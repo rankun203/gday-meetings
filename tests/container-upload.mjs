@@ -19,6 +19,17 @@ const cookie = login.headers
   .getSetCookie()
   .map((v) => v.split(';')[0])
   .join('; ')
+// Check rendered cards: missing import-map entries can still return HTTP 200.
+const dashboard = await fetch(origin + '/admin', {
+  headers: { Cookie: cookie, Origin: origin },
+  redirect: 'manual',
+})
+assert.equal(dashboard.status, 200)
+const html = await dashboard.text()
+for (const collection of ['users', 'meetings', 'tasks', 'outputs', 'audio-files']) {
+  assert.ok(html.includes('id="card-' + collection + '"'),
+    'Admin dashboard did not render the ' + collection + ' collection card')
+}
 const bytes = Buffer.alloc(60)
 bytes.write('RIFF')
 bytes.writeUInt32LE(52, 4)
@@ -67,5 +78,5 @@ assert.notEqual(
   200,
 )
 console.log(
-  'Published image: multipart CMS upload, generated metadata, authenticated byte-exact download, anonymous denial and file deletion PASS',
+  'Published image: authenticated dashboard cards, multipart CMS upload, generated metadata, authenticated byte-exact download, anonymous denial and file deletion PASS',
 )

@@ -1,6 +1,6 @@
 {
   "name": "gday-meetings",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.5.1",
@@ -9,14 +9,15 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "pnpm generate:importmap && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-force-exit tests/*.test.ts",
     "payload": "payload",
     "generate:types": "payload generate:types",
     "migrate": "payload migrate",
-    "migrate:create": "payload migrate:create"
+    "migrate:create": "payload migrate:create",
+    "generate:importmap": "payload generate:importmap"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.5",

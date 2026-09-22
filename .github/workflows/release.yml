@@ -43,6 +43,12 @@ jobs:
           node-version: '24'
       - run: npm install --global pnpm@12.5.1
       - run: pnpm install --frozen-lockfile
+      - name: Verify generated admin import map
+        env:
+          PAYLOAD_SECRET: build-only-placeholder-at-least-32-characters
+        run: |
+          pnpm generate:importmap
+          git diff --exit-code -- 'src/app/(payload)/admin/importMap.ts'
       - run: pnpm exec next typegen
       - run: pnpm typecheck
       - run: pnpm test
@@ -86,7 +92,7 @@ jobs:
             VERSION=${{ needs.verify.outputs.version }}
             REVISION=${{ needs.verify.outputs.revision }}
 
-      - name: Verify container file lifecycle as non-root
+      - name: Verify admin dashboard and file lifecycle as non-root
         env:
           IMAGE: ghcr.io/${{ github.repository }}:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
         run: |

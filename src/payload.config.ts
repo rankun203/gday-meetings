@@ -29,7 +29,13 @@ export default buildConfig({
     abortOnLimit: true,
   },
   serverURL: env.SERVER_URL,
-  admin: { user: 'users', meta: { titleSuffix: ' · GdayMeetings' } },
+  admin: {
+    user: 'users',
+    meta: { titleSuffix: ' · GdayMeetings' },
+    importMap: {
+      importMapFile: path.resolve('src/app/(payload)/admin/importMap.ts'),
+    },
+  },
   collections: [Users, Meetings, Tasks, Outputs, AudioFiles],
   db:
     adapter === 'postgres'
