@@ -56,7 +56,7 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
         context('capabilities'),
       )
     ).json(),
-    { durableTasks: true, version: 1 },
+    { durableTasks: true, transcription: false, version: 2 },
   )
   const create = await POST(
     request('POST', '/api/platform/tasks', {

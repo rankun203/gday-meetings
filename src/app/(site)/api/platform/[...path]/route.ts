@@ -1,3 +1,8 @@
+import {
+  platformAccess,
+  requireWorkerService,
+} from '../../../../../server/platform-access'
+import { runpodConfiguration } from '../../../../../server/transcription'
 import { patchTask } from '../../../../../server/atomic'
 import { z } from 'zod'
 import { cms } from '../../../../../server/payload'
@@ -14,7 +19,6 @@ import {
   errorResponse,
   HttpError,
   readJSON,
-  requireService,
 } from '../../../../../server/security'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,13 +43,22 @@ async function route(request: Request, { params }: Context) {
         await persistOutput(await cms(), parts[1], parsed.data),
       )
     }
-    requireService(request)
+    const req = await platformAccess(
+      request,
+      request.method === 'GET' ? 'meetings:read' : 'meetings:write',
+    )
     if (request.method === 'GET' && parts.join('/') === 'capabilities')
-      return Response.json({ durableTasks: true, version: 1 })
+      return Response.json({
+        durableTasks: true,
+        transcription: Boolean(runpodConfiguration()),
+        version: 2,
+      })
     if (request.method === 'POST' && parts.join('/') === 'tasks') {
       const parsed = taskInput.safeParse(await readJSON(request))
       if (!parsed.success) throw new HttpError(400, parsed.error.message)
-      return Response.json(await createTask(await cms(), parsed.data), {
+      if (req && !parsed.data.execute)
+        throw new HttpError(400, 'User submissions require execute: true')
+      return Response.json(await createTask(await cms(), parsed.data, req), {
         status: 201,
       })
     }
@@ -54,6 +67,7 @@ async function route(request: Request, { params }: Context) {
       parts[0] === 'tasks' &&
       parts.length === 2
     ) {
+      requireWorkerService(request)
       const parsed = z
         .object({
           status: z.enum(['PENDING', 'FAILED']).optional(),
@@ -70,14 +84,14 @@ async function route(request: Request, { params }: Context) {
       return Response.json(await getTask(payload, parts[1]))
     }
     if (request.method === 'GET' && parts[0] === 'tasks' && parts.length === 2)
-      return Response.json(await getTask(await cms(), parts[1]))
+      return Response.json(await getTask(await cms(), parts[1], req))
     if (
       request.method === 'GET' &&
       parts[0] === 'tasks' &&
       parts[2] === 'outputs' &&
       parts.length === 4
     ) {
-      const task = await getTask(await cms(), parts[1])
+      const task = await getTask(await cms(), parts[1], req)
       const output = task.outputs.find((o) => String(o.id) === parts[3])
       if (!output) throw new HttpError(404, 'Output not found')
       return new Response(JSON.stringify(output.body), {
@@ -93,6 +107,7 @@ async function route(request: Request, { params }: Context) {
         await searchMeetings(
           await cms(),
           new URL(request.url).searchParams.get('query') || '',
+          req,
         ),
       )
     throw new HttpError(404, 'Not found')

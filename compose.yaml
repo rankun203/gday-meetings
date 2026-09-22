@@ -1,16 +1,21 @@
 services:
   gday:
-    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.2.0}
+    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.3.0}
     ports:
       - '127.0.0.1:3000:3000'
     environment:
       PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET in .env}
       GDAY_API_TOKEN: ${GDAY_API_TOKEN:?Set GDAY_API_TOKEN in .env}
-      GDAY_MCP_TOKEN: ${GDAY_MCP_TOKEN:-}
       SERVER_URL: ${SERVER_URL:-http://localhost:3000}
       DATABASE_ADAPTER: ${DATABASE_ADAPTER:-sqlite}
       DATABASE_URI: ${DATABASE_URI:-file:/app/data/gday.db}
+      AUTH_DATABASE_URI: ${AUTH_DATABASE_URI:-}
+      OIDC_UPSTREAM_ISSUER: ${OIDC_UPSTREAM_ISSUER:-}
+      OIDC_UPSTREAM_CLIENT_ID: ${OIDC_UPSTREAM_CLIENT_ID:-}
+      OIDC_UPSTREAM_CLIENT_SECRET: ${OIDC_UPSTREAM_CLIENT_SECRET:-}
       DATA_DIR: /app/data
+      RUNPOD_ENDPOINT_URL: ${RUNPOD_ENDPOINT_URL:-}
+      RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
     volumes:
       - gday-data:/app/data
     restart: unless-stopped

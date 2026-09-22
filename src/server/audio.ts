@@ -1,3 +1,4 @@
+import type { PayloadRequest } from 'payload'
 import { audioDirectory as directory, validStorageKey } from './storage'
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
@@ -7,7 +8,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { cms } from './payload'
 import { capability, capabilityAuthorized, HttpError } from './security'
-export async function upload(request: Request) {
+export async function upload(request: Request, req?: PayloadRequest) {
   const originalName =
     new URL(request.url).searchParams.get('filename') || 'recording.wav'
   if (originalName.length > 255) throw new HttpError(400, 'Filename too long')
@@ -55,7 +56,8 @@ export async function upload(request: Request) {
     const payload = await cms()
     await payload.create({
       collection: 'audio-files',
-      overrideAccess: true,
+      overrideAccess: !req,
+      req,
       data: {
         storageKey: key,
         originalName,

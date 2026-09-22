@@ -1,5 +1,4 @@
-import { config as loadEnv } from 'dotenv'
-loadEnv({ quiet: true })
+import { serverEnv } from './lib/env'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { buildConfig } from 'payload'
@@ -15,25 +14,20 @@ import {
   AudioFiles,
 } from './collections/index'
 
-const dataDir = process.env.DATA_DIR || path.resolve('data')
+const env = serverEnv()
+const dataDir = env.DATA_DIR
 mkdirSync(dataDir, { recursive: true })
-const secret = process.env.PAYLOAD_SECRET
-if (!secret || secret.length < 32)
-  throw new Error(
-    'Set PAYLOAD_SECRET to at least 32 random characters (see .env.example).',
-  )
-const adapter = process.env.DATABASE_ADAPTER || 'sqlite'
-if (!['sqlite', 'postgres'].includes(adapter))
-  throw new Error('DATABASE_ADAPTER must be sqlite or postgres')
+const secret = env.PAYLOAD_SECRET
+const adapter = env.DATABASE_ADAPTER
 export default buildConfig({
   secret,
-  serverURL: process.env.SERVER_URL || 'http://localhost:3000',
+  serverURL: env.SERVER_URL,
   admin: { user: 'users', meta: { titleSuffix: ' · GdayMeetings' } },
   collections: [Users, Meetings, Tasks, Outputs, AudioFiles],
   db:
     adapter === 'postgres'
       ? postgresAdapter({
-          pool: { connectionString: process.env.DATABASE_URI },
+          pool: { connectionString: env.DATABASE_URI },
           idType: 'uuid',
           migrationDir: path.resolve('src/migrations-postgres'),
           prodMigrations: postgresMigrations,
@@ -41,7 +35,7 @@ export default buildConfig({
         })
       : sqliteAdapter({
           client: {
-            url: process.env.DATABASE_URI || `file:${dataDir}/gday.db`,
+            url: env.DATABASE_URI || `file:${dataDir}/gday.db`,
           },
           idType: 'uuid',
           migrationDir: path.resolve('src/migrations-sqlite'),

@@ -27,6 +27,7 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    public headers?: HeadersInit,
   ) {
     super(message)
   }
@@ -39,8 +40,14 @@ export function publicURL(path: string) {
   return new URL(path, base).toString()
 }
 export function errorResponse(error: unknown) {
-  if (error instanceof HttpError)
-    return Response.json({ error: error.message }, { status: error.status })
+  if (error instanceof HttpError) {
+    const headers = new Headers(error.headers)
+    headers.set('Cache-Control', 'no-store')
+    return Response.json(
+      { error: error.message },
+      { status: error.status, headers },
+    )
+  }
   console.error('Platform request failed', error)
   return Response.json({ error: 'Internal server error' }, { status: 500 })
 }

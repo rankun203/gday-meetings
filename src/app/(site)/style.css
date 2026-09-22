@@ -77,3 +77,44 @@ footer {
     gap: 24px;
   }
 }
+
+.oauth {
+  max-width: 760px;
+}
+.oauth h1 {
+  font-size: clamp(32px, 5vw, 52px);
+  letter-spacing: -1.5px;
+  margin: 48px 0 28px;
+}
+.oauth p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.oauth-detail {
+  background: #e9eddf;
+  padding: 18px;
+  border-radius: 12px;
+}
+.oauth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+.oauth button {
+  padding: 16px 22px;
+  font: inherit;
+  font-weight: bold;
+  border: 1px solid #526052;
+  border-radius: 28px;
+  background: #d7eb70;
+  color: #202820;
+  cursor: pointer;
+}
+.oauth button.secondary {
+  background: transparent;
+}
+.oauth button:focus-visible {
+  outline: 3px solid #526052;
+  outline-offset: 3px;
+}

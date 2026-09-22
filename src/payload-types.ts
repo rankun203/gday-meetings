@@ -133,6 +133,8 @@ export interface UserAuthOperations {
  */
 export interface User {
   id: string;
+  role: 'admin' | 'member';
+  disabled?: boolean | null;
   updatedAt: string;
   createdAt: string;
   email: string;
@@ -191,6 +193,21 @@ export interface Task {
   };
   error?: string | null;
   runpodJobId?: string | null;
+  executionState?: string | null;
+  executionOptions?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  executionRevision?: number | null;
+  submissionStartedAt?: string | null;
+  nextPollAt?: string | null;
+  idempotencyKey?: string | null;
+  requestHash?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -321,6 +338,8 @@ export interface PayloadMigration {
  * via the `definition` "users_select".
  */
 export interface UsersSelect<T extends boolean = true> {
+  role?: T;
+  disabled?: T;
   updatedAt?: T;
   createdAt?: T;
   email?: T;
@@ -371,6 +390,13 @@ export interface TasksSelect<T extends boolean = true> {
   outputs?: T;
   error?: T;
   runpodJobId?: T;
+  executionState?: T;
+  executionOptions?: T;
+  executionRevision?: T;
+  submissionStartedAt?: T;
+  nextPollAt?: T;
+  idempotencyKey?: T;
+  requestHash?: T;
   updatedAt?: T;
   createdAt?: T;
 }

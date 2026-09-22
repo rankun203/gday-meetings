@@ -1,0 +1,15 @@
+---
+date: 2026-09-22
+task: server-owned-transcription
+status: implemented
+---
+
+**Problem:** Desktop clients owned RunPod submission and polling, keeping provider credentials and processing availability tied to a laptop.
+
+**Implemented solution:** Tasks can opt into server execution with an actor-scoped idempotency key, execution options, and signed platform audio inputs. The server validates stored audio, saves the queue before returning, atomically claims submission in SQL, supplies the existing worker result callback, and periodically resumes pending work through Next.js instrumentation. Both database migrations include execution state and indexes. SQLite tests cover the worker request contract, duplicate claims, interrupted acknowledgements, restart recovery, status failures, and late callbacks. Raw Payload task creation requires the validated server-operation context, and output creation is system-only, preventing members from forging provider job IDs or worker results through generic collection endpoints.
+
+**Reasoning:** A single database compare-and-set prevents multiple server processes submitting the same task. RunPod submission has no verified idempotency guarantee; a lost POST acknowledgement becomes SUBMISSION_UNKNOWN, preserving the task for a late callback without automatically charging for duplicate work. Status requests retry through the durable polling schedule. Completed results always win late failure updates. Task execution internals and input tracks cannot be edited via ordinary Payload updates.
+
+**Technical debt:** Ambiguous submissions require checking the provider and creating a new explicit attempt if no callback arrives; future remediation is provider-supported idempotency/reconciliation. The worker runs inside a persistent Node app process, not an ephemeral/serverless deployment; move it to a dedicated queue consumer if serverless or independently scaled processing is required. A bounded scan retries provider requests every 15 seconds rather than adaptive backoff. The platform remains one shared workspace; actor namespacing prevents idempotency collisions but is not tenant isolation.
+
+**Notes:** RUNPOD_ENDPOINT_URL and RUNPOD_API_KEY remain server-only and use central validated server configuration. execute:false preserves the service-only external-worker compatibility contract. Five transcription integration tests pass against both SQLite and disposable Postgres 18 with real production migrations; four platform API tests also pass on fresh Postgres. An additional SQLite member-access test verifies raw task/output forgery is rejected, validated submission works, and execution state cannot be modified; final SQLite suite passes 6/6. Coverage includes repairing a durable output whose completion projection was interrupted without contacting RunPod. The disposable test container was removed. Identity migrations preserve the existing all-administrator policy for preexisting accounts; newly created accounts default to member. No real RunPod calls were made.

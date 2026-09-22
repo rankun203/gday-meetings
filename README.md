@@ -13,7 +13,7 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3000/admin and create your first administrator. SQLite is the default; no database server is needed. Finish first-admin setup on a trusted network before exposing the app publicly. All authenticated CMS users are trusted workspace administrators in this single-workspace release.
+Open http://localhost:3000/admin and create your first administrator. SQLite is the default; no database server is needed. Finish first-admin setup on a trusted network before exposing the app publicly. GdayMeetings is the source of user management. Administrators manage accounts in Payload; members can work with recordings in the shared workspace. Existing accounts retain their previous administrator access when upgrading.
 
 The workspace contains **Meetings**, **Tasks**, **Outputs**, and **Audio files**. A meeting groups recording attempts; every task has its own input files and durable output list. `TRANSCRIPT_OUTPUT` bodies retain the complete worker JSON and project track segments into searchable meeting text. Repeat callbacks return the original stored output instead of duplicating it. Audio and outputs have no automatic expiry.
 
@@ -24,7 +24,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose uses the published `ghcr.io/rankun203/gday-meetings:0.2.0` image, available
+Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.0` image, available
 for Linux AMD64 and ARM64. Set `GDAY_VERSION` to select another published version.
 For a source build, use `docker compose -f compose.yaml -f compose.build.yaml up -d --build`.
 
@@ -53,29 +53,17 @@ See [API reference](docs/api.md). Configure the meeting-notes filedrop URL to th
 
 ## MCP
 
-The hosted **Streamable HTTP** endpoint is `https://meetings.example.com/mcp`. It runs inside the same app/container; MCP clients need only the URL and bearer token, with no local checkout or pnpm process.
+The hosted **Streamable HTTP** endpoint is `https://meetings.example.com/mcp`. It runs inside the app/container. Connect with an OAuth-capable MCP client using this URL; no local process, shared MCP secret, or custom Authorization header is needed.
 
-Set an independent `GDAY_MCP_TOKEN` on the server for read-only meeting search. When set, this token is accepted only by `/mcp`; it cannot upload files or mutate tasks. If unset, MCP falls back to `GDAY_API_TOKEN` for simple existing deployments. Prefer a dedicated token when sharing access.
+The client discovers authorization, registers, opens your GdayMeetings login, and asks you to allow meeting search. Only tokens issued after an authenticated workspace user grants consent can call MCP. The single `mcp:read` permission allows searching and reading workspace meetings; members share the workspace, while user management is restricted to administrators.
 
-Configure a client that supports Streamable HTTP and custom authorization headers (field names can vary by client):
+`search_meetings` takes a required `query` string and searches titles, transcript text, and external IDs, returning up to 30 recently updated matches. Search runs with the authorizing user's Payload access rules.
 
-```json
-{
-  "mcpServers": {
-    "gday-meetings": {
-      "type": "http",
-      "url": "https://meetings.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer your-read-only-mcp-token"
-      }
-    }
-  }
-}
-```
+Authorization uses S256 PKCE, short-lived one-use codes, five-minute access tokens, and rotating refresh tokens with replay protection. Gday uses the maintained Better Auth OAuth/OIDC provider and canonical Payload accounts. Discovery is served at `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server`; clients discover token and revocation endpoints from metadata. See [MCP authorization](docs/mcp.md).
 
-The dedicated `src/mcp` module exposes exactly one tool: **search_meetings**, with a required `query` string. It searches titles, transcript text, and external IDs, returning up to 30 recently updated matches. The endpoint uses stateless JSON responses; GET/SSE and DELETE session operations return 405. OAuth-only clients are not supported yet.
+**Upgrading from 0.2:** reconnect existing MCP clients through browser login. `GDAY_MCP_TOKEN` and `GDAY_API_TOKEN` are no longer accepted at `/mcp`. The worker/client service API continues using `GDAY_API_TOKEN`.
 
-Set `SERVER_URL` to the public app origin. Your reverse proxy must preserve its public `Host` header and the client's `Authorization` header. Requests with an `Origin` header must exactly match `SERVER_URL`'s origin; cross-origin browser calls are not enabled. Normal server-side MCP clients omit `Origin`.
+Set `SERVER_URL` to the public HTTPS app origin (HTTP is for local development). Your reverse proxy must preserve the public `Host` and client's `Authorization` header. Requests with an `Origin` header must match the configured origin; cross-origin browser calls are not enabled. The transport is stateless: POST carries MCP requests; GET/SSE and DELETE return 405 after authentication.
 
 ## Development
 

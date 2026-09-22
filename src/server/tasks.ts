@@ -1,10 +1,19 @@
 import { projectTranscript } from './atomic'
+import { createHash } from 'node:crypto'
+import {
+  executionOptions,
+  runpodConfiguration,
+  validateOwnedAudio,
+} from './transcription'
 import { z } from 'zod'
-import type { Payload } from 'payload'
+import type { Payload, PayloadRequest } from 'payload'
 import { capability, HttpError, publicURL } from './security'
 export const taskInput = z.object({
   externalId: z.string().min(1).max(200),
   title: z.string().min(1).max(500),
+  execute: z.boolean().optional(),
+  idempotencyKey: z.string().min(1).max(200).optional(),
+  executionOptions: executionOptions.optional(),
   inputs: z
     .array(
       z.object({
@@ -27,12 +36,85 @@ export const outputInput = z.object({
 export async function createTask(
   payload: Payload,
   input: z.infer<typeof taskInput>,
+  req?: PayloadRequest,
 ) {
+  if (req && !input.execute)
+    throw new HttpError(
+      400,
+      'Authenticated clients must request server execution',
+    )
+  let idempotencyKey: string | undefined
+  let requestHash: string | undefined
+  if (input.execute) {
+    if (!runpodConfiguration())
+      throw new HttpError(503, 'Server transcription is not configured')
+    if (!input.idempotencyKey)
+      throw new HttpError(400, 'Server execution requires idempotencyKey')
+    try {
+      validateOwnedAudio(input.inputs)
+    } catch {
+      throw new HttpError(
+        400,
+        'Execution requires unique tracks with signed platform audio URLs',
+      )
+    }
+    for (const track of input.inputs) {
+      const key = new URL(track.url).pathname.slice('/files/'.length)
+      const stored = await payload.find({
+        collection: 'audio-files',
+        where: { storageKey: { equals: key } },
+        limit: 1,
+        req,
+        overrideAccess: !req,
+      })
+      if (!stored.docs.length)
+        throw new HttpError(400, 'Audio input does not exist')
+    }
+    idempotencyKey = createHash('sha256')
+      .update(
+        JSON.stringify([
+          req?.user?.id || 'service',
+          input.externalId,
+          input.idempotencyKey,
+        ]),
+      )
+      .digest('hex')
+    requestHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          externalId: input.externalId,
+          title: input.title,
+          inputs: input.inputs,
+          options: executionOptions.parse(input.executionOptions || {}),
+        }),
+      )
+      .digest('hex')
+    const existing = await payload.find({
+      collection: 'tasks',
+      where: { idempotencyKey: { equals: idempotencyKey } },
+      limit: 1,
+      req,
+      overrideAccess: !req,
+    })
+    if (existing.docs[0]) {
+      if (existing.docs[0].requestHash !== requestHash)
+        throw new HttpError(
+          409,
+          'Idempotency key already used for different inputs',
+        )
+      return {
+        id: existing.docs[0].id,
+        status: existing.docs[0].status,
+        executionState: existing.docs[0].executionState,
+      }
+    }
+  }
   let result = await payload.find({
     collection: 'meetings',
     where: { externalId: { equals: input.externalId } },
     limit: 1,
-    overrideAccess: true,
+    req,
+    overrideAccess: !req,
   })
   let meeting = result.docs[0]
   if (!meeting) {
@@ -40,24 +122,68 @@ export async function createTask(
       meeting = await payload.create({
         collection: 'meetings',
         data: { externalId: input.externalId, title: input.title },
-        overrideAccess: true,
+        req,
+        overrideAccess: !req,
       })
     } catch (error) {
       result = await payload.find({
         collection: 'meetings',
         where: { externalId: { equals: input.externalId } },
         limit: 1,
-        overrideAccess: true,
+        req,
+        overrideAccess: !req,
       })
       if (!result.docs[0]) throw error
       meeting = result.docs[0]
     }
   }
-  const task = await payload.create({
-    collection: 'tasks',
-    data: { meeting: meeting.id, status: 'PENDING', inputs: input.inputs },
-    overrideAccess: true,
-  })
+  let task
+  try {
+    task = await payload.create({
+      collection: 'tasks',
+      context: { validatedTaskSubmission: true },
+      data: {
+        meeting: meeting.id,
+        status: 'PENDING',
+        inputs: input.inputs,
+        ...(input.execute
+          ? {
+              executionState: 'QUEUED',
+              executionOptions: executionOptions.parse(
+                input.executionOptions || {},
+              ),
+              executionRevision: 0,
+              idempotencyKey,
+              requestHash,
+            }
+          : {}),
+      },
+      req,
+      overrideAccess: !req,
+    })
+  } catch (error) {
+    if (!idempotencyKey) throw error
+    const found = await payload.find({
+      collection: 'tasks',
+      where: { idempotencyKey: { equals: idempotencyKey } },
+      limit: 1,
+      req,
+      overrideAccess: !req,
+    })
+    if (!found.docs[0]) throw error
+    if (found.docs[0].requestHash !== requestHash)
+      throw new HttpError(
+        409,
+        'Idempotency key already used for different inputs',
+      )
+    task = found.docs[0]
+  }
+  if (input.execute)
+    return {
+      id: task.id,
+      status: task.status,
+      executionState: task.executionState,
+    }
   return {
     id: task.id,
     status: task.status,
@@ -67,13 +193,18 @@ export async function createTask(
     },
   }
 }
-export async function getTask(payload: Payload, id: string) {
+export async function getTask(
+  payload: Payload,
+  id: string,
+  req?: PayloadRequest,
+) {
   const tasks = await payload.find({
     collection: 'tasks',
     where: { id: { equals: id } },
     limit: 1,
     depth: 1,
-    overrideAccess: true,
+    req,
+    overrideAccess: !req,
   })
   const task = tasks.docs[0]
   if (!task) throw new HttpError(404, 'Task not found')
@@ -83,7 +214,8 @@ export async function getTask(payload: Payload, id: string) {
     limit: 0,
     pagination: false,
     depth: 0,
-    overrideAccess: true,
+    req,
+    overrideAccess: !req,
   })
   return {
     ...task,
@@ -174,7 +306,11 @@ async function persistOutputOnce(
   }
   return { id: output.id, type: output.type, persisted: true }
 }
-export async function searchMeetings(payload: Payload, query: string) {
+export async function searchMeetings(
+  payload: Payload,
+  query: string,
+  req?: PayloadRequest,
+) {
   const cleaned = query.trim()
   if (!cleaned || cleaned.length > 500)
     throw new HttpError(400, 'Query must contain 1–500 characters')
@@ -190,7 +326,8 @@ export async function searchMeetings(payload: Payload, query: string) {
     limit: 30,
     sort: '-updatedAt',
     depth: 0,
-    overrideAccess: true,
+    overrideAccess: !req,
+    req,
   })
   return {
     meetings: result.docs.map((m) => ({

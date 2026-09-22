@@ -2,7 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import packageJSON from '../../package.json' with { type: 'json' }
-import { equal, HttpError, readJSON } from '../server/security'
+import { HttpError, readJSON } from '../server/security'
+
+import { cms } from '../server/payload'
+import { searchMeetings } from '../server/tasks'
+import { authenticateAccess, authIssuer } from '../server/auth'
+
+function bearerChallenge(error: string) {
+  const base = new URL(authIssuer()).origin
+  return `Bearer error="${error}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp", scope="mcp:read"`
+}
 
 function rpcError(
   status: number,
@@ -25,25 +34,19 @@ function trustedRequest(request: Request) {
   return origin === null || origin === configured.origin
 }
 
-async function searchStoredMeetings(query: string) {
-  const [{ cms }, { searchMeetings }] = await Promise.all([
-    import('../server/payload'),
-    import('../server/tasks'),
-  ])
-  // This explicit system read follows MCP token validation and exposes only search.
-  return searchMeetings(await cms(), query)
-}
-
 /** A fresh server per request: no process-local sessions or SSE connection state. */
 export async function handleMcpRequest(request: Request): Promise<Response> {
   if (!trustedRequest(request)) return rpcError(403, 'Untrusted host or origin')
-  const token = process.env.GDAY_MCP_TOKEN || process.env.GDAY_API_TOKEN
-  if (
-    !token ||
-    !equal(request.headers.get('authorization') || '', `Bearer ${token}`)
-  ) {
-    return rpcError(401, 'Bearer authentication required', {
-      'WWW-Authenticate': 'Bearer realm="GdayMeetings MCP"',
+  const payload = await cms()
+  const principal = await authenticateAccess(request, 'mcp')
+  if (!principal) {
+    return rpcError(401, 'User authorization required', {
+      'WWW-Authenticate': bearerChallenge('invalid_token'),
+    })
+  }
+  if (!principal.scopes.has('mcp:read')) {
+    return rpcError(403, 'Meeting search permission required', {
+      'WWW-Authenticate': bearerChallenge('insufficient_scope'),
     })
   }
   if (request.method !== 'POST') {
@@ -71,7 +74,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     },
     async ({ query }) => {
       try {
-        const result = await searchStoredMeetings(query)
+        const result = await searchMeetings(payload, query, principal.req)
         return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       } catch (error) {
         console.error('MCP meeting search failed', error)
