@@ -1,7 +1,7 @@
 ---
 date: 2026-09-22
 title: Remove shared service authentication and publish 0.3.1
-status: release-ready
+status: complete
 ---
 
 ## Problem
@@ -22,4 +22,4 @@ None introduced. Existing identity provider and worker limitations remain docume
 
 ## Notes
 
-Client and server must be upgraded together because obsolete execute requests are rejected. No schema migration added. Validation: 24/24 tests pass, TypeScript and production build pass, complete diff reviewed. Release publication and container smoke results follow after tagging.
+Client and server must be upgraded together because obsolete execute requests are rejected. No schema migration added. Validation: 24/24 tests pass, TypeScript and production build pass, complete diff reviewed. Published tag v0.3.1 at 31f93fc. GitHub Actions run 35688620349 passed verification and native AMD64/ARM64 builds. Public GHCR 0.3.1 and latest resolve to sha256:e4fcc225d306e6e78e19db90ffe41caf7e506f0fd0b9c0137840f6796487dbd7. Published ARM64 container passed first-admin setup, account login, named consent, PKCE exchange, five-minute token, authenticated MCP, anonymous/shared-key denial and removed PATCH checks with no GDAY_API_TOKEN configured. Temporary container stopped. Matching Rust client commit a697256 passed 37 default tests plus actual-provider OAuth integration.
