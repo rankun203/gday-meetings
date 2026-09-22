@@ -115,6 +115,58 @@ export const Meetings: CollectionConfig = {
       access: { update: () => false },
     },
     { name: 'recordedAt', type: 'date' },
+    {
+      name: 'importKey',
+      type: 'text',
+      index: true,
+      access: {
+        create: ({ req }) => req.context.validatedMeetingImport === true,
+        update: () => false,
+      },
+    },
+    {
+      name: 'importDigest',
+      type: 'text',
+      admin: { hidden: true },
+      access: {
+        create: ({ req }) => req.context.validatedMeetingImport === true,
+        update: () => false,
+      },
+    },
+    {
+      name: 'archiveMetadata',
+      type: 'json',
+      access: {
+        create: ({ req }) => req.context.validatedMeetingImport === true,
+        update: () => false,
+      },
+    },
+    {
+      name: 'archiveArtifacts',
+      type: 'json',
+      access: {
+        create: ({ req }) => req.context.validatedMeetingImport === true,
+        update: () => false,
+      },
+    },
+    {
+      name: 'archiveAudio',
+      type: 'array',
+      access: {
+        create: ({ req }) => req.context.validatedMeetingImport === true,
+        update: () => false,
+      },
+      fields: [
+        {
+          name: 'audio',
+          type: 'relationship',
+          relationTo: 'audio-files',
+        },
+        { name: 'filename', type: 'text', required: true },
+        { name: 'sha256', type: 'text', required: true },
+        { name: 'size', type: 'number', required: true },
+      ],
+    },
   ],
 }
 export const Tasks: CollectionConfig = {

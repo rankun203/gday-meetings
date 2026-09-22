@@ -94,7 +94,12 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
         context('capabilities'),
       )
     ).json(),
-    { durableTasks: true, transcription: false, version: 2 },
+    {
+      durableTasks: true,
+      meetingImports: true,
+      transcription: false,
+      version: 2,
+    },
   )
   const task = await seedTask({
     externalId: 'integration-session',

@@ -1,3 +1,8 @@
+import {
+  importMeeting,
+  getMeetingImport,
+  meetingImportInput,
+} from '../../../../../server/import-meeting'
 import { platformAccess } from '../../../../../server/platform-access'
 import { runpodConfiguration } from '../../../../../server/transcription'
 import { cms } from '../../../../../server/payload'
@@ -42,9 +47,26 @@ async function route(request: Request, { params }: Context) {
       request,
       request.method === 'GET' ? 'meetings:read' : 'meetings:write',
     )
+    if (request.method === 'POST' && parts.join('/') === 'meetings/import') {
+      const parsed = meetingImportInput.safeParse(await readJSON(request))
+      if (!parsed.success) throw new HttpError(400, parsed.error.message)
+      return Response.json(await importMeeting(await cms(), parsed.data, req), {
+        status: 201,
+      })
+    }
+    if (
+      request.method === 'GET' &&
+      parts[0] === 'meetings' &&
+      parts[1] === 'import' &&
+      parts.length === 3
+    )
+      return Response.json(await getMeetingImport(await cms(), parts[2], req), {
+        headers: { 'Cache-Control': 'private, no-store' },
+      })
     if (request.method === 'GET' && parts.join('/') === 'capabilities')
       return Response.json({
         durableTasks: true,
+        meetingImports: true,
         transcription: Boolean(runpodConfiguration()),
         version: 2,
       })

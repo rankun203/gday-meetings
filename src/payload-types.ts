@@ -166,8 +166,59 @@ export interface Meeting {
   transcript?: string | null;
   transcriptTaskOrder?: string | null;
   recordedAt?: string | null;
+  importKey?: string | null;
+  importDigest?: string | null;
+  archiveMetadata?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  archiveArtifacts?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  archiveAudio?:
+    | {
+        audio?: (string | null) | AudioFile;
+        filename: string;
+        sha256: string;
+        size: number;
+        id?: string | null;
+      }[]
+    | null;
   updatedAt: string;
   createdAt: string;
+}
+/**
+ * Upload recordings up to 500 MB. Prefer compressed audio: Opus, M4A or MP3. WAV is also supported. Gday manages storage and metadata automatically.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "audio-files".
+ */
+export interface AudioFile {
+  id: string;
+  storageKey: string;
+  originalName: string;
+  size: number;
+  contentType: string;
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -233,28 +284,6 @@ export interface Output {
     | null;
   updatedAt: string;
   createdAt: string;
-}
-/**
- * Upload recordings up to 500 MB. Prefer compressed audio: Opus, M4A or MP3. WAV is also supported. Gday manages storage and metadata automatically.
- *
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "audio-files".
- */
-export interface AudioFile {
-  id: string;
-  storageKey: string;
-  originalName: string;
-  size: number;
-  contentType: string;
-  updatedAt: string;
-  createdAt: string;
-  url?: string | null;
-  thumbnailURL?: string | null;
-  filename?: string | null;
-  mimeType?: string | null;
-  filesize?: number | null;
-  width?: number | null;
-  height?: number | null;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -377,6 +406,19 @@ export interface MeetingsSelect<T extends boolean = true> {
   transcript?: T;
   transcriptTaskOrder?: T;
   recordedAt?: T;
+  importKey?: T;
+  importDigest?: T;
+  archiveMetadata?: T;
+  archiveArtifacts?: T;
+  archiveAudio?:
+    | T
+    | {
+        audio?: T;
+        filename?: T;
+        sha256?: T;
+        size?: T;
+        id?: T;
+      };
   updatedAt?: T;
   createdAt?: T;
 }
