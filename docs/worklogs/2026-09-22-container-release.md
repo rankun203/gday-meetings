@@ -20,9 +20,11 @@ pinned published version; an explicit build override supports source builds.
 
 GitHub Actions uses its scoped `GITHUB_TOKEN` for registry publication, avoiding
 stored personal registry credentials. Native builds avoid emulator-dependent
-Node/native-package builds. The pipeline follows Docker's documented reusable
-[GitHub Builder workflow](https://docs.docker.com/build/ci/github-actions/github-builder/build/)
-and the reference project's release architecture.
+Node/native-package builds. The pipeline follows GitHub's documented
+[Docker publication workflow](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)
+and the reference project's tag/version release architecture. Explicit native
+jobs replace the reusable builder because its automatic branch reference
+conflicted with manual publication of an existing immutable release tag.
 
 ## Technical debt
 
