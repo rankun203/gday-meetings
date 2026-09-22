@@ -1,0 +1,24 @@
+services:
+  gday:
+    environment:
+      DATABASE_ADAPTER: postgres
+      DATABASE_URI: postgresql://gday:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/gday
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: gday
+      POSTGRES_USER: gday
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U gday -d gday']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+volumes:
+  postgres-data:

@@ -1,0 +1,17 @@
+# Architecture and operations
+
+GdayMeetings is one deployable Next.js + Payload application, inspired by the single-root CMS architecture in ase-user-study. SQLite and Postgres share the same collection definitions, UUID IDs, generated types, and committed migrations.
+
+**User workflow:** upload a recording; create a task linked to a meeting; send audio URLs and a task-only result sink to a worker; persist the raw typed result; download it to the client; search the indexed transcript. Payload Admin is the control panel for inspecting meetings, task state, inputs, output JSON, and upload inventory.
+
+**Persistence:** `meetings` holds identity, title, and searchable transcript. `tasks` holds input metadata, processing status, error and RunPod linkage. `outputs` is a related collection surfaced as an outputs join in the task; its unique task/type key provides database-enforced callback deduplication. This avoids concurrent append races on a JSON array. The service response presents outputs as an ordinary array. Files stream to local persistent disk; metadata lives in `audio-files`.
+
+**Failure handling:** a result row commits before derived transcript/task updates. A callback retry repairs those projections. The first output for each task/type is immutable; revised processing must create a fresh task. An older task finishing after a newer completed attempt does not overwrite that newer meeting transcript: an atomic conditional update compares a task timestamp/UUID version on the target meeting row. SQLite callbacks queue within each process and retry transient write contention; Postgres callbacks may execute concurrently. An empty valid transcript clears the previous searchable text. Once a transcript is present, the client can recover it without the RunPod response. The platform itself does not submit or poll RunPod; the meeting-notes daemon owns execution and reports job status.
+
+**Access:** all logged-in users are trusted administrators of one workspace. API tokens are deployment configuration, never CMS content. Service APIs use explicit system Local API calls only after validating the service key or exact task capability. Tokens are timing-safe compared. Audio URLs are stable bearer capabilities, scoped to one random storage key. No URL submitted as task input is fetched by the platform. MCP uses the HTTP service API and exposes one read-only tool.
+
+**Backups and deletion:** back up the database, audio volume, and secret together. No automatic cleanup runs. Deleting an audio metadata record revokes its download capability and removes its disk file. Deleting a task/meeting does not cascade deletion of shared input audio. Explicitly delete the audio record when required; backups remain subject to your backup retention policy.
+
+**Operational limits:** local audio storage and SQLite are intended for one instance. Postgres supports the database side of larger deployment, but shared/object audio storage and coordinated migrations are required before horizontal scaling. Search currently uses bounded substring queries, not full-text ranking. No OAuth server or public multi-tenant access is included. Email password recovery requires configuring a Payload email adapter; the default logs email server-side.
+
+**Upgrades:** verify both database profiles on disposable instances, back up, and deploy one migrating instance. Production automatically executes committed migrations; development schema push is never enabled in production. Changing `PAYLOAD_SECRET` invalidates capability URLs; use stable secret storage.

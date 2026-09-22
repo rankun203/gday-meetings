@@ -1,0 +1,5 @@
+allowBuilds:
+  sharp: true
+  esbuild: true
+minimumReleaseAgeExclude:
+  - dotenv@18.0.2
