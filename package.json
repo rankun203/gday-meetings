@@ -1,6 +1,6 @@
 {
   "name": "gday-meetings",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.5.1",
@@ -16,8 +16,7 @@
     "payload": "payload",
     "generate:types": "payload generate:types",
     "migrate": "payload migrate",
-    "migrate:create": "payload migrate:create",
-    "mcp": "tsx src/mcp/index.ts"
+    "migrate:create": "payload migrate:create"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

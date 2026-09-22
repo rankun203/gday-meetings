@@ -13,3 +13,9 @@ All `/api/platform` endpoints use `Authorization: Bearer GDAY_API_TOKEN` except 
 - `GET /api/platform/meetings/search?query=budget` returns `{ "meetings": [{ "id", "externalId", "title", "transcript", "updatedAt" }], "total": 1 }`. Case-insensitive substring matching depends on the selected database collation. Query is 1–500 characters. Maximum 30 results.
 
 Payload's own `/api/meetings`, `/api/tasks`, etc. require an authenticated CMS account. These are administration APIs, separate from the service contract. Login and first-user setup are managed by Payload.
+
+## Hosted MCP
+
+`POST /mcp` uses the MCP SDK's Streamable HTTP protocol, separate from the REST API. Send `Authorization: Bearer GDAY_MCP_TOKEN` and standard MCP content negotiation headers (`Content-Type: application/json`, `Accept: application/json, text/event-stream`). If `GDAY_MCP_TOKEN` is unset, the service token is accepted instead. A configured dedicated MCP token is never accepted by service mutation endpoints.
+
+The endpoint supports initialize, notifications (202), tools/list, and tools/call through the SDK. Its single tool is `search_meetings` with `{ "query": "budget" }`. Responses use JSON and no session ID; authenticated GET and DELETE requests return 405 with `Allow: POST`. Requests are limited to 64 KiB and responses are non-cacheable. Invalid credentials return 401 with a Bearer challenge; mismatched Host or Origin return 403. The Host header must match `SERVER_URL`, and a supplied Origin must match its origin exactly. No OAuth discovery or cross-origin browser access is implemented.

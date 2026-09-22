@@ -20,8 +20,13 @@ The workspace contains **Meetings**, **Tasks**, **Outputs**, and **Audio files**
 ## Deploy
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+Compose uses the published `ghcr.io/rankun203/gday-meetings:0.2.0` image, available
+for Linux AMD64 and ARM64. Set `GDAY_VERSION` to select another published version.
+For a source build, use `docker compose -f compose.yaml -f compose.build.yaml up -d --build`.
 
 The default binds to localhost:3000. Put an HTTPS reverse proxy in front, set `SERVER_URL` to the public origin reachable by workers, and configure the proxy for long audio uploads/downloads and the appropriate maximum body size. Named volume `gday-data` stores SQLite and audio. Back it up together and preserve `PAYLOAD_SECRET`: changing the secret invalidates all existing audio and callback capability URLs. Use a single app replica with SQLite and local audio storage.
 
@@ -29,12 +34,16 @@ Postgres deployment:
 
 ```sh
 # Add POSTGRES_PASSWORD to .env (URL-safe random value).
-docker compose -f compose.yaml -f compose.postgres.yaml up -d --build
+docker compose -f compose.yaml -f compose.postgres.yaml up -d
 ```
 
 For an existing Postgres server, set `DATABASE_ADAPTER=postgres` and `DATABASE_URI=postgresql://...` instead. Switching adapters selects a different database; it does not migrate existing content. Audio continues to use the persistent app volume. The committed dialect-specific migrations run on production startup. Back up first when upgrading; coordinate a single migrating instance. Development uses Payload schema push.
 
 For production without Docker, run `pnpm build && pnpm start` with the same environment. SQLite defaults to `data/gday.db`. See [architecture and operations](docs/architecture.md).
+
+Releases are published by pushing a `vX.Y.Z` tag matching `package.json`, with
+notes in `.github/release-notes/vX.Y.Z.md`. The workflow validates source, publishes
+the multi-platform image under `X.Y.Z` and `latest`, and creates the GitHub release.
 
 ## Client and worker contract
 
@@ -42,24 +51,29 @@ See [API reference](docs/api.md). Configure the meeting-notes filedrop URL to th
 
 ## MCP
 
-The dedicated `src/mcp` module exposes exactly one tool: **search_meetings**, with a required `query` string. It searches titles, transcript text, and external IDs, returning up to 30 recently updated matches. Run with `pnpm --silent mcp` or configure your MCP client:
+The hosted **Streamable HTTP** endpoint is `https://meetings.example.com/mcp`. It runs inside the same app/container; MCP clients need only the URL and bearer token, with no local checkout or pnpm process.
+
+Set an independent `GDAY_MCP_TOKEN` on the server for read-only meeting search. When set, this token is accepted only by `/mcp`; it cannot upload files or mutate tasks. If unset, MCP falls back to `GDAY_API_TOKEN` for simple existing deployments. Prefer a dedicated token when sharing access.
+
+Configure a client that supports Streamable HTTP and custom authorization headers (field names can vary by client):
 
 ```json
 {
   "mcpServers": {
     "gday-meetings": {
-      "command": "pnpm",
-      "args": ["--dir", "/absolute/path/to/gday-meetings", "--silent", "mcp"],
-      "env": {
-        "GDAY_URL": "https://meetings.example.com",
-        "GDAY_API_TOKEN": "your-service-token"
+      "type": "http",
+      "url": "https://meetings.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-read-only-mcp-token"
       }
     }
   }
 }
 ```
 
-The stdio module calls the authenticated platform API; it does not need database credentials or direct storage access. Its tool is read-only; the configured service token is privileged and must remain private.
+The dedicated `src/mcp` module exposes exactly one tool: **search_meetings**, with a required `query` string. It searches titles, transcript text, and external IDs, returning up to 30 recently updated matches. The endpoint uses stateless JSON responses; GET/SSE and DELETE session operations return 405. OAuth-only clients are not supported yet.
+
+Set `SERVER_URL` to the public app origin. Your reverse proxy must preserve its public `Host` header and the client's `Authorization` header. Requests with an `Origin` header must exactly match `SERVER_URL`'s origin; cross-origin browser calls are not enabled. Normal server-side MCP clients omit `Origin`.
 
 ## Development
 

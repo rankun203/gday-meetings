@@ -1,11 +1,12 @@
 services:
   gday:
-    build: .
+    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.2.0}
     ports:
       - '127.0.0.1:3000:3000'
     environment:
       PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET in .env}
       GDAY_API_TOKEN: ${GDAY_API_TOKEN:?Set GDAY_API_TOKEN in .env}
+      GDAY_MCP_TOKEN: ${GDAY_MCP_TOKEN:-}
       SERVER_URL: ${SERVER_URL:-http://localhost:3000}
       DATABASE_ADAPTER: ${DATABASE_ADAPTER:-sqlite}
       DATABASE_URI: ${DATABASE_URI:-file:/app/data/gday.db}

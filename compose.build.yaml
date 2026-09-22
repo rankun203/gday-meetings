@@ -1,0 +1,4 @@
+services:
+  gday:
+    image: gday-meetings:local
+    build: .
