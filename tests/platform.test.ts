@@ -1,3 +1,4 @@
+import { wav } from './helpers/audio'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
@@ -193,7 +194,7 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
 })
 
 test('audio uploads are complete before exposure and support authenticated byte ranges', async () => {
-  const bytes = Buffer.from('0123456789abcdef')
+  const bytes = wav()
   const uploaded = await upload(
     new Request('http://localhost:3000/upload?filename=sample.wav', {
       method: 'POST',
@@ -214,7 +215,7 @@ test('audio uploads are complete before exposure and support authenticated byte 
     401,
   )
   const full = await download(new Request(`http://localhost:3000${url}`), ctx)
-  assert.equal(full.headers.get('Content-Length'), '16')
+  assert.equal(full.headers.get('Content-Length'), String(bytes.length))
   assert.deepEqual(Buffer.from(await full.arrayBuffer()), bytes)
   const part = await download(
     new Request(`http://localhost:3000${url}`, {
@@ -223,8 +224,8 @@ test('audio uploads are complete before exposure and support authenticated byte 
     ctx,
   )
   assert.equal(part.status, 206)
-  assert.equal(await part.text(), '45678')
-  assert.equal(part.headers.get('Content-Range'), 'bytes 4-8/16')
+  assert.deepEqual(Buffer.from(await part.arrayBuffer()), bytes.subarray(4, 9))
+  assert.equal(part.headers.get('Content-Range'), `bytes 4-8/${bytes.length}`)
   const invalid = await download(
     new Request(`http://localhost:3000${url}`, {
       headers: { Range: 'bytes=100-' },
@@ -400,4 +401,133 @@ test('former shared keys cannot upload, read meetings, or create client-run task
     context('tasks'),
   )
   assert.equal(unsupported.status, 503)
+})
+
+test('CMS uploads own their file and metadata, reject metadata-only records and replacement', async () => {
+  const { createLocalReq } = await import('payload')
+  const { readFile, readdir } = await import('node:fs/promises')
+  const req = await createLocalReq(
+    { user: { ...identity.user, collection: 'users' } },
+    payload,
+  )
+  const bytes = wav()
+  const record = await payload.create({
+    collection: 'audio-files',
+    overrideAccess: false,
+    req,
+    data: {
+      storageKey: '../../forged.wav',
+      originalName: 'forged',
+      size: 999,
+      contentType: 'text/html',
+    },
+    file: {
+      name: 'meeting.wav',
+      mimetype: 'audio/wav',
+      size: bytes.length,
+      data: bytes,
+    },
+  })
+  assert.match(record.filename!, /^[0-9a-f-]{36}\.wav$/)
+  assert.equal(record.storageKey, record.filename)
+  assert.equal(record.originalName, 'meeting.wav')
+  assert.equal(record.filesize, bytes.length)
+  assert.equal(record.size, bytes.length)
+  assert.equal(record.mimeType, record.contentType)
+  assert.deepEqual(
+    await readFile(path.join(directory, 'audio', record.filename!)),
+    bytes,
+  )
+  await assert.rejects(
+    payload.create({
+      collection: 'audio-files',
+      data: {} as never,
+      overrideAccess: false,
+      req,
+    }),
+    { status: 400 },
+  )
+  await assert.rejects(
+    payload.update({
+      collection: 'audio-files',
+      id: record.id,
+      data: {},
+      overrideAccess: false,
+      req,
+      file: {
+        name: 'replacement.wav',
+        mimetype: 'audio/wav',
+        size: bytes.length,
+        data: bytes,
+      },
+    }),
+    { status: 400 },
+  )
+  const updated = await payload.update({
+    collection: 'audio-files',
+    id: record.id,
+    data: { storageKey: '../../forged.wav', filename: 'forged.wav', size: 999 },
+    overrideAccess: false,
+    req,
+  })
+  assert.equal(updated.filename, record.filename)
+  assert.equal(updated.storageKey, record.storageKey)
+  assert.equal(updated.size, bytes.length)
+  await payload.delete({
+    collection: 'audio-files',
+    id: record.id,
+    overrideAccess: false,
+    req,
+  })
+  await assert.rejects(stat(path.join(directory, 'audio', record.filename!)), {
+    code: 'ENOENT',
+  })
+  assert.equal(
+    (await readdir(path.join(directory, 'audio'))).some((name) =>
+      name.endsWith('.partial'),
+    ),
+    false,
+  )
+})
+
+test('existing recordings migrate into CMS file management without moving bytes', async () => {
+  const { randomUUID } = await import('node:crypto')
+  const { writeFile, readFile } = await import('node:fs/promises')
+  const { sql } = await import('@payloadcms/db-postgres')
+  const postgres = payload.db.name !== 'sqlite'
+  const migration = postgres
+    ? await import('../src/migrations-postgres/20260922_051634_managed_audio')
+    : await import('../src/migrations-sqlite/20260922_051618_managed_audio')
+  const db = (payload.db as any).drizzle
+  await migration.down({ db } as never)
+  const id = randomUUID(),
+    key = randomUUID() + '.wav',
+    bytes = wav()
+  await writeFile(path.join(directory, 'audio', key), bytes)
+  const insert = sql`INSERT INTO audio_files (id, storage_key, original_name, size, content_type, created_at, updated_at)
+    VALUES (${id}, ${key}, 'existing.wav', ${bytes.length}, 'audio/wav', ${new Date().toISOString()}, ${new Date().toISOString()})`
+  if (postgres) await db.execute(insert)
+  else await db.run(insert)
+  await migration.up({ db } as never)
+  const record = await payload.findByID({
+    collection: 'audio-files',
+    id,
+    overrideAccess: true,
+  })
+  assert.equal(record.filename, key)
+  assert.equal(record.filesize, bytes.length)
+  assert.equal(record.mimeType, 'audio/wav')
+  assert.deepEqual(await readFile(path.join(directory, 'audio', key)), bytes)
+  const response = await download(
+    new Request(
+      `http://localhost:3000/files/${key}?token=${capability('audio', key)}`,
+    ),
+    { params: Promise.resolve({ key }) },
+  )
+  assert.equal(response.status, 200)
+  await response.arrayBuffer()
+  await payload.delete({ collection: 'audio-files', id, overrideAccess: true })
+  await assert.rejects(stat(path.join(directory, 'audio', key)), {
+    code: 'ENOENT',
+  })
 })

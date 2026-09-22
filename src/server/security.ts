@@ -1,3 +1,4 @@
+import { APIError } from 'payload'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 export function equal(a: string, b: string): boolean {
   const left = Buffer.from(a),
@@ -38,6 +39,8 @@ export function errorResponse(error: unknown) {
       { status: error.status, headers },
     )
   }
+  if (error instanceof APIError && error.status >= 400 && error.status < 500)
+    return Response.json({ error: error.message }, { status: error.status })
   console.error('Platform request failed', error)
   return Response.json({ error: 'Internal server error' }, { status: 500 })
 }

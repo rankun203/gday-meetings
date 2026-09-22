@@ -21,6 +21,11 @@ const secret = env.PAYLOAD_SECRET
 const adapter = env.DATABASE_ADAPTER
 export default buildConfig({
   secret,
+  upload: {
+    useTempFiles: true,
+    limits: { fileSize: env.MAX_UPLOAD_BYTES },
+    abortOnLimit: true,
+  },
   serverURL: env.SERVER_URL,
   admin: { user: 'users', meta: { titleSuffix: ' · GdayMeetings' } },
   collections: [Users, Meetings, Tasks, Outputs, AudioFiles],

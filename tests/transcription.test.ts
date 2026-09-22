@@ -1,3 +1,4 @@
+import { wav } from './helpers/audio'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -29,17 +30,18 @@ after(async () => {
   await rm(directory, { recursive: true, force: true })
 })
 const output = { tracks: {}, language: 'en', model: 'test' }
-const audioKey = `${randomUUID()}.opus`
-await payload.create({
+const audio = await payload.create({
   collection: 'audio-files',
-  data: {
-    storageKey: audioKey,
-    originalName: 'recording.opus',
-    size: 100,
-    contentType: 'audio/opus',
+  data: {} as never,
+  file: {
+    name: 'recording.wav',
+    data: wav(),
+    size: wav().length,
+    mimetype: 'audio/wav',
   },
   overrideAccess: true,
 })
+const audioKey = audio.storageKey
 const inputs = [
   {
     url: `${process.env.SERVER_URL}/files/${audioKey}?token=${capability('audio', audioKey)}`,

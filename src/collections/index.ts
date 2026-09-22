@@ -1,4 +1,5 @@
-import { removeAudio } from '../server/storage'
+import { audioDirectory } from '../server/storage'
+import { prepareAudio, audioMetadata } from '../server/audio-hooks'
 import type { Access, CollectionConfig } from 'payload'
 const authenticated: Access = ({ req }) =>
   Boolean(req.user && !req.user.disabled)
@@ -240,21 +241,47 @@ export const Outputs: CollectionConfig = {
 export const AudioFiles: CollectionConfig = {
   slug: 'audio-files',
   access,
-  hooks: {
-    afterDelete: [
-      async ({ doc }) => {
-        await removeAudio(String(doc.storageKey))
-      },
+  disableDuplicate: true,
+  upload: {
+    staticDir: audioDirectory(),
+    mimeTypes: [
+      'audio/*',
+      'video/mp4',
+      'video/webm',
+      'application/octet-stream',
     ],
+    filesRequiredOnCreate: true,
+    pasteURL: false,
+    crop: false,
+    focalPoint: false,
   },
+  hooks: { beforeOperation: [prepareAudio], beforeValidate: [audioMetadata] },
   admin: {
     useAsTitle: 'originalName',
-    defaultColumns: ['originalName', 'size', 'createdAt'],
+    defaultColumns: ['originalName', 'filesize', 'createdAt'],
+    description:
+      'Upload recordings here. Gday manages file storage and metadata automatically.',
   },
   fields: [
-    { name: 'storageKey', type: 'text', required: true, unique: true },
-    { name: 'originalName', type: 'text', required: true },
-    { name: 'size', type: 'number', required: true },
-    { name: 'contentType', type: 'text', required: true },
+    {
+      name: 'storageKey',
+      type: 'text',
+      required: true,
+      unique: true,
+      admin: { hidden: true },
+    },
+    {
+      name: 'originalName',
+      type: 'text',
+      required: true,
+      admin: { hidden: true },
+    },
+    { name: 'size', type: 'number', required: true, admin: { hidden: true } },
+    {
+      name: 'contentType',
+      type: 'text',
+      required: true,
+      admin: { hidden: true },
+    },
   ],
 }

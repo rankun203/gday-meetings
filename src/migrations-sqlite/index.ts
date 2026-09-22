@@ -1,6 +1,7 @@
 import * as migration_20260922_024333_initial_schema from './20260922_024333_initial_schema';
 import * as migration_20260922_025206_transcript_projection_order from './20260922_025206_transcript_projection_order';
 import * as migration_20260922_041358_server_execution_identity from './20260922_041358_server_execution_identity';
+import * as migration_20260922_051618_managed_audio from './20260922_051618_managed_audio';
 
 export const migrations = [
   {
@@ -16,6 +17,11 @@ export const migrations = [
   {
     up: migration_20260922_041358_server_execution_identity.up,
     down: migration_20260922_041358_server_execution_identity.down,
-    name: '20260922_041358_server_execution_identity'
+    name: '20260922_041358_server_execution_identity',
+  },
+  {
+    up: migration_20260922_051618_managed_audio.up,
+    down: migration_20260922_051618_managed_audio.down,
+    name: '20260922_051618_managed_audio'
   },
 ];

@@ -1,8 +1,8 @@
 import type { PayloadRequest } from 'payload'
-import { audioDirectory as directory, validStorageKey } from './storage'
+import { audioDirectory as directory } from './storage'
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, rename, stat, unlink } from 'node:fs/promises'
+import { mkdir, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -29,8 +29,7 @@ export async function upload(request: Request, req: PayloadRequest) {
     throw new HttpError(400, 'Unsupported audio extension')
   const key = randomUUID() + extension
   await mkdir(directory(), { recursive: true })
-  const temporary = path.join(directory(), `${key}.partial`),
-    destination = path.join(directory(), key)
+  const temporary = path.join(directory(), `${key}.partial`)
   let size = 0
   const limit = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 ** 3)
   try {
@@ -52,26 +51,27 @@ export async function upload(request: Request, req: PayloadRequest) {
       createWriteStream(temporary, { flags: 'wx' }),
     )
     if (!size) throw new HttpError(400, 'Audio body is empty')
-    await rename(temporary, destination)
     const payload = await cms()
-    await payload.create({
+    const record = await payload.create({
       collection: 'audio-files',
       overrideAccess: false,
       req,
-      data: {
-        storageKey: key,
-        originalName,
+      data: {} as never,
+      file: {
+        name: originalName,
         size,
-        contentType:
+        mimetype:
           request.headers.get('content-type') || 'application/octet-stream',
+        data: Buffer.alloc(0),
+        tempFilePath: temporary,
       },
     })
-    return { url: `/files/${key}?token=${capability('audio', key)}` }
+    await unlink(temporary).catch(() => {})
+    return {
+      url: `/files/${record.storageKey}?token=${capability('audio', record.storageKey)}`,
+    }
   } catch (error) {
-    await Promise.all([
-      unlink(temporary).catch(() => {}),
-      unlink(destination).catch(() => {}),
-    ])
+    await unlink(temporary).catch(() => {})
     throw error
   }
 }

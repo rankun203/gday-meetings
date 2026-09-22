@@ -24,7 +24,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.1` image, available
+Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.2` image, available
 for Linux AMD64 and ARM64. Set `GDAY_VERSION` to select another published version.
 For a source build, use `docker compose -f compose.yaml -f compose.build.yaml up -d --build`.
 
@@ -82,3 +82,5 @@ Tests create an isolated SQLite database by default and exercise actual producti
 ## License
 
 MIT.
+
+Audio Files is a native Payload upload collection: select or drag in a recording and save. The CMS stores the file under `DATA_DIR/audio`, generates metadata, and deletes the file when its record is deleted. Desktop uploads use the same collection. Existing recordings migrate in place.

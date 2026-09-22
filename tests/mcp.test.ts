@@ -1,3 +1,4 @@
+import { wav } from './helpers/audio'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { createServer } from 'node:http'
@@ -362,7 +363,7 @@ test('desktop OAuth uploads and queues a durable task without service credential
     new Request(origin + '/upload?filename=test.wav', {
       method: 'POST',
       headers,
-      body: new Uint8Array([1, 2, 3, 4]),
+      body: wav(),
     }),
   )
   assert.equal(uploaded.status, 201, await uploaded.clone().text())
