@@ -1,7 +1,7 @@
 ---
 date: 2026-09-22
 title: Publish GdayMeetings container package
-status: in-progress
+status: complete
 ---
 
 ## Problem
@@ -35,4 +35,14 @@ documented in the platform architecture guide.
 
 Validation passed: seven platform/MCP tests, typecheck, production build, Docker
 build, Compose configuration, and actual SDK initialize/list/search against the
-packaged `/mcp` endpoint. Publication and remote pull verification pending.
+packaged `/mcp` endpoint.
+
+Published [v0.2.0](https://github.com/rankun203/gday-meetings/releases/tag/v0.2.0)
+with the successful [release workflow](https://github.com/rankun203/gday-meetings/actions/runs/35684097071).
+Both `0.2.0` and `latest` point to the same AMD64/ARM64 manifest:
+`sha256:12a7d65eebf0229d6f5c14f8cb3df2a816f66797bdc248f45327b76b71f05d81`.
+An empty Docker credential directory successfully pulled the image anonymously.
+The pulled image launched with fresh SQLite migrations and passed actual MCP
+SDK initialize/list/search plus anonymous-request rejection. Test containers
+were stopped. Manual dispatch can publish an existing tag without changing it;
+the initial tag event did not start a run, and the fallback was used.

@@ -44,6 +44,8 @@ For production without Docker, run `pnpm build && pnpm start` with the same envi
 Releases are published by pushing a `vX.Y.Z` tag matching `package.json`, with
 notes in `.github/release-notes/vX.Y.Z.md`. The workflow validates source, publishes
 the multi-platform image under `X.Y.Z` and `latest`, and creates the GitHub release.
+To retry publication of an existing tag without changing it, run
+`gh workflow run release.yml --ref master -f tag=vX.Y.Z`.
 
 ## Client and worker contract
 
