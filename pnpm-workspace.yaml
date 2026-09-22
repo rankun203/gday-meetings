@@ -3,3 +3,5 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - dotenv@18.0.2
+patchedDependencies:
+  better-auth@1.7.5: patches/better-auth@1.7.5.patch

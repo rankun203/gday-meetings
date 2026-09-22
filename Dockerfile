@@ -2,6 +2,7 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /app
 RUN npm install --global pnpm@12.5.1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1

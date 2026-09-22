@@ -1,0 +1,13 @@
+diff --git a/dist/db/get-migration.mjs b/dist/db/get-migration.mjs
+index c9c0218c0c18019abc8c3734c0c8bc2a3f69cd50..da3f99163618dd86c6fe8b6849195e84a2725fab 100644
+--- a/dist/db/get-migration.mjs
++++ b/dist/db/get-migration.mjs
+@@ -323,7 +323,7 @@ function matchType(columnDataType, fieldType, dbType) {
+ 	function normalize(type) {
+ 		return type.toLowerCase().split("(")[0].trim();
+ 	}
+-	if (fieldType === "string[]" || fieldType === "number[]") return columnDataType.toLowerCase().includes("json");
++	if (fieldType === "string[]" || fieldType === "number[]") return dbType === "sqlite" ? normalize(columnDataType) === "text" : columnDataType.toLowerCase().includes("json");
+ 	const types = map[dbType];
+ 	return (Array.isArray(fieldType) ? types["string"].map((t) => t.toLowerCase()) : types[fieldType].map((t) => t.toLowerCase())).includes(normalize(columnDataType));
+ }
