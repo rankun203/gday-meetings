@@ -1,10 +1,5 @@
-import {
-  platformAccess,
-  requireWorkerService,
-} from '../../../../../server/platform-access'
+import { platformAccess } from '../../../../../server/platform-access'
 import { runpodConfiguration } from '../../../../../server/transcription'
-import { patchTask } from '../../../../../server/atomic'
-import { z } from 'zod'
 import { cms } from '../../../../../server/payload'
 import {
   createTask,
@@ -56,32 +51,9 @@ async function route(request: Request, { params }: Context) {
     if (request.method === 'POST' && parts.join('/') === 'tasks') {
       const parsed = taskInput.safeParse(await readJSON(request))
       if (!parsed.success) throw new HttpError(400, parsed.error.message)
-      if (req && !parsed.data.execute)
-        throw new HttpError(400, 'User submissions require execute: true')
       return Response.json(await createTask(await cms(), parsed.data, req), {
         status: 201,
       })
-    }
-    if (
-      request.method === 'PATCH' &&
-      parts[0] === 'tasks' &&
-      parts.length === 2
-    ) {
-      requireWorkerService(request)
-      const parsed = z
-        .object({
-          status: z.enum(['PENDING', 'FAILED']).optional(),
-          error: z.string().max(20000).optional(),
-          runpodJobId: z.string().max(200).optional(),
-        })
-        .strict()
-        .safeParse(await readJSON(request))
-      if (!parsed.success) throw new HttpError(400, parsed.error.message)
-      const payload = await cms()
-      const current = await getTask(payload, parts[1])
-      if (current.status === 'COMPLETED') return Response.json(current)
-      await patchTask(payload, parts[1], parsed.data)
-      return Response.json(await getTask(payload, parts[1]))
     }
     if (request.method === 'GET' && parts[0] === 'tasks' && parts.length === 2)
       return Response.json(await getTask(await cms(), parts[1], req))
@@ -118,4 +90,6 @@ async function route(request: Request, { params }: Context) {
 export const GET = route
 export const POST = route
 
-export const PATCH = route
+export function PATCH(_request: Request, _context: Context) {
+  return new Response(null, { status: 405, headers: { Allow: 'GET, POST' } })
+}

@@ -10,7 +10,7 @@ The authorization issuer is `SERVER_URL/api/auth`. OpenID Connect metadata is av
 
 Set a stable public HTTPS `SERVER_URL`, preserve Host and Authorization through the reverse proxy, and finish first-admin setup before exposing the service. Use HTTP only for loopback development. Back up persistent authentication data together with Payload data, audio, and deployment secrets.
 
-Upgrading from 0.2 requires reconnecting MCP clients through OAuth. Neither `GDAY_MCP_TOKEN` nor `GDAY_API_TOKEN` authorizes `/mcp`. Worker ingestion and callbacks retain their separate existing authentication.
+Client access requires OAuth across MCP and the platform API; deployment-wide API/MCP keys are not supported. Gday provides task-scoped capabilities directly to workers for output callbacks. Desktop clients never receive callback credentials.
 
 Access tokens expire after five minutes. Browser sign-out invalidates its session-bound access tokens immediately; disabling/deleting the canonical account immediately denies resource access. Revoking only a refresh token prevents renewal but an already issued access token may remain valid until its five-minute expiry. Desktop sign-out clears its private credential file and attempts remote refresh revocation.
 

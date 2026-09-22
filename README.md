@@ -8,7 +8,7 @@ Requires Node.js 24.15+ and pnpm 12.5.1.
 
 ```sh
 cp .env.example .env
-# Set PAYLOAD_SECRET and GDAY_API_TOKEN to independent random secrets.
+# Set PAYLOAD_SECRET to a stable random secret of at least 32 characters.
 pnpm install
 pnpm dev
 ```
@@ -24,7 +24,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.0` image, available
+Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.1` image, available
 for Linux AMD64 and ARM64. Set `GDAY_VERSION` to select another published version.
 For a source build, use `docker compose -f compose.yaml -f compose.build.yaml up -d --build`.
 
@@ -49,7 +49,7 @@ To retry publication of an existing tag without changing it, run
 
 ## Client and worker contract
 
-See [API reference](docs/api.md). Configure the meeting-notes filedrop URL to this platform origin and its service key to `GDAY_API_TOKEN`. The legacy raw `/upload?filename=...` endpoint is retained. Clients detect durable tasks with authenticated `GET /api/platform/capabilities`; only a 404 means an older filedrop server. A task creation response includes a scoped callback URL/token that can be passed to a worker without sharing the service key.
+See [API reference](docs/api.md). Configure the meeting-notes client with this platform origin and sign in through GdayMeetings. User OAuth tokens authorize uploads and task submissions. Every task requires a stable `idempotencyKey`; Gday queues and executes it using server-side `RUNPOD_ENDPOINT_URL` and `RUNPOD_API_KEY`. Callback capabilities stay between Gday and the worker. Clients poll durable task outputs and download the transcript when ready.
 
 ## MCP
 
@@ -61,7 +61,7 @@ The client discovers authorization, registers, opens your GdayMeetings login, an
 
 Authorization uses S256 PKCE, short-lived one-use codes, five-minute access tokens, and rotating refresh tokens with replay protection. Gday uses the maintained Better Auth OAuth/OIDC provider and canonical Payload accounts. Discovery is served at `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server`; clients discover token and revocation endpoints from metadata. See [MCP authorization](docs/mcp.md).
 
-**Upgrading from 0.2:** reconnect existing MCP clients through browser login. `GDAY_MCP_TOKEN` and `GDAY_API_TOKEN` are no longer accepted at `/mcp`. The worker/client service API continues using `GDAY_API_TOKEN`.
+All client access uses user OAuth. Deployment-wide API/MCP keys and client-managed transcription submission are not supported.
 
 Set `SERVER_URL` to the public HTTPS app origin (HTTP is for local development). Your reverse proxy must preserve the public `Host` and client's `Authorization` header. Requests with an `Origin` header must match the configured origin; cross-origin browser calls are not enabled. The transport is stateless: POST carries MCP requests; GET/SSE and DELETE return 405 after authentication.
 

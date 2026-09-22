@@ -15,7 +15,6 @@ const schema = z
     DATABASE_ADAPTER: z.enum(['sqlite', 'postgres']).default('sqlite'),
     DATABASE_URI: optional,
     AUTH_DATABASE_URI: optional,
-    GDAY_API_TOKEN: optional,
     RUNPOD_ENDPOINT_URL: optional,
     RUNPOD_API_KEY: optional,
     OIDC_UPSTREAM_ISSUER: optional,

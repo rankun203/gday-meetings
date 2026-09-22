@@ -4,13 +4,6 @@ export function equal(a: string, b: string): boolean {
     right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
 }
-export function serviceAuthorized(request: Request): boolean {
-  const token = process.env.GDAY_API_TOKEN
-  return Boolean(
-    token &&
-    equal(request.headers.get('authorization') || '', `Bearer ${token}`),
-  )
-}
 export function capability(kind: 'audio' | 'result', id: string): string {
   const secret = process.env.PAYLOAD_SECRET
   if (!secret) throw new Error('PAYLOAD_SECRET required')
@@ -31,9 +24,6 @@ export class HttpError extends Error {
   ) {
     super(message)
   }
-}
-export function requireService(request: Request) {
-  if (!serviceAuthorized(request)) throw new HttpError(401, 'Unauthorized')
 }
 export function publicURL(path: string) {
   const base = process.env.SERVER_URL || 'http://localhost:3000'

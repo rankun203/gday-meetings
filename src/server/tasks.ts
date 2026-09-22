@@ -7,106 +7,92 @@ import {
 } from './transcription'
 import { z } from 'zod'
 import type { Payload, PayloadRequest } from 'payload'
-import { capability, HttpError, publicURL } from './security'
-export const taskInput = z.object({
-  externalId: z.string().min(1).max(200),
-  title: z.string().min(1).max(500),
-  execute: z.boolean().optional(),
-  idempotencyKey: z.string().min(1).max(200).optional(),
-  executionOptions: executionOptions.optional(),
-  inputs: z
-    .array(
-      z.object({
-        url: z.string().min(1).max(4096),
-        trackName: z.string().max(200).optional(),
-        sourceType: z.string().max(100).optional(),
-        channels: z.number().int().positive().max(64).optional(),
-      }),
-    )
-    .max(32),
-})
+import { HttpError, publicURL } from './security'
+export const taskInput = z
+  .object({
+    externalId: z.string().min(1).max(200),
+    title: z.string().min(1).max(500),
+    idempotencyKey: z.string().min(1).max(200),
+    executionOptions: executionOptions.optional(),
+    inputs: z
+      .array(
+        z.object({
+          url: z.string().min(1).max(4096),
+          trackName: z.string().max(200).optional(),
+          sourceType: z.string().max(100).optional(),
+          channels: z.number().int().positive().max(64).optional(),
+        }),
+      )
+      .min(1)
+      .max(32),
+  })
+  .strict()
 export const outputInput = z.object({
   type: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
   body: z
     .unknown()
     .refine((v) => v !== undefined && v !== null, 'body required'),
 })
-// This API is an authenticated service boundary. Its callers validate a service
-// token or a single-task capability before these explicit system operations.
 export async function createTask(
   payload: Payload,
   input: z.infer<typeof taskInput>,
-  req?: PayloadRequest,
+  req: PayloadRequest,
 ) {
-  if (req && !input.execute)
+  if (!req.user) throw new HttpError(401, 'Unauthorized')
+  if (!runpodConfiguration())
+    throw new HttpError(503, 'Server transcription is not configured')
+  try {
+    validateOwnedAudio(input.inputs)
+  } catch {
     throw new HttpError(
       400,
-      'Authenticated clients must request server execution',
+      'Execution requires unique tracks with signed platform audio URLs',
     )
-  let idempotencyKey: string | undefined
-  let requestHash: string | undefined
-  if (input.execute) {
-    if (!runpodConfiguration())
-      throw new HttpError(503, 'Server transcription is not configured')
-    if (!input.idempotencyKey)
-      throw new HttpError(400, 'Server execution requires idempotencyKey')
-    try {
-      validateOwnedAudio(input.inputs)
-    } catch {
-      throw new HttpError(
-        400,
-        'Execution requires unique tracks with signed platform audio URLs',
-      )
-    }
-    for (const track of input.inputs) {
-      const key = new URL(track.url).pathname.slice('/files/'.length)
-      const stored = await payload.find({
-        collection: 'audio-files',
-        where: { storageKey: { equals: key } },
-        limit: 1,
-        req,
-        overrideAccess: !req,
-      })
-      if (!stored.docs.length)
-        throw new HttpError(400, 'Audio input does not exist')
-    }
-    idempotencyKey = createHash('sha256')
-      .update(
-        JSON.stringify([
-          req?.user?.id || 'service',
-          input.externalId,
-          input.idempotencyKey,
-        ]),
-      )
-      .digest('hex')
-    requestHash = createHash('sha256')
-      .update(
-        JSON.stringify({
-          externalId: input.externalId,
-          title: input.title,
-          inputs: input.inputs,
-          options: executionOptions.parse(input.executionOptions || {}),
-        }),
-      )
-      .digest('hex')
-    const existing = await payload.find({
-      collection: 'tasks',
-      where: { idempotencyKey: { equals: idempotencyKey } },
+  }
+  for (const track of input.inputs) {
+    const key = new URL(track.url).pathname.slice('/files/'.length)
+    const stored = await payload.find({
+      collection: 'audio-files',
+      where: { storageKey: { equals: key } },
       limit: 1,
       req,
-      overrideAccess: !req,
+      overrideAccess: false,
     })
-    if (existing.docs[0]) {
-      if (existing.docs[0].requestHash !== requestHash)
-        throw new HttpError(
-          409,
-          'Idempotency key already used for different inputs',
-        )
-      return {
-        id: existing.docs[0].id,
-        status: existing.docs[0].status,
-        executionState: existing.docs[0].executionState,
-      }
+    if (!stored.docs.length)
+      throw new HttpError(400, 'Audio input does not exist')
+  }
+  const idempotencyKey = createHash('sha256')
+    .update(
+      JSON.stringify([req.user.id, input.externalId, input.idempotencyKey]),
+    )
+    .digest('hex')
+  const requestHash = createHash('sha256')
+    .update(
+      JSON.stringify({
+        externalId: input.externalId,
+        title: input.title,
+        inputs: input.inputs,
+        options: executionOptions.parse(input.executionOptions || {}),
+      }),
+    )
+    .digest('hex')
+  const existing = await payload.find({
+    collection: 'tasks',
+    where: { idempotencyKey: { equals: idempotencyKey } },
+    limit: 1,
+    req,
+    overrideAccess: false,
+  })
+  if (existing.docs[0]) {
+    if (existing.docs[0].requestHash !== requestHash)
+      throw new HttpError(
+        409,
+        'Idempotency key already used for different inputs',
+      )
+    return {
+      id: existing.docs[0].id,
+      status: existing.docs[0].status,
+      executionState: existing.docs[0].executionState,
     }
   }
   let result = await payload.find({
@@ -114,7 +100,7 @@ export async function createTask(
     where: { externalId: { equals: input.externalId } },
     limit: 1,
     req,
-    overrideAccess: !req,
+    overrideAccess: false,
   })
   let meeting = result.docs[0]
   if (!meeting) {
@@ -123,7 +109,7 @@ export async function createTask(
         collection: 'meetings',
         data: { externalId: input.externalId, title: input.title },
         req,
-        overrideAccess: !req,
+        overrideAccess: false,
       })
     } catch (error) {
       result = await payload.find({
@@ -131,7 +117,7 @@ export async function createTask(
         where: { externalId: { equals: input.externalId } },
         limit: 1,
         req,
-        overrideAccess: !req,
+        overrideAccess: false,
       })
       if (!result.docs[0]) throw error
       meeting = result.docs[0]
@@ -146,20 +132,14 @@ export async function createTask(
         meeting: meeting.id,
         status: 'PENDING',
         inputs: input.inputs,
-        ...(input.execute
-          ? {
-              executionState: 'QUEUED',
-              executionOptions: executionOptions.parse(
-                input.executionOptions || {},
-              ),
-              executionRevision: 0,
-              idempotencyKey,
-              requestHash,
-            }
-          : {}),
+        executionState: 'QUEUED',
+        executionOptions: executionOptions.parse(input.executionOptions || {}),
+        executionRevision: 0,
+        idempotencyKey,
+        requestHash,
       },
       req,
-      overrideAccess: !req,
+      overrideAccess: false,
     })
   } catch (error) {
     if (!idempotencyKey) throw error
@@ -168,7 +148,7 @@ export async function createTask(
       where: { idempotencyKey: { equals: idempotencyKey } },
       limit: 1,
       req,
-      overrideAccess: !req,
+      overrideAccess: false,
     })
     if (!found.docs[0]) throw error
     if (found.docs[0].requestHash !== requestHash)
@@ -178,19 +158,10 @@ export async function createTask(
       )
     task = found.docs[0]
   }
-  if (input.execute)
-    return {
-      id: task.id,
-      status: task.status,
-      executionState: task.executionState,
-    }
   return {
     id: task.id,
     status: task.status,
-    resultSink: {
-      url: publicURL(`/api/platform/tasks/${task.id}/outputs`),
-      token: capability('result', String(task.id)),
-    },
+    executionState: task.executionState,
   }
 }
 export async function getTask(

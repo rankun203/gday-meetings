@@ -6,7 +6,9 @@ import path from 'node:path'
 const directory = await mkdtemp(path.join(tmpdir(), 'gday-test-'))
 process.env.DATA_DIR = directory
 process.env.PAYLOAD_SECRET = 'test-only-secret-at-least-thirty-two-characters'
+// A former shared-key value must never grant access.
 process.env.GDAY_API_TOKEN = 'test-service-token'
+process.env.SERVER_URL = 'http://localhost:3000'
 Object.assign(process.env, { NODE_ENV: 'production' })
 if (process.env.DATABASE_ADAPTER !== 'postgres')
   process.env.DATABASE_URI = `file:${directory}/test.db`
@@ -17,6 +19,41 @@ const { GET, POST, PATCH } =
 const { POST: upload } = await import('../src/app/(site)/upload/route')
 const { GET: download } = await import('../src/app/(site)/files/[key]/route')
 const { transcriptText } = await import('../src/server/tasks')
+const { oauthFixture } = await import('./helpers/oauth')
+const { issueUserToken } = await oauthFixture(payload, process.env.SERVER_URL)
+const identity = await issueUserToken('platform-test@example.test')
+const { capability } = await import('../src/server/security')
+async function seedTask(input: {
+  externalId: string
+  title: string
+  inputs: never[]
+}) {
+  const found = await payload.find({
+    collection: 'meetings',
+    where: { externalId: { equals: input.externalId } },
+    limit: 1,
+    overrideAccess: true,
+  })
+  const meeting =
+    found.docs[0] ||
+    (await payload.create({
+      collection: 'meetings',
+      data: { externalId: input.externalId, title: input.title },
+      overrideAccess: true,
+    }))
+  const task = await payload.create({
+    collection: 'tasks',
+    data: { meeting: meeting.id, status: 'PENDING', inputs: [] },
+    overrideAccess: true,
+  })
+  return {
+    id: task.id,
+    resultSink: {
+      url: `http://localhost:3000/api/platform/tasks/${task.id}/outputs`,
+      token: capability('result', task.id),
+    },
+  }
+}
 after(async () => {
   await payload.destroy()
   await rm(directory, { recursive: true, force: true })
@@ -25,7 +62,7 @@ const request = (
   method: string,
   url: string,
   body?: unknown,
-  token = 'test-service-token',
+  token = identity.token,
 ) =>
   new Request(`http://localhost:3000${url}`, {
     method,
@@ -58,27 +95,16 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
     ).json(),
     { durableTasks: true, transcription: false, version: 2 },
   )
-  const create = await POST(
-    request('POST', '/api/platform/tasks', {
-      externalId: 'integration-session',
-      title: 'Planning meeting',
-      inputs: [],
-    }),
-    context('tasks'),
-  )
-  assert.equal(create.status, 201)
-  const task = await create.json()
-  assert.equal(typeof task.id, 'string')
-  const second = await (
-    await POST(
-      request('POST', '/api/platform/tasks', {
-        externalId: 'integration-session',
-        title: 'Planning meeting',
-        inputs: [],
-      }),
-      context('tasks'),
-    )
-  ).json()
+  const task = await seedTask({
+    externalId: 'integration-session',
+    title: 'Planning meeting',
+    inputs: [],
+  })
+  const second = await seedTask({
+    externalId: 'integration-session',
+    title: 'Planning meeting',
+    inputs: [],
+  })
   assert.notEqual(task.id, second.id)
   const before = await (
     await GET(
@@ -159,7 +185,7 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
     }),
     context('tasks', task.id),
   )
-  assert.equal((await patch.json()).status, 'COMPLETED')
+  assert.equal(patch.status, 405)
   await assert.rejects(
     payload.find({ collection: 'meetings', overrideAccess: false }),
     { status: 403 },
@@ -172,7 +198,7 @@ test('audio uploads are complete before exposure and support authenticated byte 
     new Request('http://localhost:3000/upload?filename=sample.wav', {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer test-service-token',
+        Authorization: `Bearer ${identity.token}`,
         'Content-Type': 'audio/wav',
       },
       body: bytes,
@@ -227,9 +253,9 @@ test('audio uploads are complete before exposure and support authenticated byte 
 })
 
 test('newer empty transcript clears previous text; out-of-order callbacks and late failures cannot undo it', async () => {
-  const { createTask, persistOutput } = await import('../src/server/tasks')
+  const { persistOutput } = await import('../src/server/tasks')
   const { patchTask } = await import('../src/server/atomic')
-  const old = await createTask(payload, {
+  const old = await seedTask({
     externalId: 'race-test-' + Date.now(),
     title: 'Race test',
     inputs: [],
@@ -241,7 +267,7 @@ test('newer empty transcript clears previous text; out-of-order callbacks and la
   })
   const meetingId =
     typeof original.meeting === 'object' ? original.meeting.externalId : ''
-  const newer = await createTask(payload, {
+  const newer = await seedTask({
     externalId: meetingId,
     title: 'Race test',
     inputs: [],
@@ -283,14 +309,14 @@ test('newer empty transcript clears previous text; out-of-order callbacks and la
 })
 
 test('concurrent callbacks keep the newest attempt transcript', async () => {
-  const { createTask, persistOutput } = await import('../src/server/tasks')
+  const { persistOutput } = await import('../src/server/tasks')
   const externalId = 'concurrent-' + Date.now()
-  const older = await createTask(payload, {
+  const older = await seedTask({
     externalId,
     title: 'Concurrent',
     inputs: [],
   })
-  const newer = await createTask(payload, {
+  const newer = await seedTask({
     externalId,
     title: 'Concurrent',
     inputs: [],
@@ -320,4 +346,58 @@ test('concurrent callbacks keep the newest attempt transcript', async () => {
     typeof task.meeting === 'object' ? task.meeting.transcript : undefined,
     'Current transcript',
   )
+})
+
+test('former shared keys cannot upload, read meetings, or create client-run tasks', async () => {
+  for (const route of ['capabilities', 'meetings/search']) {
+    const response = await GET(
+      request('GET', '/api/platform/' + route, undefined, 'test-service-token'),
+      context(...route.split('/')),
+    )
+    assert.equal(response.status, 401)
+  }
+  const denied = await POST(
+    request(
+      'POST',
+      '/api/platform/tasks',
+      {
+        externalId: 'forbidden',
+        title: 'Forbidden',
+        inputs: [],
+        idempotencyKey: 'attempt',
+      },
+      'test-service-token',
+    ),
+    context('tasks'),
+  )
+  assert.equal(denied.status, 401)
+  const audio = await upload(
+    new Request('http://localhost:3000/upload?filename=denied.wav', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-service-token' },
+      body: 'audio',
+    }),
+  )
+  assert.equal(audio.status, 401)
+  const legacy = await POST(
+    request('POST', '/api/platform/tasks', {
+      externalId: 'forbidden',
+      title: 'Forbidden',
+      inputs: [],
+      idempotencyKey: 'attempt',
+      execute: false,
+    }),
+    context('tasks'),
+  )
+  assert.equal(legacy.status, 400)
+  const unsupported = await POST(
+    request('POST', '/api/platform/tasks', {
+      externalId: 'unconfigured',
+      title: 'Unconfigured',
+      inputs: [{ url: 'http://localhost:3000/files/test.wav?token=test' }],
+      idempotencyKey: 'attempt',
+    }),
+    context('tasks'),
+  )
+  assert.equal(unsupported.status, 503)
 })

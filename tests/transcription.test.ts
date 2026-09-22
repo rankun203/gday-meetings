@@ -19,7 +19,7 @@ if (process.env.DATABASE_ADAPTER !== 'postgres')
   process.env.DATABASE_URI = `file:${directory}/test.db`
 const { cms } = await import('../src/server/payload')
 const payload = await cms()
-const { createTask, getTask, persistOutput } =
+const { createTask, getTask, persistOutput, taskInput } =
   await import('../src/server/tasks')
 const { advanceTranscription, validateOwnedAudio } =
   await import('../src/server/transcription')
@@ -48,15 +48,38 @@ const inputs = [
     channels: 1,
   },
 ]
-const newTask = () =>
-  createTask(payload, {
-    externalId: randomUUID(),
-    title: 'Execution test',
-    inputs,
-    execute: true,
-    idempotencyKey: randomUUID(),
-    executionOptions: { language: 'en', diarize: true },
-  })
+await payload.create({
+  collection: 'users',
+  data: {
+    email: 'bootstrap@example.test',
+    password: 'test-passphrase-12345',
+    role: 'admin',
+  },
+  overrideAccess: true,
+})
+const member = await payload.create({
+  collection: 'users',
+  data: {
+    email: 'member@example.test',
+    password: 'test-passphrase-12345',
+    role: 'member',
+  },
+  overrideAccess: true,
+})
+const memberRequest = () =>
+  createLocalReq({ user: { ...member, collection: 'users' } }, payload)
+const newTask = async () =>
+  createTask(
+    payload,
+    {
+      externalId: randomUUID(),
+      title: 'Execution test',
+      inputs,
+      idempotencyKey: randomUUID(),
+      executionOptions: { language: 'en', diarize: true },
+    },
+    await memberRequest(),
+  )
 
 test('persisted output repairs interrupted completion without another provider request', async () => {
   const task = await newTask()
@@ -82,29 +105,7 @@ const fakeFetch = (
 ) => fn as typeof fetch
 
 test('members cannot forge raw tasks or outputs but validated submissions work', async () => {
-  // The first account is bootstrap administrator; use an explicit second member.
-  await payload.create({
-    collection: 'users',
-    data: {
-      email: 'bootstrap@example.test',
-      password: 'test-passphrase-12345',
-      role: 'admin',
-    },
-    overrideAccess: true,
-  })
-  const member = await payload.create({
-    collection: 'users',
-    data: {
-      email: 'member@example.test',
-      password: 'test-passphrase-12345',
-      role: 'member',
-    },
-    overrideAccess: true,
-  })
-  const req = await createLocalReq(
-    { user: { ...member, collection: 'users' } },
-    payload,
-  )
+  const req = await memberRequest()
   const meeting = await payload.create({
     collection: 'meetings',
     data: { externalId: randomUUID(), title: 'Member meeting' },
@@ -130,7 +131,6 @@ test('members cannot forge raw tasks or outputs but validated submissions work',
       externalId: meeting.externalId,
       title: meeting.title,
       inputs,
-      execute: true,
       idempotencyKey: 'member-attempt',
     },
     req,
@@ -167,17 +167,23 @@ test('idempotent enqueue validates owned audio and keeps callback secret server-
     externalId: randomUUID(),
     title: 'Meeting',
     inputs,
-    execute: true,
     idempotencyKey: 'one',
   }
-  const first = await createTask(payload, input)
-  const retry = await createTask(payload, input)
+  const first = await createTask(payload, input, await memberRequest())
+  const retry = await createTask(payload, input, await memberRequest())
   assert.equal(first.id, retry.id)
   assert.equal(first.executionState, 'QUEUED')
   assert.equal('resultSink' in first, false)
-  await assert.rejects(createTask(payload, { ...input, title: 'different' }), {
-    status: 409,
-  })
+  await assert.rejects(
+    createTask(
+      payload,
+      { ...input, title: 'different' },
+      await memberRequest(),
+    ),
+    {
+      status: 409,
+    },
+  )
   assert.throws(() =>
     validateOwnedAudio([{ url: 'http://169.254.169.254/latest/meta-data' }]),
   )
@@ -186,10 +192,12 @@ test('idempotent enqueue validates owned audio and keeps callback secret server-
       { ...inputs[0], url: inputs[0].url.replace(/token=.*/, 'token=wrong') },
     ]),
   )
-  await assert.rejects(
-    createTask(payload, { ...input, idempotencyKey: undefined }),
-    { status: 400 },
+  assert.equal(
+    taskInput.safeParse({ ...input, idempotencyKey: undefined }).success,
+    false,
   )
+  assert.equal(taskInput.safeParse({ ...input, execute: false }).success, false)
+  assert.equal(taskInput.safeParse({ ...input, execute: true }).success, false)
 })
 
 test('concurrent durable claims submit once with exact worker contract and recover completed output', async () => {

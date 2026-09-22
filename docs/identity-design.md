@@ -8,6 +8,6 @@ After login, the desktop app uploads recording tracks and submits an idempotent 
 
 The authentication boundary accepts a standard principal (issuer, subject, current canonical user, scopes, audience). Feature code consumes that principal; it does not implement provider-specific login or exchange cookies between apps. External identity integration cannot silently create privileged users or bypass canonical account removal.
 
-MCP uses `mcp:read` at `/mcp`. The desktop client uses `meetings:read` and `meetings:write` at `/api/platform`. Service-worker capabilities remain narrowly scoped to one task output or audio file. Existing service ingestion credentials stay separate from user login.
+MCP uses `mcp:read` at `/mcp`. The desktop client uses `meetings:read` and `meetings:write` at `/api/platform`. Service-worker capabilities remain narrowly scoped to one task output or audio file. No shared-key client access or client-managed task execution is supported. Task submissions require an idempotency key; Gday alone manages execution and output callback credentials.
 
-Implemented in version 0.3.0. The Rust client and maintained Gday provider have been tested together using disposable local accounts.
+OAuth-only client access and Gday-owned execution are enforced in version 0.3.1. The Rust client and maintained Gday provider have been tested together using disposable local accounts.
