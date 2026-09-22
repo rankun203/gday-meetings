@@ -1,6 +1,6 @@
 services:
   gday:
-    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.3.3}
+    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.3.4}
     ports:
       - '127.0.0.1:3000:3000'
     environment:

@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { serverEnv } from './lib/env'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -23,6 +24,7 @@ export default buildConfig({
   secret,
   upload: {
     useTempFiles: true,
+    tempFileDir: path.join(tmpdir(), 'gday-uploads'),
     limits: { fileSize: env.MAX_UPLOAD_BYTES },
     abortOnLimit: true,
   },

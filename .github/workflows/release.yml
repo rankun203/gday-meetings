@@ -80,11 +80,26 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
           cache-from: type=gha,scope=gday-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=gday-${{ matrix.arch }}
-          sbom: true
-          provenance: mode=max
+          sbom: false
+          provenance: false
           build-args: |
             VERSION=${{ needs.verify.outputs.version }}
             REVISION=${{ needs.verify.outputs.revision }}
+
+      - name: Verify container file lifecycle as non-root
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
+        run: |
+          docker pull "$IMAGE"
+          docker run -d --name gday-upload-smoke -p 127.0.0.1:37139:3000 \
+            -e SERVER_URL=http://127.0.0.1:37139 \
+            -e PAYLOAD_SECRET=synthetic-ci-upload-secret-at-least-thirty-two "$IMAGE"
+          trap 'docker logs gday-upload-smoke; docker rm -f -v gday-upload-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:37139/sign-in >/dev/null; then break; fi
+            sleep 2
+          done
+          node tests/container-upload.mjs
 
   release:
     needs: [verify, container]
@@ -110,6 +125,8 @@ jobs:
           docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" \
             "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
           docker buildx imagetools inspect "$IMAGE:$VERSION"
+          docker buildx imagetools inspect "$IMAGE:$VERSION" --raw | \
+            jq -e '.manifests | map(.platform.os + "/" + .platform.architecture) | sort == ["linux/amd64", "linux/arm64"]'
       - name: Publish release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

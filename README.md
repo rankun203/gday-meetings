@@ -24,7 +24,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.3` image, available
+Compose uses the published `ghcr.io/rankun203/gday-meetings:0.3.4` image, available
 for Linux AMD64 and ARM64. Set `GDAY_VERSION` to select another published version.
 For a source build, use `docker compose -f compose.yaml -f compose.build.yaml up -d --build`.
 
@@ -80,7 +80,6 @@ DATABASE_ADAPTER=postgres DATABASE_URI=postgresql://... pnpm payload migrate:cre
 Tests create an isolated SQLite database by default and exercise actual production migrations, task callbacks, auth boundaries, audio ranges, and search. For Postgres use a disposable database: `DATABASE_ADAPTER=postgres DATABASE_URI=postgresql://... pnpm test`. Never run integration tests against a real workspace.
 
 Audio Files accepts recordings up to 500 MB (500,000,000 bytes). Prefer Opus, M4A or MP3; WAV remains supported. It is a native Payload upload collection: select or drag in a recording and save. The CMS stores the file under `DATA_DIR/audio`, generates metadata, and deletes the file when its record is deleted. Desktop uploads use the same collection. Existing recordings migrate in place.
-
 
 ## License
 
