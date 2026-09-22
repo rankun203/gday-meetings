@@ -24,7 +24,8 @@ const schema = z
       .number()
       .int()
       .positive()
-      .default(2 * 1024 ** 3),
+      .max(500_000_000)
+      .default(500_000_000),
   })
   .superRefine((value, ctx) => {
     if (Boolean(value.RUNPOD_ENDPOINT_URL) !== Boolean(value.RUNPOD_API_KEY)) {

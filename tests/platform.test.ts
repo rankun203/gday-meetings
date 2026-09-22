@@ -531,3 +531,67 @@ test('existing recordings migrate into CMS file management without moving bytes'
     code: 'ENOENT',
   })
 })
+
+test('CMS and desktop uploads enforce the same size cap and clean rejected temporary files', async () => {
+  const { createLocalReq } = await import('payload')
+  const { readdir } = await import('node:fs/promises')
+  const { prepareAudio } = await import('../src/server/audio-hooks')
+  const req = await createLocalReq(
+    { user: { ...identity.user, collection: 'users' } },
+    payload,
+  )
+  const oversized = {
+    name: 'large.wav',
+    mimetype: 'audio/wav',
+    size: 500_000_001,
+    data: Buffer.alloc(0),
+  }
+  req.file = oversized
+  assert.throws(
+    () => prepareAudio({ args: {}, operation: 'create', req } as never),
+    { status: 413 },
+  )
+  req.file = { ...oversized, size: 500_000_000 }
+  assert.doesNotThrow(() =>
+    prepareAudio({ args: {}, operation: 'create', req } as never),
+  )
+  const old = process.env.MAX_UPLOAD_BYTES
+  try {
+    process.env.MAX_UPLOAD_BYTES = '8'
+    const response = await upload(
+      new Request('http://localhost:3000/upload?filename=large.wav', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${identity.token}`,
+          'Content-Type': 'audio/wav',
+        },
+        body: wav(),
+      }),
+    )
+    assert.equal(response.status, 413)
+    await assert.rejects(
+      payload.create({
+        collection: 'audio-files',
+        data: {} as never,
+        overrideAccess: false,
+        req,
+        file: {
+          name: 'large.wav',
+          mimetype: 'audio/wav',
+          size: wav().length,
+          data: wav(),
+        },
+      }),
+      { status: 413 },
+    )
+    assert.equal(
+      (await readdir(path.join(directory, 'audio'))).some((name) =>
+        name.endsWith('.partial'),
+      ),
+      false,
+    )
+  } finally {
+    if (old === undefined) delete process.env.MAX_UPLOAD_BYTES
+    else process.env.MAX_UPLOAD_BYTES = old
+  }
+})

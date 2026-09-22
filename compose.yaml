@@ -1,10 +1,11 @@
 services:
   gday:
-    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.3.2}
+    image: ghcr.io/rankun203/gday-meetings:${GDAY_VERSION:-0.3.3}
     ports:
       - '127.0.0.1:3000:3000'
     environment:
       PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET in .env}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-500000000}
       SERVER_URL: ${SERVER_URL:-http://localhost:3000}
       DATABASE_ADAPTER: ${DATABASE_ADAPTER:-sqlite}
       DATABASE_URI: ${DATABASE_URI:-file:/app/data/gday.db}

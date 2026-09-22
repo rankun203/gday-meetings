@@ -50,3 +50,16 @@ test('database and upstream provider environment is validated centrally', () => 
     /SQLite/,
   )
 })
+
+test('upload size defaults to 500 MB and may only be lowered', () => {
+  assert.equal(serverEnv(base).MAX_UPLOAD_BYTES, 500_000_000)
+  assert.equal(
+    serverEnv({ ...base, MAX_UPLOAD_BYTES: '1000000' }).MAX_UPLOAD_BYTES,
+    1_000_000,
+  )
+  for (const value of ['500000001', '0', '-1'])
+    assert.throws(
+      () => serverEnv({ ...base, MAX_UPLOAD_BYTES: value }),
+      /MAX_UPLOAD_BYTES/,
+    )
+})

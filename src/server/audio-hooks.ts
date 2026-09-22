@@ -1,3 +1,4 @@
+import { serverEnv } from '../lib/env'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
@@ -33,11 +34,11 @@ export const prepareAudio: CollectionBeforeOperationHook = ({
     const extension = path.extname(file.name).toLowerCase()
     if (!extensions.has(extension))
       throw new APIError('Unsupported audio extension', 400)
-    if (
-      !file.size ||
-      file.size > Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 ** 3)
-    )
-      throw new APIError('Audio is empty or exceeds upload limit', 400)
+    if (!file.size || file.size > serverEnv().MAX_UPLOAD_BYTES)
+      throw new APIError(
+        'Audio is empty or exceeds the configured upload limit (maximum 500 MB). Prefer Opus, M4A or MP3.',
+        file.size ? 413 : 400,
+      )
     req.context.originalAudioName = path.basename(file.name)
     file.name = randomUUID() + extension
   }

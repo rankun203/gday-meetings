@@ -1,3 +1,4 @@
+import { serverEnv } from '../lib/env'
 import type { PayloadRequest } from 'payload'
 import { audioDirectory as directory } from './storage'
 import { randomUUID } from 'node:crypto'
@@ -31,7 +32,7 @@ export async function upload(request: Request, req: PayloadRequest) {
   await mkdir(directory(), { recursive: true })
   const temporary = path.join(directory(), `${key}.partial`)
   let size = 0
-  const limit = Number(process.env.MAX_UPLOAD_BYTES || 2 * 1024 ** 3)
+  const limit = serverEnv().MAX_UPLOAD_BYTES
   try {
     if (!request.body) throw new HttpError(400, 'Audio body required')
     const limiter = new Transform({
@@ -39,7 +40,10 @@ export async function upload(request: Request, req: PayloadRequest) {
         size += chunk.length
         callback(
           size > limit
-            ? new HttpError(413, 'Audio exceeds upload limit')
+            ? new HttpError(
+                413,
+                'Audio exceeds the configured upload limit (maximum 500 MB). Prefer Opus, M4A or MP3.',
+              )
             : null,
           chunk,
         )

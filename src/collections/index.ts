@@ -260,7 +260,7 @@ export const AudioFiles: CollectionConfig = {
     useAsTitle: 'originalName',
     defaultColumns: ['originalName', 'filesize', 'createdAt'],
     description:
-      'Upload recordings here. Gday manages file storage and metadata automatically.',
+      'Upload recordings up to 500 MB. Prefer compressed audio: Opus, M4A or MP3. WAV is also supported. Gday manages storage and metadata automatically.',
   },
   fields: [
     {
