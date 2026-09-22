@@ -1,6 +1,6 @@
 ---
 date: 2026-09-22
-status: validating-release
+status: complete
 ---
 
 ## Problem
@@ -21,4 +21,4 @@ One shared workspace remains; members can read its meetings. Add membership/owne
 
 ## Notes
 
-Nine MCP/desktop integration tests pass: real login/consent/code exchange, SDK search, static-token rejection, audience separation, expiry/logout/disable/delete, refresh rotation/replay/revocation, complete discovery, scoped upload and idempotent queue creation. Environment validation tests pass. SQLite/Postgres task and identity migrations validated on disposable databases. Production typecheck/build and Docker build pass. Actual Rust-to-Gday integration passed native registration, canonical login, consent, EdDSA ID-token verification and initial/refreshed platform access. Full platform suite: 23 tests passed. Publication verification pending.
+Nine MCP/desktop integration tests pass: real login/consent/code exchange, SDK search, static-token rejection, audience separation, expiry/logout/disable/delete, refresh rotation/replay/revocation, complete discovery, scoped upload and idempotent queue creation. Environment validation tests pass. SQLite/Postgres task and identity migrations validated on disposable databases. Production typecheck/build and Docker build pass. Actual Rust-to-Gday integration passed native registration, canonical login, consent, EdDSA ID-token verification and initial/refreshed platform access. Full platform suite: 23 tests passed. Published v0.3.0 and latest for Linux AMD64/ARM64 via successful workflow 35687119914. Anonymous registry access verified; both tags resolve to sha256:f180b2e976c3e56d016b0fa350f85b52404f97b69954a719b23df7d4f67553d0. Pulled the published image and verified complete discovery, first-admin bootstrap and repeat denial, login, named consent page, PKCE exchange, five-minute token, authenticated MCP initialize and anonymous rejection. Test container and synthetic databases removed. Rust integration is committed locally at 431dc89 (37 default tests plus actual-provider integration passed). No live deployment target or RunPod credentials were supplied; no paid provider job was invoked.
