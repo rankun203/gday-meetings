@@ -567,7 +567,7 @@ struct RecordingSettingsDisclosure: View {
                         Text(summary(meeting)).font(.callout)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
-                    }.padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }.padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
                         .contentShape(Rectangle())
                 }.buttonStyle(ActionButtonStyle())
                     .accessibilityLabel("Recording Settings")
