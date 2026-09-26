@@ -105,3 +105,7 @@ Loading RunPod's languages still started a billable `capabilities` job, and the 
 ## Follow-up: name the language source
 
 The language information popover now names the provider whenever the menu has choices: “Languages from *Provider*, included with Gday Meetings.” for RunPod’s built-in list, and “Languages from *Provider*, updated *date*.” for a loaded list. This replaces “Languages updated *date*.” and the previously empty built-in state. Technical debt: None.
+
+## Follow-up: shorter RunPod language list
+
+The user chose the Rust client's 11 languages for RunPod: English, Chinese (Simplified), Chinese (Traditional), Japanese, Korean, Spanish, French, German, Portuguese, Russian, and Arabic, in that order. `export-languages.py` now filters the worker's list to `OFFERED` in display order and exits with an error if the worker stops supporting one of them, so the list stays a verified subset. Technical debt: None.

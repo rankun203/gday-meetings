@@ -94,13 +94,11 @@ import Testing
     @Test func runpodUsesTheBuiltInWorkerList() throws {
         let catalog = try #require(ProviderLanguageService.builtInCatalog(for: provider("RunPod", kind: .runpod)))
         let names = Dictionary(uniqueKeysWithValues: catalog.languages.map { ($0.code, $0.name) })
-        #expect(names["en"] == "English")
-        #expect(names["zh"] == "Chinese")
         #expect(names["zh-cn"] == "Chinese (Simplified)")
         #expect(names["zh-tw"] == "Chinese (Traditional)")
-        #expect(names.count == catalog.languages.count)
-        // The worker sorts by name; the list must also pass the discovery schema checks.
-        #expect(catalog.languages.map(\.name) == catalog.languages.map(\.name).sorted())
+        // The offered subset keeps its display order; it must also pass the discovery schema checks.
+        #expect(
+            catalog.languages.map(\.code) == ["en", "zh-cn", "zh-tw", "ja", "ko", "es", "fr", "de", "pt", "ru", "ar"])
         let entries = catalog.languages.map { ["code": $0.code, "name": $0.name] }
         #expect(try ProviderLanguageService.parseLanguages(entries, source: "RunPod") == catalog)
         #expect(ProviderLanguageService.builtInCatalog(for: provider("Website")) == nil)

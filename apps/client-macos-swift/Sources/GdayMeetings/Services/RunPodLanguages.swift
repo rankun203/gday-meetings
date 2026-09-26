@@ -3,7 +3,8 @@
 // Source: capabilities.transcription_languages() in
 // apps/worker-audio-extraction/src/audio_extraction/capabilities.py, evaluated with
 // WhisperX 3.8.6 (whisperx/utils.py LANGUAGES and whisperx/alignment.py alignment
-// models) and the default multilingual model. A deployed worker built from other
+// models) and the default multilingual model, filtered to OFFERED in that script
+// (the app's shorter list, in display order). A deployed worker built from other
 // code can differ; it then rejects the language when the transcription job runs.
 //
 // Regenerate after changing capabilities.py or the WhisperX pin in uv.lock:
@@ -13,48 +14,16 @@
 enum RunPodLanguages {
     static let whisperXVersion = "3.8.6"
     static let all: [ProviderLanguage] = [
-        ProviderLanguage(code: "ar", name: "Arabic"),
-        ProviderLanguage(code: "eu", name: "Basque"),
-        ProviderLanguage(code: "ca", name: "Catalan"),
-        ProviderLanguage(code: "zh", name: "Chinese"),
+        ProviderLanguage(code: "en", name: "English"),
         ProviderLanguage(code: "zh-cn", name: "Chinese (Simplified)"),
         ProviderLanguage(code: "zh-tw", name: "Chinese (Traditional)"),
-        ProviderLanguage(code: "hr", name: "Croatian"),
-        ProviderLanguage(code: "cs", name: "Czech"),
-        ProviderLanguage(code: "da", name: "Danish"),
-        ProviderLanguage(code: "nl", name: "Dutch"),
-        ProviderLanguage(code: "en", name: "English"),
-        ProviderLanguage(code: "fi", name: "Finnish"),
-        ProviderLanguage(code: "fr", name: "French"),
-        ProviderLanguage(code: "gl", name: "Galician"),
-        ProviderLanguage(code: "ka", name: "Georgian"),
-        ProviderLanguage(code: "de", name: "German"),
-        ProviderLanguage(code: "el", name: "Greek"),
-        ProviderLanguage(code: "he", name: "Hebrew"),
-        ProviderLanguage(code: "hi", name: "Hindi"),
-        ProviderLanguage(code: "hu", name: "Hungarian"),
-        ProviderLanguage(code: "id", name: "Indonesian"),
-        ProviderLanguage(code: "it", name: "Italian"),
         ProviderLanguage(code: "ja", name: "Japanese"),
         ProviderLanguage(code: "ko", name: "Korean"),
-        ProviderLanguage(code: "lv", name: "Latvian"),
-        ProviderLanguage(code: "ml", name: "Malayalam"),
-        ProviderLanguage(code: "no", name: "Norwegian"),
-        ProviderLanguage(code: "nn", name: "Nynorsk"),
-        ProviderLanguage(code: "fa", name: "Persian"),
-        ProviderLanguage(code: "pl", name: "Polish"),
-        ProviderLanguage(code: "pt", name: "Portuguese"),
-        ProviderLanguage(code: "ro", name: "Romanian"),
-        ProviderLanguage(code: "ru", name: "Russian"),
-        ProviderLanguage(code: "sk", name: "Slovak"),
-        ProviderLanguage(code: "sl", name: "Slovenian"),
         ProviderLanguage(code: "es", name: "Spanish"),
-        ProviderLanguage(code: "sv", name: "Swedish"),
-        ProviderLanguage(code: "tl", name: "Tagalog"),
-        ProviderLanguage(code: "te", name: "Telugu"),
-        ProviderLanguage(code: "tr", name: "Turkish"),
-        ProviderLanguage(code: "uk", name: "Ukrainian"),
-        ProviderLanguage(code: "ur", name: "Urdu"),
-        ProviderLanguage(code: "vi", name: "Vietnamese"),
+        ProviderLanguage(code: "fr", name: "French"),
+        ProviderLanguage(code: "de", name: "German"),
+        ProviderLanguage(code: "pt", name: "Portuguese"),
+        ProviderLanguage(code: "ru", name: "Russian"),
+        ProviderLanguage(code: "ar", name: "Arabic"),
     ]
 }
