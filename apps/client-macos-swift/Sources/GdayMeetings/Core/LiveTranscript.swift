@@ -60,6 +60,10 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable {
     static func ordered(_ left: Self, _ right: Self) -> Bool {
         left.start == right.start ? left.source.rawValue < right.source.rawValue : left.start < right.start
     }
+    static func replacingPartials(_ partials: [Self], with phrase: Self, final: Bool) -> [Self] {
+        let retained = partials.filter { $0.source != phrase.source || $0.session != phrase.session }
+        return final ? retained : retained + [phrase]
+    }
 }
 
 struct LiveTranscriptWord: Codable, Equatable {

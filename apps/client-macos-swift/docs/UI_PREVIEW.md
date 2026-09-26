@@ -41,6 +41,8 @@ This option is for UI Preview. The file supplies `RUNPOD_ENDPOINT_URL`, `RUNPOD_
 
 To fill **Settings → Data Privacy** without credentials, launch the executable with `--synthetic-providers`. It adds RunPod, Filedrop, and OpenAI-compatible providers with `.invalid` addresses, selects them for transcription and summaries, and turns on **Automatically Transcribe**. `.invalid` names never resolve, so checks and model lists started by opening a provider panel fail on this Mac and nothing is uploaded. Website sign-in cannot be simulated; website rows are covered by unit tests.
 
+Use `--synthetic-multiple-transcription-providers` to add a second eligible RunPod connection with an `.invalid` address. The saved Transcript action becomes a provider menu; inspect its choices without starting a job. The ordinary `--synthetic-providers` fixture shows the single-provider action, and no provider flag shows setup.
+
 Connection checks use real services. Starting a RunPod transcription uploads the selected audio to the configured Filedrop provider and can incur RunPod charges. Use generated speech when validating recognition; the default waveform fixtures exercise layout and playback controls. See the [file-transfer contract](../../../docs/protocols/file-transfer.md) and the [optional live test](../README.md#optional-live-provider-test).
 
 ## Signing and repeated Keychain prompts

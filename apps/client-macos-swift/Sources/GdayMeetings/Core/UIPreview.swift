@@ -90,6 +90,16 @@ enum UIPreview {
             if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
                 store.settings = syntheticProviderSettings(store.settings)
             }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-multiple-transcription-providers") {
+                store.settings = syntheticProviderSettings(store.settings)
+                var second = ServiceProvider(kind: .runpod)
+                second.name = "Second Preview Provider"
+                second.endpoint = "https://second.example.invalid/v2/preview"
+                second.apiKey = "synthetic-preview-key"
+                second.enabledCapabilities = [.transcription]
+                second.uploadProviderID = store.settings.serviceProviders.first { $0.kind == .filedrop }?.id
+                store.settings.serviceProviders.append(second)
+            }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {

@@ -199,13 +199,11 @@ final class LiveTranscriptController: ObservableObject {
     }
     func receive(_ value: LiveTranscriptPhrase, final: Bool, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }
-        partials.removeAll { $0.source == value.source && $0.session == value.session }
+        partials = LiveTranscriptPhrase.replacingPartials(
+            partials, with: value, final: final || token != generation)
         if final {
             draft?.accept(value)
             checkpoint()
-        }
-        else if token == generation {
-            partials.append(value)
         }
     }
     private func checkpoint() {

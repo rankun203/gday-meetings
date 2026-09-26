@@ -38,11 +38,9 @@ struct LiveTranscriptView: View {
                             }
                             .frame(maxWidth: .infinity)
                         }
-                        ForEach(finalized) { phrase in
-                            phraseView(phrase, provisional: false)
-                        }
-                        ForEach(controller.partials.sorted(by: LiveTranscriptPhrase.ordered)) { phrase in
-                            phraseView(phrase, provisional: true)
+                        ForEach(LiveTranscriptPresentation.rows(finalized: finalized, partials: controller.partials)) {
+                            row in
+                            phraseView(row.phrase, provisional: row.provisional)
                         }
                         Color.clear.frame(height: 1).id("live-end")
                     }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
@@ -62,9 +60,20 @@ struct LiveTranscriptView: View {
     private func refreshFinalized() {
         finalized = (controller.draft?.phrases ?? []).sorted(by: LiveTranscriptPhrase.ordered)
     }
+    private func styledText(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> AttributedString {
+        var text = AttributedString(phrase.text)
+        if provisional, controller.enabled,
+            phrase.id == LiveTranscriptPresentation.activePhraseID(controller.partials),
+            let range = LiveTranscriptPresentation.newestWordRange(in: phrase),
+            let attributedRange = Range(range, in: text)
+        {
+            text[attributedRange].foregroundColor = .red
+        }
+        return text
+    }
     private func phraseView(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> some View {
         TranscriptRow(start: phrase.start, source: phrase.source.title, provisional: provisional) {
-            Text(phrase.text).foregroundStyle(provisional ? .secondary : .primary).textSelection(.enabled)
+            Text(styledText(phrase, provisional: provisional)).foregroundStyle(.primary).textSelection(.enabled)
                 .accessibilityLabel(provisional ? "Draft: \(phrase.text)" : phrase.text)
         }
     }
