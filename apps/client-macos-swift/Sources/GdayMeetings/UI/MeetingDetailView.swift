@@ -68,7 +68,7 @@ struct MeetingDetailView: View {
                         meetingDate(meeting).fixedSize()
                         Spacer(minLength: 8)
                         MeetingLanguagePicker(
-                            selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID,
+                            selection: text(\.language),
                             compact: true
                         )
                         .fixedSize()
@@ -76,7 +76,7 @@ struct MeetingDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         meetingDate(meeting)
                         MeetingLanguagePicker(
-                            selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID,
+                            selection: text(\.language),
                             compact: true
                         )
                         .fixedSize()

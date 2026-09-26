@@ -146,7 +146,7 @@ struct PrivacyContext {
 /// guard that allows the matching request: MeetingIntelligence (summaries, chat),
 /// ProviderTranscription (transcription), ServerArchive (archive),
 /// ServiceProvidersView and ProviderModelListPolicy (checks and model
-/// lists), and ProviderLanguageSelection (Load Languages).
+/// lists), and ProviderLanguageSelection (explicit language discovery).
 enum DataPrivacy {
     static func routes(_ context: PrivacyContext) -> [PrivacyRoute] {
         let settings = context.settings

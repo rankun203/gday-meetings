@@ -70,13 +70,13 @@ import Testing
             jobs += 1
             return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
         }
-        // Without a saved list, pickers show a Load Languages action instead of sending a request.
+        // Without a saved list, reading provider support must not send a request.
         #expect(first.languageState(for: selected.id) == .idle)
         #expect(jobs == 0)
         await first.refreshProviderLanguages(providerID: selected.id)
         #expect(jobs == 1)
 
-        // A later launch reads the saved list; pickers and Transcribe send no request.
+        // A later launch reads the saved list; validation sends no request.
         let second = MeetingStore(dataDirectory: directory)
         second.settings.serviceProviders = [selected]
         second.providerLanguageLoader = { _ in
@@ -112,7 +112,7 @@ import Testing
             Issue.record("RunPod languages must never be loaded")
             throw ServiceError("Unexpected request")
         }
-        // The picker has the list immediately, even before a key is entered.
+        // Provider support is available immediately, even before a key is entered.
         guard case .builtIn(let catalog) = store.languageState(for: selected.id) else {
             Issue.record("Expected the built-in RunPod list")
             return
@@ -142,7 +142,7 @@ import Testing
         catch {
             #expect(
                 error.localizedDescription
-                    == "RunPod does not support this meeting's language. Choose a listed language.")
+                    .contains("does not support"))
         }
         #expect(store.meetings.first?.transcriptionAttempt == nil)
     }

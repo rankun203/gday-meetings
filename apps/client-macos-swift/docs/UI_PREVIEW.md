@@ -28,7 +28,7 @@ The synthetic conversation includes multiple tags and confirmed, suggested, and 
 
 ## Provider testing
 
-UI Preview uses the real provider adapters. Saving an enabled provider or opening its panel checks its connection without uploading meeting content. RunPod's language list is built in. A website's language list loads only when you choose **Load Languages**. Transcription and other content operations use the same actions as the full app. **Transcribe** starts the configured upload and job directly; provider panels contain the brief destination and charge details. Preview fixtures are synthetic by default; importing another recording does not automatically upload it.
+UI Preview uses the real provider adapters. Saving an enabled provider or opening its panel checks its connection without uploading meeting content. Meeting language pickers use the standard offline app list with or without a provider. RunPod's supported-code list is built in. A website's list loads when you choose **Load Languages** in its provider panel or explicitly transcribe without a saved list. Verify one English choice, separate Simplified and Traditional Chinese, Italian, and Cantonese; changing providers must not change these choices. Transcription and other content operations use the same actions as the full app. **Transcribe** starts the configured upload and job directly; provider panels contain the brief destination and charge details. Preview fixtures are synthetic by default; importing another recording does not automatically upload it.
 
 To seed test providers without typing credentials, build Preview, then launch its executable with an explicit credential-file path:
 

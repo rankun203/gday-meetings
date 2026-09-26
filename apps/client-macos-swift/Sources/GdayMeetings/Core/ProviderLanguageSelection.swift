@@ -6,7 +6,7 @@ extension MeetingStore {
         return ProviderLanguageIdentity(provider: provider)
     }
 
-    /// Reads built-in or cached state only. Pickers call this, so it must never send a request.
+    /// Reads built-in or cached provider support only; never sends a request.
     func languageState(for providerID: UUID?) -> ProviderLanguageState {
         guard let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else { return .idle }
         if let catalog = ProviderLanguageService.builtInCatalog(for: provider) { return .builtIn(catalog) }
@@ -85,24 +85,32 @@ extension MeetingStore {
         }
     }
 
-    /// Transcribe is an explicit action that already starts provider work. It uses the
-    /// built-in or saved list, and loads a website list only when none is saved.
-    func validateTranscriptionLanguage(_ language: String, for provider: ServiceProvider) async throws {
-        guard TranscriptionLanguage.isExplicit(language) else {
-            throw ServiceError("Choose a language for this meeting before transcribing.")
+    /// Resolves the app choice before audio is uploaded. Website discovery is
+    /// metadata-only and happens only for an explicit transcription or refresh.
+    func resolvedTranscriptionLanguage(
+        _ language: String, for provider: ServiceProvider,
+        preservingRequestCode: Bool = false
+    ) async throws -> String {
+        try TranscriptionLanguage.validate(language)
+        let catalog: ProviderLanguageCatalog
+        if let builtIn = ProviderLanguageService.builtInCatalog(for: provider) {
+            catalog = builtIn
         }
-        if let catalog = ProviderLanguageService.builtInCatalog(for: provider) {
-            guard catalog.languages.contains(where: { $0.code == language }) else {
-                throw ServiceError(
-                    "\(provider.name) does not support this meeting's language. Choose a listed language.")
-            }
-            return
+        else {
+            catalog = try await resolveProviderLanguages(provider, refresh: false)
         }
-        let catalog = try await resolveProviderLanguages(provider, refresh: false)
-        guard catalog.languages.contains(where: { $0.code == language }) else {
+        let code =
+            preservingRequestCode
+            ? catalog.languages.first { $0.code == language }?.code
+            : AppLanguages.providerCode(for: language, catalog: catalog)
+        guard let code else {
             throw ServiceError(
-                "\(provider.name) does not support this meeting's language. Choose a language listed by the provider, or load its languages again."
+                "\(provider.name) does not support \(AppLanguages.name(for: language)). Choose another transcription provider or change the meeting language."
             )
         }
+        return code
+    }
+    func validateTranscriptionLanguage(_ language: String, for provider: ServiceProvider) async throws {
+        _ = try await resolvedTranscriptionLanguage(language, for: provider)
     }
 }

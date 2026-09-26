@@ -19,6 +19,8 @@ struct ProviderTranscriptionAttempt: Codable, Equatable {
     var uploadEndpoint: String?
     var uploadsExpireAt: Date?
     var language = "en"
+    /// The exact provider code is saved before upload and remains fixed on retry.
+    var providerLanguage: String?
     var failure: String?
 }
 
@@ -53,7 +55,9 @@ extension MeetingStore {
             return
         }
         if attempt.taskID == nil {
-            try await validateTranscriptionLanguage(attempt.language, for: provider)
+            attempt.providerLanguage = try await resolvedTranscriptionLanguage(
+                attempt.providerLanguage ?? attempt.language, for: provider,
+                preservingRequestCode: meeting.transcriptionAttempt != nil)
         }
         switch provider.kind {
         case .gdayWebsite:
@@ -82,7 +86,8 @@ extension MeetingStore {
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                 }
                 attempt.taskID = try await server.submit(
-                    externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs, language: attempt.language,
+                    externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs,
+                    language: attempt.providerLanguage ?? attempt.language,
                     diarize: attempt.diarize, idempotencyKey: attempt.idempotencyKey)
                 try saveTranscriptionAttempt(attempt, meetingID: id)
             }
@@ -198,10 +203,12 @@ extension MeetingStore {
         let tracks = attempt.inputs.map {
             ProviderAudioTrack(url: $0.url, trackName: $0.trackName, sourceType: $0.sourceType)
         }
-        _ = try runpod.submissionRequest(tracks: tracks, language: attempt.language, diarize: attempt.diarize)
+        _ = try runpod.submissionRequest(
+            tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
         attempt.submissionUncertain = true
         try saveTranscriptionAttempt(attempt, meetingID: id)
-        attempt.taskID = try await runpod.submit(tracks: tracks, language: attempt.language, diarize: attempt.diarize)
+        attempt.taskID = try await runpod.submit(
+            tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
         attempt.submissionUncertain = false
         try saveTranscriptionAttempt(attempt, meetingID: id)
         try await pollRunPod(id: id, runpod: runpod, attempt: &attempt)

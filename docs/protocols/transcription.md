@@ -17,11 +17,11 @@ The app requires an explicit language for every transcription provider. Automati
 
 Input identifies the meeting, tracks, language, and whether [Speaker Labels](diarization.md) are requested. Each track has a stable name, source type, audio location, and timeline offset. The adapter must explain every destination that receives audio.
 
-Language belongs to the meeting's recording configuration. Choose it when creating the meeting and edit it in that meeting later. New meetings use **Settings → Defaults → Default Language**, initially English (`en`). Changing the default does not change existing meetings. A transcription attempt snapshots the meeting's language when it starts; resuming that attempt preserves the snapshot. Changing the meeting language affects future attempts, not a queued or running job. Providers may report supported languages, but do not own the chosen meeting language.
+Language belongs to the meeting's recording configuration. Choose it when creating the meeting and edit it in that meeting later. New meetings use **Settings → Defaults → Default Language**, initially English (`en`). Changing the default does not change existing meetings. A transcription attempt snapshots the meeting's language and the resolved provider code before uploading audio; resuming preserves both snapshots. Changing the meeting language affects future attempts, not a queued or running job. Providers may report supported languages, but do not own the chosen meeting language.
 
 The current worker recognizes Chinese as `zh`. Its `zh-cn` and `zh-tw` inputs select Simplified or Traditional output: both use `zh` for recognition, then OpenCC converts segment and word text. Plain `zh` leaves the recognized text unchanged. `zh-Hans` and `zh-Hant` do not select conversion in the current handler. See [worker language handling](../../apps/worker-audio-extraction/src/audio_extraction/handler.py).
 
-The app uses the selected provider's language catalog: the Gday Meetings website reports its list, and the Swift app ships the RunPod worker's list. The worker always aligns recognized text, so its catalog includes only languages supported by both recognition and its installed alignment metadata. Discovery does not establish deployed model availability or accuracy.
+The app owns an offline standard language list, independent of provider selection. Each adapter maps a meeting choice to an explicitly supported provider code before upload. The Gday Meetings website reports its supported codes, and the Swift app ships the RunPod worker's list. Chinese Simplified and Traditional remain distinct; neither is silently mapped to bare `zh`. See [standard language choices](../design/languages.md). The worker always aligns recognized text, so its catalog includes only languages supported by both recognition and its installed alignment metadata. Discovery does not establish deployed model availability or accuracy.
 
 The result contains text segments with start and end times, track identity, language, and model information when available. Word timing and speaker assignments are optional. Track-relative timestamps are restored to the meeting timeline when results are combined.
 
@@ -41,7 +41,7 @@ Keep the accepted job identifier so polling failures do not cause another paid s
 
 ## Discover supported languages
 
-Language choices come from the selected transcription provider. The app must not offer free-text codes as if they were validated, or substitute one provider's list when another provider's list is unavailable. The single exception to provider-reported lists is RunPod: its worker is built from this repository, so the Swift app ships that worker's list (see [RunPod built-in list](#runpod-built-in-list)). The meeting stores the selected code; metadata supplies its name and whether the provider supports it. Automatic detection (`auto`) is not an app language choice.
+Provider discovery reports supported request codes for adapter validation. The app's standard choices remain available when a provider has no catalog; that absence blocks new transcription, not recording or language selection. Do not substitute another provider's support list. RunPod uses the worker list shipped with the app (see [RunPod built-in list](#runpod-built-in-list)). Existing unknown imported codes stay visible and require an exact supported code; there is no free-text language entry or automatic detection (`auto`).
 
 The metadata operation sends no audio, transcript, or meeting identifier. It reports recognition and alignment support without initializing inference or downloading model weights:
 
@@ -67,11 +67,11 @@ This is an example response, not a fixed list. Version 1 requires a nonempty arr
 
 The website obtains its list from its configured worker. It returns `transcriptionLanguages: null` with an explanatory error if no worker is configured or discovery fails; other platform capabilities remain available. It must not substitute a built-in list.
 
-RunPod metadata can queue while a worker starts. A client that uses it polls the returned metadata job ID instead of submitting another job. Discovery is audio-free, but RunPod can still charge for worker execution. The website's discovery request is free. The desktop client never discovers languages automatically: it saves the website's list with its fetch time and asks again only when the person chooses **Load Languages** (in a language picker's information popover or the provider panel), or when **Transcribe** finds no saved list. Showing a picker only reads the saved list. The website bounds discovery to 60 seconds and 30 polling attempts, caches success for five minutes and failure for five seconds, and shares an in-flight lookup. Cache identity includes endpoint, authentication, and worker kind. Configuration changes bypass the previous cache. The desktop client keys its saved list by provider, kind, endpoint, and model. It excludes credentials, because a new key reaches the same worker, and it keeps the list until **Load Languages** replaces it. A saved list can be outdated: submission uses it to reject unsupported languages, and the error suggests loading languages again.
+RunPod metadata can queue while a worker starts. A client that uses it polls the returned metadata job ID instead of submitting another job. Discovery is audio-free, but RunPod can still charge for worker execution. The website's discovery request is free. The desktop client never discovers languages automatically: it saves the website's list with its fetch time and asks again only when the person chooses **Load Languages** in the provider panel, or when **Transcribe** finds no saved list. Showing a picker reads only the app-owned standard list. The website bounds discovery to 60 seconds and 30 polling attempts, caches success for five minutes and failure for five seconds, and shares an in-flight lookup. Cache identity includes endpoint, authentication, and worker kind. Configuration changes bypass the previous cache. The desktop client keys its saved list by provider, kind, endpoint, and model. It excludes credentials, because a new key reaches the same worker, and it keeps the list until **Load Languages** replaces it. A saved list can be outdated: submission uses it to reject unsupported languages, and a failed discovery can be retried with **Load Languages**.
 
 Distinguish these states:
 
-- **Unknown:** the provider has not returned a valid list. Do not invent choices. Offer **Load Languages**.
+- **Unknown:** the provider has not returned a valid list. Keep the standard meeting choices available; offer **Load Languages** in the provider panel.
 - **Unavailable:** the request failed or the provider lacks metadata support. Keep the saved meeting language, explain the problem, and offer another check.
 - **Unsupported:** a valid current list excludes the saved code. Preserve the meeting setting, but require a supported choice before submitting a new transcription.
 
@@ -83,7 +83,7 @@ Existing worker deployments must be updated to implement metadata discovery. A h
 
 ### RunPod built-in list
 
-The Swift app never runs the RunPod `capabilities` job, because each run can be billed. [`RunPodLanguages.swift`](../../apps/client-macos-swift/Sources/GdayMeetings/Services/RunPodLanguages.swift) contains the list that the worker's `capabilities()` returns with the WhisperX version pinned in the worker's `uv.lock` and the default multilingual model. Pickers show it immediately, the provider panel shows its size, and **Transcribe** rejects a code outside it before uploading audio.
+The Swift app never runs the RunPod `capabilities` job, because each run can be billed. [`RunPodLanguages.swift`](../../apps/client-macos-swift/Sources/GdayMeetings/Services/RunPodLanguages.swift) contains the list that the worker's `capabilities()` returns with the WhisperX version pinned in the worker's `uv.lock` and the default multilingual model. The provider panel shows its size, and **Transcribe** maps the standard meeting choice to this list or rejects it before uploading audio.
 
 [`export-languages.py`](../../apps/worker-audio-extraction/scripts/export-languages.py) regenerates the file. It downloads only the pinned WhisperX wheel and runs the worker's `capabilities.py` against WhisperX's metadata, without installing PyTorch. Regenerate it whenever `capabilities.py` or the WhisperX pin changes.
 
@@ -132,7 +132,7 @@ RunPod retains asynchronous results for a limited period, so persist retrieved t
 
 ## Desktop job handling
 
-The app saves the selected provider and endpoint, upload destination, uploaded track URLs and earliest expiry, the meeting language snapshot, submission state, and returned job ID in the meeting. A pending attempt keeps its original destinations. Before submitting, it checks both connections, validates upload limits, and reuses unexpired receipts. Expired receipts require a new upload.
+The app saves the selected provider and endpoint, upload destination, uploaded track URLs and earliest expiry, the meeting language and resolved provider-code snapshots, submission state, and returned job ID in the meeting. A pending attempt keeps its original destinations. Before submitting, it checks both connections, validates upload limits, and reuses unexpired receipts. Expired receipts require a new upload.
 
 Before sending a RunPod submission, the app records that its acceptance may be uncertain. A lost response must not cause an automatic repeat of paid work. Once a job ID is saved, Resume Transcription polls that job. Foreground polling lasts about five minutes; RunPod's separate 30-minute retention period starts after completion. The app validates that completed output contains exactly the submitted track names and valid timestamps.
 
