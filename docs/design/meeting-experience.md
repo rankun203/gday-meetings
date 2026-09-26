@@ -54,6 +54,10 @@ flowchart TD
 
 Cloud transcription uploads audio for processing. Keeping that audio in the website library is a separate choice.
 
+## App navigation
+
+Use **Meetings**, **People**, and **Tags** in the app sidebar. Search the local meeting library from Meetings. Configure website accounts and other connections in **Settings → Service Providers**. Website transcription and **Archive to Server** act on a local meeting; they do not require a separate remote-library destination.
+
 ## Service providers
 
 A **provider** is a configured service or account. A **capability** is an operation it provides, such as transcription or search. Each provider can offer one or more capabilities, with its own settings.

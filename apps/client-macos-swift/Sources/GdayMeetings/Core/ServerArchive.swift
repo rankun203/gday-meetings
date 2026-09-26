@@ -56,13 +56,14 @@ extension MeetingStore {
         for meeting in meetings { refreshArchiveStatus(id: meeting.id) }
     }
     func archiveToServer(id: UUID) async {
-        guard !isBusy, recordingID == nil, libraryWritable, let meeting = meetings.first(where: { $0.id == id }) else {
-            return
-        }
-        isBusy = true
+        // Only this meeting's own recording blocks archiving; its audio is still being written.
+        guard recordingID != id, libraryWritable, !isJobRunning(.importAudio, .meeting(id)),
+            let meeting = meetings.first(where: { $0.id == id }),
+            beginJob(.archive, .meeting(id), progress: "Preparing the meeting archive…")
+        else { return }
         errorMessage = nil
         defer {
-            isBusy = false
+            endJob(.archive, .meeting(id))
             refreshArchiveStatus(id: id)
         }
         do {
@@ -86,9 +87,14 @@ extension MeetingStore {
                 }
             }
             else {
-                statusMessage = "Preparing the meeting archive…"
                 var archivedMeeting = meeting
                 archivedMeeting.transcriptionAttempt = nil
+                // Voice vectors train local recognition; archives retain labels and
+                // assignments without sending those vectors to the website.
+                for index in archivedMeeting.speakers.indices {
+                    archivedMeeting.speakers[index].embedding = nil
+                    archivedMeeting.speakers[index].voiceScope = nil
+                }
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
                 encoder.dateEncodingStrategy = .iso8601
@@ -102,7 +108,15 @@ extension MeetingStore {
                     "chat.json": try json(meeting.chat),
                 ]
                 let metadata: [String: Any] = [
-                    "people": try json(people.filter { meeting.personIDs.contains($0.id) }),
+                    "people": try json(
+                        people.filter { person in
+                            meeting.personIDs.contains(person.id)
+                                || meeting.speakers.contains { $0.personID == person.id }
+                        }.map { person in
+                            var archived = person
+                            archived.voiceSamples = []
+                            return archived
+                        }),
                     "tags": try json(tags.filter { meeting.tagIDs.contains($0.id) }), "client": "Gday Meetings Swift",
                 ]
                 let snapshot = try JSONSerialization.data(
@@ -113,7 +127,7 @@ extension MeetingStore {
                     ], options: [.sortedKeys])
                 var audio: [ArchiveAudio] = []
                 for (index, file) in audioURLs(for: meeting).enumerated() {
-                    statusMessage = "Preparing archive audio \(index + 1)…"
+                    setJobProgress(.archive, .meeting(id), "Preparing archive audio \(index + 1)…")
                     // Archive original supported bytes when they fit; transcription
                     // separately prefers compressed upload copies for network efficiency.
                     let prepared = try await prepareServerAudio(file, compressPCM: false)
@@ -154,7 +168,8 @@ extension MeetingStore {
                         "Audio changed after this archive was prepared. The original snapshot has been preserved locally."
                     )
                 }
-                statusMessage = "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…"
+                setJobProgress(
+                    .archive, .meeting(id), "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…")
                 checkpoint.audio[index].url = try await server.upload(file: source)
                 try Self.saveArchive(checkpoint, to: checkpointURL)
             }
@@ -166,9 +181,9 @@ extension MeetingStore {
                 ["filename": $0.filename, "url": $0.url!.absoluteString, "sha256": $0.sha256, "size": $0.size]
                     as [String: Any]
             }
-            statusMessage = "Saving the archive to the server…"
+            setJobProgress(.archive, .meeting(id), "Saving the archive to the server…")
             _ = try await server.importArchive(body)
-            statusMessage = "Verifying the archived meeting and audio…"
+            setJobProgress(.archive, .meeting(id), "Verifying the archived meeting and audio…")
             let verified = try await server.verifyArchive(externalID: checkpoint.externalID)
             guard verified["importKey"] as? String == checkpoint.importKey,
                 verified["audioCount"] as? Int == checkpoint.audio.count,

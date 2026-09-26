@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum LibraryDestination: Hashable { case meetings, people, tags, server }
+private enum LibraryDestination: Hashable { case meetings, people, tags }
 
 struct LibraryView: View {
     /// Splits after the first sentence; a single-sentence message has no body.
@@ -64,7 +64,7 @@ struct LibraryView: View {
         } actions: {
             if search.isEmpty {
                 Button("New Recording") { store.presentsRecordingSetup = true }
-                    .disabled(store.isBusy || recordingActive)
+                    .disabled(!store.canStartRecording)
             }
         }
     }
@@ -85,7 +85,6 @@ struct LibraryView: View {
                             Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                             Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                             Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
-                            Label("Server Library", systemImage: "network").tag(LibraryDestination.server)
                         }
                         .opacity(sidebarRowsVisible ? 1 : 0)
                         .animation(nil, value: sidebarRowsVisible)
@@ -105,9 +104,6 @@ struct LibraryView: View {
                 HSplitView {
                     Group {
                         switch destination {
-                        case .server:
-                            Text("Search your connected Gday server library.").foregroundStyle(.secondary).padding()
-                                .navigationTitle("Server Library")
                         case .people: PeopleView(selection: $selectedPerson)
                         case .tags: TagsView(selection: $selectedTag)
                         default:
@@ -188,7 +184,10 @@ struct LibraryView: View {
                                     guard current.contains(where: { !existing.contains($0) }),
                                         let added = filteredMeetings.first(where: { !existing.contains($0.id) })
                                     else { return }
-                                    scroll.scrollTo(added.id, anchor: .top)
+                                    // Center the added row. For the first row, native scrolling
+                                    // clamps to the document beginning, preserving the list inset.
+                                    // Top or minimum alignment scrolls that native space away.
+                                    scroll.scrollTo(added.id, anchor: .center)
                                 }
                             }
                         }
@@ -198,9 +197,6 @@ struct LibraryView: View {
                             store.meetings.contains(where: { $0.id == id })
                         {
                             MeetingDetailView(meetingID: id).id(id)
-                        }
-                        else if destination == .server {
-                            ServerLibraryView()
                         }
                         else if destination == .people, let id = selectedPerson,
                             let person = store.people.first(where: { $0.id == id })
@@ -259,15 +255,16 @@ struct LibraryView: View {
                     .labelStyle(.titleAndIcon).tint(.red)
                     .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
                     // A read-only library can't save a recording, import, or new notes.
-                    .disabled(
-                        !store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording
-                            || (store.isBusy && store.recordingID == nil))
+                    // Background jobs such as transcription never disable it.
+                    .disabled(!store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording)
                     Button {
                         MeetingPanels.importAudio(store)
                     } label: {
                         Label("Import", systemImage: "square.and.arrow.down")
                     }
-                    .help("Import an audio or video file").disabled(store.isBusy || !store.libraryWritable)
+                    .help("Import an audio or video file")
+                    .disabled(
+                        !store.libraryWritable || recordingActive || store.isImportingAudio)
                     Menu {
                         Button("New Meeting Notes", systemImage: "square.and.pencil") {
                             showMeeting(store.createMeeting(title: "Untitled Meeting"))
@@ -278,7 +275,7 @@ struct LibraryView: View {
                     } label: {
                         Label("Library Actions", systemImage: "ellipsis")
                     }
-                    .help("New notes and library imports").disabled(store.isBusy || !store.libraryWritable)
+                    .help("New notes and library imports").disabled(!store.libraryWritable)
                     if destination == .meetings {
                         HStack(spacing: 4) {
                             Button {
@@ -327,13 +324,20 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                // Progress for long-running work only; it disappears when the work ends.
-                if !recordingActive && store.isBusy {
+                // Progress for background jobs, including during a recording. It shows
+                // the newest job and a count of the others, and disappears when all end.
+                if !store.backgroundJobs.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        if store.backgroundJobs.count > 1 {
+                            Text("\(store.backgroundJobs.count - 1) more in progress").font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                         Spacer()
                     }.padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
+                        .accessibilityElement(children: .combine)
+                        .help(store.backgroundJobs.map(store.progressText).joined(separator: "\n"))
                 }
             }
         }
@@ -392,7 +396,6 @@ struct LibraryView: View {
         switch destination {
         case .people: "People"
         case .tags: "Tags"
-        case .server: "Server Library"
         default: "Meetings"
         }
     }
@@ -423,7 +426,7 @@ struct LibraryView: View {
             .buttonStyle(ActionButtonStyle(cornerRadius: 44))
             .accessibilityLabel("New Recording")
             .help("New Recording")
-            .disabled(store.isBusy || recordingActive)
+            .disabled(!store.canStartRecording)
             Text("Select a meeting or start a recording.")
                 .font(.callout).foregroundStyle(.secondary)
         }

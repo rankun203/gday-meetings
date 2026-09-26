@@ -37,7 +37,11 @@ struct TranscriptionActionButton: View {
                 Task { await store.transcribe(id: meeting.id) }
             }
         }
-        .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meeting.id)
+        .disabled(
+            store.isJobRunning(.transcription, .meeting(meeting.id))
+                || store.isJobRunning(.importAudio, .meeting(meeting.id)) || meeting.audioFiles.isEmpty
+                || store.recordingID == meeting.id
+        )
         .confirmationDialog("Replace the current transcript?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Replace Transcript", role: .destructive) {
                 store.applySavedTranscriptionResult(meetingID: meeting.id)
@@ -56,7 +60,7 @@ struct PendingTranscriptionActions: View {
     let meeting: Meeting
     var body: some View {
         Button("Discard Pending Request…", role: .destructive) { confirming = true }
-            .disabled(store.isBusy)
+            .disabled(store.isJobRunning(.transcription, .meeting(meeting.id)))
             .confirmationDialog("Discard this pending request?", isPresented: $confirming, titleVisibility: .visible) {
                 Button("Discard Pending Request", role: .destructive) {
                     do { try store.clearTranscriptionAttempt(meetingID: meeting.id) }

@@ -7,8 +7,6 @@ struct MeetingDetailView: View {
     @ViewState private var tab = 0
     @ViewState private var chatDraft = ""
     @ViewState private var todoDraft = ""
-    @ViewState private var speakerFrom = ""
-    @ViewState private var speakerTo = ""
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
@@ -40,11 +38,14 @@ struct MeetingDetailView: View {
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                TextField("Meeting title", text: text(\.title))
+            HStack(alignment: .top, spacing: 12) {
+                // Let the native multiline editor measure the large title's line
+                // height while focused, rather than using a single-line field editor.
+                TextField("Meeting title", text: text(\.title), axis: .vertical)
                     .font(.largeTitle.weight(.semibold)).textFieldStyle(.plain)
+                    .lineLimit(1...3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(minHeight: 40)
+                    .layoutPriority(1)
                     .accessibilityLabel("Meeting title")
                 if store.recordingID != meetingID && !meeting.audioFiles.isEmpty {
                     playbackButton(meeting)
@@ -68,10 +69,7 @@ struct MeetingDetailView: View {
                 }
             }.font(.callout).foregroundStyle(.secondary)
             MeetingArchiveStatusView(meetingID: meetingID).font(.callout).foregroundStyle(.secondary)
-            associationsMenu.font(.callout).foregroundStyle(.secondary)
-            if !meeting.personIDs.isEmpty || !meeting.tagIDs.isEmpty {
-                Text(associationSummary(meeting)).font(.callout).foregroundStyle(.secondary)
-            }
+            MeetingTagsView(meetingID: meetingID)
         }
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(1)
@@ -85,59 +83,6 @@ struct MeetingDetailView: View {
                     "Duration \(formatTime(meeting.duration))")
             }
         }
-    }
-
-    private var associationsMenu: some View {
-        Menu {
-            Section("People") {
-                ForEach(store.people) { person in
-                    Toggle(
-                        person.name,
-                        isOn: Binding(
-                            get: { self.meeting?.personIDs.contains(person.id) ?? false },
-                            set: { selected in
-                                change {
-                                    if selected {
-                                        $0.personIDs.append(person.id)
-                                    }
-                                    else {
-                                        $0.personIDs.removeAll { $0 == person.id }
-                                    }
-                                }
-                            }))
-                }
-                if store.people.isEmpty { Text("Add people in the sidebar") }
-            }
-            Section("Tags") {
-                ForEach(store.tags) { tag in
-                    Toggle(
-                        tag.name,
-                        isOn: Binding(
-                            get: { self.meeting?.tagIDs.contains(tag.id) ?? false },
-                            set: { selected in
-                                change {
-                                    if selected {
-                                        $0.tagIDs.append(tag.id)
-                                    }
-                                    else {
-                                        $0.tagIDs.removeAll { $0 == tag.id }
-                                    }
-                                }
-                            }))
-                }
-                if store.tags.isEmpty { Text("Add tags in the sidebar") }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Label("People & Tags", systemImage: "person.2")
-                Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
-            }
-            .padding(.horizontal, 10)
-            .frame(minWidth: 28, minHeight: 28)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
-        .help("Manage people and tags")
     }
 
     private func playbackButton(_ meeting: Meeting) -> some View {
@@ -200,7 +145,9 @@ struct MeetingDetailView: View {
                     Spacer()
                     Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles")
                     { Task { await store.summarize(id: meetingID) } }
-                    .disabled(store.isBusy || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
+                    .disabled(
+                        store.isJobRunning(.summary, .meeting(meetingID))
+                            || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
                 }
                 editor("Summary", binding: text(\.summary))
             }
@@ -209,11 +156,6 @@ struct MeetingDetailView: View {
         }
     }
 
-    private func associationSummary(_ meeting: Meeting) -> String {
-        let names: [String] = store.people.filter { meeting.personIDs.contains($0.id) }.map(\.name)
-        let tags: [String] = store.tags.filter { meeting.tagIDs.contains($0.id) }.map { "#" + $0.name }
-        return (names + tags).joined(separator: " · ")
-    }
     private func editor(_ label: String, binding: Binding<String>) -> some View {
         // HIG accessibility: standard editable text, semantic fonts and system colors
         // respect contrast and assistive technologies without custom event handling.
@@ -224,25 +166,6 @@ struct MeetingDetailView: View {
     }
     private func transcript(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading) {
-            if !meeting.transcript.isEmpty {
-                HStack {
-                    Picker("Speaker", selection: $speakerFrom) {
-                        Text("Choose speaker").tag("")
-                        ForEach(Array(Set(meeting.transcript.map(\.speaker))).sorted(), id: \.self) { Text($0).tag($0) }
-                    }
-                    TextField("Rename speaker", text: $speakerTo)
-                    Button("Apply") {
-                        change { meeting in
-                            for index in meeting.transcript.indices
-                            where meeting.transcript[index].speaker == speakerFrom {
-                                meeting.transcript[index].speaker = speakerTo
-                            }
-                        }
-                        speakerFrom = speakerTo
-                        speakerTo = ""
-                    }.disabled(speakerFrom.isEmpty || speakerTo.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(meeting.transcript) { segment in
@@ -253,23 +176,9 @@ struct MeetingDetailView: View {
                                         meeting: meeting, files: store.audioURLs(for: meeting), at: segment.start)
                                 }.buttonStyle(.link).monospacedDigit().help("Play from this point").disabled(
                                     playback.isPlaybackBlocked || store.audioURLs(for: meeting).isEmpty)
-                                TextField(
-                                    "Speaker",
-                                    text: Binding(
-                                        get: {
-                                            self.meeting?.transcript.first(where: { $0.id == segment.id })?.speaker
-                                                ?? ""
-                                        },
-                                        set: { value in
-                                            change { meeting in
-                                                if let index = meeting.transcript.firstIndex(where: {
-                                                    $0.id == segment.id
-                                                }) {
-                                                    meeting.transcript[index].speaker = value
-                                                }
-                                            }
-                                        })
-                                ).font(.headline).textFieldStyle(.plain)
+                                Text(meeting.speakerName(for: segment, people: store.people))
+                                    .font(.headline)
+
                             }
                             TextField(
                                 "Transcript",
@@ -286,6 +195,9 @@ struct MeetingDetailView: View {
                             ).textFieldStyle(.plain)
                             Divider()
                         }
+                    }
+                    if !meeting.speakers.isEmpty {
+                        MeetingSpeakersView(meetingID: meetingID)
                     }
                 }.padding(4)
             }.overlay {
@@ -387,7 +299,8 @@ struct MeetingDetailView: View {
                 TextField("Ask about this meeting", text: $chatDraft, axis: .vertical).lineLimit(1...5).onSubmit(
                     sendChat)
                 Button("Send", systemImage: "arrow.up", action: sendChat).disabled(
-                    store.isBusy || chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    store.isJobRunning(.chat, .meeting(meetingID))
+                        || chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
@@ -423,7 +336,10 @@ struct MeetingActionsMenu: View {
             Button("Archive to Server", systemImage: "icloud.and.arrow.up") {
                 Task { await store.archiveToServer(id: meeting.id) }
             }
-            .disabled(!server.connected || store.isBusy || store.recordingID == meeting.id)
+            .disabled(
+                !server.connected || store.isJobRunning(.archive, .meeting(meeting.id))
+                    || store.isJobRunning(.importAudio, .meeting(meeting.id))
+                    || store.recordingID == meeting.id)
         } label: {
             Label("Meeting Actions", systemImage: "ellipsis.circle")
         }

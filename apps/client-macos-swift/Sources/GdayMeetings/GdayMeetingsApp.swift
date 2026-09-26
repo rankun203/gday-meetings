@@ -45,7 +45,10 @@ struct GdayMeetingsApp: App {
                         Task { await store.stopRecording() }
                     }
                 }.keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
+                    // Background jobs never disable this; only the recording lifecycle does.
+                    .disabled(
+                        store.isStartingRecording || store.isFinalizingRecording
+                            || (store.recordingID == nil && !store.canStartRecording))
             }
             CommandGroup(after: .help) {
                 Button("Export Logs") { MeetingPanels.exportLogs(store) }
@@ -130,7 +133,9 @@ private struct RecordingMenuView: View {
             else {
                 recordingButton
             }
-        }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
+        }.disabled(
+            store.isStartingRecording || store.isFinalizingRecording
+                || (store.recordingID == nil && !store.canStartRecording))
         Button {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)

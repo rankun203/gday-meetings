@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import QuartzCore
 import SwiftUI
 
@@ -123,6 +124,111 @@ final class RecordingActivityView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         moving.transform = CATransform3DMakeTranslation(offset, 0, 0)
+        CATransaction.commit()
+    }
+}
+
+/// Owns a direct meter subscription so amplitude updates do not invalidate SwiftUI layout.
+struct RecordingLiveActivitySurface: NSViewRepresentable {
+    let meter: RecordingMeterState
+    let microphone: Bool
+    let tint: Color
+    let animate: Bool
+
+    final class Coordinator {
+        var subscription: AnyCancellable?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> RecordingActivityView { RecordingActivityView() }
+    func updateNSView(_ view: RecordingActivityView, context: Context) {
+        context.coordinator.subscription = meter.$levels.sink { [weak view] _ in
+            view?.configure(
+                bars: meter.activity.bars(microphone: microphone), start: meter.activity.bucketStart,
+                tint: NSColor(tint), animate: animate)
+        }
+    }
+    static func dismantleNSView(_ view: RecordingActivityView, coordinator: Coordinator) {
+        coordinator.subscription = nil
+        view.stop()
+    }
+}
+
+struct RecordingLiveLevelSurface: NSViewRepresentable {
+    let meter: RecordingMeterState
+    let microphone: Bool
+    let saving: Bool
+    let tint: Color
+    let title: String
+
+    final class Coordinator {
+        var subscription: AnyCancellable?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> RecordingLevelView { RecordingLevelView() }
+    func updateNSView(_ view: RecordingLevelView, context: Context) {
+        context.coordinator.subscription = meter.$levels.sink { [weak view] levels in
+            view?.configure(
+                source: microphone ? levels.microphone : levels.system, saving: saving,
+                tint: NSColor(tint), title: title)
+        }
+    }
+    static func dismantleNSView(_ view: RecordingLevelView, coordinator: Coordinator) {
+        coordinator.subscription = nil
+    }
+}
+
+/// The bar changes layer geometry, not its view's size or Auto Layout constraints.
+final class RecordingLevelView: NSView {
+    private let track = CALayer()
+    private let signal = CALayer()
+    private var source = RecordingSourceLevel()
+    private var saving = false
+    private var tint = NSColor.controlAccentColor
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.addSublayer(track)
+        layer?.addSublayer(signal)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.levelIndicator)
+        setAccessibilityMinValue(-120)
+        setAccessibilityMaxValue(0)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(source: RecordingSourceLevel, saving: Bool, tint: NSColor, title: String) {
+        self.source = source
+        self.saving = saving
+        self.tint = tint
+        let receiving = !saving && source.enabled && source.hasSamples && !source.stale && !source.reconnecting
+        let status = saving ? (source.enabled ? "Finalizing" : "Not recorded") : source.statusText
+        setAccessibilityLabel(title)
+        setAccessibilityValue(receiving ? source.rmsDB : -120)
+        setAccessibilityValueDescription(receiving ? "\(status), \(Int(source.rmsDB)) decibels" : status)
+        toolTip = status
+        updateLayers()
+    }
+    override func layout() {
+        super.layout()
+        updateLayers()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateLayers()
+    }
+    private func updateLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        track.frame = bounds
+        signal.frame = CGRect(x: 0, y: 0, width: bounds.width * (saving ? 0 : source.level), height: bounds.height)
+        track.cornerRadius = bounds.height / 2
+        signal.cornerRadius = bounds.height / 2
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            track.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            signal.backgroundColor = (source.peakDB > -1 ? NSColor.systemOrange : tint).cgColor
+        }
         CATransaction.commit()
     }
 }

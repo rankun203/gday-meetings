@@ -30,7 +30,7 @@ import Testing
         #expect(reopened.libraryWritable)
         reopened.deleteMeeting(id: try #require(reopened.meetings.first { $0.title == "Old" }).id)
         #expect(try savedVersion(url) == MeetingLibrary.currentVersion)
-        #expect(!FileManager.default.fileExists(atPath: url.appendingPathComponent("library-v1-backup.json").path))
+        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("library-v1-backup.json").path))
     }
 
     @Test func newerLibraryIsRefusedAndNeverWritten() async throws {
@@ -73,7 +73,7 @@ import Testing
         // A version with no migration step is refused instead of guessed.
         #expect(throws: (any Error).self) { try MeetingLibrary.load(from: file, supportedVersion: 3, migrations: [:]) }
         let current = try MeetingLibrary.load(from: file)
-        #expect(!current.migrated)
+        #expect(current.migrated)
     }
 
     @Test func archiveStatusFollowsCheckpoint() throws {

@@ -91,7 +91,7 @@ A deployed worker can differ from the built-in list, for example when it runs ol
 
 ## Swift interface
 
-`TranscriptionProvider.submit(tracks:language:diarize:)` returns a job ID. `status(jobID:)` returns pending, completed segments, or failure. `cancel(jobID:)` requests cancellation. The initial result type contains timed segments and track names; language and model metadata from the worker are not yet retained by this interface.
+`TranscriptionProvider.submit(tracks:language:diarize:)` returns a job ID. `status(jobID:)` returns pending, completed segments, or failure. `cancel(jobID:)` requests cancellation. The result type contains timed segments, track names, optional speaker labels, and validated voice embeddings; language and model metadata from the worker are not yet retained by this interface.
 
 ## RunPod audio worker
 
@@ -136,7 +136,7 @@ The app saves the selected provider and endpoint, upload destination, uploaded t
 
 Before sending a RunPod submission, the app records that its acceptance may be uncertain. A lost response must not cause an automatic repeat of paid work. Once a job ID is saved, Resume Transcription polls that job. Foreground polling lasts about five minutes; RunPod's separate 30-minute retention period starts after completion. The app validates that completed output contains exactly the submitted track names and valid timestamps.
 
-Results are saved before application. If the transcript changed during processing, the app retains the returned result and offers **Apply Saved Transcript…** with replacement confirmation. This protects current edits; a general history of all transcript versions remains future work. RunPod language, model, word timing, and voice embeddings are not retained in the current meeting result.
+Results are saved before application. If the transcript or speaker assignments changed during processing, the app retains the returned result and offers **Apply Saved Transcript…** with replacement confirmation. This protects current edits; a general history of all transcript versions remains future work. RunPod voice embeddings are retained with track-scoped speaker identities for local recognition. Language, model, and word-timing output are not yet retained in the meeting result.
 
 ## Gday Meetings website
 

@@ -39,3 +39,13 @@ The worker needs configured Hugging Face model access for diarization. The curre
 The Swift `DiarizationProvider` currently extends `TranscriptionProvider`; `diarize` selects combined processing. Separate speaker-range output and speaker-count controls are not yet part of that Swift interface.
 
 Standalone diarization without transcription is not implemented by this adapter. A future adapter may implement it independently under the same capability contract.
+
+## Person assignments in the Swift app
+
+The Transcript tab shows provider-specific Speakers sections below the transcript. A meeting can have multiple tags in its metadata, independently of speaker assignments. Assign a speaker to an existing or new person, or confirm, reject, or reassign a suggested match. Confirmed assignments contribute to that person's meeting context; suggestions remain labeled as suggestions.
+
+RunPod embeddings are matched locally against confirmed samples using cosine similarity with a 0.75 threshold. At most one speaker per track is suggested for each person. Track and result identities remain distinct even when provider labels repeat. The worker does not report an embedding model/version, so matching is limited to the same configured endpoint and vector dimension. Model changes at the same endpoint remain a compatibility risk; provider model provenance is the required follow-up.
+
+Rust imports preserve labels, tracks, assignments, and available confirmed samples. Without a matching saved confirmed sample, an imported assignment remains a suggestion. Imported vectors use a separate scope and do not train RunPod recognition. Old Swift display labels migrate without inferred person links. Library format version 2 retains a backup before upgrading version 1.
+
+Voice samples stay in the local library. Text exports omit vectors; website archives omit both embeddings and person voice samples. Removing or reassigning a speaker removes its previous training sample.

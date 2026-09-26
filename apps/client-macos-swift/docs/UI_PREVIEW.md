@@ -24,6 +24,8 @@ This uses the production SwiftUI screens with a clearly marked preview banner, g
 
 The bundle flag `GdayUIPreview` enables this mode; developers can also launch the executable with `--ui-preview`. The separate preview bundle identifier isolates window/preferences state and lets the normal app remain open. Do not use preview results as evidence of real capture, permissions, or speaker output. A provider check validates its documented connection operation; a successful transcription test validates the tested service path. Neither establishes performance or accuracy for other recordings.
 
+The synthetic conversation includes multiple tags and confirmed, suggested, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignments, confirmation, rejection, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, and Tags; providers are configured in Settings.
+
 ## Provider testing
 
 UI Preview uses the real provider adapters. Saving an enabled provider or opening its panel checks its connection without uploading meeting content. RunPod's language list is built in. A website's language list loads only when you choose **Load Languages**. Transcription and other content operations use the same actions as the full app. **Transcribe** starts the configured upload and job directly; provider panels contain the brief destination and charge details. Preview fixtures are synthetic by default; importing another recording does not automatically upload it.

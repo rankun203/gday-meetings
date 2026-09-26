@@ -6,7 +6,8 @@ struct TranscriptSegment: Codable, Identifiable, Equatable {
     var end: Double = 0
     var speaker = "Speaker"
     var text = ""
-    enum CodingKeys: String, CodingKey { case id, start, end, speaker, text }
+    var speakerID: UUID?
+    enum CodingKeys: String, CodingKey { case id, start, end, speaker, text, speakerID }
 
 }
 struct MeetingTodo: Codable, Identifiable, Equatable {
@@ -33,6 +34,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     var notes = ""
     var summary = ""
     var transcript: [TranscriptSegment] = []
+    var speakers: [MeetingSpeaker] = []
     var personIDs: [UUID] = []
     var tagIDs: [UUID] = []
     var audioFiles: [String] = []
@@ -43,7 +45,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, title, language, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat,
             todos,
-            recordingProfile, transcriptionAttempt
+            recordingProfile, transcriptionAttempt, speakers
     }
 
 }
@@ -52,7 +54,8 @@ struct Person: Codable, Identifiable, Equatable {
     var name = ""
     var email = ""
     var notes = ""
-    enum CodingKeys: String, CodingKey { case id, name, email, notes }
+    var voiceSamples: [PersonVoiceSample] = []
+    enum CodingKeys: String, CodingKey { case id, name, email, notes, voiceSamples }
 
 }
 struct MeetingTag: Codable, Identifiable, Equatable {
@@ -104,11 +107,15 @@ struct AppSettings: Codable, Equatable {
 ///   after keeping a backup. It never opens or rewrites a newer version, and it
 ///   always saves `currentVersion`, so a save cannot lower the version.
 struct MeetingLibrary: Codable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     typealias Migration = (inout MeetingLibrary) throws -> Void
-    /// Upgrades a library from the key's version to the next one. Empty: no
-    /// released layout precedes version 1.
-    static let migrations: [Int: Migration] = [:]
+    /// Version 2 retains speaker identity and confirmed voice samples. New fields
+    /// decode empty in version 1; no existing speaker name implies a person.
+    static let migrations: [Int: Migration] = [
+        1: { library in
+            for index in library.meetings.indices { library.meetings[index].restoreSpeakerIdentities() }
+        }
+    ]
 
     var contextualChats: [String: [ChatMessage]] = [:]
     var version = MeetingLibrary.currentVersion
@@ -136,6 +143,7 @@ extension TranscriptSegment {
         end = try values.decodeIfPresent(Double.self, forKey: .end) ?? 0
         speaker = try values.decodeIfPresent(String.self, forKey: .speaker) ?? "Speaker"
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
+        speakerID = try values.decodeIfPresent(UUID.self, forKey: .speakerID)
     }
 }
 
@@ -172,6 +180,7 @@ extension Meeting {
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
         summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? ""
         transcript = try values.decodeIfPresent([TranscriptSegment].self, forKey: .transcript) ?? []
+        speakers = try values.decodeIfPresent([MeetingSpeaker].self, forKey: .speakers) ?? []
         personIDs = try values.decodeIfPresent([UUID].self, forKey: .personIDs) ?? []
         tagIDs = try values.decodeIfPresent([UUID].self, forKey: .tagIDs) ?? []
         audioFiles = try values.decodeIfPresent([String].self, forKey: .audioFiles) ?? []
@@ -190,6 +199,7 @@ extension Person {
         id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
         email = try values.decodeIfPresent(String.self, forKey: .email) ?? ""
+        voiceSamples = try values.decodeIfPresent([PersonVoiceSample].self, forKey: .voiceSamples) ?? []
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
     }
 }

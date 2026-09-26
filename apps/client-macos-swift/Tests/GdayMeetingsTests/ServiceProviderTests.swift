@@ -123,17 +123,23 @@ struct ServiceProviderTests {
             ])
         }
     }
-    @MainActor @Test func disabledSearchAndSummariesDoNotSendContent() async {
-        let website = ServiceProvider(kind: .gdayWebsite)
-        await #expect(throws: (any Error).self) {
-            try await GdaySearchProvider(provider: website).search(query: "private meeting")
-        }
+    @MainActor @Test func disabledSummariesDoNotSendContent() async {
         let llm = ServiceProvider(kind: .openAICompatible)
         await #expect(throws: (any Error).self) {
             try await OpenAISummaryProvider(provider: llm).summarize(
                 transcript: "private transcript", instructions: "Summarize")
         }
     }
+    @Test func savedSearchCapabilityDoesNotEnableWebsiteSearch() throws {
+        var website = ServiceProvider(kind: .gdayWebsite)
+        website.enabledCapabilities = [.transcription, .search]
+        let restored = try JSONDecoder().decode(ServiceProvider.self, from: JSONEncoder().encode(website))
+        #expect(restored.enabledCapabilities.contains(.search))
+        #expect(!restored.supports(.search))
+        #expect(restored.supports(.transcription))
+        #expect(!ServiceProviderKind.gdayWebsite.capabilities.contains(.search))
+    }
+
     @Test func endpointRejectsCredentialsQueriesAndOperationURLs() throws {
         for text in [
             "", "https://key@example.com", "https://example.com?token=secret", "http://example.com",

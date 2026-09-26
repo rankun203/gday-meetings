@@ -53,7 +53,7 @@ struct MeetingLanguagePicker: View {
             .popover(isPresented: $showInformation) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Transcription Language").font(.headline)
-                    Text("Choose the language spoken in this meeting.")
+                    Text("Choose the language spoken in the recording.")
                     status
                 }
                 .font(.callout)
@@ -86,10 +86,14 @@ struct MeetingLanguagePicker: View {
 
     @ViewBuilder private var status: some View {
         if let provider {
+            if unsupported {
+                Text("\(provider.name) doesn’t support \(selectedName). Choose another language.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             switch state {
             case .idle:
                 if provider.supports(.transcription) {
-                    Text("Languages for \(provider.name) aren’t loaded.")
+                    Text("Load languages to choose one for this recording.")
                         .font(.caption).foregroundStyle(.secondary)
                     loadButton(provider)
                 }
@@ -102,30 +106,22 @@ struct MeetingLanguagePicker: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
-            // Whenever the menu has choices, name the provider they come from.
             case .builtIn:
-                Text("Languages from \(provider.name), included with Gday Meetings.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                EmptyView()
             case .loading:
-                Text("Loading Languages…").font(.caption).foregroundStyle(.secondary)
+                Text("Loading languages…").font(.caption).foregroundStyle(.secondary)
             case .failed(let message):
-                Label("Languages Unavailable", systemImage: "exclamationmark.circle")
+                Label("Couldn’t load languages.", systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 loadButton(provider)
-            case .loaded(_, let fetchedAt):
-                Text(
-                    "Languages from \(provider.name), updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened))."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            case .loaded:
                 loadButton(provider)
             }
         }
         else {
-            Text("Select a transcription provider in Settings to change the language.")
+            Text("Choose a transcription provider in Settings → Defaults to change the language.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

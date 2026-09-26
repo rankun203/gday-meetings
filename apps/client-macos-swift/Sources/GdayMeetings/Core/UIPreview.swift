@@ -25,8 +25,35 @@ enum UIPreview {
                 try store.insertImportedMeeting(meeting)
                 try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
             }
-            _ = store.addPerson(name: "Preview Person")
-            _ = store.addTag(name: "Preview")
+            let person = store.addPerson(name: "Alex Morgan")
+            let suggested = store.addPerson(name: "Sam Chen")
+            let previewTag = store.addTag(name: "Preview")
+            let projectTag = store.addTag(name: "Planning")
+            if var conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }) {
+                let first = MeetingSpeaker(
+                    label: "sys_SPEAKER_00", track: "system", providerName: "RunPod",
+                    voiceScope: "preview:synthetic", embedding: [1, 0], personID: person, confirmed: true)
+                let second = MeetingSpeaker(
+                    label: "sys_SPEAKER_01", track: "system", providerName: "RunPod",
+                    voiceScope: "preview:synthetic", embedding: [0, 1], personID: suggested, confidence: 0.91)
+                let third = MeetingSpeaker(
+                    label: "mic_SPEAKER_00", track: "microphone", providerName: "RunPod",
+                    voiceScope: "preview:synthetic", embedding: [0.5, 0.5])
+                conversation.replaceSpeakers([first, second, third])
+                conversation.tagIDs = [previewTag, projectTag]
+                conversation.transcript = [
+                    TranscriptSegment(
+                        start: 1, end: 5, speaker: first.label,
+                        text: "Let’s review the release plan.", speakerID: first.id),
+                    TranscriptSegment(
+                        start: 6, end: 10, speaker: second.label,
+                        text: "The next step is to check the meeting notes.", speakerID: second.id),
+                    TranscriptSegment(
+                        start: 11, end: 15, speaker: third.label,
+                        text: "I’ll update the schedule after this call.", speakerID: third.id),
+                ]
+                store.updateMeeting(conversation)
+            }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
                 store.settings = syntheticProviderSettings(store.settings)
             }

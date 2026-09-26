@@ -88,9 +88,8 @@ import Testing
         let url = try directory()
         defer { try? FileManager.default.removeItem(at: url) }
         let store = MeetingStore(dataDirectory: url)
-        store.isBusy = true
-        store.statusMessage = "Writing summary…"
-        store.isBusy = false
+        #expect(store.beginJob(.summary, .library, progress: "Writing summary…"))
+        store.endJob(.summary, .library)
         #expect(store.statusMessage.isEmpty)
     }
     @Test func failedRecordingFinalizationRaisesError() async throws {
@@ -104,7 +103,7 @@ import Testing
         let message = try #require(store.errorMessage)
         #expect(message.contains("original WAV audio is kept"))
         #expect(store.recordingID == nil)
-        #expect(!store.isBusy && !store.isFinalizingRecording)
+        #expect(store.backgroundJobs.isEmpty && !store.isFinalizingRecording)
         #expect(store.statusMessage.isEmpty)
     }
 }

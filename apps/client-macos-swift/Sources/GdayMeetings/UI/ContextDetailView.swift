@@ -54,7 +54,10 @@ struct ContextDetailView: View {
             HStack {
                 TextField("Ask a question", text: $draft, axis: .vertical).lineLimit(1...5).onSubmit(send)
                 Button("Send", systemImage: "arrow.up", action: send).disabled(
-                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy || meetings.isEmpty)
+                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || store.isJobRunning(
+                            .contextChat, .context(MeetingStore.contextChatKey(personID: personID, tagID: tagID)))
+                        || meetings.isEmpty)
             }
         }.padding(20).navigationTitle(title)
             .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {

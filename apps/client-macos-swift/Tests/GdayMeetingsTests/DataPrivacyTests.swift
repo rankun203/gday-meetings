@@ -106,12 +106,8 @@ struct DataPrivacyTests {
         #expect(texts(rows, .todos) == ["Sent to Office Website (meet.example.com) when you choose Archive to Server"])
         #expect(texts(rows, .peopleAndTags) == texts(rows, .todos))
         #expect(
-            texts(rows, .searchQueries) == [
-                "Sent to Office Website (meet.example.com) when you search the Server Library"
-            ])
-        #expect(
             texts(rows, .credentials) == [
-                "Sent to Office Website (meet.example.com) to authenticate when you transcribe a meeting, choose Archive to Server, search the Server Library, open the provider in Settings, or choose Load Languages"
+                "Sent to Office Website (meet.example.com) to authenticate when you transcribe a meeting, choose Archive to Server, open the provider in Settings, or choose Load Languages"
             ])
         #expect(!row(rows, .settings).leavesMac)
     }
@@ -131,7 +127,7 @@ struct DataPrivacyTests {
             #expect(texts(rows, type) == [expected])
         }
         #expect(row(rows, .settings).note == "Only Summary Instructions are sent.")
-        for type in [PrivacyDataType.audio, .todos, .peopleAndTags, .searchQueries, .credentials, .logs] {
+        for type in [PrivacyDataType.audio, .todos, .peopleAndTags, .credentials, .logs] {
             #expect(!row(rows, type).leavesMac)
         }
 
@@ -152,7 +148,6 @@ struct DataPrivacyTests {
         ] {
             #expect(texts(rows, type) == [archive])
         }
-        #expect(!row(rows, .searchQueries).leavesMac)
         #expect(!row(rows, .settings).leavesMac)
         #expect(!row(rows, .logs).leavesMac)
 

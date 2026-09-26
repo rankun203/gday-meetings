@@ -33,12 +33,12 @@ Updates must not replace a newer indexed version. Retries use stable identities.
 
 ## Swift interface
 
-`SearchProvider` declares `search(query:)`. `GdaySearchProvider` implements authenticated, read-only queries for the selected, enabled website and verifies its signed-in origin. Results contain a meeting ID, optional external ID, title, and excerpt.
+`SearchProvider` declares the proposed `search(query:)` extension point. Results contain a meeting ID, optional external ID, title, and excerpt. The Swift app has no remote search adapter or remote library screen. Its library search reads local meeting content.
 
 `SearchIndexProvider` extends that query contract with `index` and `remove`. Index documents carry a meeting ID and revision. Indexing status and result versions require further interface work. No indexing adapter is implemented yet.
 
-## Current website integration
+## Website API reference
 
-The existing Gday Meetings website can search stored meeting text using authenticated requests. See its [API reference](../../apps/server/docs/api.md) and [MCP documentation](../../apps/server/docs/mcp.md). The existing workspace is shared; this capability does not establish private per-person storage.
+The Gday Meetings website exposes authenticated meeting-text search for its own clients. The native Swift app does not call that endpoint. See its [API reference](../../apps/server/docs/api.md) and [MCP documentation](../../apps/server/docs/mcp.md). The existing workspace is shared; this capability does not establish private per-person storage.
 
 The full versioned indexing and deletion contract above remains a target. Existing archive uploads create snapshots and do not continuously synchronize later edits. An adapter must expose only operations supported by the connected website. A successful connection check must not upload content or issue a query containing meeting text.

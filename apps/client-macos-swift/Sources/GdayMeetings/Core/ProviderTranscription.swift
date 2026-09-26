@@ -11,6 +11,8 @@ struct ProviderTranscriptionAttempt: Codable, Equatable {
     var taskID: String?
     var originalTranscript: [TranscriptSegment] = []
     var result: [TranscriptSegment]?
+    var resultSpeakers: [MeetingSpeaker]?
+    var originalSpeakers: [MeetingSpeaker]?
     var submissionUncertain = false
     var diarize = false
     var uploadProviderID: UUID?
@@ -24,7 +26,8 @@ extension ProviderTranscriptionAttempt {
     init(provider: ServiceProvider, meeting: Meeting) {
         self.init(
             providerID: provider.id, endpoint: provider.endpoint, kind: provider.kind, title: meeting.title,
-            originalTranscript: meeting.transcript, diarize: provider.enabledCapabilities.contains(.diarization),
+            originalTranscript: meeting.transcript, originalSpeakers: meeting.speakers,
+            diarize: provider.enabledCapabilities.contains(.diarization),
             language: meeting.language)
     }
 }
@@ -65,7 +68,9 @@ extension MeetingStore {
                 let files = audioURLs(for: meeting)
                 guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
                 for (index, file) in files.enumerated() where index >= attempt.inputs.count {
-                    statusMessage = "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…"
+                    setJobProgress(
+                        .transcription, .meeting(id),
+                        "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…")
                     let prepared = try await prepareServerAudio(file)
                     defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
                     let url = try await server.upload(file: prepared.url)
@@ -84,7 +89,7 @@ extension MeetingStore {
             guard let taskID = attempt.taskID else { throw ServiceError("The provider returned no job ID.") }
             for _ in 0..<150 {
                 try Task.checkCancellation()
-                statusMessage = "Transcribing with \(provider.name)…"
+                setJobProgress(.transcription, .meeting(id), "Transcribing with \(provider.name)…")
                 switch try await server.task(id: taskID) {
                 case .pending: try await Task.sleep(for: .seconds(2))
                 case .failed(let message):
@@ -92,14 +97,9 @@ extension MeetingStore {
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                     throw ServiceError(message + " Discard the pending request before starting another transcription.")
                 case .complete(let segments):
-                    let result = segments.map { segment in
-                        TranscriptSegment(
-                            start: segment.start, end: segment.end,
-                            speaker: segment.speaker
-                                ?? (attempt.inputs.first { $0.trackName == segment.track }?.sourceType == "mic"
-                                    ? "You" : "Speaker"),
-                            text: segment.text)
-                    }
+                    let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
+                    let result = recognized.segments
+                    attempt.resultSpeakers = recognized.speakers
                     attempt.result = result
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                     try saveTranscriptionResult(result, attempt: attempt, meetingID: id)
@@ -175,7 +175,8 @@ extension MeetingStore {
         attempt.uploadEndpoint = upload.endpoint
         try saveTranscriptionAttempt(attempt, meetingID: id)
         for (index, file) in files.enumerated() where index >= attempt.inputs.count {
-            statusMessage = "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…"
+            setJobProgress(
+                .transcription, .meeting(id), "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…")
             let prepared = try await prepareFiledropAudio(file, allowedExtensions: info.allowedExtensions)
             defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
             let receipt = try await filedrop.upload(file: prepared.url)
@@ -213,7 +214,7 @@ extension MeetingStore {
         guard let jobID = attempt.taskID else { throw ServiceError("The transcription has no RunPod job ID.") }
         for _ in 0..<150 {
             try Task.checkCancellation()
-            statusMessage = "Transcribing with \(runpod.provider.name)…"
+            setJobProgress(.transcription, .meeting(id), "Transcribing with \(runpod.provider.name)…")
             switch try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) {
             case .pending: try await Task.sleep(for: .seconds(2))
             case .failed(let message):
@@ -225,12 +226,9 @@ extension MeetingStore {
                 guard segments.allSatisfy({ expected.contains($0.track) }) else {
                     throw ServiceError("RunPod returned a transcript for an unexpected audio track.")
                 }
-                let result = segments.map { segment in
-                    let source = attempt.inputs.first { $0.trackName == segment.track }?.sourceType
-                    return TranscriptSegment(
-                        start: segment.start, end: segment.end,
-                        speaker: segment.speaker ?? (source == "mic" ? "You" : "Speaker"), text: segment.text)
-                }
+                let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
+                let result = recognized.segments
+                attempt.resultSpeakers = recognized.speakers
                 attempt.result = result
                 try saveTranscriptionAttempt(attempt, meetingID: id)
                 try saveTranscriptionResult(result, attempt: attempt, meetingID: id)
@@ -253,6 +251,9 @@ extension MeetingStore {
     }
 
     func clearTranscriptionAttempt(meetingID: UUID) throws {
+        guard !isJobRunning(.transcription, .meeting(meetingID)) else {
+            throw ServiceError("Wait for this transcription to finish before discarding its request.")
+        }
         guard var latest = meetings.first(where: { $0.id == meetingID }) else { return }
         latest.transcriptionAttempt = nil
         errorMessage = nil
@@ -261,10 +262,13 @@ extension MeetingStore {
     }
 
     func applySavedTranscriptionResult(meetingID: UUID) {
-        guard !isBusy, var latest = meetings.first(where: { $0.id == meetingID }),
+        guard !isJobRunning(.transcription, .meeting(meetingID)),
+            var latest = meetings.first(where: { $0.id == meetingID }),
             let result = latest.transcriptionAttempt?.result
         else { return }
+        latest.replaceSpeakers(latest.transcriptionAttempt?.resultSpeakers ?? [])
         latest.transcript = result
+        latest.restoreSpeakerIdentities()
         latest.transcriptionAttempt = nil
         updateMeeting(latest)
     }
@@ -273,12 +277,16 @@ extension MeetingStore {
         throws
     {
         guard var latest = meetings.first(where: { $0.id == meetingID }) else { return }
-        guard latest.transcript == attempt.originalTranscript else {
+        guard latest.transcript == attempt.originalTranscript,
+            attempt.originalSpeakers == nil || latest.speakers == attempt.originalSpeakers
+        else {
             throw ServiceError(
                 "The transcript was edited during processing. The new result is saved. Choose Apply Saved Transcript to review the replacement."
             )
         }
+        latest.replaceSpeakers(attempt.resultSpeakers ?? [])
         latest.transcript = result
+        latest.restoreSpeakerIdentities()
         latest.transcriptionAttempt = nil
         errorMessage = nil
         updateMeeting(latest)

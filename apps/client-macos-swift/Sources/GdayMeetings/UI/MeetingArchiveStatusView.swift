@@ -44,7 +44,10 @@ struct MeetingArchiveStatusView: View {
                     .accessibilityLabel(status.accessibilityText)
                     .help(status.accessibilityText)
                 if case .incomplete = status {
-                    let canResume = server.connected && !store.isBusy && store.recordingID != meetingID
+                    let canResume =
+                        server.connected && !store.isJobRunning(.archive, .meeting(meetingID))
+                        && !store.isJobRunning(.importAudio, .meeting(meetingID))
+                        && store.recordingID != meetingID
                     Button("Archive to Server") { Task { await store.archiveToServer(id: meetingID) } }
                         .buttonStyle(.link)
                         // The header's secondary style would hide that this is an action;

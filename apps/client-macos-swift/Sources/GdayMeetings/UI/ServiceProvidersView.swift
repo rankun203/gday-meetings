@@ -439,7 +439,7 @@ private struct ServiceProviderPanel: View {
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization: "Summaries send the selected transcript and notes to this provider."
-        case .search: "Search queries are sent to this website. Archiving a meeting uploads its text and audio."
+        case .search: "No search provider is available."
         case .playback: "Remote playback requires uploading original audio."
         case .fileTransfer: "Temporary audio links expire automatically."
         }

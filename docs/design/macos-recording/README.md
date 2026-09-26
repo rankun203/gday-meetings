@@ -1,6 +1,13 @@
+---
+title: Recording and listening design
+date: 2026-09-26
+status: active
+scope: swift-app-design
+---
+
 # Recording and listening design
 
-The [generated concept](recording-and-player-concept.png) and [exact prompt](imagegen-prompt.md) explore two states using the built-in image generation tool. Native implementation follows their hierarchy rather than embedding the image in the app.
+The [current design brief](imagegen-prompt.md) describes recording and listening states. The sidebar contains Meetings, People, and Tags; connections belong in Settings → Service Providers. The September 24 generated concept is retained as historical worklog evidence and is not a current navigation reference. Product views use native controls rather than a generated image.
 
 Actual SwiftUI component renders:
 

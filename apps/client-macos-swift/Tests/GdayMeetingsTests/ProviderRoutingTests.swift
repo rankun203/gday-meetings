@@ -14,7 +14,7 @@ import Testing
         await store.transcribe(id: id)
         #expect(store.errorMessage == "Choose a transcription provider in Settings → Defaults.")
         #expect(store.meetings.first?.transcriptionAttempt == nil)
-        #expect(!store.isBusy)
+        #expect(store.backgroundJobs.isEmpty)
     }
 
     @Test func missingSummaryProviderPointsToDefaults() throws {
@@ -65,7 +65,7 @@ import Testing
         let store = try store()
         let id = store.createMeeting(title: "Edited transcript")
         let meeting = try #require(store.meetings.first { $0.id == id })
-        let generated = [TranscriptSegment(text: "Generated text")]
+        let generated = [TranscriptSegment(start: 1.5, end: 3.0, speaker: "Speaker A", text: "Generated text")]
         let attempt = ProviderTranscriptionAttempt(
             providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: meeting.title,
             originalTranscript: [], result: generated)
@@ -79,7 +79,17 @@ import Testing
         #expect(store.meetings.first?.transcript == edited.transcript)
         #expect(store.meetings.first?.transcriptionAttempt?.result == generated)
         store.applySavedTranscriptionResult(meetingID: meeting.id)
-        #expect(store.meetings.first?.transcript == generated)
-        #expect(store.meetings.first?.transcriptionAttempt == nil)
+        let applied = try #require(store.meetings.first)
+        #expect(applied.transcript.count == generated.count)
+        let segment = try #require(applied.transcript.first)
+        #expect(segment.id == generated[0].id)
+        #expect(segment.text == generated[0].text)
+        #expect(segment.start == generated[0].start)
+        #expect(segment.end == generated[0].end)
+        #expect(segment.speaker == generated[0].speaker)
+        let identity = try #require(applied.speakers.first { $0.id == segment.speakerID })
+        #expect(identity.label == generated[0].speaker)
+        #expect(identity.personID == nil)
+        #expect(applied.transcriptionAttempt == nil)
     }
 }

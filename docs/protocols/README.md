@@ -25,7 +25,7 @@ The [meeting experience](../design/meeting-experience.md) describes provider set
 
 ## Swift implementation
 
-The app contracts are declared in [`ServiceProviders.swift`](../../apps/client-macos-swift/Sources/GdayMeetings/Services/ServiceProviders.swift). `TranscriptionProvider`, `DiarizationProvider`, and `SummarizationProvider` have RunPod or language-model adapters. `SearchProvider` has a read-only website query adapter. `SearchIndexProvider` and `PlaybackProvider` define extension points; indexing and remote playback adapters are not yet implemented. The website does not advertise remote Playback in the app.
+The app contracts are declared in [`ServiceProviders.swift`](../../apps/client-macos-swift/Sources/GdayMeetings/Services/ServiceProviders.swift). `TranscriptionProvider`, `DiarizationProvider`, and `SummarizationProvider` have RunPod or language-model adapters. `SearchProvider`, `SearchIndexProvider`, and `PlaybackProvider` define extension points; remote search, indexing, and remote playback adapters are not implemented. The website does not advertise Search or remote Playback in the app. The app searches its local library; website sign-in, transcription, and archiving remain provider operations.
 
 These initial Swift interfaces cover submission, result retrieval, and the operations listed in their declarations. The richer version and provenance requirements in these documents guide subsequent implementation; they are not a claim that every field is already persisted.
 

@@ -110,4 +110,22 @@ import UniformTypeIdentifiers
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         #expect(store.meetings.first == meeting)
     }
+
+    @Test func importsContinueBesideOtherMeetingsJobsAndProtectActiveAudio() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root, name: "voice.wav", seconds: 1)
+        let store = MeetingStore(dataDirectory: root.appendingPathComponent("library"))
+        let id = store.createMeeting(title: "Processing audio")
+        for kind: BackgroundJob.Kind in [.transcription, .archive] {
+            #expect(store.beginJob(kind, .meeting(id), progress: "Processing audio…"))
+            await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
+            let imported = try await store.importAudioFiles([source])
+            #expect(imported.count == 1)
+            #expect(store.isJobRunning(kind, .meeting(id)))
+            #expect(!store.isImportingAudio)
+            #expect(store.meetings.first { $0.id == id }?.audioFiles.isEmpty == true)
+            store.endJob(kind, .meeting(id))
+        }
+    }
 }

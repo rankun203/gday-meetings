@@ -2,7 +2,7 @@ import Foundation
 
 /// Data types the app manages, in Settings → Data Privacy order.
 enum PrivacyDataType: String, CaseIterable, Identifiable {
-    case audio, meetingDetails, notes, transcripts, summaries, todos, chat, peopleAndTags, searchQueries,
+    case audio, meetingDetails, notes, transcripts, summaries, todos, chat, peopleAndTags, voiceSamples,
         credentials, settings, logs
     var id: String { rawValue }
     var title: String {
@@ -15,7 +15,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
         case .todos: "To-Dos"
         case .chat: "Chat Messages"
         case .peopleAndTags: "People and Tags"
-        case .searchQueries: "Server Library Searches"
+        case .voiceSamples: "Voice Recognition Data"
         case .credentials: "Credentials"
         case .settings: "Settings"
         case .logs: "Logs"
@@ -26,7 +26,9 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
         switch self {
         case .audio: "Microphone and system audio tracks"
         case .meetingDetails: "Title, date, duration, language, and recording devices"
-        case .peopleAndTags: "Names, email addresses, and notes"
+        case .peopleAndTags: "Names, email addresses, notes, and speaker assignments"
+        case .voiceSamples:
+            "Voice patterns from transcription results and confirmed speaker matches. Recognition runs on this Mac."
         case .credentials: "Provider API keys and website sign-in, stored in Keychain"
         default: nil
         }
@@ -41,7 +43,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
         case .todos: "checklist"
         case .chat: "bubble.left.and.bubble.right"
         case .peopleAndTags: "person.2"
-        case .searchQueries: "magnifyingglass"
+        case .voiceSamples: "waveform.badge.person.crop"
         case .credentials: "key"
         case .settings: "gearshape"
         case .logs: "doc.text"
@@ -51,7 +53,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
 
 /// What sends data. Cases are in sentence order: automatic first, then actions.
 enum PrivacyTrigger: Int, Comparable {
-    case afterRecording, transcribe, summarizeOrChat, archive, search
+    case afterRecording, transcribe, summarizeOrChat, archive
     /// Opening an enabled provider's panel checks it and lists its models; saving and
     /// Check Connection happen in that panel.
     case openProvider
@@ -66,7 +68,6 @@ enum PrivacyTrigger: Int, Comparable {
         case .transcribe: "transcribe a meeting"
         case .summarizeOrChat: "generate a summary or send a chat message"
         case .archive: "choose Archive to Server"
-        case .search: "search the Server Library"
         case .openProvider: "open the provider in Settings"
         case .editProvider: "edit the provider in Settings"
         case .loadLanguages: "choose Load Languages"
@@ -143,8 +144,8 @@ struct PrivacyContext {
 
 /// Derives Settings → Data Privacy from provider settings. Each rule mirrors the
 /// guard that allows the matching request: MeetingIntelligence (summaries, chat),
-/// ProviderTranscription (transcription), ServerArchive (archive), ServerLibraryView
-/// (search), ServiceProvidersView and ProviderModelListPolicy (checks and model
+/// ProviderTranscription (transcription), ServerArchive (archive),
+/// ServiceProvidersView and ProviderModelListPolicy (checks and model
 /// lists), and ProviderLanguageSelection (Load Languages).
 enum DataPrivacy {
     static func routes(_ context: PrivacyContext) -> [PrivacyRoute] {
@@ -206,9 +207,6 @@ enum DataPrivacy {
                             .audio, .meetingDetails, .notes, .transcripts, .summaries, .todos, .chat, .peopleAndTags,
                         ],
                         trigger: .archive, receivers: [website]))
-            }
-            if website.supports(.search) {
-                routes.append(.init(data: [.searchQueries], trigger: .search, receivers: [website]))
             }
         }
 

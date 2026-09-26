@@ -23,21 +23,22 @@ final class MeetingStore: ObservableObject {
     }
     @Published var recordingID: UUID?
     @Published var presentsRecordingSetup = false
-    /// Clearing the activity text with the busy flag keeps progress transient;
-    /// outcomes appear in the content itself, and failures use errorMessage.
-    @Published var isBusy = false {
-        didSet { if !isBusy { statusMessage = "" } }
-    }
+    /// Transcription, summaries, chat, archiving, and imports in progress; see
+    /// BackgroundJobs.swift. Change only through beginJob and endJob. Jobs never
+    /// block recording. Progress is transient: outcomes appear in the content
+    /// itself, and failures use errorMessage.
+    @Published var backgroundJobs: [BackgroundJob] = []
     @Published var errorMessage: String?
     @Published var recordingPermissionNeeded: RecordingPermission?
-    @Published var captureHealth = ""
-    /// Progress text for the current long-running task. Shown only while isBusy.
-    @Published var statusMessage = ""
+    /// Capture diagnostics text. Not shown in the interface, so it is not published:
+    /// a change must not re-render every view observing the store.
+    var captureHealth = ""
     @Published var recordingStartedAt: Date?
     @Published var isFinalizingRecording = false
     @Published private(set) var isStartingRecording = false
-    @Published var recordingLevels = RecordingLevels()
-    private(set) var recordingActivity = RecordingActivityHistory()
+    /// 10 Hz meter state lives outside the store's publisher; only the meters observe it.
+    let recordingMeter = RecordingMeterState()
+    var recordingLevels: RecordingLevels { recordingMeter.levels }
     let dataDirectory: URL
     private var recorder: AudioCapture?
     private var captureTransition = false
@@ -53,6 +54,11 @@ final class MeetingStore: ObservableObject {
     private var savedProviderKeys: [String: String] = [:]
     private var unreadableProviderKeys = Set<String>()
     var recordingDuration: TimeInterval { recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0 }
+    /// Only the recording lifecycle and a read-only library prevent a new
+    /// recording; background jobs for other meetings never do.
+    var canStartRecording: Bool {
+        recordingID == nil && !isStartingRecording && !isFinalizingRecording && !captureTransition && canSave
+    }
 
     init(dataDirectory: URL? = nil) {
         let dataDirectory =
@@ -221,6 +227,10 @@ final class MeetingStore: ObservableObject {
             errorMessage = "Stop recording before deleting this meeting."
             return
         }
+        guard !backgroundJobs.contains(where: { $0.meetingID == id }) else {
+            errorMessage = "Wait for this meeting’s background tasks to finish before deleting it."
+            return
+        }
         do {
             let original = meetings
             meetings.removeAll { $0.id == id }
@@ -257,7 +267,14 @@ final class MeetingStore: ObservableObject {
         guard canSave else { return }
         people.removeAll { $0.id == id }
         contextualChats.removeValue(forKey: Self.contextChatKey(personID: id))
-        for i in meetings.indices { meetings[i].personIDs.removeAll { $0 == id } }
+        for i in meetings.indices {
+            meetings[i].personIDs.removeAll { $0 == id }
+            for speaker in meetings[i].speakers.indices where meetings[i].speakers[speaker].personID == id {
+                meetings[i].speakers[speaker].personID = nil
+                meetings[i].speakers[speaker].confidence = nil
+                meetings[i].speakers[speaker].confirmed = false
+            }
+        }
         save()
     }
     @discardableResult func addTag(name: String, color: String = "blue") -> UUID {
@@ -297,17 +314,16 @@ final class MeetingStore: ObservableObject {
             errorMessage = "Recording is disabled in UI Preview."
             return
         }
-        guard recordingID == nil, !isBusy, canSave else { return }
+        guard canStartRecording else { return }
         let microphone = microphoneEnabled ?? settings.captureMicrophone
         let systemAudio = systemEnabled ?? settings.captureSystemAudio
         isStartingRecording = true
         defer { isStartingRecording = false }
-        recordingActivity = RecordingActivityHistory()
-        recordingLevels = RecordingLevels(
-            microphone: RecordingSourceLevel(enabled: microphone),
-            system: RecordingSourceLevel(enabled: systemAudio))
+        recordingMeter.reset(
+            RecordingLevels(
+                microphone: RecordingSourceLevel(enabled: microphone),
+                system: RecordingSourceLevel(enabled: systemAudio)))
         recordingPermissionNeeded = nil
-        isBusy = true
         captureTransition = true
         activeRecordingFormat = format ?? settings.recordingFormat
         let suppliedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -321,8 +337,7 @@ final class MeetingStore: ObservableObject {
                 Task { @MainActor in
                     defer { delivered() }
                     if self?.recordingID == meeting.id && self?.isFinalizingRecording == false {
-                        self?.recordingActivity.append(levels)
-                        self?.recordingLevels = levels
+                        self?.recordingMeter.deliver(levels)
                     }
                 }
             }
@@ -332,8 +347,9 @@ final class MeetingStore: ObservableObject {
             capture.onFailure = { [weak self] error in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.errorMessage = error.localizedDescription
                     while self.captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    guard self.recordingID == meeting.id else { return }
+                    self.errorMessage = error.localizedDescription
                     await self.stopRecording(transcribeAfter: false)
                 }
             }
@@ -371,7 +387,6 @@ final class MeetingStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
-        isBusy = false
         captureTransition = false
     }
     /// The live Voice Processing switch; explicit for the rest of the recording.
@@ -380,7 +395,6 @@ final class MeetingStore: ObservableObject {
         guard let id = recordingID else { return }
         guard !captureTransition else { return }
         captureTransition = true
-        isBusy = true
         isFinalizingRecording = true
         let duration = recordingDuration
         var stopFailed = false
@@ -412,12 +426,11 @@ final class MeetingStore: ObservableObject {
         }
         recordingID = nil
         recordingStartedAt = nil
-        recordingActivity = RecordingActivityHistory()
-        recordingLevels = RecordingLevels()
+        recordingMeter.reset()
         captureTransition = false
-        isBusy = false
         isFinalizingRecording = false
-        if !stopFailed && transcribeAfter && settings.autoTranscribe { await transcribe(id: id) }
+        // A separate task, so callers awaiting the stop return once audio is saved.
+        if !stopFailed && transcribeAfter && settings.autoTranscribe { Task { await transcribe(id: id) } }
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {
         guard canSave, format != .wav else { return }
@@ -468,21 +481,28 @@ final class MeetingStore: ObservableObject {
     /// tracks to one meeting. Commit metadata once, or remove all new copies.
     @discardableResult func importAudioFiles(_ urls: [URL], into target: UUID? = nil) async throws -> [UUID] {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
-        guard !isBusy, !isStartingRecording, !isFinalizingRecording, recordingID == nil else {
-            throw MeetingError.message("Finish the current operation before importing audio.")
+        guard !isStartingRecording, !isFinalizingRecording, recordingID == nil else {
+            throw MeetingError.message("Stop the recording before importing audio.")
+        }
+        guard !isImportingAudio else {
+            throw MeetingError.message("Wait for the current import to finish before importing more audio.")
         }
         guard !urls.isEmpty else { return [] }
         if let target {
             guard let meeting = meetings.first(where: { $0.id == target }) else {
                 throw MeetingError.message("This meeting no longer exists.")
             }
-            guard meeting.transcriptionAttempt == nil else {
+            guard meeting.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(target)) else {
                 throw MeetingError.message(
                     "Resume and finish this meeting’s pending transcription before adding tracks.")
             }
+            guard !isJobRunning(.archive, .meeting(target)) else {
+                throw MeetingError.message("Wait for this meeting’s archive to finish before adding tracks.")
+            }
         }
-        isBusy = true
-        defer { isBusy = false }
+        let scope: BackgroundJob.Scope = target.map { .meeting($0) } ?? .library
+        guard beginJob(.importAudio, scope, progress: "Importing audio…") else { return [] }
+        defer { endJob(.importAudio, scope) }
         var copied: [URL] = []
         var newFolders: [URL] = []
         var additions: [(id: UUID, title: String, file: String, duration: Double)] = []
@@ -575,6 +595,14 @@ final class MeetingStore: ObservableObject {
         meeting.personIDs = []
         meeting.tagIDs = []
         meeting.transcriptionAttempt = nil
+        for index in meeting.speakers.indices {
+            meeting.speakers[index].personID = nil
+            meeting.speakers[index].confidence = nil
+            meeting.speakers[index].confirmed = false
+            meeting.speakers[index].embedding = nil
+            meeting.speakers[index].voiceScope = nil
+        }
+        meeting.restoreSpeakerIdentities()
         meetings.insert(meeting, at: 0)
         guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
     }
@@ -583,6 +611,11 @@ final class MeetingStore: ObservableObject {
             throw MeetingError.message("Meeting no longer exists.")
         }
         meeting.transcriptionAttempt = nil
+        for index in meeting.transcript.indices {
+            meeting.transcript[index].speaker = meeting.speakerName(for: meeting.transcript[index], people: people)
+            meeting.transcript[index].speakerID = nil
+        }
+        meeting.speakers = []
         if url.pathExtension.lowercased() == "json" {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

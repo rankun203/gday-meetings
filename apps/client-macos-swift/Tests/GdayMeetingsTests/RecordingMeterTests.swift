@@ -1,10 +1,111 @@
 import AVFoundation
+import AppKit
+import Combine
 import Foundation
 import Testing
 
 @testable import GdayMeetings
 
 struct RecordingMeterTests {
+    @MainActor
+    @Test func meterTicksDoNotPublishLibraryChanges() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(dataDirectory: directory)
+        var storeChanges = 0
+        var meterChanges = 0
+        let storeSubscription = store.objectWillChange.sink { storeChanges += 1 }
+        let meterSubscription = store.recordingMeter.objectWillChange.sink { meterChanges += 1 }
+        defer {
+            storeSubscription.cancel()
+            meterSubscription.cancel()
+        }
+        let levels = RecordingLevels(
+            microphone: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30))
+        for tick in 0..<100 {
+            store.recordingMeter.deliver(levels, at: Double(tick) / 10)
+            store.captureHealth = "Captured buffer \(tick)"
+        }
+        #expect(storeChanges == 0)
+        #expect(meterChanges == 100)
+        #expect(store.recordingMeter.levels.microphone.rmsDB == -30)
+        #expect(store.recordingMeter.activity.bars(microphone: true).contains { $0 > 0 })
+        store.recordingMeter.reset()
+        #expect(storeChanges == 0)
+        #expect(meterChanges == 101)
+        #expect(!store.recordingMeter.levels.microphone.enabled)
+        #expect(store.recordingMeter.activity.samples.isEmpty)
+    }
+
+    @MainActor
+    @Test func statusPublishesTransitionsWithoutAmplitudeTicks() {
+        let meter = RecordingMeterState()
+        var changes = 0
+        let subscription = meter.status.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+        var levels = RecordingLevels(
+            microphone: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30))
+        meter.deliver(levels, at: 0)
+        #expect(changes == 1)
+        for tick in 1...100 {
+            levels.microphone.rmsDB = -Double(tick % 30)
+            levels.microphone.peakDB = -Double(tick % 10)
+            meter.deliver(levels, at: Double(tick) / 10)
+        }
+        #expect(changes == 1)
+        levels.microphone.rmsDB = -90
+        meter.deliver(levels)
+        #expect(changes == 1)
+        #expect(meter.levels.microphone.statusText == "Quiet")
+        levels.microphone.reconnecting = true
+        levels.microphone.switchingTo = "Headphones"
+        levels.microphoneStatus.canSwitch = false
+        meter.deliver(levels)
+        #expect(changes == 2)
+        #expect(meter.status.levels.microphone.switchingTo == "Headphones")
+        levels.microphoneStatus.voiceProcessing = true
+        levels.microphoneStatus.notices = ["Voice Processing turned on"]
+        meter.deliver(levels)
+        #expect(changes == 3)
+        #expect(meter.status.levels.microphoneStatus == levels.microphoneStatus)
+        meter.reset()
+        #expect(changes == 4)
+        #expect(!meter.status.levels.microphone.enabled)
+    }
+
+    @MainActor
+    @Test func nativeLevelMeterResizesAndKeepsAccessibleState() throws {
+        let view = RecordingLevelView(frame: NSRect(x: 0, y: 0, width: 200, height: 7))
+        var source = RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30, peakDB: -10)
+        view.configure(source: source, saving: false, tint: .systemTeal, title: "Microphone")
+        #expect(view.accessibilityRole() == .levelIndicator)
+        #expect(view.accessibilityLabel() == "Microphone")
+        #expect(view.accessibilityValue() as? Double == -30)
+        #expect(view.accessibilityValueDescription() == "Receiving audio, -30 decibels")
+        let layer = try #require(view.layer?.sublayers?.last)
+        #expect(layer.frame.width == 100)
+        view.setFrameSize(NSSize(width: 400, height: 7))
+        view.layout()
+        #expect(layer.frame.width == 200)
+        source.rmsDB = -15
+        source.peakDB = 0
+        view.configure(source: source, saving: false, tint: .systemTeal, title: "Microphone")
+        #expect(layer.frame.width == 300)
+        #expect(view.accessibilityValue() as? Double == -15)
+        source.rmsDB = -90
+        view.configure(source: source, saving: false, tint: .systemTeal, title: "Microphone")
+        #expect(view.accessibilityValueDescription() == "Quiet, -90 decibels")
+        #expect(view.toolTip == "Quiet")
+        source.reconnecting = true
+        source.switchingTo = "Headphones"
+        view.configure(source: source, saving: false, tint: .systemTeal, title: "Microphone")
+        #expect(layer.frame.width == 0)
+        #expect(view.accessibilityValueDescription() == "Switching to Headphones…")
+        view.configure(source: source, saving: true, tint: .systemTeal, title: "Microphone")
+        #expect(layer.frame.width == 0)
+        #expect(view.accessibilityValueDescription() == "Finalizing")
+    }
+
     @Test func activityHistoryKeepsTenSecondsAndSeparatesSources() {
         var history = RecordingActivityHistory()
         let levels = RecordingLevels(

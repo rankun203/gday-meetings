@@ -45,8 +45,8 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .runpod: return [.transcription, .diarization]
         case .filedrop: return [.fileTransfer]
         case .openAICompatible: return [.summarization]
-        // Remote playback has no app adapter yet. Do not advertise it as available.
-        case .gdayWebsite: return [.transcription, .diarization, .search]
+        // Search and remote playback have no app adapters. Do not advertise them as available.
+        case .gdayWebsite: return [.transcription, .diarization]
         }
     }
 }
@@ -241,14 +241,20 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
                 guard let entries = body["segments"] as? [[String: Any]] else {
                     throw ServiceError("The transcript is missing an audio track's segments.")
                 }
+                let embeddings = body["speaker_embeddings"] as? [String: Any] ?? [:]
                 for entry in entries {
                     guard let start = entry["start"] as? Double, let end = entry["end"] as? Double,
                         let text = entry["text"] as? String, start.isFinite, end.isFinite, start >= 0, end >= start
                     else {
                         throw ServiceError("The transcript contains an invalid timestamp or text.")
                     }
+                    let label = entry["speaker"] as? String
+                    let embedding = label.flatMap { embeddings[$0] as? [Double] }
+                    // Invalid optional voice data must not discard usable text.
                     segments.append(
-                        .init(start: start, end: end, text: text, speaker: entry["speaker"] as? String, track: track))
+                        .init(
+                            start: start, end: end, text: text, speaker: label, track: track,
+                            embedding: embedding.flatMap { SpeakerRecognition.isValid($0) ? $0 : nil }))
                 }
             }
             return .complete(segments.sorted { $0.start == $1.start ? $0.track < $1.track : $0.start < $1.start })
@@ -424,24 +430,5 @@ struct FiledropProvider: FileTransferProvider {
             throw ServiceError("Filedrop returned no valid file expiry.")
         }
         return FiledropUpload(url: url, expiresAt: Date().addingTimeInterval(expiry))
-    }
-}
-
-@MainActor struct GdaySearchProvider: SearchProvider {
-    let provider: ServiceProvider
-    func search(query: String) async throws -> [ProviderSearchResult] {
-        guard provider.kind == .gdayWebsite, provider.supports(.search) else {
-            throw ServiceError("Enable Search for this Gday Meetings website.")
-        }
-        let server = GdayServerService.shared
-        let origin = try ServiceHTTP.origin(provider.endpoint)
-        guard server.connected,
-            server.origin.flatMap(URL.init(string:)).map({ ServiceHTTP.sameOrigin($0, origin) }) == true
-        else {
-            throw ServiceError("Sign in to \(provider.name) in Service Providers.")
-        }
-        return try await server.search(query: query).map {
-            ProviderSearchResult(meetingID: $0.id, externalID: $0.externalID, title: $0.title, excerpt: $0.transcript)
-        }
     }
 }

@@ -12,17 +12,12 @@ struct ServerTranscriptSegment: Equatable {
     let text: String
     let speaker: String?
     let track: String
+    var embedding: [Double]?
 }
 enum ServerTaskResult {
     case pending
     case complete([ServerTranscriptSegment])
     case failed(String)
-}
-struct ServerMeeting: Identifiable {
-    let id: String
-    let externalID: String
-    let title: String
-    let transcript: String
 }
 extension GdayServerService {
     func ensureTranscriptionAvailable() async throws {
@@ -116,22 +111,6 @@ extension GdayServerService {
         }
         if status == "COMPLETED" { throw ServiceError("The completed task contains no transcript output.") }
         return .pending
-    }
-    func search(query: String) async throws -> [ServerMeeting] {
-        var r = try await authorizedRequest("api/platform/meetings/search")
-        var components = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "query", value: query)]
-        r.url = components.url
-        let result = try await ServiceHTTP.json(r, trace: Self.trace("search query"))
-        guard let meetings = result["meetings"] as? [[String: Any]] else {
-            throw ServiceError("Invalid server search results.")
-        }
-        return meetings.compactMap { value in
-            guard let id = value["id"] as? String, let title = value["title"] as? String else { return nil }
-            return ServerMeeting(
-                id: id, externalID: value["externalId"] as? String ?? id, title: title,
-                transcript: value["transcript"] as? String ?? "")
-        }
     }
     func ensureArchiveAvailable() async throws {
         let capabilities = try await ServiceHTTP.json(

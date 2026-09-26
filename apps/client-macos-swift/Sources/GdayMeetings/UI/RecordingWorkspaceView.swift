@@ -163,7 +163,7 @@ struct RecordingSetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                .disabled((!microphone && !systemAudio) || store.isBusy || store.isStartingRecording)
+                .disabled((!microphone && !systemAudio) || !store.canStartRecording)
             }
         }
     }
@@ -275,9 +275,8 @@ struct RecordingWorkspaceView: View {
                         Text(store.isFinalizingRecording ? "Saving Recording" : "Recording").font(
                             .subheadline.weight(.semibold))
                         // Recording continues while a device reconnects; Stop & Save stays available.
-                        if !store.isFinalizingRecording, let status = Self.reconnectingStatus(store.recordingLevels) {
-                            Label(status, systemImage: "arrow.triangle.2.circlepath")
-                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        if !store.isFinalizingRecording {
+                            RecordingReconnectStatus(status: store.recordingMeter.status)
                         }
                     }
                     TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -305,24 +304,10 @@ struct RecordingWorkspaceView: View {
                     }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
                 }
             }
-            HStack(alignment: .top, spacing: 26) {
-                VStack(alignment: .leading, spacing: 10) {
-                    RecordingSourceMeter(
-                        title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone,
-                        saving: store.isFinalizingRecording,
-                        activity: store.recordingActivity.bars(microphone: true),
-                        activityTime: store.recordingActivity.bucketStart, tint: .accentColor)
-                    if store.recordingLevels.microphone.enabled && !store.isFinalizingRecording {
-                        RecordingVoiceProcessingControl(status: store.recordingLevels.microphoneStatus) {
-                            store.setRecordingVoiceProcessing($0)
-                        }
-                    }
-                }
-                RecordingSourceMeter(
-                    title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system,
-                    saving: store.isFinalizingRecording,
-                    activity: store.recordingActivity.bars(microphone: false),
-                    activityTime: store.recordingActivity.bucketStart, tint: .teal)
+            RecordingLiveMeters(
+                meter: store.recordingMeter, status: store.recordingMeter.status, saving: store.isFinalizingRecording
+            ) {
+                store.setRecordingVoiceProcessing($0)
             }
         }
         .padding(18)
@@ -352,6 +337,42 @@ struct RecordingWorkspaceView: View {
         return value >= 3600
             ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60)
             : String(format: "%02d:%02d", value / 60, value % 60)
+    }
+}
+
+/// SwiftUI observes semantic status only; native surfaces receive amplitude ticks directly.
+private struct RecordingReconnectStatus: View {
+    @ObservedObject var status: RecordingMeterStatus
+    var body: some View {
+        if let status = RecordingWorkspaceView.reconnectingStatus(status.levels) {
+            Label(status, systemImage: "arrow.triangle.2.circlepath")
+                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+private struct RecordingLiveMeters: View {
+    let meter: RecordingMeterState
+    @ObservedObject var status: RecordingMeterStatus
+    let saving: Bool
+    let setVoiceProcessing: (Bool) -> Void
+    var body: some View {
+        let levels = status.levels
+        HStack(alignment: .top, spacing: 26) {
+            VStack(alignment: .leading, spacing: 10) {
+                RecordingSourceMeter(
+                    title: "Microphone", symbol: "mic.fill", source: levels.microphone, saving: saving,
+                    activity: meter.activity.bars(microphone: true), activityTime: meter.activity.bucketStart,
+                    tint: .accentColor, liveMeter: meter, microphone: true)
+                if levels.microphone.enabled && !saving {
+                    RecordingVoiceProcessingControl(status: levels.microphoneStatus, onChange: setVoiceProcessing)
+                }
+            }
+            RecordingSourceMeter(
+                title: "System Audio", symbol: "speaker.wave.2.fill", source: levels.system, saving: saving,
+                activity: meter.activity.bars(microphone: false), activityTime: meter.activity.bucketStart,
+                tint: .teal, liveMeter: meter, microphone: false)
+        }
     }
 }
 
@@ -428,6 +449,8 @@ struct RecordingSourceMeter: View {
     let activity: [Double]
     let activityTime: TimeInterval?
     let tint: Color
+    var liveMeter: RecordingMeterState? = nil
+    var microphone = true
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             // HIG Feedback / Accessibility: use a stable symbol slot for changing
@@ -437,10 +460,18 @@ struct RecordingSourceMeter: View {
             HStack(spacing: 6) {
                 sourceLabel.lineLimit(1)
                 Spacer(minLength: 0)
-                RecordingActivitySurface(
-                    bars: activity, bucketStart: activityTime, tint: tint,
-                    animate: receiving && !reduceMotion && scenePhase == .active
-                )
+                Group {
+                    if let liveMeter {
+                        RecordingLiveActivitySurface(
+                            meter: liveMeter, microphone: microphone, tint: tint,
+                            animate: receiving && !reduceMotion && scenePhase == .active)
+                    }
+                    else {
+                        RecordingActivitySurface(
+                            bars: activity, bucketStart: activityTime, tint: tint,
+                            animate: receiving && !reduceMotion && scenePhase == .active)
+                    }
+                }
                 .frame(minWidth: 40, idealWidth: 110, maxWidth: 110)
                 .frame(height: 24)
                 .help("Last 10 seconds · " + statusText)
@@ -451,19 +482,27 @@ struct RecordingSourceMeter: View {
                     }
                 }
             }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary)
-                    Capsule().fill(source.peakDB > -1 ? Color.orange : tint)
-                        .frame(width: geometry.size.width * (saving ? 0 : source.level))
-                }
-            }.frame(height: 7)
+            if let liveMeter {
+                RecordingLiveLevelSurface(
+                    meter: liveMeter, microphone: microphone, saving: saving, tint: tint, title: title
+                )
+                .frame(height: 7)
+            }
+            else {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.quaternary)
+                        Capsule().fill(source.peakDB > -1 ? Color.orange : tint)
+                            .frame(width: geometry.size.width * (saving ? 0 : source.level))
+                    }
+                }.frame(height: 7)
+            }
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: liveMeter == nil ? .ignore : .contain)
         .accessibilityLabel(title)
         .help(statusText)
         .accessibilityValue(
-            receiving ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
+            receiving && liveMeter == nil ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
     }
 
     private var receiving: Bool {
@@ -472,7 +511,10 @@ struct RecordingSourceMeter: View {
 
     private var sourceLabel: some View { Label(title, systemImage: symbol).font(.subheadline.weight(.medium)) }
     private var statusText: String {
-        saving ? (source.enabled ? "Finalizing" : "Not recorded") : source.statusText
+        if saving { return source.enabled ? "Finalizing" : "Not recorded" }
+        // The native child exposes current loudness; the container describes availability.
+        if liveMeter != nil && receiving { return "Receiving audio" }
+        return source.statusText
     }
 
     private var statusSymbol: String {

@@ -6,7 +6,7 @@ import Testing
 
 /// A real TCP fixture bound only to loopback. It receives complete HTTP bodies;
 /// application URLSession configuration and production request builders remain unchanged.
-private final class HTTPFixture: @unchecked Sendable {
+final class HTTPFixture: @unchecked Sendable {
     struct Request: Sendable {
         let method: String
         let target: String
