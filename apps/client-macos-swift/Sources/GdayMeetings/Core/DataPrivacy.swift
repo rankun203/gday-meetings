@@ -24,7 +24,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
     /// Clarifies types whose title alone does not say what they contain.
     var contents: String? {
         switch self {
-        case .audio: "Microphone and system audio tracks"
+        case .audio: "Microphone and system audio tracks. Live transcription audio is processed on this Mac."
         case .meetingDetails: "Title, date, duration, language, and recording devices"
         case .peopleAndTags: "Names, email addresses, notes, and speaker assignments"
         case .voiceSamples:
@@ -77,7 +77,7 @@ enum PrivacyTrigger: Int, Comparable {
 }
 
 /// A path data can take off this Mac. Capabilities add routes declaratively; a
-/// capability that processes data on this Mac (for example, a future on-device
+/// capability that processes data on this Mac (for example, on-device
 /// Live Transcription) adds a route with no receivers, so its data stays local.
 struct PrivacyRoute {
     let data: Set<PrivacyDataType>

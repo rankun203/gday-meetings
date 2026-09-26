@@ -36,6 +36,14 @@ struct GdayMeetingsApp: App {
                 Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
                 Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
             }
+            CommandMenu("Format") {
+                Button("Bold") { NSApp.sendAction(#selector(NotesTextView.markdownBold(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("b")
+                Button("Italic") { NSApp.sendAction(#selector(NotesTextView.markdownItalic(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("i")
+                Button("Link…") { NSApp.sendAction(#selector(NotesTextView.markdownLink(_:)), to: nil, from: nil) }
+                    .keyboardShortcut("k")
+            }
             CommandMenu("Recording") {
                 Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
                     if store.recordingID == nil {
@@ -54,6 +62,9 @@ struct GdayMeetingsApp: App {
                 Button("Export Logs") { MeetingPanels.exportLogs(store) }
             }
             CommandMenu("Playback") {
+                Button("Play From Line") {
+                    NSApp.sendAction(#selector(NotesTextView.playFromLine(_:)), to: nil, from: nil)
+                }.keyboardShortcut(.return)
                 Button(playback.isPlaying ? "Pause" : "Play") { playback.togglePlayPause() }
                     .disabled(!playback.hasSelection || playback.isPlaybackBlocked || playback.isLoading)
                 Button("Back 15 Seconds") { playback.skip(by: -15) }
@@ -100,8 +111,8 @@ final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let store else { return .terminateNow }
         Task {
-            await store.finalizeForQuit()
-            sender.reply(toApplicationShouldTerminate: true)
+            let saved = await store.finalizeForQuit()
+            sender.reply(toApplicationShouldTerminate: saved)
         }
         return .terminateLater
     }

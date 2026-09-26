@@ -52,3 +52,9 @@ Apple's current [NSAccessibilityProtocol documentation](https://developer.apple.
 
 - The existing conversion path allocates channel mapping and output buffers per converted callback. Its measured CPU cost does not justify changing it here. If a future profile identifies these allocations as significant, reuse buffers under the writer lock and test changing formats, growing frame counts, and resampler resets across outages.
 - UI Preview retains its prior SwiftUI bar while live recording uses the native bar. This keeps the preview simulation unchanged during the measured fix, but Preview cannot detect live-rendering regressions. Migrate the simulation to `RecordingMeterState`, then remove the legacy bar when its source-state scenarios use production subscriptions.
+
+## Final installed-build check
+
+The validated build recorded and saved “Validation — isolated recording status” for about 1:28 with microphone, quiet system audio, and Voice Processing enabled. Eight three-second CPU intervals measured 18.4, 20.6, 20.7, 19.8, 17.5, 17.5, 19.7, and 23.1 percent of one core: average 19.7%, range 17.5–23.1%. Excluded the initial zero reading before top had a sampling interval. A concurrent five-second sample showed 60 hosting-view minimum-size samples, down from about 160 in the earlier native build. Recording stopped and saved; automatic transcription was off. This quiet-route check meets the target on average but does not establish a sustained upper bound or results on other devices. Logs: `/tmp/gday-final-recording-cpu.txt` and `/tmp/gday-final-recording-sample.txt`.
+
+The installed version-2 library opened successfully with its version-1 backup retained. All 217 integrated tests, formatting, lint, and final Preview build passed before installation. Later Markdown notes, live transcription, and animation work needs separate validation.

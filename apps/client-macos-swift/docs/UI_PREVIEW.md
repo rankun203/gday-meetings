@@ -54,3 +54,13 @@ Normal settings saves now write credentials only when their values changed. The 
 The collapsible **Recording visualization preview · synthetic levels** section shows the production microphone/system meters with simulated ten-second histories. Use it to check miniature waveform layout and appearance without starting capture. System Audio simulates a four-second device switch every 20 seconds: “Reconnecting system audio…” for two seconds, then “Switching system audio to Preview Headphones…”, with the reset meter throughout. The Microphone column also shows the live **Voice Processing** switch: Off shows the “Echo detected” hint, and On shows the “Echo detected · Voice Processing turned on” notice. The switch changes only the preview; no capture, device, or echo detection runs. The simulation does not exercise real device recovery. It is absent from the full app.
 
 New Recording's microphone menu lists this Mac's real input devices. Listing devices reads Core Audio properties only; it opens no device and requests no permission.
+
+## Markdown notes
+
+The synthetic conversation has timed headings and list items, a task checkbox, and an untimed line in **Notes**. Click a gutter time or use **Playback → Play From Line** (Command-Return) to seek the silent player three seconds before the saved time. Check editing, undo, list continuation, Format commands, and keyboard access in light and dark appearance and at narrow widths. Marker comments stay hidden in the editor and remain in the temporary library's `notes.md`. Images are a later phase and currently remain Markdown text.
+
+## Live transcription and recording card
+
+The synthetic conversation includes a saved live draft. Open its Transcript tab to check draft expansion, timeline playback, **Use Live Draft as Transcript**, and **Saved Transcript Revisions**. Recognition accuracy is not simulated.
+
+Launch Preview with `--synthetic-live-recording` to show the production recording card for the synthetic conversation. It includes a finalized phrase and provisional text. This flag does not open audio hardware, download a model, or start SpeechAnalyzer. Check the 44-point Recording Settings disclosure, folded language/processing/tag summary, expanded controls, and Live Transcript switch. The synthetic recording’s duration advances, but its audio files remain fixture audio. Stop & Save ends the synthetic state.

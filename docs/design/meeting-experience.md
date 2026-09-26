@@ -260,7 +260,7 @@ Speaker labels distinguish voices. Naming a speaker is a separate feature. Savin
 
 Use a built-in transcription engine when supported. Show device requirements, supported languages, model size, and availability of live text and speaker labels.
 
-Follow the [live transcription research](../live-transcription-research.md): evaluate Apple Speech and multilingual Whisper, while keeping recording available on macOS 14.2. Test English, Mandarin, and mixed-language accuracy before release.
+Follow the [live transcription research](live-transcription-research.md): evaluate Apple Speech and multilingual Whisper, while keeping recording available on macOS 14.2. Test English, Mandarin, and mixed-language accuracy before release.
 
 If a model is missing, show **Download Model**. Do not switch to Cloud.
 
@@ -453,7 +453,7 @@ Implementation status on 2026-09-26:
 - [Provider transcription](../../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift) saves upload receipts and job progress. It preserves edits made during processing and retains the returned transcript for an explicit replacement.
 - The [worker API](../../apps/worker-audio-extraction/src/audio_extraction/http_worker.py) still requires a token and fetches audio from URLs. Optional authentication and a separate local HTTP provider remain future work.
 - The website retains its existing transcription and search workflows. Complete search indexing and remote playback adapters remain unimplemented; their protocols describe the target contracts.
-- Local live transcription remains [research](../live-transcription-research.md). Billing, private hosted accounts, encrypted storage, and confidential workers still need implementation.
+- Local live transcription uses This Mac on macOS 26 and later; representative accuracy and long-duration validation remain open in the [design](live-transcription-research.md). Billing, private hosted accounts, encrypted storage, and confidential workers still need implementation.
 
 ## Open decisions
 

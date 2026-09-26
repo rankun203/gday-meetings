@@ -266,6 +266,7 @@ extension MeetingStore {
             var latest = meetings.first(where: { $0.id == meetingID }),
             let result = latest.transcriptionAttempt?.result
         else { return }
+        guard preserveTranscript(latest) else { return }
         latest.replaceSpeakers(latest.transcriptionAttempt?.resultSpeakers ?? [])
         latest.transcript = result
         latest.restoreSpeakerIdentities()
@@ -283,6 +284,9 @@ extension MeetingStore {
             throw ServiceError(
                 "The transcript was edited during processing. The new result is saved. Choose Apply Saved Transcript to review the replacement."
             )
+        }
+        guard preserveTranscript(latest) else {
+            throw ServiceError(errorMessage ?? "Couldn’t save the previous transcript.")
         }
         latest.replaceSpeakers(attempt.resultSpeakers ?? [])
         latest.transcript = result

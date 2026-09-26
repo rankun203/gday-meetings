@@ -38,8 +38,10 @@ final class MeetingStore: ObservableObject {
     @Published private(set) var isStartingRecording = false
     /// 10 Hz meter state lives outside the store's publisher; only the meters observe it.
     let recordingMeter = RecordingMeterState()
+    let liveTranscript = LiveTranscriptController()
     var recordingLevels: RecordingLevels { recordingMeter.levels }
     let dataDirectory: URL
+    lazy var notesStorage = NotesStorage(directory: dataDirectory)
     private var recorder: AudioCapture?
     private var captureTransition = false
     private var activeRecordingFormat: RecordingFormat = .opus
@@ -87,6 +89,12 @@ final class MeetingStore: ObservableObject {
             if FileManager.default.fileExists(atPath: settingsURL.path) {
                 settings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsURL))
             }
+            for index in meetings.indices {
+                meetings[index].notes = try notesStorage.load(meetings[index].id, fallback: meetings[index].notes)
+            }
+            notesStorage.onError = { [weak self] error in
+                self?.errorMessage = "Couldn’t save meeting notes. \(error.localizedDescription)"
+            }
             lastSavedLibrary = MeetingLibrary(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
             if migrated { save() }
@@ -127,7 +135,13 @@ final class MeetingStore: ObservableObject {
             return false
         }
         do {
-            let data = try JSONEncoder().encode(
+            try notesStorage.flushAll()
+            for meeting in meetings where notesStorage.saved[meeting.id] != meeting.notes {
+                try notesStorage.write(meeting.id, text: meeting.notes)
+            }
+            let encoder = JSONEncoder()
+            encoder.userInfo[.notesInSidecars] = true
+            let data = try encoder.encode(
                 MeetingLibrary(contextualChats: contextualChats, meetings: meetings, people: people, tags: tags))
             try data.write(to: dataDirectory.appendingPathComponent("library.json"), options: .atomic)
             try FileManager.default.setAttributes(
@@ -137,7 +151,11 @@ final class MeetingStore: ObservableObject {
             return true
         }
         catch {
-            meetings = lastSavedLibrary.meetings
+            meetings = lastSavedLibrary.meetings.map { old in
+                var recovered = old
+                recovered.notes = notesStorage.pending[old.id] ?? notesStorage.saved[old.id] ?? old.notes
+                return recovered
+            }
             people = lastSavedLibrary.people
             tags = lastSavedLibrary.tags
             contextualChats = lastSavedLibrary.contextualChats
@@ -232,6 +250,7 @@ final class MeetingStore: ObservableObject {
             return
         }
         do {
+            try notesStorage.flush(id)
             let original = meetings
             meetings.removeAll { $0.id == id }
             guard save() else { return }
@@ -240,6 +259,7 @@ final class MeetingStore: ObservableObject {
                 if FileManager.default.fileExists(atPath: folder.path) {
                     _ = try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
                 }
+                notesStorage.discard(id)
             }
             catch {
                 meetings = original
@@ -333,6 +353,8 @@ final class MeetingStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: directory(for: meeting.id), withIntermediateDirectories: true)
             let capture = AudioCapture()
+            let liveSink = LiveAudioSink()
+            capture.liveAudioSink = liveSink
             capture.onLevels = { [weak self] levels, delivered in
                 Task { @MainActor in
                     defer { delivered() }
@@ -369,6 +391,10 @@ final class MeetingStore: ObservableObject {
             recorder = capture
             recordingID = meeting.id
             recordingStartedAt = Date()
+            liveTranscript.begin(
+                meetingID: meeting.id, language: meeting.language, directory: directory(for: meeting.id),
+                sources: [microphone ? .microphone : nil, systemAudio ? .system : nil].compactMap { $0 },
+                sink: liveSink, enabled: settings.showLiveTranscript)
             captureHealth = [
                 microphone
                     ? (capture.profile.microphoneVoiceProcessing
@@ -392,6 +418,7 @@ final class MeetingStore: ObservableObject {
     /// The live Voice Processing switch; explicit for the rest of the recording.
     func setRecordingVoiceProcessing(_ enabled: Bool) { recorder?.setVoiceProcessing(enabled) }
     func stopRecording(transcribeAfter: Bool = true) async {
+        _ = flushNotes()
         guard let id = recordingID else { return }
         guard !captureTransition else { return }
         captureTransition = true
@@ -408,6 +435,7 @@ final class MeetingStore: ObservableObject {
                 : "Couldn’t finish the recording. Audio captured before the problem is kept in this meeting. \(error.localizedDescription)"
             stopFailed = true
         }
+        await liveTranscript.finish()
         let profile = recorder?.profile
         recorder = nil
         captureHealth = ""
@@ -472,10 +500,11 @@ final class MeetingStore: ObservableObject {
         // every finalized compressed track. Failed conversion leaves WAV recoverable.
         for file in originals { try? FileManager.default.removeItem(at: file) }
     }
-    func finalizeForQuit() async {
+    @discardableResult func finalizeForQuit() async -> Bool {
         RecordingPermissions.cancelPendingStart()
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
         await stopRecording(transcribeAfter: false)
+        return flushNotes()
     }
     /// A list drop creates one meeting per file; a detail drop appends aligned
     /// tracks to one meeting. Commit metadata once, or remove all new copies.
@@ -627,7 +656,7 @@ final class MeetingStore: ObservableObject {
             }.joined(separator: "\n\n")
             let todos = meeting.todos.map { "- [\($0.isCompleted ? "x" : " ")] \($0.title)" }.joined(separator: "\n")
             try
-                "# \(meeting.title)\n\n\(meeting.createdAt.formatted())\n\n## Summary\n\n\(meeting.summary)\n\n## Notes\n\n\(meeting.notes)\n\n## Action items\n\n\(todos)\n\n## Transcript\n\n\(transcript)\n"
+                "# \(meeting.title)\n\n\(meeting.createdAt.formatted())\n\n## Summary\n\n\(meeting.summary)\n\n## Notes\n\n\(NotesDocument(meeting.notes).citedText)\n\n## Action items\n\n\(todos)\n\n## Transcript\n\n\(transcript)\n"
                 .write(to: url, atomically: true, encoding: .utf8)
         }
     }

@@ -15,11 +15,12 @@ enum TranscriptionLanguage {
 
 /// App capability contracts are documented in docs/protocols/.
 enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
-    case transcription, diarization, summarization, search, playback, fileTransfer
+    case transcription, liveTranscription, diarization, summarization, search, playback, fileTransfer
     var id: String { rawValue }
     var title: String {
         switch self {
         case .transcription: return "Transcription"
+        case .liveTranscription: return "Live Transcription"
         case .diarization: return "Speaker Labels"
         case .summarization: return "Summaries"
         case .search: return "Search"

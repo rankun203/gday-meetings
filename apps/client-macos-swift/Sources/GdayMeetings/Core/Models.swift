@@ -82,6 +82,7 @@ struct AppSettings: Codable, Equatable {
     var summaryProviderID: UUID?
     var defaultLanguage = "en"
     var autoTranscribe = false
+    var showLiveTranscript = true
     var captureSystemAudio = true
     var captureMicrophone = true
     var recordingFormat: RecordingFormat = .opus
@@ -94,6 +95,7 @@ struct AppSettings: Codable, Equatable {
         "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID, defaultLanguage, autoTranscribe,
+            showLiveTranscript,
             captureSystemAudio,
             captureMicrophone, recordingFormat, summarizationPrompt, automaticVoiceProcessing, microphoneDevice
     }
@@ -107,14 +109,16 @@ struct AppSettings: Codable, Equatable {
 ///   after keeping a backup. It never opens or rewrites a newer version, and it
 ///   always saves `currentVersion`, so a save cannot lower the version.
 struct MeetingLibrary: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
     typealias Migration = (inout MeetingLibrary) throws -> Void
     /// Version 2 retains speaker identity and confirmed voice samples. New fields
     /// decode empty in version 1; no existing speaker name implies a person.
     static let migrations: [Int: Migration] = [
         1: { library in
             for index in library.meetings.indices { library.meetings[index].restoreSpeakerIdentities() }
-        }
+        },
+        // Sidecar file work runs in LibraryFormat before the version advances.
+        2: { _ in },
     ]
 
     var contextualChats: [String: [ChatMessage]] = [:]
@@ -223,6 +227,7 @@ extension AppSettings {
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
+        showLiveTranscript = try values.decodeIfPresent(Bool.self, forKey: .showLiveTranscript) ?? true
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
@@ -245,5 +250,31 @@ extension MeetingLibrary {
         meetings = try values.decodeIfPresent([Meeting].self, forKey: .meetings) ?? []
         people = try values.decodeIfPresent([Person].self, forKey: .people) ?? []
         tags = try values.decodeIfPresent([MeetingTag].self, forKey: .tags) ?? []
+    }
+}
+
+// Only the library index omits notes; standalone meeting JSON retains Markdown.
+extension CodingUserInfoKey {
+    static let notesInSidecars = CodingUserInfoKey(rawValue: "notesInSidecars")!
+}
+extension Meeting {
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(title, forKey: .title)
+        try values.encode(language, forKey: .language)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encode(duration, forKey: .duration)
+        if encoder.userInfo[.notesInSidecars] as? Bool != true { try values.encode(notes, forKey: .notes) }
+        try values.encode(summary, forKey: .summary)
+        try values.encode(transcript, forKey: .transcript)
+        try values.encode(speakers, forKey: .speakers)
+        try values.encode(personIDs, forKey: .personIDs)
+        try values.encode(tagIDs, forKey: .tagIDs)
+        try values.encode(audioFiles, forKey: .audioFiles)
+        try values.encode(chat, forKey: .chat)
+        try values.encode(todos, forKey: .todos)
+        try values.encodeIfPresent(recordingProfile, forKey: .recordingProfile)
+        try values.encodeIfPresent(transcriptionAttempt, forKey: .transcriptionAttempt)
     }
 }

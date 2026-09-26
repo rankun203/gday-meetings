@@ -7,7 +7,7 @@ scope: swift-app-notes
 
 # Markdown notes with images and timeline links
 
-This design covers the Notes tab in the Swift macOS client. The direction and the decisions in [Decisions](#decisions) are accepted. Only library format versioning (see [Migration](#migration)) is implemented. [Open follow-ups](#open-follow-ups) lists the remaining items.
+This design covers the Notes tab in the Swift macOS client. The direction and the decisions in [Decisions](#decisions) are accepted. Phase 1 is implemented and undergoing validation; image support remains planned. [Open follow-ups](#open-follow-ups) lists the remaining items.
 
 ## Goals
 
@@ -18,15 +18,12 @@ This design covers the Notes tab in the Swift macOS client. The direction and th
 
 ## Current state
 
-- `Meeting.notes` is a plain `String` in `library.json` (`Core/Models.swift`). Every keystroke calls `MeetingStore.updateMeeting`, which rewrites the whole library file.
-- `library.json` has a `version` field, currently 1 (`MeetingLibrary.currentVersion`). `MeetingLibrary.load` (`Core/LibraryFormat.swift`) opens that version and older ones, and backs up an older library before migrating it. A newer version leaves the library read-only and unchanged, with the message “This library was saved by a newer version of Gday Meetings.”
-- The Notes tab is a SwiftUI `TextEditor` bound to that string (`UI/MeetingDetailView.swift`, `editor(_:binding:)`).
-- Transcript times use `playback.play(meeting:files:at:)`. That method seeks if the meeting is already loaded and loads it otherwise. Notes should use the same call.
-- The meeting folder (`MeetingStore.directory(for:)`) holds audio and `server-archive.json`. Meetings created with **New Meeting Notes** have no folder until audio is added.
-- Notes are also read by library search (`LibraryView`), summaries and chat (`MeetingIntelligence`), Markdown and JSON export (`MeetingStore.exportMeeting`), JSON import, legacy import, and server archive (`ServerArchive`, artifact `notes.md`).
-- The server accepts only flat `.json`, `.md`, and `.txt` artifacts (`apps/server/src/server/import-meeting.ts`). It has no place for images.
-- Audio is written against a host-clock recording epoch (`AudioCapture.epoch`, `TimedAudioWriter`). `MeetingStore.recordingStartedAt` is set after capture starts, so it can lag the audio timeline slightly.
-- `Package.swift` targets macOS 14.2 and has no package dependencies. Third-party code is limited to checksum-pinned C source archives built offline ([ThirdParty/README.md](../../apps/client-macos-swift/ThirdParty/README.md)).
+- Notes use an AppKit TextKit 2 editor. Markdown syntax stays visible; valid timeline markers appear in the gutter.
+- `notes.md` in each meeting folder is the saved source. `Meeting.notes` remains in memory for search, provider context, and export. Typing uses a half-second debounce; focus changes, closing notes, recording stop, and quit flush pending edits.
+- Library format version 3 moves notes out of `library.json`, following version 2's speaker identity migration. An older library is backed up before migration. A failed notes save keeps the app open at quit.
+- Search removes markers, summaries and Markdown export use readable time prefixes, and JSON export and server archive retain Markdown markers.
+- Images remain Markdown text in phase 1. No image URL is fetched. The existing server accepts flat `.json`, `.md`, and `.txt` artifacts and has no image attachment type.
+- The app targets macOS 14.2 and adds no package dependency. Playback links use the existing meeting player, and recording times use `MeetingStore.recordingDuration` until exact audio-epoch alignment is added.
 
 ## Decisions
 
@@ -87,7 +84,7 @@ Store notes in the meeting folder:
 
 ### Migration
 
-- At library load, for each meeting whose `notes` is non-empty and whose folder lacks `notes.md`, write `notes.md` and then clear the field. This is a layout change: increase `MeetingLibrary.currentVersion` to 2 and add the step to `MeetingLibrary.migrations`.
+- At library load, for each meeting whose `notes` is non-empty and whose folder lacks `notes.md`, write `notes.md` and then clear the field. This is a layout change: increase `MeetingLibrary.currentVersion` to 3 and add the step to `MeetingLibrary.migrations`.
 - **Library format policy** (implemented in `Core/LibraryFormat.swift`; see the contract comment on `MeetingLibrary`):
   - Any change to the library layout, including where notes are stored, increases the `library.json` version.
   - A build opens its own version and older ones. Before migrating an older library, it copies `library.json` to `library-v<N>-backup.json`. A step that changes files outside `library.json`, such as writing `notes.md`, must also keep those files recoverable or leave the old data readable.
@@ -232,6 +229,8 @@ Other findings:
 Each phase ends with `make format-macos`, `make lint-macos`, `make test-macos`, and a worklog. UI checks use UI Preview in Light, Dark, and System appearance at small and large window sizes, following [UI design](../../apps/client-macos-swift/docs/UI_DESIGN.md).
 
 ### Phase 1: Markdown notes with times
+
+Implemented; final UI and compatibility validation is tracked in the [worklog](../worklogs/2026-09-26-markdown-notes.md).
 
 - `notes.md` storage, migration, debounced atomic save, and change detection when a meeting opens.
 - `NSTextView` editor with live styling, Format menu commands, and list continuation.

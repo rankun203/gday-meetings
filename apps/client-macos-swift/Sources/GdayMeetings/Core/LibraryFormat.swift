@@ -39,6 +39,18 @@ extension MeetingLibrary {
                     "This library uses format version \(library.version), which this version of Gday Meetings can’t upgrade."
                 )
             }
+            if library.version == 2, supportedVersion >= 3 {
+                for meeting in library.meetings where !meeting.notes.isEmpty {
+                    let folder = url.deletingLastPathComponent().appendingPathComponent(meeting.id.uuidString)
+                    let notes = folder.appendingPathComponent("notes.md")
+                    if !FileManager.default.fileExists(atPath: notes.path) {
+                        try FileManager.default.createDirectory(
+                            at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                        try Data(meeting.notes.utf8).write(to: notes, options: .atomic)
+                        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: notes.path)
+                    }
+                }
+            }
             try step(&library)
             library.version += 1
         }

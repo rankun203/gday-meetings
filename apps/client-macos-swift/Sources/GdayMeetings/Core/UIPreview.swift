@@ -41,6 +41,14 @@ enum UIPreview {
                     voiceScope: "preview:synthetic", embedding: [0.5, 0.5])
                 conversation.replaceSpeakers([first, second, third])
                 conversation.tagIDs = [previewTag, projectTag]
+                conversation.notes = """
+                    # Release plan <!-- gday:t=0:05 -->
+
+                    - Review **meeting notes** <!-- gday:t=0:12 -->
+                    - [ ] Update the schedule <!-- gday:t=0:24 -->
+
+                    This line has no recording time.
+                    """
                 conversation.transcript = [
                     TranscriptSegment(
                         start: 1, end: 5, speaker: first.label,
@@ -53,6 +61,24 @@ enum UIPreview {
                         text: "I’ll update the schedule after this call.", speakerID: third.id),
                 ]
                 store.updateMeeting(conversation)
+                var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
+                live.accept(
+                    .init(
+                        session: UUID(), source: .system, start: 1, end: 4,
+                        text: "Synthetic live draft for reviewing transcript revisions.", locale: "en-AU"))
+                live.complete = true
+                try live.save(at: store.directory(for: conversation.id))
+                if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording") {
+                    store.recordingID = conversation.id
+                    store.recordingStartedAt = Date()
+                    store.recordingMeter.deliver(
+                        RecordingLevels(
+                            microphone: RecordingSourceLevel(enabled: true, hasSamples: true),
+                            system: RecordingSourceLevel(enabled: true, hasSamples: true),
+                            microphoneStatus: RecordingMicrophoneStatus(voiceProcessing: true, canSwitch: true)))
+                    store.liveTranscript.seedPreview(
+                        meetingID: conversation.id, directory: store.directory(for: conversation.id))
+                }
             }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
                 store.settings = syntheticProviderSettings(store.settings)

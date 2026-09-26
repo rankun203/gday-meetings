@@ -9,6 +9,7 @@ struct MeetingPlayerBar: View {
     @ViewState private var tracksExpanded = false
     @ViewState private var tracksSpaceExpanded = false
     @ViewState private var tracksVisible = false
+    @ViewState private var trackWaveformsMounted = false
     @ViewState private var tracksTransition = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -146,16 +147,24 @@ struct MeetingPlayerBar: View {
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .disabled(playback.isLoading || playback.isPlaybackBlocked)
                                 }.frame(width: 160)
-                                PlaybackPosition(
-                                    progress: playback.progress,
-                                    waveforms: playback.waveforms.indices.contains(index)
-                                        ? [playback.waveforms[index]].compactMap { $0 } : [],
-                                    duration: playback.duration,
-                                    label: "\(name) playback position",
-                                    dimmed: playback.mutedTracks.contains(index),
-                                    isLoading: playback.isLoadingWaveforms, seek: playback.seek
-                                )
-                                .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                                Group {
+                                    if trackWaveformsMounted {
+                                        PlaybackPosition(
+                                            progress: playback.progress,
+                                            waveforms: playback.waveforms.indices.contains(index)
+                                                ? [playback.waveforms[index]].compactMap { $0 } : [],
+                                            duration: playback.duration,
+                                            label: "\(name) playback position",
+                                            dimmed: playback.mutedTracks.contains(index),
+                                            isLoading: playback.isLoadingWaveforms, seek: playback.seek
+                                        )
+                                        .disabled(
+                                            playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                                    }
+                                    else {
+                                        Color.clear.frame(height: 24).accessibilityHidden(true)
+                                    }
+                                }.transition(.identity)
                             }
                         }
                     }.padding(.horizontal, 20).padding(.bottom, 12)
@@ -194,6 +203,7 @@ struct MeetingPlayerBar: View {
             tracksExpanded = false
             tracksSpaceExpanded = false
             tracksVisible = false
+            trackWaveformsMounted = false
         }
     }
 
@@ -204,9 +214,13 @@ struct MeetingPlayerBar: View {
         if reduceMotion {
             tracksSpaceExpanded = tracksExpanded
             tracksVisible = tracksExpanded
+            trackWaveformsMounted = tracksExpanded
             return
         }
         if tracksExpanded {
+            // Preserve viewport and row geometry while releasing hidden waveform
+            // observers and native display links between openings.
+            trackWaveformsMounted = true
             // Reveal only after the full-size viewport has made room for the rows.
             withAnimation(.easeInOut(duration: 0.25), completionCriteria: .removed) {
                 tracksSpaceExpanded = true
@@ -221,7 +235,12 @@ struct MeetingPlayerBar: View {
                 tracksVisible = false
             } completion: {
                 guard tracksTransition == transition, !tracksExpanded else { return }
-                withAnimation(.easeInOut(duration: 0.25)) { tracksSpaceExpanded = false }
+                withAnimation(.easeInOut(duration: 0.25), completionCriteria: .removed) {
+                    tracksSpaceExpanded = false
+                } completion: {
+                    guard tracksTransition == transition, !tracksExpanded else { return }
+                    trackWaveformsMounted = false
+                }
             }
         }
     }

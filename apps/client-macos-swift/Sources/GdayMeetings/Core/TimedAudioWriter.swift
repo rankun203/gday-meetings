@@ -103,6 +103,7 @@ final class TimedAudioWriter {
     private let voiceProcessed: Bool
     private var failure: Error?
     private var finished = false
+    private let alignedAudio: ((AVAudioPCMBuffer, Double) -> Void)?
     /// Silence runs in track frames; contiguous padding extends the last run.
     private var gapRuns: [(start: Int64, frames: Int64)] = []
     private var converter: AVAudioConverter?
@@ -129,7 +130,11 @@ final class TimedAudioWriter {
             })
     }
 
-    init(url: URL, format: AVAudioFormat, epoch: TimeInterval, voiceProcessed: Bool = false) throws {
+    init(
+        url: URL, format: AVAudioFormat, epoch: TimeInterval, voiceProcessed: Bool = false,
+        alignedAudio: ((AVAudioPCMBuffer, Double) -> Void)? = nil
+    ) throws {
+        self.alignedAudio = alignedAudio
         self.format = format
         self.epoch = epoch
         self.voiceProcessed = voiceProcessed
@@ -209,11 +214,13 @@ final class TimedAudioWriter {
                     }
                 }
                 try Self.check(ExtAudioFileWriteAsync(file, count, trimmed.audioBufferList))
+                alignedAudio?(trimmed, Double(framesWritten) / format.sampleRate)
                 framesWritten += Int64(count)
                 sourceFrames += Int64(count)
             }
             else {
                 try Self.check(ExtAudioFileWriteAsync(file, samples.frameLength, samples.audioBufferList))
+                alignedAudio?(samples, Double(framesWritten) / format.sampleRate)
                 framesWritten += Int64(samples.frameLength)
                 sourceFrames += Int64(samples.frameLength)
             }

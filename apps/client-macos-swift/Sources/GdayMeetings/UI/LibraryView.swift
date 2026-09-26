@@ -36,9 +36,10 @@ struct LibraryView: View {
     private var filteredMeetings: [Meeting] {
         store.meetings.filter { meeting in
             search.isEmpty
-                || ([meeting.title, meeting.notes, meeting.summary] + meeting.transcript.map(\.text)).joined(
-                    separator: " "
-                ).localizedCaseInsensitiveContains(search)
+                || ([meeting.title, NotesDocument(meeting.notes).text, meeting.summary] + meeting.transcript.map(\.text))
+                    .joined(
+                        separator: " "
+                    ).localizedCaseInsensitiveContains(search)
         }.sorted { $0.createdAt > $1.createdAt }
     }
 

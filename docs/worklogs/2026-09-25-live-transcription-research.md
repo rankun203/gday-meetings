@@ -11,7 +11,7 @@ Gday Meetings records microphone and system audio but transcribes completed file
 
 ## Implemented solution
 
-Added [live transcription research](../live-transcription-research.md), grounded in the Swift capture/store/model code, the existing server/worker contract, current primary-source documentation, and installed Speech SDK declarations. Compared SpeechAnalyzer/SpeechTranscriber, DictationTranscriber, SFSpeechRecognizer, WhisperKit, whisper.cpp, hosted streaming, self-hosted streaming, and short-file chunking. Included proposed architecture, timeline/revision rules, phased delivery, test gates, cost accounting, and unresolved experiments.
+Added [live transcription research](../design/live-transcription-research.md), grounded in the Swift capture/store/model code, the existing server/worker contract, current primary-source documentation, and installed Speech SDK declarations. Compared SpeechAnalyzer/SpeechTranscriber, DictationTranscriber, SFSpeechRecognizer, WhisperKit, whisper.cpp, hosted streaming, self-hosted streaming, and short-file chunking. Included proposed architecture, timeline/revision rules, phased delivery, test gates, cost accounting, and unresolved experiments.
 
 ## Reasoning
 

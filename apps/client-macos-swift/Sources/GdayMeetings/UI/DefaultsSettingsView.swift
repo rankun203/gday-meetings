@@ -46,6 +46,14 @@ struct DefaultsSettingsView: View {
                     "Turns on when audio plays through speakers or the microphone picks up system audio. Reduces echo and background noise in the microphone track, and may lower other apps’ volume."
                 ).font(.caption).foregroundStyle(.secondary)
             }
+            Section("Live Transcription") {
+                LabeledContent("Provider", value: "This Mac")
+                Toggle("Show Live Transcript", isOn: setting(\.showLiveTranscript))
+                Text(
+                    "Shows a live draft during recording. Audio is processed on this Mac. Requires macOS 26 or later and a supported speech model."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
             // Default Language follows the provider because its choices come
             // from the selected transcription provider.
             CapabilityDefaultSection(

@@ -66,18 +66,23 @@ import UniformTypeIdentifiers
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("library"))
         let id = try #require(try await store.importAudioFiles([source]).first)
         let old = try #require(store.meetings.first)
+        let existingFiles = try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path).sorted()
         let bytes = try Data(contentsOf: store.audioURLs(for: old)[0])
         let invalid = root.appendingPathComponent("broken.wav")
         try Data("not audio".utf8).write(to: invalid)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source, invalid], into: id) }
         #expect(store.meetings.first == old)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path) == old.audioFiles)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path).sorted() == existingFiles
+        )
         let library = store.dataDirectory.appendingPathComponent("library.json")
         try FileManager.default.moveItem(at: library, to: root.appendingPathComponent("backup.json"))
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: false)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         #expect(store.meetings.first == old)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path) == old.audioFiles)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path).sorted() == existingFiles
+        )
         #expect(try Data(contentsOf: store.audioURLs(for: old)[0]) == bytes)
     }
 

@@ -13,6 +13,10 @@ struct ServiceProvidersView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 List(selection: $selection) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label("This Mac", systemImage: "desktopcomputer")
+                        Text("Live Transcription").font(.caption).foregroundStyle(.secondary)
+                    }.tag(ThisMacProvider.id).padding(.vertical, 4)
                     ForEach(store.settings.serviceProviders) { provider in
                         VStack(alignment: .leading, spacing: 3) {
                             Label(provider.name, systemImage: provider.kind == .gdayWebsite ? "globe" : "server.rack")
@@ -42,13 +46,16 @@ struct ServiceProvidersView: View {
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .buttonStyle(.borderless).disabled(selection == nil)
+                    .buttonStyle(.borderless).disabled(selection == nil || selection == ThisMacProvider.id)
                     .accessibilityLabel("Remove Provider").help("Remove Provider")
                     Spacer()
                 }.padding(12)
             }.frame(width: 205)
             Divider()
-            if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
+            if selection == ThisMacProvider.id {
+                ThisMacProviderView()
+            }
+            else if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
                 ServiceProviderPanel(provider: provider, addProvider: add, signInTask: $signInTask).id(provider.id)
             }
             else {
@@ -66,7 +73,7 @@ struct ServiceProvidersView: View {
                 ProgressView("Removing Provider…").padding()
             }
         }
-        .onAppear { if selection == nil { selection = store.settings.serviceProviders.first?.id } }
+        .onAppear { if selection == nil { selection = ThisMacProvider.id } }
         .alert(
             "Couldn’t Update Providers",
             isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
@@ -436,6 +443,7 @@ private struct ServiceProviderPanel: View {
 
     private func disclosure(_ capability: ProviderCapability) -> String {
         switch capability {
+        case .liveTranscription: "Transcribes audio during recording."
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization: "Summaries send the selected transcript and notes to this provider."

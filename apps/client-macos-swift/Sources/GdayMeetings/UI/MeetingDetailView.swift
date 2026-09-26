@@ -19,21 +19,32 @@ struct MeetingDetailView: View {
     }
     var body: some View {
         if let meeting {
-            VStack(alignment: .leading, spacing: 22) {
-                meetingHeader(meeting)
+            Group {
                 if store.recordingID == meetingID {
-                    RecordingWorkspaceView(meetingID: meetingID)
+                    GeometryReader { geometry in
+                        detailContent(meeting, recordingHeight: min(330, max(230, geometry.size.height * 0.45)))
+                    }
                 }
-                MeetingContentTabs(selection: $tab)
-                meetingContent(meeting)
+                else {
+                    detailContent(meeting, recordingHeight: nil)
+                }
             }
-            .padding(24)
             .modifier(AudioFileDrop(meetingID: meetingID))
             .navigationTitle(meeting.title)
-            // Reading or editing a meeting never changes the app-owned playback.
             .onAppear { if store.recordingID == meetingID { tab = 1 } }
             .onChange(of: store.recordingID) { _, id in if id == meetingID { tab = 1 } }
         }
+    }
+
+    private func detailContent(_ meeting: Meeting, recordingHeight: CGFloat?) -> some View {
+        VStack(alignment: .leading, spacing: recordingHeight == nil ? 22 : 14) {
+            meetingHeader(meeting)
+            if let recordingHeight {
+                RecordingWorkspaceView(meetingID: meetingID).frame(height: recordingHeight)
+            }
+            MeetingContentTabs(selection: $tab)
+            meetingContent(meeting)
+        }.padding(24)
     }
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
@@ -51,25 +62,29 @@ struct MeetingDetailView: View {
                     playbackButton(meeting)
                 }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    meetingDate(meeting).fixedSize()
-                    Spacer(minLength: 8)
-                    MeetingLanguagePicker(
-                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID, compact: true
-                    )
-                    .fixedSize()
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    meetingDate(meeting)
-                    MeetingLanguagePicker(
-                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID, compact: true
-                    )
-                    .fixedSize()
-                }
-            }.font(.callout).foregroundStyle(.secondary)
-            MeetingArchiveStatusView(meetingID: meetingID).font(.callout).foregroundStyle(.secondary)
-            MeetingTagsView(meetingID: meetingID)
+            if store.recordingID != meetingID {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        meetingDate(meeting).fixedSize()
+                        Spacer(minLength: 8)
+                        MeetingLanguagePicker(
+                            selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID,
+                            compact: true
+                        )
+                        .fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        meetingDate(meeting)
+                        MeetingLanguagePicker(
+                            selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID,
+                            compact: true
+                        )
+                        .fixedSize()
+                    }
+                }.font(.callout).foregroundStyle(.secondary)
+                MeetingArchiveStatusView(meetingID: meetingID).font(.callout).foregroundStyle(.secondary)
+                MeetingTagsView(meetingID: meetingID)
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(1)
@@ -136,7 +151,7 @@ struct MeetingDetailView: View {
                         Text("Saved as you type").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                editor("Notes", binding: text(\.notes))
+                MeetingNotesEditor(meetingID: meetingID)
             }
         case 2:
             VStack(alignment: .leading, spacing: 12) {
@@ -168,6 +183,9 @@ struct MeetingDetailView: View {
         VStack(alignment: .leading) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    if meeting.transcript.isEmpty {
+                        emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity)
+                    }
                     ForEach(meeting.transcript) { segment in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -196,18 +214,11 @@ struct MeetingDetailView: View {
                             Divider()
                         }
                     }
+                    SavedLiveTranscriptView(meetingID: meetingID)
                     if !meeting.speakers.isEmpty {
                         MeetingSpeakersView(meetingID: meetingID)
                     }
                 }.padding(4)
-            }.overlay {
-                // Expanded playback can leave little vertical space. Keep the
-                // empty-state action reachable using standard scrolling.
-                if meeting.transcript.isEmpty {
-                    ScrollView {
-                        emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity)
-                    }
-                }
             }
         }
     }
@@ -217,7 +228,7 @@ struct MeetingDetailView: View {
         } description: {
             Text(
                 store.recordingID == meetingID
-                    ? "Take notes while recording. Transcription is available after the audio is saved."
+                    ? "View live text in the recording card. You can transcribe the saved audio after recording."
                     : "No transcript yet.")
         } actions: {
             if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {

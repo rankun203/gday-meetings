@@ -70,6 +70,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     private var meterDeliveryPending = false
     var onLevels: ((RecordingLevels, @escaping () -> Void) -> Void)?
     var onHealth: ((String) -> Void)?
+    var liveAudioSink: LiveAudioSink?
     /// Terminal failures only: a writer error, or every selected source failed permanently.
     var onFailure: ((Error) -> Void)?
 
@@ -180,7 +181,11 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     if let microphoneWriter { return microphoneWriter }
                     epoch = hostNow()
                     try prepareSystemWriter(directory: directory)
-                    let writer = try TimedAudioWriter(url: url, format: format, epoch: epoch, voiceProcessed: processed)
+                    let writer = try TimedAudioWriter(
+                        url: url, format: format, epoch: epoch, voiceProcessed: processed,
+                        alignedAudio: { [weak self] buffer, start in
+                            self?.liveAudioSink?.append(buffer, start: start, source: .microphone)
+                        })
                     microphoneWriter = writer
                     return writer
                 }
@@ -1217,6 +1222,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     : "\(selectedMicrophone.name) unavailable · Using \(device)")
         }
         if microphoneRoute.voiceProcessingUnavailable {
+            status.voiceProcessingUnavailable = true
             status.notices.append("Voice Processing is unavailable for \(device)")
         }
         if now < echoNoticeUntil { status.notices.append("Echo detected · Voice Processing turned on") }
@@ -1241,7 +1247,10 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         guard let format = initialSystemFormat else { return }
         try queue.sync {
             systemWriter = try TimedAudioWriter(
-                url: directory.appendingPathComponent("system.wav"), format: format, epoch: epoch)
+                url: directory.appendingPathComponent("system.wav"), format: format, epoch: epoch,
+                alignedAudio: { [weak self] buffer, start in
+                    self?.liveAudioSink?.append(buffer, start: start, source: .system)
+                })
         }
     }
 
@@ -1419,6 +1428,7 @@ struct RecordingLevels: Equatable {
 }
 /// Live Voice Processing state and automatic-choice explanations for the recording view.
 struct RecordingMicrophoneStatus: Equatable {
+    var voiceProcessingUnavailable = false
     /// The switch position: a requested change while it applies, otherwise the running engine's state.
     var voiceProcessing = false
     /// False while the microphone rebuilds or reconnects.

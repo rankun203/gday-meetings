@@ -267,26 +267,31 @@ struct RecordingWorkspaceView: View {
     @EnvironmentObject private var store: MeetingStore
     let meetingID: UUID
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
-                        Circle().fill(store.isFinalizingRecording ? Color.secondary : .red).frame(width: 7, height: 7)
-                        Text(store.isFinalizingRecording ? "Saving Recording" : "Recording").font(
-                            .subheadline.weight(.semibold))
-                        // Recording continues while a device reconnects; Stop & Save stays available.
-                        if !store.isFinalizingRecording {
-                            RecordingReconnectStatus(status: store.recordingMeter.status)
+                        Circle().fill(store.isFinalizingRecording ? Color.secondary : .red)
+                            .frame(width: 7, height: 7).accessibilityHidden(true)
+                        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                            let elapsed =
+                                store.isFinalizingRecording
+                                ? (store.meetings.first { $0.id == meetingID }?.duration ?? store.recordingDuration)
+                                : (store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
+                            Text(Self.elapsed(elapsed)).font(.system(size: 26, weight: .medium, design: .rounded))
+                                .monospacedDigit()
+                                .accessibilityLabel("Recording duration").accessibilityValue(Self.elapsed(elapsed))
                         }
+                        Text(store.isFinalizingRecording ? "Saving" : "Recording")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                        let elapsed =
-                            store.isFinalizingRecording
-                            ? (store.meetings.first { $0.id == meetingID }?.duration ?? store.recordingDuration)
-                            : (store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
-                        Text(Self.elapsed(elapsed)).font(.system(size: 34, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .accessibilityLabel("Recording duration").accessibilityValue(Self.elapsed(elapsed))
+                    if let meeting = store.meetings.first(where: { $0.id == meetingID }) {
+                        Text(meeting.createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    // A route change is exceptional; preserve its visible explanation.
+                    if !store.isFinalizingRecording {
+                        RecordingReconnectStatus(status: store.recordingMeter.status)
                     }
                 }
                 Spacer()
@@ -309,8 +314,15 @@ struct RecordingWorkspaceView: View {
             ) {
                 store.setRecordingVoiceProcessing($0)
             }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    RecordingSettingsDisclosure(meetingID: meetingID, status: store.recordingMeter.status)
+                    LiveTranscriptView(controller: store.liveTranscript)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+
         }
-        .padding(18)
+        .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
     }
@@ -364,9 +376,6 @@ private struct RecordingLiveMeters: View {
                     title: "Microphone", symbol: "mic.fill", source: levels.microphone, saving: saving,
                     activity: meter.activity.bars(microphone: true), activityTime: meter.activity.bucketStart,
                     tint: .accentColor, liveMeter: meter, microphone: true)
-                if levels.microphone.enabled && !saving {
-                    RecordingVoiceProcessingControl(status: levels.microphoneStatus, onChange: setVoiceProcessing)
-                }
             }
             RecordingSourceMeter(
                 title: "System Audio", symbol: "speaker.wave.2.fill", source: levels.system, saving: saving,
@@ -452,36 +461,22 @@ struct RecordingSourceMeter: View {
     var liveMeter: RecordingMeterState? = nil
     var microphone = true
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            // HIG Feedback / Accessibility: use a stable symbol slot for changing
-            // status, with a text explanation on hover and in the accessible value.
-            // Status changes must not reflow one meter independently of the other.
-            // https://developer.apple.com/design/human-interface-guidelines/accessibility
-            HStack(spacing: 6) {
-                sourceLabel.lineLimit(1)
-                Spacer(minLength: 0)
-                Group {
-                    if let liveMeter {
-                        RecordingLiveActivitySurface(
-                            meter: liveMeter, microphone: microphone, tint: tint,
-                            animate: receiving && !reduceMotion && scenePhase == .active)
-                    }
-                    else {
-                        RecordingActivitySurface(
-                            bars: activity, bucketStart: activityTime, tint: tint,
-                            animate: receiving && !reduceMotion && scenePhase == .active)
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            // Preserve the source name at narrow widths. The level bar remains
+            // visible when there is not enough room for the activity history.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    sourceLabel.fixedSize()
+                    Spacer(minLength: 0)
+                    activitySurface.frame(width: 110, height: 24)
                 }
-                .frame(minWidth: 40, idealWidth: 110, maxWidth: 110)
-                .frame(height: 24)
-                .help("Last 10 seconds · " + statusText)
-                .overlay(alignment: .trailing) {
-                    if !receiving {
-                        Image(systemName: statusSymbol).font(.caption2).foregroundStyle(.secondary)
-                            .padding(2).background(.background, in: Circle())
-                    }
+                HStack(spacing: 6) {
+                    sourceLabel.fixedSize()
+                    Spacer(minLength: 0)
+                    Image(systemName: statusSymbol).font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
-            }
+            }.frame(height: 24)
             if let liveMeter {
                 RecordingLiveLevelSurface(
                     meter: liveMeter, microphone: microphone, saving: saving, tint: tint, title: title
@@ -505,6 +500,28 @@ struct RecordingSourceMeter: View {
             receiving && liveMeter == nil ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
     }
 
+    private var activitySurface: some View {
+        Group {
+            if let liveMeter {
+                RecordingLiveActivitySurface(
+                    meter: liveMeter, microphone: microphone, tint: tint,
+                    animate: receiving && !reduceMotion && scenePhase == .active)
+            }
+            else {
+                RecordingActivitySurface(
+                    bars: activity, bucketStart: activityTime, tint: tint,
+                    animate: receiving && !reduceMotion && scenePhase == .active)
+            }
+        }
+        .help("Last 10 seconds · " + statusText)
+        .overlay(alignment: .trailing) {
+            if !receiving {
+                Image(systemName: statusSymbol).font(.caption2).foregroundStyle(.secondary)
+                    .padding(2).background(.background, in: Circle())
+            }
+        }
+    }
+
     private var receiving: Bool {
         !saving && source.enabled && source.hasSamples && !source.stale && !source.reconnecting
     }
@@ -524,5 +541,77 @@ struct RecordingSourceMeter: View {
         if !source.hasSamples { return "clock" }
         if source.stale { return "exclamationmark.triangle" }
         return source.rmsDB < -60 ? "waveform" : "waveform.circle.fill"
+    }
+}
+
+/// The full disclosure row is a native button; values wrap without shrinking the hit target.
+struct RecordingSettingsDisclosure: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject var status: RecordingMeterStatus
+    let meetingID: UUID
+    @ViewState private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    init(meetingID: UUID, status: RecordingMeterStatus) {
+        self.meetingID = meetingID
+        self.status = status
+    }
+    var body: some View {
+        if let meeting = store.meetings.first(where: { $0.id == meetingID }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold)).frame(width: 12)
+                        Text(summary(meeting)).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }.padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }.buttonStyle(ActionButtonStyle())
+                    .accessibilityLabel("Recording Settings")
+                    .accessibilityValue("\(expanded ? "Expanded" : "Collapsed"). \(summary(meeting))")
+                    .help(expanded ? "Hide Recording Settings" : "Show Recording Settings")
+                if expanded {
+                    MeetingLanguagePicker(
+                        selection: Binding(
+                            get: { meeting.language },
+                            set: { language in
+                                guard var latest = store.meetings.first(where: { $0.id == meetingID }) else { return }
+                                latest.language = language
+                                store.updateMeeting(latest)
+                                if store.meetings.first(where: { $0.id == meetingID })?.language == language {
+                                    store.liveTranscript.changeLanguage(language)
+                                }
+                            }))
+                    if status.levels.microphone.enabled && !store.isFinalizingRecording {
+                        RecordingVoiceProcessingControl(status: status.levels.microphoneStatus) {
+                            store.setRecordingVoiceProcessing($0)
+                        }
+                    }
+                    MeetingTagsView(meetingID: meetingID)
+                }
+            }
+        }
+    }
+    private func summary(_ meeting: Meeting) -> String {
+        let language = Locale.current.localizedString(forIdentifier: meeting.language) ?? meeting.language
+        let names = meeting.tagIDs.compactMap { id in store.tags.first(where: { $0.id == id })?.name }
+        return Self.settingsSummary(
+            language: language, microphoneEnabled: status.levels.microphone.enabled,
+            microphone: status.levels.microphoneStatus, tags: names)
+    }
+    static func settingsSummary(
+        language: String, microphoneEnabled: Bool,
+        microphone: RecordingMicrophoneStatus, tags: [String]
+    ) -> String {
+        let processing =
+            !microphoneEnabled
+            ? "Microphone Off"
+            : microphone.voiceProcessingUnavailable
+                ? "Voice Processing Unavailable"
+                : "Voice Processing \(microphone.voiceProcessing ? "On" : "Off")"
+        return "\(language) · \(processing) · \(tags.isEmpty ? "No Tags" : tags.joined(separator: ", "))"
     }
 }

@@ -160,7 +160,7 @@ extension MeetingStore {
         }
     }
     private func context(_ meeting: Meeting) -> String {
-        "Title: \(meeting.title)\nNotes: \(meeting.notes)\nSummary: \(meeting.summary)\nTranscript:\n"
+        "Title: \(meeting.title)\nNotes: \(NotesDocument(meeting.notes).citedText)\nSummary: \(meeting.summary)\nTranscript:\n"
             + meeting.transcript.map { "\(meeting.speakerName(for: $0, people: people)): \($0.text)" }.joined(
                 separator: "\n")
     }
