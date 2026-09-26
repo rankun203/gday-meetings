@@ -70,7 +70,7 @@ The three website options describe ways to use the product. In the app, manage c
 
 Remote search keeps a searchable copy of selected text. Remote playback keeps a copy of original audio. These uploads need separate permission. Uploading audio for transcription does not enable remote playback or retain an audio library.
 
-Language belongs to each meeting's recording configuration. Choose it when creating the meeting and edit it in that meeting later. New meetings use **Settings → Recording → Default Language**, initially English. Changing the default leaves existing meetings unchanged. Starting transcription snapshots that language for the request; changes apply to future attempts. The transcription provider reports the available language choices through its [metadata operation](../protocols/transcription.md#discover-supported-languages); the app has no fallback language catalog. Its settings do not choose the meeting language. If metadata is unavailable, preserve the saved choice and keep recording available. If a valid list excludes the choice, require a supported language before a new transcription.
+Language belongs to each meeting's recording configuration. Choose it when creating the meeting and edit it in that meeting later. New meetings use **Settings → Defaults → Default Language**, initially English. Changing the default leaves existing meetings unchanged. Starting transcription snapshots that language for the request; changes apply to future attempts. The transcription provider reports the available language choices through its [metadata operation](../protocols/transcription.md#discover-supported-languages); the app has no fallback language catalog. Its settings do not choose the meeting language. If metadata is unavailable, preserve the saved choice and keep recording available. If a valid list excludes the choice, require a supported language before a new transcription.
 
 Local playback and recording always work without a provider. Local library search stays available for locally stored content. **On This Mac** represents optional built-in processing; it has no account or network address and only lists capabilities installed on the device.
 
@@ -150,7 +150,7 @@ The Cloud panel can be richer, like the supplied iCloud reference. Lead with acc
 
 ### Choose a provider for each task
 
-**Settings → Defaults** has one section per capability. It selects the default transcription and speaker-label providers, and the default summary provider. Each starts at **None** until explicitly chosen. Pickers list enabled providers that support the task and explain unavailable choices.
+**Settings → Defaults** starts with a **Recording** section for the audio sources, format, and voice processing that new recordings use, then has one section per capability. It selects the default transcription and speaker-label providers, and the default summary provider. Each starts at **None** until explicitly chosen. Pickers list enabled providers that support the task and explain unavailable choices.
 
 Per-meeting actions show the selected provider and allow a change. Adding, signing in to, or enabling a provider never changes these defaults. If a provider fails or is disabled, keep the choice visible and ask the person to retry or choose another provider.
 
@@ -345,7 +345,7 @@ Show Available, Reserved, and Spent points in a history linked to meetings. The 
 
 ## Settings and errors
 
-Group settings under **Recording**, **Service Providers**, **Defaults**, and **AI & Integrations**. Service Providers contains connection details, capability switches, models, online copies, and account settings. Defaults selects the provider for each capability, with one section per capability. AI & Integrations manages tool access. Cloud points and purchases stay in the Cloud provider panel.
+Group settings under **Defaults**, **Service Providers**, **Data Privacy**, and the planned **AI & Integrations**. Defaults sets what new recordings start with and selects the provider for each capability, with one section per capability. Service Providers contains connection details, capability switches, models, online copies, and account settings. Data Privacy lists each kind of data and where it is sent. AI & Integrations manages tool access. Cloud points and purchases stay in the Cloud provider panel.
 
 Summaries and chat need their own service choice and permission to send text. Permission to transcribe does not include sending notes or transcripts to an AI service.
 

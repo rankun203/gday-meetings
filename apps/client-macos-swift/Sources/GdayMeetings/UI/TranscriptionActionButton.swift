@@ -4,7 +4,7 @@ import SwiftUI
 struct TranscriptionActionButton: View {
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.openSettings) private var openSettings
-    @AppStorage("settingsTab") private var settingsTab = "recording"
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var confirming = false
     let meeting: Meeting
 

@@ -4,7 +4,7 @@ struct ServerLibraryView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject private var server = GdayServerService.shared
     @Environment(\.openSettings) private var openSettings
-    @AppStorage("settingsTab") private var settingsTab = "recording"
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
     private var provider: ServiceProvider? {
         store.settings.serviceProviders.first {
             $0.kind == .gdayWebsite && $0.supports(.search)

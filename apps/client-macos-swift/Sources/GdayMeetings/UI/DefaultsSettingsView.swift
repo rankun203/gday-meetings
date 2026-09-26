@@ -1,10 +1,17 @@
 import SwiftUI
 
-/// Settings → Defaults: one section per capability that chooses the provider
-/// used for new work. Add a capability by adding one `CapabilityDefaultSection`
-/// with its settings key path; stored keys stay in `AppSettings`.
+/// Settings → Defaults: what new recordings start with, then one section per
+/// capability that chooses the provider used for new work. Add a capability by
+/// adding one `CapabilityDefaultSection` with its settings key path; stored keys
+/// stay in `AppSettings`.
 struct DefaultsSettingsView: View {
     @EnvironmentObject private var store: MeetingStore
+
+    // Capture reads these when a recording starts; changing them mid-recording
+    // would misdescribe the recording in progress.
+    private var audioSettingsLocked: Bool {
+        store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
+    }
 
     private func setting<T>(_ path: WritableKeyPath<AppSettings, T>) -> Binding<T> {
         Binding(
@@ -17,9 +24,37 @@ struct DefaultsSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Recording") {
+                Toggle("Microphone", isOn: setting(\.captureMicrophone)).disabled(audioSettingsLocked)
+                Toggle("System Audio", isOn: setting(\.captureSystemAudio)).disabled(audioSettingsLocked)
+                // HIG Privacy: explain the requested resources in the context of their use.
+                // https://developer.apple.com/design/human-interface-guidelines/privacy
+                Text(
+                    "New Recording starts with these sources, and you can change them there. macOS asks for permission the first time you record each source."
+                ).font(.caption).foregroundStyle(.secondary)
+                Picker("Audio Format", selection: setting(\.recordingFormat)) {
+                    Text("Opus (Recommended)").tag(RecordingFormat.opus)
+                    Text("M4A (AAC)").tag(RecordingFormat.m4a)
+                    Text("WAV").tag(RecordingFormat.wav)
+                }.disabled(audioSettingsLocked)
+                Text(
+                    "Recordings are saved in this format when you stop. If conversion fails, the original audio is kept."
+                ).font(.caption).foregroundStyle(.secondary)
+                Toggle("Turn On Voice Processing Automatically", isOn: setting(\.automaticVoiceProcessing))
+                    .disabled(audioSettingsLocked)
+                Text(
+                    "Turns on when audio plays through speakers or the microphone picks up system audio. Reduces echo and background noise in the microphone track, and may lower other apps’ volume."
+                ).font(.caption).foregroundStyle(.secondary)
+            }
+            // Default Language follows the provider because its choices come
+            // from the selected transcription provider.
             CapabilityDefaultSection(
                 capability: .transcription, selection: setting(\.transcriptionProviderID),
-                caption: "Transcription sends recording audio to the selected provider.")
+                caption: "Transcription sends recording audio to the selected provider."
+            ) {
+                MeetingLanguagePicker(title: "Default Language", selection: setting(\.defaultLanguage))
+                Toggle("Automatically Transcribe Recordings", isOn: setting(\.autoTranscribe))
+            }
             CapabilityDefaultSection(
                 capability: .summarization, selection: setting(\.summaryProviderID),
                 caption: "Summaries and chat send the selected transcript and notes to this provider."
@@ -35,7 +70,7 @@ struct DefaultsSettingsView: View {
 /// settings and the caption that states what the provider receives.
 struct CapabilityDefaultSection<Extra: View>: View {
     @EnvironmentObject private var store: MeetingStore
-    @AppStorage("settingsTab") private var settingsTab = "recording"
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
     let capability: ProviderCapability
     @Binding var selection: UUID?
     let caption: String
