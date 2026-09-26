@@ -102,8 +102,11 @@ struct MeetingLanguagePicker: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+            // Whenever the menu has choices, name the provider they come from.
             case .builtIn:
-                EmptyView()
+                Text("Languages from \(provider.name), included with Gday Meetings.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             case .loading:
                 Text("Loading Languages…").font(.caption).foregroundStyle(.secondary)
             case .failed(let message):
@@ -113,8 +116,11 @@ struct MeetingLanguagePicker: View {
                     .fixedSize(horizontal: false, vertical: true)
                 loadButton(provider)
             case .loaded(_, let fetchedAt):
-                Text("Languages updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened)).")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(
+                    "Languages from \(provider.name), updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened))."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 loadButton(provider)
             }
         }

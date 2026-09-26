@@ -101,3 +101,7 @@ Loading RunPod's languages still started a billable `capabilities` job, and the 
 
 - **Validation from the repository root.** `make format-macos`, `make lint-macos`, `make test-macos` (186 tests passed; the baseline was 183), and `make build-macos-preview` passed. The export script's output matches the checked-in file. No Swift compiler warnings appeared; the linker search-path warnings existed before this change.
 - **Not validated.** No RunPod requests were made, and nothing was launched on screen. The provider panel section and picker popover still need checking in UI Preview.
+
+## Follow-up: name the language source
+
+The language information popover now names the provider whenever the menu has choices: “Languages from *Provider*, included with Gday Meetings.” for RunPod’s built-in list, and “Languages from *Provider*, updated *date*.” for a loaded list. This replaces “Languages updated *date*.” and the previously empty built-in state. Technical debt: None.
