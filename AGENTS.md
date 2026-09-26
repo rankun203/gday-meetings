@@ -14,6 +14,12 @@ scope: repository-workflow
 - All UI text and documentation across every app must follow Apple's clarity guidance as summarized in that document. This includes labels, messages, accessibility text, examples, design documents, and worklogs.
 - Review all added or changed wording against the guide before finishing. When editing an existing document or UI flow, check its surrounding wording for consistency. Use concrete descriptions and actions; remove vague reassurance and promotional filler.
 
+## UI design before implementation
+
+- Before changing UI, capture and inspect a screenshot of the existing screen and the relevant interaction state. Use the running app or an isolated preview; preserve active recordings and user work.
+- Use that evidence to describe the current problem and the intended layout, controls, and behavior before editing UI code. Do not implement a UI change without a concrete design.
+- After implementation, capture the changed UI and compare it with the design. Check the affected interactions and record validation limits in the worklog.
+
 ## Branches and validation
 
 - This is a single-maintainer repository. Work directly on the default branch (`master`).
