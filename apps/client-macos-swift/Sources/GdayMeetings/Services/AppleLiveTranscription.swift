@@ -22,14 +22,7 @@ actor AppleLiveTranscription {
     static let log = Logger(subsystem: "com.gdaymeetings.macos", category: "live-transcription")
 
     static func locale(for language: String) async -> Locale? {
-        let mapped: String
-        switch language.lowercased() {
-        case "en": mapped = "en-AU"
-        case "zh", "zh-cn": mapped = "zh-CN"
-        case "zh-tw": mapped = "zh-TW"
-        default: mapped = language
-        }
-        return await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: mapped))
+        AppleSpeechLanguageMapping.locale(for: language, supported: await SpeechTranscriber.supportedLocales)
     }
 
     static func prepare(language: String, status: @Sendable (String) async -> Void) async throws -> Locale {

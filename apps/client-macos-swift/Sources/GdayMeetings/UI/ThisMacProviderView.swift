@@ -7,7 +7,7 @@ enum ThisMacProvider {
 }
 
 struct ThisMacProviderView: View {
-    @ViewState private var locales: [Locale] = []
+    @ViewState private var models: [SpeechModelOption] = []
     @ViewState private var message = "Checking speech models…"
     var body: some View {
         Form {
@@ -20,9 +20,21 @@ struct ThisMacProviderView: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Section("Live Transcription") {
-                if locales.isEmpty { Text(message).foregroundStyle(.secondary) }
-                ForEach(locales, id: \.identifier) { locale in
-                    if #available(macOS 26.0, *) { SpeechModelRow(locale: locale) }
+                Text(
+                    "Choose a language when you record. The model used for each language is shown below. English uses English (United States)."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                Text(
+                    "Installed models appear first. Download only the languages you use."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                if models.isEmpty { Text(message).foregroundStyle(.secondary) }
+                ForEach(models) { model in
+                    if #available(macOS 26.0, *) {
+                        SpeechModelRow(model: model) {
+                            await refreshModels()
+                        }
+                    }
                 }
             }
         }
@@ -36,46 +48,95 @@ struct ThisMacProviderView: View {
                 message = "Live transcript isn’t available on this Mac."
                 return
             }
-            locales = await SpeechTranscriber.supportedLocales.sorted { $0.identifier < $1.identifier }
-            if locales.isEmpty { message = "No speech models are available on this Mac." }
+            await refreshModels()
+            if models.isEmpty { message = "No speech models are available on this Mac." }
+        }
+    }
+
+    @MainActor @available(macOS 26.0, *)
+    private func refreshModels() async {
+        let supported = await SpeechTranscriber.supportedLocales
+        var snapshot: [SpeechModelOption] = []
+        for language in AppLanguages.all {
+            guard let locale = AppleSpeechLanguageMapping.locale(for: language.code, supported: supported) else {
+                snapshot.append(.init(language: language, locale: nil, readiness: .unavailable))
+                continue
+            }
+            let status = await AssetInventory.status(forModules: [
+                SpeechTranscriber(locale: locale, preset: .transcription)
+            ])
+            let readiness: SpeechModelReadiness
+            switch status {
+            case .installed: readiness = .installed
+            case .supported, .downloading: readiness = .available
+            default: readiness = .unavailable
+            }
+            snapshot.append(.init(language: language, locale: locale, readiness: readiness))
+        }
+        guard !Task.isCancelled else { return }
+        models = SpeechModelOrdering.sorted(snapshot)
+    }
+}
+
+enum SpeechModelReadiness { case installed, available, unavailable }
+struct SpeechModelOption: Identifiable {
+    let language: ProviderLanguage
+    let locale: Locale?
+    let readiness: SpeechModelReadiness
+    var id: String { language.code }
+}
+
+enum SpeechModelOrdering {
+    static func sorted(_ models: [SpeechModelOption], displayLocale: Locale = .current) -> [SpeechModelOption] {
+        models.sorted { lhs, rhs in
+            let leftInstalled = lhs.readiness == .installed
+            let rightInstalled = rhs.readiness == .installed
+            if leftInstalled != rightInstalled { return leftInstalled }
+            let comparison = lhs.language.name.compare(
+                rhs.language.name,
+                options: [.caseInsensitive, .diacriticInsensitive], locale: displayLocale)
+            return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
         }
     }
 }
 
 @available(macOS 26.0, *)
 private struct SpeechModelRow: View {
-    let locale: Locale
-    @ViewState private var readiness: AssetInventory.Status?
+    let model: SpeechModelOption
+    let refreshAllModels: () async -> Void
     @ViewState private var downloading = false
     @ViewState private var progress = 0.0
     @ViewState private var failure: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.language.name)
+                    if let locale = model.locale {
+                        Text(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Spacer()
                 if downloading {
                     ProgressView(value: progress).frame(width: 85)
                         .accessibilityLabel("Speech model download")
                 }
-                else if readiness == .installed {
+                else if model.readiness == .installed {
                     Text("Installed").foregroundStyle(.secondary)
                 }
-                else if readiness == .supported || readiness == .downloading {
+                else if model.readiness == .available {
                     Button("Download") { Task { await download() } }
                 }
                 else {
-                    Text(readiness == nil ? "Checking…" : "Unavailable").foregroundStyle(.secondary)
+                    Text("Unavailable on this Mac").foregroundStyle(.secondary)
                 }
             }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
         }
-        .task { await refresh() }
-    }
-    private func refresh() async {
-        readiness = await AssetInventory.status(forModules: [SpeechTranscriber(locale: locale, preset: .transcription)])
     }
     private func download() async {
+        guard let locale = model.locale else { return }
         downloading = true
         failure = nil
         defer { downloading = false }
@@ -102,6 +163,8 @@ private struct SpeechModelRow: View {
             AppleLiveTranscription.log.error(
                 "Speech model installation failed: locale \(locale.identifier, privacy: .public)")
         }
-        await refresh()
+        // Apple may share installed assets across regional locales. Refresh the
+        // whole list and its ordering, not just the row that started the download.
+        await refreshAllModels()
     }
 }
