@@ -24,6 +24,12 @@ struct LibraryView: View {
     @ViewState private var sidebarExpanded = true
     @ViewState private var sidebarRowsVisible = true
     @ViewState private var sidebarTransition = UUID()
+    private let sidebarControl: LibrarySidebarControl?
+
+    init(sidebar: LibrarySidebarControl? = nil, selectedMeetingID: UUID? = nil) {
+        sidebarControl = sidebar
+        _selectedMeeting = ViewState(initialValue: selectedMeetingID)
+    }
 
     private var recordingActive: Bool {
         store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
@@ -346,6 +352,11 @@ struct LibraryView: View {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
         }
         .background(PlaybackSpaceKey(playback: playback))
+        .onAppear {
+            sidebarControl?.connect(
+                expanded: $sidebarExpanded, rows: $sidebarRowsVisible, toggle: toggleSidebar(reduceMotion:))
+        }
+        .onDisappear { sidebarControl?.disconnect() }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
         // Messages lead with the problem; that sentence is the title, and what was
         // kept and technical detail follow as the smaller message text.
@@ -401,7 +412,9 @@ struct LibraryView: View {
         }
     }
 
-    private func toggleSidebar() {
+    private func toggleSidebar() { toggleSidebar(reduceMotion: reduceMotion) }
+
+    private func toggleSidebar(reduceMotion: Bool) {
         let transition = UUID()
         sidebarTransition = transition
         sidebarRowsVisible = false
@@ -410,6 +423,7 @@ struct LibraryView: View {
         } completion: {
             guard sidebarTransition == transition else { return }
             sidebarRowsVisible = sidebarExpanded
+            sidebarControl?.completed?(sidebarExpanded)
         }
     }
 
