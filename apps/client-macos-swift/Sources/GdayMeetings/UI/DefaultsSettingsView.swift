@@ -50,18 +50,25 @@ struct DefaultsSettingsView: View {
                 LabeledContent("Provider", value: "This Mac")
                 Toggle("Show Live Transcript", isOn: setting(\.showLiveTranscript))
                 Text(
-                    "Shows a live draft during recording. Audio is processed on this Mac. Requires macOS 26 or later and a supported speech model."
+                    "Transcribes audio on this Mac and shows text in Transcript while recording. Requires macOS 26 or later and a supported speech model."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
-            // Default Language follows the provider because its choices come
-            // from the selected transcription provider.
             CapabilityDefaultSection(
                 capability: .transcription, selection: setting(\.transcriptionProviderID),
                 caption: "Transcription sends recording audio to the selected provider."
             ) {
                 MeetingLanguagePicker(title: "Default Language", selection: setting(\.defaultLanguage))
-                Toggle("Automatically Transcribe Recordings", isOn: setting(\.autoTranscribe))
+                Toggle("Automatically Transcribe", isOn: setting(\.autoTranscribe))
+                    .toggleStyle(.checkbox)
+                if store.settings.autoTranscribe {
+                    Toggle(
+                        "Automatically Transcribe Even if a Live Transcript Exists",
+                        isOn: setting(\.autoTranscribeEvenWithLiveTranscript)
+                    )
+                    .toggleStyle(.checkbox)
+                    .padding(.leading, 20)
+                }
             }
             CapabilityDefaultSection(
                 capability: .summarization, selection: setting(\.summaryProviderID),

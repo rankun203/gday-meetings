@@ -12,7 +12,7 @@ struct LiveTranscriptDraft: Codable, Equatable {
 
     var segments: [TranscriptSegment] {
         phrases.sorted(by: LiveTranscriptPhrase.ordered).map {
-            TranscriptSegment(id: $0.id, start: $0.start, end: $0.end, speaker: $0.source.title, text: $0.text)
+            TranscriptSegment(id: $0.id, start: $0.start, end: $0.end, speaker: "", text: $0.text)
         }
     }
 

@@ -100,10 +100,9 @@ enum SpeakerRecognition {
                     speakerID = speaker.id
                 }
             }
-            let source = attempt.inputs.first { $0.trackName == segment.track }?.sourceType
             return TranscriptSegment(
                 start: segment.start, end: segment.end,
-                speaker: segment.speaker ?? (source == "mic" ? "You" : "Speaker"),
+                speaker: segment.speaker ?? "",
                 text: segment.text, speakerID: speakerID)
         }
         suggest(&speakers, people: people)

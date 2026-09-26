@@ -64,7 +64,25 @@ struct DataPrivacyTests {
         rows = DataPrivacy.rows(PrivacyContext(settings: settings))
         #expect(
             texts(rows, .audio).last
-                == "Sent to RunPod (api.runpod.ai) after each recording and when you transcribe a meeting")
+                == "Sent to RunPod (api.runpod.ai) after recording when automatic transcription applies and when you transcribe a meeting"
+        )
+    }
+
+    @Test func manualProvidersAreDisclosedButOnlyDefaultRunsAutomatically() {
+        let (runpod, filedrop) = runpodAndFiledrop()
+        var alternate = runpod
+        alternate.id = UUID()
+        alternate.name = "Other RunPod"
+        var settings = AppSettings()
+        settings.serviceProviders = [runpod, alternate, filedrop]
+        settings.transcriptionProviderID = runpod.id
+        settings.autoTranscribe = true
+        let routes = DataPrivacy.routes(PrivacyContext(settings: settings))
+        #expect(routes.contains { $0.trigger == .transcribe && $0.receivers.contains { $0.id == alternate.id } })
+        #expect(!routes.contains { $0.trigger == .afterRecording && $0.receivers.contains { $0.id == alternate.id } })
+        #expect(routes.contains { $0.trigger == .afterRecording && $0.receivers.contains { $0.id == runpod.id } })
+        let audio = row(DataPrivacy.rows(PrivacyContext(settings: settings)), .audio)
+        #expect(audio.destinations.filter { $0.id == filedrop.id }.count == 1)
     }
 
     @Test func runpodWithoutUsableUploadProviderSendsNoAudio() {
@@ -195,7 +213,7 @@ struct DataPrivacyTests {
         #expect(PrivacyDestination.phrase([.transcribe]) == "when you transcribe a meeting")
         #expect(
             PrivacyDestination.phrase([.afterRecording, .transcribe, .summarizeOrChat, .archive])
-                == "after each recording and when you transcribe a meeting, generate a summary or send a chat message, or choose Archive to Server"
+                == "after recording when automatic transcription applies and when you transcribe a meeting, generate a summary or send a chat message, or choose Archive to Server"
         )
     }
 

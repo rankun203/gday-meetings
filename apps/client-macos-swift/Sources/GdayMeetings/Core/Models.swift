@@ -34,6 +34,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     var notes = ""
     var summary = ""
     var transcript: [TranscriptSegment] = []
+    var liveTranscriptAdopted = false
     var speakers: [MeetingSpeaker] = []
     var personIDs: [UUID] = []
     var tagIDs: [UUID] = []
@@ -45,7 +46,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, title, language, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat,
             todos,
-            recordingProfile, transcriptionAttempt, speakers
+            recordingProfile, transcriptionAttempt, speakers, liveTranscriptAdopted
     }
 
 }
@@ -82,6 +83,7 @@ struct AppSettings: Codable, Equatable {
     var summaryProviderID: UUID?
     var defaultLanguage = "en"
     var autoTranscribe = false
+    var autoTranscribeEvenWithLiveTranscript = false
     var showLiveTranscript = true
     var captureSystemAudio = true
     var captureMicrophone = true
@@ -95,7 +97,7 @@ struct AppSettings: Codable, Equatable {
         "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID, defaultLanguage, autoTranscribe,
-            showLiveTranscript,
+            autoTranscribeEvenWithLiveTranscript, showLiveTranscript,
             captureSystemAudio,
             captureMicrophone, recordingFormat, summarizationPrompt, automaticVoiceProcessing, microphoneDevice
     }
@@ -184,6 +186,7 @@ extension Meeting {
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
         summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? ""
         transcript = try values.decodeIfPresent([TranscriptSegment].self, forKey: .transcript) ?? []
+        liveTranscriptAdopted = try values.decodeIfPresent(Bool.self, forKey: .liveTranscriptAdopted) ?? false
         speakers = try values.decodeIfPresent([MeetingSpeaker].self, forKey: .speakers) ?? []
         personIDs = try values.decodeIfPresent([UUID].self, forKey: .personIDs) ?? []
         tagIDs = try values.decodeIfPresent([UUID].self, forKey: .tagIDs) ?? []
@@ -219,6 +222,12 @@ extension MeetingTag {
 }
 
 extension AppSettings {
+    /// Evaluate after live recognition finishes for the recording being saved.
+    /// Empty sessions and provisional text do not count as finalized live text.
+    func shouldAutomaticallyTranscribe(hasUsableFinalizedLiveTranscript: Bool) -> Bool {
+        autoTranscribe && (autoTranscribeEvenWithLiveTranscript || !hasUsableFinalizedLiveTranscript)
+    }
+
     init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -227,6 +236,8 @@ extension AppSettings {
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
+        autoTranscribeEvenWithLiveTranscript =
+            try values.decodeIfPresent(Bool.self, forKey: .autoTranscribeEvenWithLiveTranscript) ?? false
         showLiveTranscript = try values.decodeIfPresent(Bool.self, forKey: .showLiveTranscript) ?? true
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
@@ -268,6 +279,7 @@ extension Meeting {
         if encoder.userInfo[.notesInSidecars] as? Bool != true { try values.encode(notes, forKey: .notes) }
         try values.encode(summary, forKey: .summary)
         try values.encode(transcript, forKey: .transcript)
+        try values.encode(liveTranscriptAdopted, forKey: .liveTranscriptAdopted)
         try values.encode(speakers, forKey: .speakers)
         try values.encode(personIDs, forKey: .personIDs)
         try values.encode(tagIDs, forKey: .tagIDs)

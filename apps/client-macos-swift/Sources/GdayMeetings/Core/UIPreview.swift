@@ -69,6 +69,13 @@ enum UIPreview {
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording") {
+                    // Simulate a new recording, not a live stream on top of the
+                    // saved batch fixture. Stop can then exercise live adoption.
+                    if var recording = store.meetings.first(where: { $0.id == conversation.id }) {
+                        recording.transcript = []
+                        recording.replaceSpeakers([])
+                        store.updateMeeting(recording)
+                    }
                     store.recordingID = conversation.id
                     store.recordingStartedAt = Date()
                     store.recordingMeter.deliver(

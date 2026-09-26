@@ -314,12 +314,7 @@ struct RecordingWorkspaceView: View {
             ) {
                 store.setRecordingVoiceProcessing($0)
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    RecordingSettingsDisclosure(meetingID: meetingID, status: store.recordingMeter.status)
-                    LiveTranscriptView(controller: store.liveTranscript)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
+            RecordingSettingsDisclosure(meetingID: meetingID, status: store.recordingMeter.status)
 
         }
         .padding(14)
@@ -574,23 +569,29 @@ struct RecordingSettingsDisclosure: View {
                     .accessibilityValue("\(expanded ? "Expanded" : "Collapsed"). \(summary(meeting))")
                     .help(expanded ? "Hide Recording Settings" : "Show Recording Settings")
                 if expanded {
-                    MeetingLanguagePicker(
-                        selection: Binding(
-                            get: { meeting.language },
-                            set: { language in
-                                guard var latest = store.meetings.first(where: { $0.id == meetingID }) else { return }
-                                latest.language = language
-                                store.updateMeeting(latest)
-                                if store.meetings.first(where: { $0.id == meetingID })?.language == language {
-                                    store.liveTranscript.changeLanguage(language)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            MeetingLanguagePicker(
+                                selection: Binding(
+                                    get: { meeting.language },
+                                    set: { language in
+                                        guard var latest = store.meetings.first(where: { $0.id == meetingID }) else {
+                                            return
+                                        }
+                                        latest.language = language
+                                        store.updateMeeting(latest)
+                                        if store.meetings.first(where: { $0.id == meetingID })?.language == language {
+                                            store.liveTranscript.changeLanguage(language)
+                                        }
+                                    }))
+                            if status.levels.microphone.enabled && !store.isFinalizingRecording {
+                                RecordingVoiceProcessingControl(status: status.levels.microphoneStatus) {
+                                    store.setRecordingVoiceProcessing($0)
                                 }
-                            }))
-                    if status.levels.microphone.enabled && !store.isFinalizingRecording {
-                        RecordingVoiceProcessingControl(status: status.levels.microphoneStatus) {
-                            store.setRecordingVoiceProcessing($0)
-                        }
-                    }
-                    MeetingTagsView(meetingID: meetingID)
+                            }
+                            MeetingTagsView(meetingID: meetingID)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(minHeight: 65, idealHeight: 100, maxHeight: 120)
                 }
             }
         }

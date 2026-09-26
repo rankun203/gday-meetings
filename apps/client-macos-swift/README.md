@@ -150,7 +150,7 @@ For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR`
 
 | Data | Sent when | Receiver |
 | --- | --- | --- |
-| Recorded audio, meeting language | **Transcribe**, or after each recording with **Automatically Transcribe Recordings** on | Filedrop stores the audio; RunPod downloads it and receives the language. The website receives audio, title, and language. |
+| Recorded audio, meeting language | **Transcribe**, or after recording when **Automatically Transcribe** applies. Existing live text skips automatic transcription unless its override is on | Filedrop stores the audio; RunPod downloads it and receives the language. The website receives audio, title, and language. |
 | Title, notes, transcript, summary, chat, Summary Instructions | **Generate Summary** or **Send** in a chat | The selected OpenAI-compatible provider. To-dos are not sent. |
 | Meeting content, audio, linked people and tags (excluding voice samples) | **Archive to Server** | The signed-in Gday Meetings website. |
 | API keys and sign-in tokens (Keychain) | Each request above; free connection checks and model lists when an enabled provider's panel opens; **Load Languages** for a website | Only the provider they belong to. A disabled provider is contacted only to list models while its endpoint or key is edited. |

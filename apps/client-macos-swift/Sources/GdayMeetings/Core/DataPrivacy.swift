@@ -98,7 +98,7 @@ struct PrivacyDestination: Identifiable, Equatable {
 
     static func phrase(_ triggers: [PrivacyTrigger]) -> String {
         var parts: [String] = []
-        if triggers.contains(.afterRecording) { parts.append("after each recording") }
+        if triggers.contains(.afterRecording) { parts.append("after recording when automatic transcription applies") }
         let actions = triggers.compactMap(\.action)
         if !actions.isEmpty { parts.append("when you " + join(actions)) }
         return parts.joined(separator: " and ")
@@ -158,8 +158,11 @@ enum DataPrivacy {
         }
         var routes: [PrivacyRoute] = []
 
-        // Transcription: the default provider, plus providers of unsent attempts.
-        var transcriptions = [(settings.transcriptionProviderID, nil as UUID?, settings.autoTranscribe)]
+        // Manual transcription can choose any configured provider. Only the
+        // default provider can run automatically; pending attempts retain theirs.
+        var transcriptions: [(UUID?, UUID?, Bool)] = providers.map {
+            ($0.id, nil, settings.autoTranscribe && $0.id == settings.transcriptionProviderID)
+        }
         transcriptions += context.pendingTranscriptions.map { ($0.providerID, $0.uploadProviderID, false) }
         for (id, uploadID, automatic) in transcriptions {
             guard let transcriber = provider(id), transcriber.supports(.transcription) else { continue }

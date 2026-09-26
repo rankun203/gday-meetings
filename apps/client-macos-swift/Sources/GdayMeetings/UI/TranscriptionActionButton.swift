@@ -1,55 +1,60 @@
 import SwiftUI
 
-/// Routine transcription starts directly; destructive result replacement asks first.
+/// Provider choice applies only to this request. Existing requests always resume
+/// with their saved provider, rather than silently starting a different paid job.
 struct TranscriptionActionButton: View {
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var confirming = false
     let meeting: Meeting
+    var hasTranscript: Bool? = nil
 
-    private var provider: ServiceProvider? { try? store.transcriptionProvider(for: meeting) }
-    /// A provider is ready but no default is chosen: Defaults is the next step.
-    /// Otherwise the provider itself needs setup in Service Providers.
-    private var defaultNeedsChoosing: Bool {
-        meeting.transcriptionAttempt == nil && store.settings.transcriptionProviderID == nil
-            && store.settings.serviceProviders.contains {
-                ProviderConfigurationEligibility.canSelect(
-                    $0, for: .transcription, providers: store.settings.serviceProviders)
-            }
-    }
-    private var title: String {
-        if meeting.transcriptionAttempt?.result != nil { return "Apply Saved Transcript…" }
-        if meeting.transcriptionAttempt != nil { return "Resume Transcription" }
-        guard let provider else { return "Set Up Transcription…" }
-        return "Transcribe with \(provider.name)"
+    private var providers: [ServiceProvider] { store.eligibleTranscriptionProviders }
+    private var verb: String { (hasTranscript ?? !meeting.transcript.isEmpty) ? "Re-transcribe" : "Transcribe" }
+    private var busy: Bool {
+        store.isJobRunning(.transcription, .meeting(meeting.id))
+            || store.isJobRunning(.importAudio, .meeting(meeting.id)) || store.recordingID == meeting.id
     }
     var body: some View {
-        Button(title, systemImage: "text.bubble") {
+        Group {
             if meeting.transcriptionAttempt?.result != nil {
-                confirming = true
+                Button("Apply Saved Transcript…", systemImage: "text.bubble") { confirming = true }
+                    .disabled(busy)
             }
-            else if provider == nil {
-                settingsTab = defaultNeedsChoosing ? "defaults" : "providers"
-                openSettings()
+            else if meeting.transcriptionAttempt != nil {
+                Button("Resume Transcription", systemImage: "text.bubble") {
+                    Task { await store.transcribe(id: meeting.id) }
+                }.disabled(busy || meeting.audioFiles.isEmpty)
+            }
+            else if providers.count == 1, let provider = providers.first {
+                Button("\(verb) with \(provider.name)", systemImage: "text.bubble") {
+                    start(provider)
+                }.disabled(busy || meeting.audioFiles.isEmpty)
+            }
+            else if providers.count > 1 {
+                Menu(verb, systemImage: "text.bubble") {
+                    ForEach(providers) { provider in
+                        Button("\(verb) with \(provider.name)") { start(provider) }
+                    }
+                }.disabled(busy || meeting.audioFiles.isEmpty)
             }
             else {
-                Task { await store.transcribe(id: meeting.id) }
+                Button("Set Up Transcription…", systemImage: "text.bubble") {
+                    settingsTab = "providers"
+                    openSettings()
+                }
             }
         }
-        .disabled(
-            store.isJobRunning(.transcription, .meeting(meeting.id))
-                || store.isJobRunning(.importAudio, .meeting(meeting.id)) || meeting.audioFiles.isEmpty
-                || store.recordingID == meeting.id
-        )
         .confirmationDialog("Replace the current transcript?", isPresented: $confirming, titleVisibility: .visible) {
-            Button("Replace Transcript", role: .destructive) {
-                store.applySavedTranscriptionResult(meetingID: meeting.id)
-            }
+            Button("Replace Transcript") { store.applySavedTranscriptionResult(meetingID: meeting.id) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The saved result will replace the current transcript and its edits. The recording is kept.")
+            Text("The current transcript and its edits will be kept in Transcript History. The recording is kept.")
         }
+    }
+    private func start(_ provider: ServiceProvider) {
+        Task { await store.transcribe(id: meeting.id, providerID: provider.id) }
     }
 }
 

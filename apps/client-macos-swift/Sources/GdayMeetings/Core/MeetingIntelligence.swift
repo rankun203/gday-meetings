@@ -1,13 +1,13 @@
 import Foundation
 
 extension MeetingStore {
-    func transcribe(id: UUID) async {
+    func transcribe(id: UUID, providerID: UUID? = nil) async {
         guard !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
             recordingID != id,
             let meeting = meetings.first(where: { $0.id == id })
         else { return }
         do {
-            let provider = try transcriptionProvider(for: meeting)
+            let provider = try transcriptionProvider(for: meeting, providerID: providerID)
             guard beginJob(.transcription, .meeting(id), progress: "Transcribing with \(provider.name)…") else {
                 return
             }
@@ -19,8 +19,17 @@ extension MeetingStore {
         }
     }
 
-    func transcriptionProvider(for meeting: Meeting) throws -> ServiceProvider {
-        let providerID = meeting.transcriptionAttempt?.providerID ?? settings.transcriptionProviderID
+    var eligibleTranscriptionProviders: [ServiceProvider] {
+        settings.serviceProviders.filter {
+            ProviderConfigurationEligibility.canSelect($0, for: .transcription, providers: settings.serviceProviders)
+        }
+    }
+
+    func transcriptionProvider(for meeting: Meeting, providerID requestedID: UUID? = nil) throws -> ServiceProvider {
+        if let attempt = meeting.transcriptionAttempt, let requestedID, requestedID != attempt.providerID {
+            throw ServiceError("Resume or discard the pending transcription before choosing another provider.")
+        }
+        let providerID = meeting.transcriptionAttempt?.providerID ?? requestedID ?? settings.transcriptionProviderID
         guard let providerID, let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else {
             throw ServiceError("Choose a transcription provider in Settings → Defaults.")
         }
@@ -161,7 +170,10 @@ extension MeetingStore {
     }
     private func context(_ meeting: Meeting) -> String {
         "Title: \(meeting.title)\nNotes: \(NotesDocument(meeting.notes).citedText)\nSummary: \(meeting.summary)\nTranscript:\n"
-            + meeting.transcript.map { "\(meeting.speakerName(for: $0, people: people)): \($0.text)" }.joined(
+            + meeting.transcript.map { segment in
+                let name = meeting.speakerName(for: segment, people: people)
+                return name.isEmpty ? segment.text : "\(name): \(segment.text)"
+            }.joined(
                 separator: "\n")
     }
 }

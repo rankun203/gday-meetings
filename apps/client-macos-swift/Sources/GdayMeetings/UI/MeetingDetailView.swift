@@ -31,8 +31,10 @@ struct MeetingDetailView: View {
             }
             .modifier(AudioFileDrop(meetingID: meetingID))
             .navigationTitle(meeting.title)
-            .onAppear { if store.recordingID == meetingID { tab = 1 } }
-            .onChange(of: store.recordingID) { _, id in if id == meetingID { tab = 1 } }
+            .onAppear { if store.recordingID == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 } }
+            .onChange(of: store.recordingID) { _, id in
+                if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
+            }
         }
     }
 
@@ -40,7 +42,7 @@ struct MeetingDetailView: View {
         VStack(alignment: .leading, spacing: recordingHeight == nil ? 22 : 14) {
             meetingHeader(meeting)
             if let recordingHeight {
-                RecordingWorkspaceView(meetingID: meetingID).frame(height: recordingHeight)
+                RecordingWorkspaceView(meetingID: meetingID).frame(maxHeight: recordingHeight)
             }
             MeetingContentTabs(selection: $tab)
             meetingContent(meeting)
@@ -141,7 +143,13 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func meetingContent(_ meeting: Meeting) -> some View {
         switch tab {
-        case 0: transcript(meeting)
+        case 0:
+            if store.recordingID == meetingID {
+                LiveTranscriptView(controller: store.liveTranscript)
+            }
+            else {
+                MeetingTranscriptView(meetingID: meetingID)
+            }
         case 1:
             VStack(alignment: .leading, spacing: 10) {
                 if store.recordingID == meetingID {
@@ -179,64 +187,6 @@ struct MeetingDetailView: View {
             .padding(8).background(.background, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
     }
-    private func transcript(_ meeting: Meeting) -> some View {
-        VStack(alignment: .leading) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    if meeting.transcript.isEmpty {
-                        emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity)
-                    }
-                    ForEach(meeting.transcript) { segment in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Button(formatTime(segment.start)) {
-                                    playback.play(
-                                        meeting: meeting, files: store.audioURLs(for: meeting), at: segment.start)
-                                }.buttonStyle(.link).monospacedDigit().help("Play from this point").disabled(
-                                    playback.isPlaybackBlocked || store.audioURLs(for: meeting).isEmpty)
-                                Text(meeting.speakerName(for: segment, people: store.people))
-                                    .font(.headline)
-
-                            }
-                            TextField(
-                                "Transcript",
-                                text: Binding(
-                                    get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.text ?? "" },
-                                    set: { value in
-                                        change { meeting in
-                                            if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id })
-                                            {
-                                                meeting.transcript[index].text = value
-                                            }
-                                        }
-                                    }), axis: .vertical
-                            ).textFieldStyle(.plain)
-                            Divider()
-                        }
-                    }
-                    SavedLiveTranscriptView(meetingID: meetingID)
-                    if !meeting.speakers.isEmpty {
-                        MeetingSpeakersView(meetingID: meetingID)
-                    }
-                }.padding(4)
-            }
-        }
-    }
-    private func emptyTranscript(_ meeting: Meeting) -> some View {
-        ContentUnavailableView {
-            Label("Recording transcript", systemImage: "text.bubble")
-        } description: {
-            Text(
-                store.recordingID == meetingID
-                    ? "View live text in the recording card. You can transcribe the saved audio after recording."
-                    : "No transcript yet.")
-        } actions: {
-            if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
-                TranscriptionActionButton(meeting: meeting)
-            }
-        }
-    }
-
     private func todos(_ meeting: Meeting) -> some View {
         VStack {
             HStack {

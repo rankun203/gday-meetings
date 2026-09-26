@@ -43,6 +43,10 @@ extension MeetingStore {
         var attempt =
             meeting.transcriptionAttempt
             ?? ProviderTranscriptionAttempt(provider: provider, meeting: meeting)
+        guard attempt.providerID == provider.id, attempt.kind == provider.kind, attempt.endpoint == provider.endpoint
+        else {
+            throw ServiceError("Resume the pending transcription with its original provider and address.")
+        }
         if attempt.taskID == nil && attempt.result == nil {
             try TranscriptionLanguage.validate(attempt.language)
         }

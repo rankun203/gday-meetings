@@ -98,6 +98,7 @@ final class MeetingStore: ObservableObject {
             lastSavedLibrary = MeetingLibrary(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
             if migrated { save() }
+            recoverUnadoptedLiveTranscripts()
             refreshArchiveStatuses()
             if usesKeychain {
                 for index in settings.serviceProviders.indices {
@@ -452,13 +453,20 @@ final class MeetingStore: ObservableObject {
                 stopFailed = true
             }
         }
+        let finalizedLive = liveTranscript.draft.flatMap { $0.meetingID == id ? $0 : nil }
+        if let finalizedLive { _ = adoptLiveTranscript(finalizedLive) }
         recordingID = nil
         recordingStartedAt = nil
         recordingMeter.reset()
         captureTransition = false
         isFinalizingRecording = false
         // A separate task, so callers awaiting the stop return once audio is saved.
-        if !stopFailed && transcribeAfter && settings.autoTranscribe { Task { await transcribe(id: id) } }
+        if !stopFailed && transcribeAfter
+            && settings.shouldAutomaticallyTranscribe(
+                hasUsableFinalizedLiveTranscript: finalizedLive?.hasUsableText == true)
+        {
+            Task { await transcribe(id: id) }
+        }
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {
         guard canSave, format != .wav else { return }
@@ -652,7 +660,8 @@ final class MeetingStore: ObservableObject {
         }
         else {
             let transcript = meeting.transcript.map {
-                "[\(Int($0.start / 60)):\(String(format: "%02d", Int($0.start) % 60))] **\($0.speaker):** \($0.text)"
+                let attribution = $0.speaker.isEmpty ? "" : "**\($0.speaker):** "
+                return "[\(Int($0.start / 60)):\(String(format: "%02d", Int($0.start) % 60))] \(attribution)\($0.text)"
             }.joined(separator: "\n\n")
             let todos = meeting.todos.map { "- [\($0.isCompleted ? "x" : " ")] \($0.title)" }.joined(separator: "\n")
             try
