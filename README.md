@@ -40,7 +40,7 @@ xcode-select --install
 make install-macos
 ```
 
-This builds and locally signs **Gday Meetings Swift.app**, then opens a Finder folder with an **Applications** shortcut. Drag the app onto Applications and open it. No full Xcode, Rust, CMake, Homebrew, Node, or Docker is required to build this client. Transcription uses a separately configured Gday Meetings server or compatible provider; AI features use your configured provider.
+This builds and locally signs **Gday Meetings.app**, then opens a Finder folder with an **Applications** shortcut. Drag the app onto Applications and open it. No full Xcode, Rust, CMake, Homebrew, Node, or Docker is required to build this client. Transcription uses a separately configured Gday Meetings server or compatible provider; AI features use your configured provider.
 
 `make start-macos` builds and launches it; `make build-macos` only builds; `make doctor-macos` checks the selected Apple toolchain; `make test-macos` runs its tests. Xcode users can open `apps/client-macos-swift/Package.swift`. See the [Swift client guide](apps/client-macos-swift/README.md) for permissions, features, and development.
 
@@ -83,7 +83,7 @@ docs/                     Architecture, deployment, and worklogs
 Makefile                  Common commands delegating to independent components
 ```
 
-The Rust client binary is `gday-meetings-client` and its macOS bundle is `Gday Meetings.app`. Its existing local data paths and macOS app identity are preserved. The SwiftUI client is independently packaged as `Gday Meetings Swift.app`. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
+The Rust client binary is `gday-meetings-client` and its macOS bundle is `Gday Meetings.app`. Its existing local data paths and macOS app identity are preserved. The SwiftUI client is also packaged as `Gday Meetings.app`, with a separate bundle identity and library. The source folder remains `apps/client-macos-swift`. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
 
 The GitHub repository URL still uses `meeting-notes`. Our domain is `gdaymeetings.com`. The native SwiftUI app uses `com.gdaymeetings.macos` and stores meetings in `~/.local/share/com.gdaymeetings.macos/`. The Rust client uses `com.gdaymeetings.macos.rust` with a separate library because the formats differ. Both clients preserve their old libraries during migration; recording permissions may need to be granted again after the identity change. Historical worklogs and release notes retain their original names.
 

@@ -27,7 +27,7 @@ UI Preview displays a visible banner and offers System/Light/Dark appearance con
 
 Build outputs:
 
-- Full app: `.build/macos/Gday Meetings Swift.app`
+- Full app: `.build/macos/Gday Meetings.app`
 - UI Preview: `.build/preview/Gday Meetings UI Preview.app`
 
 These paths are relative to this client directory. Quit the bundle being rebuilt first. Preview packaging currently also rebuilds the full `.build/macos` bundle, so that development copy must be stopped too. A full app running from Applications or `.build/installer` can remain open while building Preview.
@@ -42,7 +42,7 @@ xcode-select --install
 make install-macos
 ```
 
-Finder opens `apps/client-macos-swift/.build/installer/` in icon view, with the app on the left, an **Applications** shortcut on the right, and a background showing drag instructions. Drag **Gday Meetings Swift.app** onto Applications and open it. macOS may ask to allow Finder automation. If automation is unavailable, the folder opens normally; press Command-1 to show icons. Installation does not overwrite Applications automatically. No Rust, CMake, Homebrew, Node, Python, Docker, Apple Developer account, or full Xcode is needed. The app is locally ad-hoc signed; these scripts do not produce a notarized public release.
+Finder opens `apps/client-macos-swift/.build/installer/` in icon view, with the app on the left, an **Applications** shortcut on the right, and a background showing drag instructions. Drag **Gday Meetings.app** onto Applications and open it. macOS may ask to allow Finder automation. If automation is unavailable, the folder opens normally; press Command-1 to show icons. Installation does not overwrite Applications automatically. No Rust, CMake, Homebrew, Node, Python, Docker, Apple Developer account, or full Xcode is needed. The app is locally ad-hoc signed; these scripts do not produce a notarized public release.
 
 Other commands:
 

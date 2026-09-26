@@ -1,8 +1,15 @@
+---
+title: Build and install the macOS client
+date: 2026-09-27
+status: active
+scope: macos-setup
+---
+
 # Build and install the macOS client
 
 ## SwiftUI client (Command Line Tools only)
 
-The native SwiftUI client needs macOS 14.2+ and Apple's Command Line Tools. Install the tools with `xcode-select --install`, finish the installer, clone this repository, and run `make install-macos`. Finder opens with **Gday Meetings Swift.app** and an **Applications** shortcut. Full Xcode is optional: its users can also open `apps/client-macos-swift/Package.swift`.
+The native SwiftUI client needs macOS 14.2+ and Apple's Command Line Tools. Install the tools with `xcode-select --install`, finish the installer, clone this repository, and run `make install-macos`. Finder opens with **Gday Meetings.app** and an **Applications** shortcut. Full Xcode is optional: its users can also open `apps/client-macos-swift/Package.swift`.
 
 Use `make doctor-macos`, `make build-macos`, `make start-macos`, and `make test-macos` for the Swift client. It uses its own library and app identity. See its [guide](../apps/client-macos-swift/README.md) for native recording permissions, server settings, and feature details.
 

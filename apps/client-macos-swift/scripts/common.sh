@@ -2,7 +2,7 @@
 set -euo pipefail
 client_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="$client_dir/.build"
-app_path="$build_dir/macos/Gday Meetings Swift.app"
+app_path="$build_dir/macos/Gday Meetings.app"
 
 check_tools() {
     if [[ "$(uname -s)" != Darwin ]]; then
@@ -30,7 +30,7 @@ check_tools() {
     os_major="$(/usr/bin/sw_vers -productVersion | cut -d. -f1)"
     os_minor="$(/usr/bin/sw_vers -productVersion | cut -d. -f2)"
     if (( os_major < 14 || (os_major == 14 && os_minor < 2) )); then
-        echo 'Gday Meetings Swift requires macOS 14.2 or later.' >&2
+        echo 'Gday Meetings requires macOS 14.2 or later.' >&2
         exit 1
     fi
 }

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key><string>com.gdaymeetings.macos</string>
-    <key>CFBundleName</key><string>Gday Meetings Swift</string>
+    <key>CFBundleName</key><string>Gday Meetings</string>
     <key>CFBundleDisplayName</key><string>Gday Meetings</string>
     <key>CFBundleExecutable</key><string>GdayMeetings</string>
     <key>CFBundlePackageType</key><string>APPL</string>
