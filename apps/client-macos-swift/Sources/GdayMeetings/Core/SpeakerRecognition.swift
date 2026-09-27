@@ -125,10 +125,13 @@ extension Meeting {
         }
     }
 
-    func speakerName(for segment: TranscriptSegment, people: [Person], includesSuggestion: Bool = true) -> String {
+    func speakerName(
+        for segment: TranscriptSegment, people: [Person], includesSuggestion: Bool = true,
+        compactProviderLabel: Bool = false
+    ) -> String {
         guard let speaker = speakers.first(where: { $0.id == segment.speakerID }),
             let person = people.first(where: { $0.id == speaker.personID })
-        else { return segment.speaker }
+        else { return compactProviderLabel ? SpeakerLabelPresentation.display(segment.speaker) : segment.speaker }
         return speaker.confirmed || !includesSuggestion ? person.name : "\(person.name) (Suggested)"
     }
 
@@ -166,5 +169,19 @@ extension MeetingStore {
         }
         meeting.replaceSpeakers(replacement)
         updateMeeting(meeting)
+    }
+}
+
+/// Presentation only: canonical provider labels remain unchanged in the library.
+enum SpeakerLabelPresentation {
+    static func display(_ label: String) -> String {
+        for source in ["mic", "sys"] {
+            let prefix = source + "_SPEAKER_"
+            guard label.hasPrefix(prefix) else { continue }
+            let number = label.dropFirst(prefix.count)
+            guard !number.isEmpty, number.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else { return label }
+            return source + "_" + number
+        }
+        return label
     }
 }

@@ -127,7 +127,7 @@ struct MeetingSpeakersView: View {
     private func speakerRow(_ speaker: MeetingSpeaker) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(speaker.label).font(.callout.monospaced())
+                Text(SpeakerLabelPresentation.display(speaker.label)).font(.callout.monospaced())
                 if !speaker.track.isEmpty { Text(speaker.track).font(.caption).foregroundStyle(.secondary) }
             }
             ViewThatFits(in: .horizontal) {
@@ -188,7 +188,7 @@ struct MeetingSpeakersView: View {
                 }
             }
             .fixedSize()
-            .accessibilityLabel("Assign \(speaker.label) to a person")
+            .accessibilityLabel("Assign \(SpeakerLabelPresentation.display(speaker.label)) to a person")
         }
     }
 
