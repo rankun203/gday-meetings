@@ -14,17 +14,20 @@ struct TranscriptRow<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
-                ZStack(alignment: .topTrailing) {
-                    Text("00:00:00").hidden().accessibilityHidden(true)
-                    if let seek {
-                        Button(Self.timestamp(start), action: seek)
-                            .buttonStyle(.link).help("Play from this point")
+                if let seek {
+                    Button(action: seek) {
+                        timestampLabel.frame(minHeight: 32, alignment: .topTrailing)
+                            .contentShape(Rectangle())
                     }
-                    else {
-                        Text(Self.timestamp(start)).foregroundStyle(.secondary)
-                    }
+                    .buttonStyle(.borderless)
+                    .modifier(ActionHover(cornerRadius: 6))
+                    .foregroundStyle(.tint)
+                    .help("Play from this point")
+                    .accessibilityLabel("Play from \(Self.timestamp(start))")
                 }
-                .monospacedDigit().fixedSize()
+                else {
+                    timestampLabel.foregroundStyle(.secondary)
+                }
                 if showsSpeakerColumn || !speaker.isEmpty {
                     Text(speaker).fontWeight(.semibold)
                         .frame(width: 100, alignment: .topLeading)
@@ -43,6 +46,13 @@ struct TranscriptRow<Content: View>: View {
             Divider()
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
+    private var timestampLabel: some View {
+        ZStack(alignment: .topTrailing) {
+            Text("00:00:00").hidden().accessibilityHidden(true)
+            Text(Self.timestamp(start))
+        }.monospacedDigit().fixedSize()
+    }
+
     static func timestamp(_ seconds: Double) -> String {
         let value = seconds.isFinite ? max(0, Int(min(seconds, Double(Int.max / 2)))) : 0
         if value >= 3600 {
