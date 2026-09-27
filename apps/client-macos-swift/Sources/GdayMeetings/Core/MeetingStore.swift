@@ -91,6 +91,11 @@ final class MeetingStore: ObservableObject {
             }
             for index in meetings.indices {
                 meetings[index].notes = try notesStorage.load(meetings[index].id, fallback: meetings[index].notes)
+                // No editor undo session exists during startup. Keep conflict-copy assets too.
+                let folder = directory(for: meetings[index].id)
+                if FileManager.default.fileExists(atPath: folder.appendingPathComponent("notes.md").path) {
+                    try? NotesImageClipboard.cleanupSaved(directory: folder, markdown: meetings[index].notes)
+                }
             }
             notesStorage.onError = { [weak self] error in
                 self?.errorMessage = "Couldn’t save meeting notes. \(error.localizedDescription)"
@@ -626,7 +631,8 @@ final class MeetingStore: ObservableObject {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
-        var meeting = try JSONDecoder().decode(Meeting.self, from: Data(contentsOf: url))
+        let archiveData = try Data(contentsOf: url)
+        var meeting = try JSONDecoder().decode(Meeting.self, from: archiveData)
         meeting.id = UUID()
         meeting.audioFiles = []
         meeting.personIDs = []
@@ -640,33 +646,27 @@ final class MeetingStore: ObservableObject {
             meeting.speakers[index].voiceScope = nil
         }
         meeting.restoreSpeakerIdentities()
+        let importedDirectory = directory(for: meeting.id)
+        do {
+            try MeetingExport.importAssets(
+                from: archiveData, source: url, notes: meeting.notes, directory: importedDirectory)
+            meeting.notes = try NotesImageStore.canonicalizedNotes(in: meeting.notes, directory: importedDirectory)
+        }
+        catch {
+            try? FileManager.default.removeItem(at: importedDirectory)
+            throw error
+        }
         meetings.insert(meeting, at: 0)
-        guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
-    }
-    func exportMeeting(id: UUID, to url: URL) throws {
-        guard var meeting = meetings.first(where: { $0.id == id }) else {
-            throw MeetingError.message("Meeting no longer exists.")
+        guard save() else {
+            meetings.removeAll { $0.id == meeting.id }
+            try? FileManager.default.removeItem(at: importedDirectory)
+            throw MeetingError.message(errorMessage ?? "Could not save imported meeting.")
         }
-        meeting.transcriptionAttempt = nil
-        for index in meeting.transcript.indices {
-            meeting.transcript[index].speaker = meeting.speakerName(for: meeting.transcript[index], people: people)
-            meeting.transcript[index].speakerID = nil
-        }
-        meeting.speakers = []
-        if url.pathExtension.lowercased() == "json" {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(meeting).write(to: url, options: .atomic)
-        }
-        else {
-            let transcript = meeting.transcript.map {
-                let attribution = $0.speaker.isEmpty ? "" : "**\($0.speaker):** "
-                return "[\(Int($0.start / 60)):\(String(format: "%02d", Int($0.start) % 60))] \(attribution)\($0.text)"
-            }.joined(separator: "\n\n")
-            let todos = meeting.todos.map { "- [\($0.isCompleted ? "x" : " ")] \($0.title)" }.joined(separator: "\n")
-            try
-                "# \(meeting.title)\n\n\(meeting.createdAt.formatted())\n\n## Summary\n\n\(meeting.summary)\n\n## Notes\n\n\(NotesDocument(meeting.notes).citedText)\n\n## Action items\n\n\(todos)\n\n## Transcript\n\n\(transcript)\n"
-                .write(to: url, atomically: true, encoding: .utf8)
+        if !NotesAssets.tokens(in: meeting.notes).isEmpty,
+            (try JSONSerialization.jsonObject(with: archiveData) as? [String: Any])?["notesAssets"] == nil
+        {
+            errorMessage =
+                "Meeting text was imported. Its JSON file did not include an image manifest, so images in notes were not imported."
         }
     }
 }

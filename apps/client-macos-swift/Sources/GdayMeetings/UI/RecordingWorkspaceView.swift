@@ -591,7 +591,7 @@ struct RecordingSettingsDisclosure: View {
                             }
                             MeetingTagsView(meetingID: meetingID)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(minHeight: 65, idealHeight: 100, maxHeight: 120)
+                    }.frame(height: 100)
                 }
             }
         }

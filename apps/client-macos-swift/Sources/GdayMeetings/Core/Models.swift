@@ -111,7 +111,7 @@ struct AppSettings: Codable, Equatable {
 ///   after keeping a backup. It never opens or rewrites a newer version, and it
 ///   always saves `currentVersion`, so a save cannot lower the version.
 struct MeetingLibrary: Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
     typealias Migration = (inout MeetingLibrary) throws -> Void
     /// Version 2 retains speaker identity and confirmed voice samples. New fields
     /// decode empty in version 1; no existing speaker name implies a person.
@@ -121,6 +121,9 @@ struct MeetingLibrary: Codable {
         },
         // Sidecar file work runs in LibraryFormat before the version advances.
         2: { _ in },
+        // Image assets are created lazily; existing Markdown and files stay intact.
+        // The version guard prevents older editors from rewriting richer notes.
+        3: { _ in },
     ]
 
     var contextualChats: [String: [ChatMessage]] = [:]

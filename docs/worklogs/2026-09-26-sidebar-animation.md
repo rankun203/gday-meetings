@@ -45,6 +45,8 @@ Official APIs reviewed: [SwiftUI animation completion](https://developer.apple.c
 
 Both the default synthetic workload and the long-transcript fixture passed row-restoration and completion-duration assertions in the shared checkout. The default workload measured 60.3% process CPU during animated toggles; no CPU threshold is asserted. Formatting and lint passed. The full suite passed 243 tests, including a mounted production-view reversal and Reduce Motion regression test. Independent review confirmed the original state/toggle behavior and the inactive production diagnostic path. Original sidebar UI behavior was retained after rejecting the candidates.
 
+During the later notes integration, concurrent main-actor tests delayed the intermediate reversal observation beyond the animation's end. The suite now always checks immediate reversal state and settled results, and checks the intermediate state only when it resumes within that interval. A separate run with `GDAY_SIDEBAR_STRICT_TIMING=1` requires that interval to be observed and passed the hidden-row, completion, and Reduce Motion checks (one test, 1.137 seconds). The integrated suite passed 305 tests. This changes test scheduling expectations only; it does not improve or change the app's animation.
+
 ## Technical debt
 
 Sidebar animation performance remains unresolved. The current width animation still triggers content reflow. A future change needs a demonstrated improvement on this workload plus visible checks for toolbar stability, divider positions, title wrapping, selection, keyboard access, rapid reversal, and Reduce Motion. Rejected implementations remain outside the app.

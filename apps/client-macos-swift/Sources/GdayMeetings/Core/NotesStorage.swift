@@ -8,6 +8,8 @@ final class NotesStorage {
     var pending: [UUID: String] = [:]
     var tasks: [UUID: Task<Void, Never>] = [:]
     var onError: ((Error) -> Void)?
+    private var watcher: NotesFileWatcher?
+    private var watchedID: UUID?
     init(directory: URL) { self.directory = directory }
     func url(_ id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent("notes.md")
@@ -59,14 +61,49 @@ final class NotesStorage {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
             }
         }
+        try NotesImageStore.ensurePreviews(in: text, directory: file.deletingLastPathComponent())
         try Data(text.utf8).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         saved[id] = text
+        try NotesImageStore.cleanupManagedPreviews(in: text, directory: file.deletingLastPathComponent())
     }
     func discard(_ id: UUID) {
+        stopWatching(id)
         tasks.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)
         saved.removeValue(forKey: id)
+    }
+    func watch(_ id: UUID, reloaded: @escaping (String) -> Void) throws {
+        watcher?.stop()
+        watchedID = id
+        let watcher = NotesFileWatcher()
+        try watcher.start(directory: url(id).deletingLastPathComponent()) { [weak self] in
+            guard let self, self.watchedID == id else { return }
+            do {
+                if let text = try self.reloadExternal(id) { reloaded(text) }
+            }
+            catch { self.onError?(error) }
+        }
+        self.watcher = watcher
+    }
+    func stopWatching(_ id: UUID) {
+        guard watchedID == id else { return }
+        watcher?.stop()
+        watcher = nil
+        watchedID = nil
+    }
+    /// Returns only an external replacement. A pending app draft wins, with
+    /// write() retaining the conflicting disk copy before its atomic save.
+    func reloadExternal(_ id: UUID) throws -> String? {
+        guard FileManager.default.fileExists(atPath: url(id).path) else { return nil }
+        let external = try String(contentsOf: url(id), encoding: .utf8)
+        guard external != saved[id] else { return nil }
+        if pending[id] != nil {
+            try flush(id)
+            return nil
+        }
+        saved[id] = external
+        return external
     }
 }
 
@@ -92,7 +129,17 @@ extension MeetingStore {
         do {
             if notesStorage.pending[id] != nil { try notesStorage.flush(id) }
             meetings[index].notes = try notesStorage.load(id, fallback: meetings[index].notes)
+            if FileManager.default.fileExists(atPath: directory(for: id).path) {
+                try notesStorage.watch(id) { [weak self] text in
+                    guard let self, let index = self.meetings.firstIndex(where: { $0.id == id }) else { return }
+                    self.meetings[index].notes = text
+                }
+            }
         }
         catch { errorMessage = "Couldn’t open meeting notes. \(error.localizedDescription)" }
+    }
+    func closeNotes(id: UUID) {
+        _ = flushNotes()
+        notesStorage.stopWatching(id)
     }
 }

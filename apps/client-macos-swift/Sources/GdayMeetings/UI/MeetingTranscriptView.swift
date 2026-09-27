@@ -26,6 +26,9 @@ struct MeetingTranscriptView: View {
     }
     var body: some View {
         if let meeting {
+            let displayedSegments = segments
+            let showsSpeakers =
+                !usesCheckpoint && displayedSegments.contains { !$0.speaker.isEmpty || $0.speakerID != nil }
             VStack(alignment: .leading, spacing: 8) {
                 ViewThatFits(in: .horizontal) {
                     HStack {
@@ -55,16 +58,24 @@ struct MeetingTranscriptView: View {
                             )
                             .frame(maxWidth: .infinity)
                         }
-                        ForEach(segments) { segment in
+                        ForEach(displayedSegments) { segment in
                             TranscriptRow(
                                 start: segment.start,
-                                speaker: usesCheckpoint ? "" : meeting.speakerName(for: segment, people: store.people),
+                                speaker: usesCheckpoint
+                                    ? ""
+                                    : meeting.speakerName(
+                                        for: segment, people: store.people, includesSuggestion: false),
+                                showsSpeakerColumn: showsSpeakers,
                                 seek: canPlay(meeting) ? { seek(segment.start, meeting: meeting) } : nil
                             ) {
                                 TextField(
                                     "Transcript",
                                     text: Binding(
-                                        get: { segments.first { $0.id == segment.id }?.text ?? "" },
+                                        get: {
+                                            String(
+                                                (segments.first { $0.id == segment.id }?.text ?? "")
+                                                    .drop(while: { $0.isWhitespace }))
+                                        },
                                         set: { updateSegment(segment.id, text: $0) }), axis: .vertical
                                 )
                                 .textFieldStyle(.plain)

@@ -13,6 +13,15 @@
     <key>LSMinimumSystemVersion</key><string>14.2</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>UTImportedTypeDeclarations</key>
+    <array><dict>
+        <key>UTTypeIdentifier</key><string>org.textbundle.package</string>
+        <key>UTTypeDescription</key><string>TextBundle</string>
+        <key>UTTypeConformsTo</key><array><string>com.apple.package</string></array>
+        <key>UTTypeTagSpecification</key><dict>
+            <key>public.filename-extension</key><array><string>textbundle</string></array>
+        </dict>
+    </dict></array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Gday Meetings records your microphone to include your voice in meeting recordings.</string>
     <key>NSAudioCaptureUsageDescription</key>

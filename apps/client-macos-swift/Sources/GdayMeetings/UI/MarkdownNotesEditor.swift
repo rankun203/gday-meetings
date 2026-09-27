@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MeetingNotesEditor: View {
     @EnvironmentObject private var store: MeetingStore
@@ -25,11 +26,17 @@ struct MeetingNotesEditor: View {
                 playback.play(
                     meeting: meeting, files: store.audioURLs(for: meeting), at: NotesDocument.playbackStart(time))
             },
-            changed: { store.editNotes(id: meetingID, text: $0) }, flush: { _ = store.flushNotes() }
+            changed: { store.editNotes(id: meetingID, text: $0) }, flush: { _ = store.flushNotes() },
+            directory: store.directory(for: meetingID), imageError: { store.errorMessage = $0 },
+            audioDrop: { urls in
+                Task {
+                    do { _ = try await store.importAudioFiles(urls) }
+                    catch { store.errorMessage = error.localizedDescription }
+                }
+            }
         )
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
-        .onAppear { store.openNotes(id: meetingID) }
         .onDisappear { _ = store.flushNotes() }
         .id(meetingID)
     }
@@ -45,6 +52,9 @@ struct MarkdownNotesEditor: NSViewRepresentable {
     var play: (TimeInterval) -> Void
     var changed: (String) -> Void
     var flush: () -> Void
+    var directory: URL? = nil
+    var imageError: (String) -> Void = { _ in }
+    var audioDrop: ([URL]) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -65,6 +75,7 @@ struct MarkdownNotesEditor: NSViewRepresentable {
         text.drawsBackground = false
         text.setAccessibilityLabel("Meeting Notes")
         text.editor = self
+        text.registerForDraggedTypes(Array(Set(text.registeredDraggedTypes + [.fileURL, .png, .tiff])))
         text.load(markdown)
         text.delegate = text
         text.textStorage?.delegate = text
@@ -79,7 +90,10 @@ struct MarkdownNotesEditor: NSViewRepresentable {
         text.needsLayout = true
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) {
-        (scroll.documentView as? NotesTextView)?.editor?.flush()
+        guard let text = scroll.documentView as? NotesTextView else { return }
+        // Retain this meeting's editor until its final save completes, but do not
+        // publish notes or errors while SwiftUI is dismantling its view graph.
+        DispatchQueue.main.async { text.finishEditingSession() }
     }
 }
 
@@ -87,7 +101,13 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     var editor: MarkdownNotesEditor?
     var document = NotesDocument("")
     var notesPasteboard = NSPasteboard.general
-    private var applyingStyle = false
+    private var styledText: String?
+    private var imageLayoutScheduled = false
+    lazy var images = NotesImagePresentation(text: self)
+    var lastInsertionDate: Date?
+    private var imageSaveTask: Task<Void, Never>?
+    private var normalizingImages = false
+    private var normalizedImages: Set<String> = []
     private var gutterButtons: [NSButton] = []
     private var gutterTimes: [ObjectIdentifier: TimeInterval] = [:]
     private var notesTrackingArea: NSTrackingArea?
@@ -98,17 +118,31 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     }
 
     func load(_ markdown: String) {
+        undoManager?.removeAllActions()
+        lastInsertionDate = nil
+        imageSaveTask?.cancel()
+        normalizedImages.removeAll()
         document = NotesDocument(markdown)
+        images.invalidate()
         string = document.text
-        style(NSRange(location: 0, length: (string as NSString).length))
+        styledText = nil
+        scheduleImageLayout()
         needsLayout = true
     }
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?)
         -> Bool
     {
         guard let replacementString else { return true }
+        images.willChange(affectedCharRange, replacementLength: (replacementString as NSString).length)
         let previous = document
-        document.replace(affectedCharRange, with: replacementString, clock: editor?.clock())
+        let now = Date()
+        let phraseClock =
+            affectedCharRange.length == 0 && !replacementString.isEmpty
+                && lastInsertionDate.map { now.timeIntervalSince($0) >= 15 } == true ? editor?.clock() : nil
+        document.replace(affectedCharRange, with: replacementString, clock: editor?.clock(), phraseClock: phraseClock)
+        if !replacementString.isEmpty, undoManager?.isUndoing != true, undoManager?.isRedoing != true {
+            lastInsertionDate = now
+        }
         if undoManager?.isUndoing != true, undoManager?.isRedoing != true {
             registerDocumentUndo(previous)
         }
@@ -126,25 +160,30 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     func textDidChange(_ notification: Notification) {
         // Native undo owns text mutations. The companion undo action restores
         // timeline metadata in the same undo group.
+        images.didChangeText()
         editor?.changed(document.markdown)
         needsLayout = true
+        imageSaveTask?.cancel()
+        if !normalizingImages, undoManager?.isUndoing != true, undoManager?.isRedoing != true {
+            imageSaveTask?.cancel()
+            imageSaveTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(450)) }
+                catch { return }
+                self?.normalizeImageWidths()
+            }
+        }
     }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result { editor?.flush() }
+        if result {
+            normalizeImageWidths()
+            editor?.flush()
+        }
         return result
     }
-    func textStorage(
-        _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
-        range editedRange: NSRange, changeInLength delta: Int
-    ) {
-        guard editedMask.contains(.editedCharacters), !applyingStyle else { return }
-        style((string as NSString).paragraphRange(for: editedRange))
-    }
+    private static var expressions: [String: NSRegularExpression] = [:]
     private func style(_ range: NSRange) {
         guard let storage = textStorage, range.length > 0, NSMaxRange(range) <= storage.length else { return }
-        applyingStyle = true
-        defer { applyingStyle = false }
         storage.addAttributes(
             [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.labelColor],
             range: range)
@@ -165,17 +204,60 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             (#"(?m)^(?:#{1,6}|>|[-+*]|\d+\.) |\*\*|`|\[[ xX]\]"#, [.foregroundColor: NSColor.secondaryLabelColor]),
         ]
         for (pattern, attributes) in patterns {
-            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
+            guard let expression = Self.expressions[pattern] ?? (try? NSRegularExpression(pattern: pattern)) else {
+                continue
+            }
+            Self.expressions[pattern] = expression
             for match in expression.matches(in: source as String, range: range) {
                 storage.addAttributes(attributes, range: match.range)
             }
         }
         typingAttributes = [
             .font: NSFont.systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: NSParagraphStyle.default,
         ]
     }
+    func prepareImageLayout() {
+        guard let content = textLayoutManager?.textContentManager else { return }
+        content.performEditingTransaction {
+            textStorage?.beginEditing()
+            if styledText != string {
+                let current = string as NSString
+                var range = NSRange(location: 0, length: current.length)
+                if let previous = styledText as NSString? {
+                    var start = 0
+                    while start < min(previous.length, current.length),
+                        previous.character(at: start) == current.character(at: start)
+                    { start += 1 }
+                    var tail = 0
+                    while tail < min(previous.length, current.length) - start,
+                        previous.character(at: previous.length - tail - 1)
+                            == current.character(at: current.length - tail - 1)
+                    { tail += 1 }
+                    range = current.paragraphRange(for: NSRange(location: start, length: current.length - start - tail))
+                }
+                style(range)
+                styledText = string
+            }
+            images.prepare()
+            textStorage?.endEditing()
+        }
+    }
+    private func scheduleImageLayout() {
+        guard !imageLayoutScheduled else { return }
+        imageLayoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.imageLayoutScheduled = false
+            self.prepareImageLayout()
+        }
+    }
     override func layout() {
+        // Mutating paragraph attributes inside viewport layout leaves TextKit's
+        // fragments with stale ranges after a large replacement.
+        scheduleImageLayout()
         super.layout()
+        images.layout()
         updateGutter()
     }
     private func updateGutter() {
@@ -240,7 +322,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         needsLayout = true
     }
     override func accessibilityChildren() -> [Any]? {
-        (super.accessibilityChildren() ?? []) + gutterButtons.filter { !$0.isHidden }
+        (super.accessibilityChildren() ?? []) + gutterButtons.filter { !$0.isHidden } + images.views
     }
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         [
@@ -262,7 +344,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
                 dequeue: false), next.type == .leftMouseUp
             {
                 _ = window?.nextEvent(matching: .leftMouseUp)
-                if editor?.canPlay() == true, let time = document.time(atLine: document.lineIndex(at: position)) {
+                if editor?.canPlay() == true, let time = document.time(at: position) {
                     editor?.play(time)
                 }
                 return
@@ -285,8 +367,9 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         super.mouseDown(with: event)
     }
     override func cursorUpdate(with event: NSEvent) {
+        if images.setResizeCursor(at: convert(event.locationInWindow, from: nil)) { return }
         let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        if event.modifierFlags.contains(.command), document.time(atLine: document.lineIndex(at: index)) != nil,
+        if event.modifierFlags.contains(.command), document.time(at: index) != nil,
             editor?.canPlay() == true
         {
             NSCursor.pointingHand.set()
@@ -319,10 +402,11 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     }
     private func updateTimelineHover(_ event: NSEvent) {
         let position = convert(window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow, from: nil)
+        if images.setResizeCursor(at: position) { return }
         let index = characterIndexForInsertion(at: position)
         let time =
             event.modifierFlags.contains(.command) && editor?.canPlay() == true
-            ? document.time(atLine: document.lineIndex(at: index)) : nil
+            ? document.time(at: index) : nil
         for button in gutterButtons {
             button.highlight(time != nil && button.tag == document.timedLine(for: document.lineIndex(at: index)))
         }
@@ -353,7 +437,16 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         menu.addItem(time)
         return menu
     }
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        Array(Set(super.readablePasteboardTypes + [.png, .tiff, .fileURL, Self.pasteType]))
+    }
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(paste(_:)), isEditable,
+            notesPasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+                || notesPasteboard.availableType(from: [.png, .tiff, Self.pasteType]) != nil
+        {
+            return true
+        }
         if menuItem.action == #selector(playFromLine(_:)) {
             return editor?.canPlay() == true
                 && document.time(atLine: document.lineIndex(at: selectedRange().location)) != nil
@@ -438,11 +531,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         let range = selectedRange()
         guard range.length > 0 else { return }
         let text = (string as NSString).substring(with: range)
-        var copied = NotesDocument(text)
-        let first = document.lineIndex(at: range.location)
-        for index in copied.lines.indices where first + index < document.lines.count {
-            copied.setTime(document.time(atLine: first + index), line: index)
-        }
+        let copied = document.slice(range)
         notesPasteboard.clearContents()
         notesPasteboard.setString(text, forType: .string)
         if let meetingID = editor?.meetingID,
@@ -459,16 +548,27 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         if let data = notesPasteboard.data(forType: Self.pasteType),
             let payload = try? JSONDecoder().decode(Clipboard.self, from: data)
         {
-            let pasted = NotesDocument(payload.markdown)
-            let first = document.lineIndex(at: selectedRange().location)
+            var content = payload.markdown
+            if payload.meetingID != editor?.meetingID, let destination = editor?.directory {
+                let source = destination.deletingLastPathComponent().appendingPathComponent(
+                    payload.meetingID.uuidString)
+                do { content = try NotesImageClipboard.copyAssets(in: content, from: source, to: destination) }
+                catch {
+                    editor?.imageError(error.localizedDescription)
+                    return
+                }
+            }
+            let pasted = NotesDocument(content)
+            let insertion = selectedRange().location
             insertText(pasted.text, replacementRange: selectedRange())
             if payload.meetingID == editor?.meetingID {
-                for index in pasted.lines.indices where first + index < document.lines.count {
-                    document.setTime(pasted.lines[index].time, line: first + index)
-                }
+                document.applyCopiedTimes(pasted, at: insertion)
                 editor?.changed(document.markdown)
                 needsLayout = true
             }
+        }
+        else if pasteImages(from: notesPasteboard) {
+            return
         }
         else if let value = notesPasteboard.string(forType: .string) {
             insertText(NotesDocument(value).text, replacementRange: selectedRange())
@@ -477,4 +577,163 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             super.paste(sender)
         }
     }
+    func resizeImage(_ reference: NotesImageReference, width: Double?) {
+        guard isEditable, let directory = editor?.directory else { return }
+        do {
+            let largest = NotesImageReference.parse(in: string).filter {
+                $0.originalPath == reference.originalPath && $0.range != reference.range
+            }.compactMap(\.width).max()
+            let resized = try NotesImageStore.resized(
+                reference, width: width, directory: directory, previewWidth: largest)
+            replaceImage(reference, with: resized)
+        }
+        catch { editor?.imageError(error.localizedDescription) }
+    }
+    @discardableResult func pasteImages(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable, let directory = editor?.directory else { return false }
+        do {
+            let urls =
+                pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+                ?? []
+            let imageURLs = urls.filter { NotesImageStore.isImage($0) }
+            var references: [NotesImageReference] = []
+            if !imageURLs.isEmpty {
+                references = try imageURLs.map { try NotesImageStore.importFile($0, directory: directory) }
+            }
+            else if let bytes = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) {
+                references = [try NotesImageStore.importClipboard(bytes, directory: directory)]
+            }
+            else if let image = NSImage(pasteboard: pasteboard), let bytes = image.tiffRepresentation {
+                references = [try NotesImageStore.importClipboard(bytes, directory: directory)]
+            }
+            else {
+                return false
+            }
+            let selected = selectedRange()
+            let source = string as NSString
+            let prefix =
+                selected.location > 0
+                    && source.substring(with: NSRange(location: selected.location - 1, length: 1)) != "\n" ? "\n" : ""
+            let suffix =
+                NSMaxRange(selected) < source.length
+                    && source.substring(with: NSRange(location: NSMaxRange(selected), length: 1)) == "\n" ? "" : "\n"
+            insertText(prefix + references.map(\.markdown).joined(separator: "\n") + suffix, replacementRange: selected)
+            return true
+        }
+        catch {
+            editor?.imageError(error.localizedDescription)
+            return true
+        }
+    }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard isEditable else { return [] }
+        return sender.draggingPasteboard.availableType(from: [.fileURL, .png, .tiff]) != nil
+            ? .copy : super.draggingEntered(sender)
+    }
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard isEditable else { return [] }
+        return sender.draggingPasteboard.availableType(from: [.fileURL, .png, .tiff]) != nil
+            ? .copy : super.draggingUpdated(sender)
+    }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard isEditable else { return false }
+        guard sender.draggingPasteboard.availableType(from: [.fileURL, .png, .tiff]) != nil else {
+            return super.performDragOperation(sender)
+        }
+        let index = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
+        setSelectedRange(NSRange(location: index, length: 0))
+        if pasteImages(from: sender.draggingPasteboard) { return true }
+        let urls =
+            sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+            as? [URL] ?? []
+        let audio = urls.filter {
+            (try? $0.resourceValues(forKeys: [.contentTypeKey]).contentType?.conforms(to: .audio)) == true
+        }
+        if !audio.isEmpty {
+            editor?.audioDrop(audio)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+
+    func finishEditingSession() {
+        imageSaveTask?.cancel()
+        normalizeImageWidths()
+        editor?.flush()
+        undoManager?.removeAllActions()
+        guard let directory = editor?.directory,
+            let saved = try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8),
+            saved == document.markdown
+        else { return }
+        do { try NotesImageClipboard.cleanupSaved(directory: directory, markdown: saved) }
+        catch { editor?.imageError(error.localizedDescription) }
+    }
+
+    func normalizeImageWidths() {
+        guard !normalizingImages, isEditable, let directory = editor?.directory else { return }
+        normalizingImages = true
+        defer { normalizingImages = false }
+        for reference in NotesImageReference.parse(in: string).reversed() where reference.width != nil {
+            do {
+                let original = try NotesAssets.safeURL(relativePath: reference.originalPath, directory: directory)
+                let metadata = try original.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let version =
+                    "@\(metadata.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(metadata.fileSize ?? 0)"
+                let key = reference.markdown + version
+                if normalizedImages.contains(key) { continue }
+                let largest = NotesImageReference.parse(in: string).filter { $0.originalPath == reference.originalPath }
+                    .compactMap(\.width).max()
+                let desired = try NotesImageStore.resized(
+                    reference, width: reference.width, directory: directory, previewWidth: largest)
+                normalizedImages.insert(key)
+                normalizedImages.insert(desired.markdown + version)
+                if desired.markdown != reference.markdown {
+                    replaceSourcePreservingSelection(in: reference.range, with: desired.markdown)
+                }
+            }
+            catch { editor?.imageError(error.localizedDescription) }
+        }
+        editor?.flush()
+    }
+
+    func replaceImage(_ reference: NotesImageReference, with replacement: NotesImageReference) {
+        guard NotesImageReference.parse(in: string).contains(reference) else {
+            editor?.imageError("This image changed while its controls were open. Select the image again.")
+            return
+        }
+        breakUndoCoalescing()
+        window?.makeFirstResponder(self)
+        replaceSourcePreservingSelection(in: reference.range, with: replacement.markdown)
+        breakUndoCoalescing()
+    }
+    private func replaceSourcePreservingSelection(in range: NSRange, with replacement: String) {
+        let before = (string as NSString).substring(with: range) as NSString
+        let after = replacement as NSString
+        var prefix = 0
+        while prefix < min(before.length, after.length), before.character(at: prefix) == after.character(at: prefix) {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < min(before.length, after.length) - prefix,
+            before.character(at: before.length - suffix - 1) == after.character(at: after.length - suffix - 1)
+        { suffix += 1 }
+        let edit = NSRange(location: range.location + prefix, length: before.length - prefix - suffix)
+        let inserted = after.substring(with: NSRange(location: prefix, length: after.length - prefix - suffix))
+        let delta = (inserted as NSString).length - edit.length
+        let selection = selectedRange()
+        let viewport = enclosingScrollView?.contentView.bounds.origin
+        func adjusted(_ offset: Int) -> Int {
+            if offset <= edit.location { return offset }
+            if offset >= NSMaxRange(edit) { return offset + delta }
+            return edit.location + min(offset - edit.location, (inserted as NSString).length)
+        }
+        insertText(inserted, replacementRange: edit)
+        let start = adjusted(selection.location)
+        setSelectedRange(NSRange(location: start, length: max(0, adjusted(NSMaxRange(selection)) - start)))
+        if let viewport, let scroll = enclosingScrollView {
+            scroll.contentView.scroll(to: viewport)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+
 }

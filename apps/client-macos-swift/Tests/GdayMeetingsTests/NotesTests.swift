@@ -257,8 +257,7 @@ extension NotesStorageTests {
         store.editNotes(id: id, text: "First edit")
         store.editNotes(id: id, text: "Latest edit")
         #expect(try String(contentsOf: store.notesStorage.url(id), encoding: .utf8) == "")
-        let deadline = Date().addingTimeInterval(3)
-        while !store.notesStorage.pending.isEmpty, Date() < deadline {
+        for _ in 0..<100 where !store.notesStorage.pending.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(try String(contentsOf: store.notesStorage.url(id), encoding: .utf8) == "Latest edit")

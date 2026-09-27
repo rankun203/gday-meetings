@@ -1,6 +1,8 @@
 import AVFoundation
 import Foundation
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Uses a temporary library, silent playback, and no Keychain access.
 enum UIPreview {
@@ -49,6 +51,12 @@ enum UIPreview {
 
                     This line has no recording time.
                     """
+                let image = try writeNotesImage(directory: store.directory(for: conversation.id))
+                let resizedImage = try NotesImageStore.resized(
+                    image, width: 180, directory: store.directory(for: conversation.id))
+                conversation.notes +=
+                    "\n\n" + image.markdown + " <!-- gday:t=0:32 -->\n\n" + resizedImage.markdown
+                    + " <!-- gday:t=0:42 -->\n\nEnd of image notes."
                 conversation.transcript = [
                     TranscriptSegment(
                         start: 1, end: 5, speaker: first.label,
@@ -60,6 +68,22 @@ enum UIPreview {
                         start: 11, end: 15, speaker: third.label,
                         text: "I’ll update the schedule after this call.", speakerID: third.id),
                 ]
+                if ProcessInfo.processInfo.arguments.contains("--transcript-layout")
+                    || Bundle.main.object(forInfoDictionaryKey: "GdayTranscriptLayoutPreview") as? Bool == true
+                {
+                    conversation.transcript.append(contentsOf: [
+                        TranscriptSegment(
+                            start: 3599, end: 3600, speaker: first.label,
+                            text:
+                                "This longer paragraph checks wrapping across several lines while the timestamp and speaker stay aligned at the top. Editing should preserve the complete text and its recording time.",
+                            speakerID: first.id),
+                        TranscriptSegment(
+                            start: 3600, end: 3605, speaker: "A speaker with a long display name",
+                            text:
+                                "The hour digits extend to the left, leaving the text column aligned with earlier rows."
+                        ),
+                    ])
+                }
                 store.updateMeeting(conversation)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 live.accept(
@@ -68,7 +92,9 @@ enum UIPreview {
                         text: "Synthetic live draft for reviewing transcript revisions.", locale: "en-AU"))
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
-                if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording") {
+                if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
+                    || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
+                {
                     // Simulate a new recording, not a live stream on top of the
                     // saved batch fixture. Stop can then exercise live adoption.
                     if var recording = store.meetings.first(where: { $0.id == conversation.id }) {
@@ -187,6 +213,36 @@ enum UIPreview {
             verifiedAt: verified ? Date() : nil)
         try JSONEncoder().encode(checkpoint).write(to: store.archiveCheckpointURL(for: id), options: .atomic)
         store.refreshArchiveStatus(id: id)
+    }
+
+    static func writeNotesImage(directory: URL) throws -> NotesImageReference {
+        guard
+            let context = CGContext(
+                data: nil, width: 800, height: 400, bitsPerComponent: 8,
+                bytesPerRow: 3200, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else {
+            throw MeetingError.message("Couldn’t create the preview image.")
+        }
+        context.setFillColor(CGColor(red: 0.12, green: 0.4, blue: 0.65, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        context.setFillColor(CGColor(red: 0.8, green: 0.93, blue: 1, alpha: 1))
+        for x in [60, 310, 560] { context.fill(CGRect(x: x, y: 100, width: 180, height: 200)) }
+        let data = NSMutableData()
+        guard let image = context.makeImage(),
+            let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+        else {
+            throw MeetingError.message("Couldn’t create the preview image.")
+        }
+        CGImageDestinationAddImage(
+            destination, image, [kCGImagePropertyDPIWidth: 144, kCGImagePropertyDPIHeight: 144] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw MeetingError.message("Couldn’t save the preview image.")
+        }
+        let path = try NotesImageStore.write(data as Data, filename: "preview-diagram.png", directory: directory)
+        return NotesImageReference(
+            range: .init(location: 0, length: 0), originalPath: path, displayPath: path,
+            alt: "Three steps in the release plan")
     }
 
     static func writeFixture(to url: URL, source: Int) throws {

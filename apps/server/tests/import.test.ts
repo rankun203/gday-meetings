@@ -49,6 +49,130 @@ after(async () => {
   await payload.destroy()
   await rm(directory, { recursive: true, force: true })
 })
+test('image archives verify bytes, retain relative paths and allow authenticated downloads', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=',
+    'base64',
+  )
+  const image = {
+    encoding: 'base64',
+    mediaType: 'image/png',
+    data: png.toString('base64'),
+    sha256: hash(png),
+    size: png.length,
+  }
+  const body = {
+    externalId: 'notes-images',
+    title: 'Image notes',
+    audio: [],
+    importKey: hash('image-snapshot'),
+    artifacts: {
+      'notes.md': '![Board](assets/board.png)',
+      'assets/board.png': image,
+      'assets/图/board.png': image,
+    },
+  }
+  const saved = await send(body)
+  assert.equal(saved.status, 201, await saved.clone().text())
+  const artifactContext = (name: string) => ({
+    params: Promise.resolve({
+      path: [
+        'meetings',
+        'import',
+        body.externalId,
+        'artifacts',
+        ...name.split('/'),
+      ],
+    }),
+  })
+  const downloaded = await GET(
+    request('GET'),
+    artifactContext('assets/board.png'),
+  )
+  assert.equal(downloaded.status, 200)
+  assert.equal(downloaded.headers.get('content-type'), 'image/png')
+  assert.equal(downloaded.headers.get('x-content-type-options'), 'nosniff')
+  assert.match(downloaded.headers.get('content-disposition')!, /^attachment;/)
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), png)
+  const nested = await GET(
+    request('GET'),
+    artifactContext('assets/图/board.png'),
+  )
+  assert.equal(nested.status, 200)
+  assert.deepEqual(Buffer.from(await nested.arrayBuffer()), png)
+  const notes = await GET(request('GET'), artifactContext('notes.md'))
+  assert.equal(await notes.text(), body.artifacts['notes.md'])
+  assert.equal(
+    (
+      await GET(
+        request('GET', undefined, 'wrong'),
+        artifactContext('assets/board.png'),
+      )
+    ).status,
+    401,
+  )
+  for (const [name, value] of [
+    ['assets/../board.png', image],
+    ['assets/%2e%2e/board.png', image],
+    ['assets/board.svg', image],
+    ['assets/board.png', { ...image, data: image.data + '!' }],
+    ['assets/board.png', { ...image, sha256: hash('different') }],
+    ['assets/board.png', { ...image, mediaType: 'text/html' }],
+    ['assets/board.png', { ...image, size: image.size + 1 }],
+  ] as const) {
+    assert.equal(
+      (
+        await send({
+          ...body,
+          externalId: 'invalid-image',
+          artifacts: { [name]: value },
+        })
+      ).status,
+      400,
+    )
+  }
+  assert.equal(
+    (await GET(request('GET'), artifactContext('assets/%2e%2e/board.png')))
+      .status,
+    404,
+  )
+  assert.equal(
+    (
+      await send({
+        ...body,
+        externalId: 'oversized',
+        artifacts: { 'notes.md': 'x'.repeat(20 * 1024 * 1024) },
+      })
+    ).status,
+    413,
+  )
+  const changed = {
+    ...image,
+    data: Buffer.concat([png, Buffer.from('changed')]).toString('base64'),
+    size: png.length + 7,
+    sha256: hash(Buffer.concat([png, Buffer.from('changed')])),
+  }
+  assert.equal(
+    (
+      await send({
+        ...body,
+        artifacts: { ...body.artifacts, 'assets/board.png': changed },
+      })
+    ).status,
+    409,
+  )
+  const record = await saved.json()
+  await payload.update({
+    collection: 'meetings',
+    id: record.id,
+    overrideAccess: true,
+    context: { validatedMeetingImport: true },
+    data: {
+      archiveArtifacts: { ...body.artifacts, 'assets/board.png': changed },
+    },
+  })
+  assert.equal((await read(body.externalId)).status, 409)
+})
 test('OAuth archive imports preserve edits, native audio, idempotency and verified readback without tasks', async () => {
   const bytes = wav()
   const uploaded = await upload(

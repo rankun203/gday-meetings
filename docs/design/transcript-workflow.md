@@ -1,7 +1,7 @@
 ---
 title: Live and saved transcript workflow
 date: 2026-09-26
-status: in-progress
+status: implemented
 scope: swift-app-transcription
 ---
 
@@ -13,9 +13,9 @@ Before implementation, the current Preview Transcript and Defaults screens were 
 
 ## Intended layout
 
-The recording card contains the timer, date, stop action, meters, and recording settings. Live text belongs to the Transcript tab. Its status and controls stay outside the text's scrolling viewport. Live text uses timed rows without speaker attribution; input tracks are not people. Following new text must not scroll the recording settings or prevent reading earlier text.
+The recording card contains the timer, date, stop action, meters, and recording settings. Live text belongs to the Transcript tab. Its Live Transcript switch, status, and Follow Live control stay outside the text's scrolling viewport. Live text uses timed rows without speaker attribution; input tracks are not people. Following new text must not scroll the recording settings or prevent reading earlier text.
 
-After recording, finalized live text becomes the meeting transcript when doing so will not overwrite existing edits. The independent live checkpoint remains recoverable. Transcription failure, unavailable live recognition, or a disabled live setting must not prevent audio recording or saving.
+After recording, finalized live text becomes the meeting transcript when doing so will not overwrite existing edits. The independent live checkpoint remains recoverable through Transcript History. Legacy live-only recordings are adopted on library load when they have no existing transcript, speaker assignments, or pending request. A saved adoption marker prevents later deliberate clearing from restoring the text again. Transcription failure, unavailable live recognition, or a disabled live setting must not prevent audio recording or saving.
 
 ## Saved recording actions
 
@@ -35,4 +35,4 @@ Evaluate the policy after live recognition finishes. With automatic transcriptio
 
 ## Validation
 
-Check live, disabled, unavailable, stopped, and empty transcript states; zero, one, and multiple transcription providers; pending requests and replacement conflicts; short-window scrolling; light and dark appearances; and the dependent Defaults controls. Use synthetic Preview data and isolated tests without hardware capture or provider uploads.
+The initial integration passed 261 tests, formatting, lint, and Preview packaging. Synthetic Preview checks covered live text in Transcript, independent recording settings, retaining final text when live recognition is turned off, saving editable text on stop, the zero-provider action, and the dependent Defaults layout. Further provider-count, narrow-window, appearance, and highlighting checks are tracked in the workflow worklogs. Validation uses synthetic Preview data and isolated tests without hardware capture or provider uploads.

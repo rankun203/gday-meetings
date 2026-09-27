@@ -20,14 +20,6 @@ struct ThisMacProviderView: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Section("Live Transcription") {
-                Text(
-                    "Choose a language when you record. The model used for each language is shown below. English uses English (United States)."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                Text(
-                    "Installed models appear first. Download only the languages you use."
-                )
-                .font(.caption).foregroundStyle(.secondary)
                 if models.isEmpty { Text(message).foregroundStyle(.secondary) }
                 ForEach(models) { model in
                     if #available(macOS 26.0, *) {

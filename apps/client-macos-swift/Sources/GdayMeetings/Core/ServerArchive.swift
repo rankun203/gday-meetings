@@ -16,6 +16,7 @@ struct ArchiveCheckpoint: Codable {
     let importKey: String
     let snapshot: Data
     var audio: [ArchiveAudio]
+    var omittedNoteImages: Bool? = nil
     /// Set after server verification. Missing in checkpoints written before this
     /// field existed; those show as incomplete until the next Archive to Server.
     var verifiedAt: Date?
@@ -56,6 +57,7 @@ extension MeetingStore {
         for meeting in meetings { refreshArchiveStatus(id: meeting.id) }
     }
     func archiveToServer(id: UUID) async {
+        guard flushNotes() else { return }
         // Only this meeting's own recording blocks archiving; its audio is still being written.
         guard recordingID != id, libraryWritable, !isJobRunning(.importAudio, .meeting(id)),
             let meeting = meetings.first(where: { $0.id == id }),
@@ -74,7 +76,7 @@ extension MeetingStore {
                         && (try? ServiceHTTP.origin($0.endpoint).absoluteString) == origin
                 })
             else { throw ServiceError("Add and sign in to a Gday Meetings website in Service Providers.") }
-            try await server.ensureArchiveAvailable()
+            let supportsImages = try await server.ensureArchiveAvailable()
             let folder = directory(for: id)
             try FileManager.default.createDirectory(
                 at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -101,12 +103,19 @@ extension MeetingStore {
                 func json<T: Encodable>(_ value: T) throws -> Any {
                     try JSONSerialization.jsonObject(with: encoder.encode(value))
                 }
-                let artifacts: [String: Any] = [
+                var artifacts: [String: Any] = [
                     "meeting.json": try json(archivedMeeting),
                     "transcript.json": ["segments": try json(meeting.transcript)], "notes.md": meeting.notes,
                     "summary.md": meeting.summary, "todos.json": try json(meeting.todos),
                     "chat.json": try json(meeting.chat),
                 ]
+                let hasImages = !NotesAssets.tokens(in: meeting.notes).isEmpty
+                if supportsImages {
+                    try NotesImageStore.ensurePreviews(in: meeting.notes, directory: folder)
+                    artifacts.merge(try ArchiveNoteImages.artifacts(notes: meeting.notes, directory: folder)) {
+                        _, new in new
+                    }
+                }
                 let metadata: [String: Any] = [
                     "people": try json(
                         people.filter { person in
@@ -147,14 +156,29 @@ extension MeetingStore {
                             filename: source.lastPathComponent, path: source.lastPathComponent, sha256: hashed.hash,
                             size: hashed.size))
                 }
-                var hash = SHA256()
-                hash.update(data: snapshot)
-                for file in audio { hash.update(data: Data("\n\(file.filename):\(file.sha256):\(file.size)".utf8)) }
                 checkpoint = ArchiveCheckpoint(
                     origin: origin, externalID: id.uuidString,
-                    importKey: hash.finalize().map { String(format: "%02x", $0) }.joined(), snapshot: snapshot,
-                    audio: audio)
+                    importKey: ArchiveNoteImages.importKey(snapshot: snapshot, audio: audio), snapshot: snapshot,
+                    audio: audio, omittedNoteImages: hasImages && !supportsImages)
+                // Reserve the maximum protocol URL size before uploading audio;
+                // the exact serialized body is checked again before submission.
+                var estimate = try JSONSerialization.jsonObject(with: snapshot) as! [String: Any]
+                estimate["importKey"] = checkpoint.importKey
+                estimate["audio"] = audio.map {
+                    [
+                        "filename": $0.filename, "url": String(repeating: "/", count: 4096), "sha256": $0.sha256,
+                        "size": $0.size,
+                    ] as [String: Any]
+                }
+                _ = try ArchiveNoteImages.requestData(estimate)
                 try Self.saveArchive(checkpoint, to: checkpointURL)
+            }
+            if checkpoint.omittedNoteImages == nil,
+                let oldBody = try JSONSerialization.jsonObject(with: checkpoint.snapshot) as? [String: Any],
+                let oldArtifacts = oldBody["artifacts"] as? [String: Any],
+                let notes = oldArtifacts["notes.md"] as? String
+            {
+                checkpoint.omittedNoteImages = NotesAssets.tokens(in: notes).contains { oldArtifacts[$0.path] == nil }
             }
             for index in checkpoint.audio.indices where checkpoint.audio[index].url == nil {
                 let item = checkpoint.audio[index]
@@ -194,6 +218,10 @@ extension MeetingStore {
             }
             checkpoint.verifiedAt = Date()
             try Self.saveArchive(checkpoint, to: checkpointURL)
+            if checkpoint.omittedNoteImages == true {
+                errorMessage =
+                    "Meeting text and audio were archived. Images in notes weren’t archived because this server doesn’t support image attachments. Export the meeting to keep a portable copy with its images."
+            }
         }
         catch {
             errorMessage =

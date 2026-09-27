@@ -19,43 +19,34 @@ struct MeetingDetailView: View {
     }
     var body: some View {
         if let meeting {
-            Group {
-                if store.recordingID == meetingID {
-                    GeometryReader { geometry in
-                        detailContent(meeting, recordingHeight: min(330, max(230, geometry.size.height * 0.45)))
-                    }
+            detailContent(meeting)
+                .modifier(AudioFileDrop(meetingID: meetingID))
+                .navigationTitle(meeting.title)
+                .onAppear { if store.recordingID == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 } }
+                .onChange(of: store.recordingID) { _, id in
+                    if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
                 }
-                else {
-                    detailContent(meeting, recordingHeight: nil)
-                }
-            }
-            .modifier(AudioFileDrop(meetingID: meetingID))
-            .navigationTitle(meeting.title)
-            .onAppear { if store.recordingID == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 } }
-            .onChange(of: store.recordingID) { _, id in
-                if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
-            }
         }
     }
 
-    private func detailContent(_ meeting: Meeting, recordingHeight: CGFloat?) -> some View {
-        VStack(alignment: .leading, spacing: recordingHeight == nil ? 22 : 14) {
+    private func detailContent(_ meeting: Meeting) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             meetingHeader(meeting)
-            if let recordingHeight {
-                RecordingWorkspaceView(meetingID: meetingID).frame(maxHeight: recordingHeight)
+            if store.recordingID == meetingID {
+                RecordingWorkspaceView(meetingID: meetingID)
             }
             MeetingContentTabs(selection: $tab)
-            meetingContent(meeting)
+            meetingContent(meeting).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }.padding(24)
     }
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                // Let the native multiline editor measure the large title's line
+                // Let the native multiline editor measure the title's line
                 // height while focused, rather than using a single-line field editor.
                 TextField("Meeting title", text: text(\.title), axis: .vertical)
-                    .font(.largeTitle.weight(.semibold)).textFieldStyle(.plain)
+                    .font(.title2.weight(.semibold)).textFieldStyle(.plain)
                     .lineLimit(1...3)
                     .fixedSize(horizontal: false, vertical: true)
                     .layoutPriority(1)
@@ -159,7 +150,7 @@ struct MeetingDetailView: View {
                         Text("Saved as you type").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                MeetingNotesEditor(meetingID: meetingID)
+                MeetingNotesWorkspace(meetingID: meetingID)
             }
         case 2:
             VStack(alignment: .leading, spacing: 12) {

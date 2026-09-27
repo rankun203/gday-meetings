@@ -97,6 +97,7 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
     {
       durableTasks: true,
       meetingImports: true,
+      meetingImageArtifacts: true,
       transcription: false,
       protocolVersion: 1,
       transcriptionLanguages: null,

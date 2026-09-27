@@ -257,7 +257,9 @@ struct LibraryView: View {
                     } label: {
                         Label(
                             store.isFinalizingRecording ? "Saving…" : recordingActive ? "Recording" : "New Recording",
-                            systemImage: "record.circle.fill")
+                            systemImage: "record.circle.fill"
+                        )
+                        .modifier(RecordingToolbarForeground())
                     }
                     .labelStyle(.titleAndIcon).tint(.red)
                     .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
@@ -555,15 +557,28 @@ enum MeetingPanels {
     }
     static func export(_ meeting: Meeting, store: MeetingStore) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json, UTType(filenameExtension: "md") ?? .plainText]
-        panel.allowsOtherFileTypes = true
         panel.nameFieldStringValue = meeting.title + ".json"
-        panel.message = "Export meeting text as JSON or Markdown (.md). Audio files are not included."
-        if panel.runModal() == .OK, let url = panel.url {
+        let formats = MeetingExportPanel(panel: panel)
+        if withExtendedLifetime(formats, { panel.runModal() }) == .OK, let url = panel.url {
             do { try store.exportMeeting(id: meeting.id, to: url) }
             catch {
                 store.errorMessage = error.localizedDescription
             }
+        }
+    }
+}
+
+/// Native toolbar tint does not always color its label. Preserve the system's
+/// disabled rendering by applying a foreground only to enabled content.
+private struct RecordingToolbarForeground: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if isEnabled {
+            content.foregroundStyle(.red)
+        }
+        else {
+            content
         }
     }
 }

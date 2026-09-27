@@ -7,6 +7,11 @@ import type { Meeting } from '../payload-types'
 import { audioDirectory } from './storage'
 import { capabilityAuthorized, HttpError, publicURL } from './security'
 import { transcriptText } from './tasks'
+import {
+  archiveArtifacts,
+  archiveImage,
+  decodeArchiveImage,
+} from './archive-images'
 const json = z.json()
 export const meetingImportInput = z
   .object({
@@ -14,18 +19,7 @@ export const meetingImportInput = z
     title: z.string().min(1).max(500),
     recordedAt: z.iso.datetime({ offset: true }).optional(),
     metadata: json.optional(),
-    artifacts: z
-      .record(
-        z
-          .string()
-          .max(255)
-          .regex(/^[^./\\][^/\\]*\.(json|md|txt)$/),
-        json,
-      )
-      .refine(
-        (values) => Object.values(values).every((v) => v !== null),
-        'Artifact cannot be null',
-      ),
+    artifacts: archiveArtifacts,
     audio: z
       .array(
         z
@@ -168,6 +162,46 @@ export async function getMeetingImport(
   const meeting = await find(payload, externalId, req)
   if (!meeting) throw new HttpError(404, 'Meeting import not found')
   return summary(payload, meeting, req)
+}
+
+export async function getMeetingArtifact(
+  payload: Payload,
+  externalId: string,
+  name: string,
+  req: PayloadRequest,
+) {
+  const meeting = await find(payload, externalId, req)
+  if (!meeting) throw new HttpError(404, 'Meeting import not found')
+  await summary(payload, meeting, req)
+  const artifacts = (meeting.archiveArtifacts || {}) as Input['artifacts']
+  if (!Object.hasOwn(artifacts, name))
+    throw new HttpError(404, 'Archive artifact not found')
+  const value = artifacts[name]
+  const image = decodeArchiveImage(name, value)
+  let content: Buffer
+  let type: string
+  if (image) {
+    content = image
+    type = archiveImage.parse(value).mediaType
+  } else if (/^[^./\\][^/\\]*\.(json|md|txt)$/.test(name)) {
+    content = Buffer.from(
+      typeof value === 'string' ? value : JSON.stringify(value),
+    )
+    type = name.endsWith('.json')
+      ? 'application/json'
+      : 'text/plain; charset=utf-8'
+  } else {
+    throw new HttpError(409, 'Archived image verification failed')
+  }
+  return new Response(new Uint8Array(content), {
+    headers: {
+      'Content-Type': type,
+      'Content-Length': String(content.length),
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name)).replace(/['()*]/g, (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase())}`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+    },
+  })
 }
 export async function importMeeting(
   payload: Payload,

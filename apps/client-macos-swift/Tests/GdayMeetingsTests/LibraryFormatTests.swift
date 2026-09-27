@@ -76,6 +76,35 @@ import Testing
         #expect(current.migrated)
     }
 
+    @Test func versionThreeNotesAndAssetsSurviveVersionFourMigration() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Existing notes")
+        let folder = root.appendingPathComponent(meeting.id.uuidString)
+        try FileManager.default.createDirectory(
+            at: folder.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        let notes = Data("Existing words <!-- gday:t=0:01 -->\n![Board](assets/board.png)\n".utf8)
+        let asset = Data([137, 80, 78, 71])
+        try notes.write(to: folder.appendingPathComponent("notes.md"))
+        try asset.write(to: folder.appendingPathComponent("assets/board.png"))
+        let original = try JSONEncoder().encode(MeetingLibrary(version: 3, meetings: [meeting]))
+        let index = root.appendingPathComponent("library.json")
+        try original.write(to: index)
+        let store = MeetingStore(dataDirectory: root)
+        #expect(store.libraryWritable)
+        #expect(store.meetings.first?.notes == String(decoding: notes, as: UTF8.self))
+        #expect(try savedVersion(root) == 4)
+        #expect(try Data(contentsOf: root.appendingPathComponent("library-v3-backup.json")) == original)
+        #expect(try Data(contentsOf: folder.appendingPathComponent("notes.md")) == notes)
+        #expect(try Data(contentsOf: folder.appendingPathComponent("assets/board.png")) == asset)
+        let upgraded = try Data(contentsOf: index)
+        #expect(throws: NewerLibraryVersionError(version: 4)) {
+            try MeetingLibrary.load(from: index, supportedVersion: 3)
+        }
+        #expect(try Data(contentsOf: index) == upgraded)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("library-v4-backup.json").path))
+    }
+
     @Test func archiveStatusFollowsCheckpoint() throws {
         let url = try directory()
         defer { try? FileManager.default.removeItem(at: url) }

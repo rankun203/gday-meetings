@@ -125,11 +125,11 @@ extension Meeting {
         }
     }
 
-    func speakerName(for segment: TranscriptSegment, people: [Person]) -> String {
+    func speakerName(for segment: TranscriptSegment, people: [Person], includesSuggestion: Bool = true) -> String {
         guard let speaker = speakers.first(where: { $0.id == segment.speakerID }),
             let person = people.first(where: { $0.id == speaker.personID })
         else { return segment.speaker }
-        return speaker.confirmed ? person.name : "\(person.name) (Suggested)"
+        return speaker.confirmed || !includesSuggestion ? person.name : "\(person.name) (Suggested)"
     }
 
     mutating func replaceSpeakers(_ replacement: [MeetingSpeaker]) {

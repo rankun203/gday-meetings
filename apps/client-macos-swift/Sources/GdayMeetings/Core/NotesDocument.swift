@@ -3,18 +3,35 @@ import Foundation
 /// Markdown stays the source of truth. Only valid, namespaced timeline comments
 /// are hidden; damaged markers and unrelated HTML are ordinary editable text.
 struct NotesDocument: Equatable {
+    struct PhraseMarker: Equatable {
+        var offset: Int
+        var time: TimeInterval
+        var raw: String
+    }
     struct Line: Equatable {
         var text: String
         var prefix = ""
         var suffix = ""
         var time: TimeInterval?
         var newline = ""
-        var markdown: String { prefix + text + suffix + newline }
+        var markers: [PhraseMarker] = []
+        var markdown: String {
+            guard !markers.isEmpty else { return prefix + text + suffix + newline }
+            let source = text as NSString
+            var result = prefix
+            var cursor = 0
+            for marker in markers {
+                let end = min(source.length, max(cursor, marker.offset))
+                result += source.substring(with: NSRange(location: cursor, length: end - cursor)) + marker.raw
+                cursor = end
+            }
+            return result + source.substring(from: cursor) + newline
+        }
         var hasContent: Bool { NotesDocument.hasContent(text) }
     }
     var lines: [Line]
     private static let marker = try! NSRegularExpression(
-        pattern: #"( ?<!-- gday:t=((?:\d+:)?\d{1,2}:\d{2}(?:\.\d+)?) -->)$"#)
+        pattern: #"( ?<!-- gday:t=((?:\d+:)?\d{1,2}:\d{2}(?:\.\d+)?) -->)"#)
 
     init(_ markdown: String) {
         let parts = markdown.components(separatedBy: "\n")
@@ -29,26 +46,40 @@ struct NotesDocument: Equatable {
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             let fenceToken = Self.fenceToken(trimmed)
             let isCode = fence != nil
-            if fence != nil, fenceToken == fence {
+            if let token = fence, Self.closesFence(trimmed, token: token) {
                 fence = nil
             }
             else if fence == nil, let fenceToken {
                 fence = fenceToken
             }
-            if !isCode, let match = Self.marker.firstMatch(in: text, range: range),
-                let timeRange = Range(match.range(at: 2), in: text),
-                let suffixRange = Range(match.range(at: 1), in: text),
-                let time = Self.seconds(String(text[timeRange]))
-            {
-                lines.append(
-                    Line(
-                        text: String(text[..<suffixRange.lowerBound]), suffix: String(text[suffixRange]), time: time,
-                        newline: ending))
+            let codeRanges = NotesAssets.codeRanges(in: text)
+            let matches =
+                isCode
+                ? []
+                : Self.marker.matches(in: text, range: range).filter { match in
+                    !codeRanges.contains { NSIntersectionRange($0, match.range).length > 0 }
+                }
+            var visible = ""
+            var markers: [PhraseMarker] = []
+            var cursor = text.startIndex
+            for match in matches {
+                guard let timeRange = Range(match.range(at: 2), in: text),
+                    let markerRange = Range(match.range(at: 1), in: text),
+                    let time = Self.seconds(String(text[timeRange]))
+                else { continue }
+                visible += text[cursor..<markerRange.lowerBound]
+                markers.append(PhraseMarker(offset: visible.utf16.count, time: time, raw: String(text[markerRange])))
+                cursor = markerRange.upperBound
+            }
+            visible += text[cursor...]
+            if markers.count == 1, let only = markers.first, only.offset == visible.utf16.count {
+                lines.append(Line(text: visible, suffix: only.raw, time: only.time, newline: ending))
             }
             else {
-                lines.append(Line(text: text, newline: ending))
+                lines.append(Line(text: visible, time: markers.first?.time, newline: ending, markers: markers))
             }
         }
+
         // A standalone block marker is represented on its following opening
         // line, without exposing an extra blank line in the editor.
         var index = 0
@@ -67,7 +98,20 @@ struct NotesDocument: Equatable {
     var text: String { lines.map { $0.text + $0.newline }.joined() }
     var citedText: String {
         lines.map { line in
-            (line.time.map { "[\(Self.timestamp($0))]" + (line.prefix.isEmpty ? " " : "\n") } ?? "") + line.text
+            if !line.markers.isEmpty {
+                let text = line.text as NSString
+                var cursor = 0
+                var result = ""
+                for marker in line.markers {
+                    let end = min(text.length, max(cursor, marker.offset))
+                    result +=
+                        "[\(Self.timestamp(marker.time))] "
+                        + text.substring(with: NSRange(location: cursor, length: end - cursor))
+                    cursor = end
+                }
+                return result + text.substring(from: cursor) + line.newline
+            }
+            return (line.time.map { "[\(Self.timestamp($0))]" + (line.prefix.isEmpty ? " " : "\n") } ?? "") + line.text
                 + line.newline
         }.joined()
     }
@@ -140,10 +184,98 @@ struct NotesDocument: Equatable {
         return block ?? line
     }
     func time(atLine line: Int) -> TimeInterval? { lines[timedLine(for: line)].time }
+    func time(at location: Int) -> TimeInterval? {
+        let line = lineIndex(at: location)
+        let relative = location - range(of: line).location
+        guard !lines[line].markers.isEmpty else { return time(atLine: line) }
+        if let marker = lines[line].markers.first(where: { relative < $0.offset }) { return marker.time }
+        return relative == lines[line].text.utf16.count && lines[line].markers.last?.offset == relative
+            ? lines[line].markers.last?.time : nil
+    }
+    /// Copies visible text while clipping each phrase boundary to the selection.
+    func slice(_ selection: NSRange) -> Self {
+        let source = text as NSString
+        guard selection.location >= 0, NSMaxRange(selection) <= source.length else { return Self("") }
+        var result = Self(source.substring(with: selection))
+        for index in result.lines.indices where result.lines[index].hasContent {
+            let absolute = selection.location + result.range(of: index).location
+            let oldIndex = lineIndex(at: absolute)
+            let relative = absolute - range(of: oldIndex).location
+            let end = relative + result.lines[index].text.utf16.count
+            let original = lines[oldIndex]
+            if original.markers.isEmpty {
+                result.setTime(time(at: absolute), line: index)
+            }
+            else {
+                var previous = 0
+                var clipped: [PhraseMarker] = []
+                for marker in original.markers {
+                    if marker.offset > relative && previous < end {
+                        var copy = marker
+                        copy.offset = min(end, marker.offset) - relative
+                        clipped.append(copy)
+                    }
+                    previous = marker.offset
+                }
+                result.lines[index].markers = clipped
+                result.lines[index].time = clipped.first?.time
+                result.lines[index].suffix = ""
+            }
+        }
+        return result
+    }
+
+    /// Apply private clipboard times after NSTextView has inserted its visible
+    /// text, keeping native undo responsible for the actual text mutation.
+    mutating func applyCopiedTimes(_ copied: Self, at location: Int) {
+        for index in copied.lines.indices where copied.lines[index].hasContent {
+            let start = location + copied.range(of: index).location
+            let end = start + copied.lines[index].text.utf16.count
+            let target = lineIndex(at: start)
+            let base = range(of: target).location
+            let lower = start - base
+            let upper = end - base
+            let beforeTime = lower > 0 ? time(at: start - 1) : nil
+            var existing = lines[target].markers
+            if existing.isEmpty, let time = lines[target].time {
+                existing = [
+                    PhraseMarker(
+                        offset: lines[target].text.utf16.count, time: time,
+                        raw: " <!-- gday:t=\(Self.timestamp(time)) -->")
+                ]
+            }
+            existing.removeAll { $0.offset > lower && $0.offset <= upper }
+            if let beforeTime, !existing.contains(where: { $0.offset == lower }) {
+                existing.append(
+                    PhraseMarker(
+                        offset: lower, time: beforeTime,
+                        raw: " <!-- gday:t=\(Self.timestamp(beforeTime)) -->"))
+            }
+            var inserted = copied.lines[index].markers
+            if inserted.isEmpty, let time = copied.time(atLine: index) {
+                inserted = [
+                    PhraseMarker(
+                        offset: copied.lines[index].text.utf16.count, time: time,
+                        raw: " <!-- gday:t=\(Self.timestamp(time)) -->")
+                ]
+            }
+            existing += inserted.map { marker in
+                var value = marker
+                value.offset += lower
+                return value
+            }
+            lines[target].markers = existing.filter { $0.offset > 0 }.sorted { $0.offset < $1.offset }
+            lines[target].time = lines[target].markers.first?.time
+            lines[target].suffix = ""
+            lines[target].prefix = ""
+        }
+        normalizeBlocks()
+    }
     mutating func setTime(_ time: TimeInterval?, line: Int) {
         guard lines.indices.contains(line) else { return }
         let line = timedLine(for: line)
         lines[line].time = time
+        lines[line].markers = []
         lines[line].prefix = ""
         lines[line].suffix = time.map { " <!-- gday:t=\(Self.timestamp($0)) -->" } ?? ""
         normalizeBlocks()
@@ -151,7 +283,9 @@ struct NotesDocument: Equatable {
     /// Edits are in displayed UTF-16 coordinates, as required by NSTextView.
     /// Existing nonempty line fragments keep their time; a new line gets its
     /// clock only when it receives text. Splitting a line inherits both halves.
-    mutating func replace(_ range: NSRange, with inserted: String, clock: TimeInterval?) {
+    mutating func replace(
+        _ range: NSRange, with inserted: String, clock: TimeInterval?, phraseClock: TimeInterval? = nil
+    ) {
         let oldText = text as NSString
         guard range.location <= oldText.length, NSMaxRange(range) <= oldText.length else { return }
         let start = lineIndex(at: range.location)
@@ -164,6 +298,52 @@ struct NotesDocument: Equatable {
         let tail = oldText.substring(with: NSRange(location: tailStart, length: NSMaxRange(endRange) - tailStart))
         let pieces = (prefix + inserted + tail).components(separatedBy: "\n")
         let original = lines[start]
+        let newPhrase = phraseClock.flatMap { time -> TimeInterval? in
+            guard range.length == 0, range.location == NSMaxRange(startRange), original.hasContent,
+                original.time != nil,
+                !inserted.isEmpty, !inserted.contains("\n"), timedLine(for: start) == start,
+                !Self.isFence(original.text), !Self.isTableStart(lines, start),
+                time.isFinite, time >= 0, time <= 1_000_000_000_000
+            else { return nil }
+            return time
+        }
+        var phraseMarkers: [(Int, PhraseMarker)] = []
+        for index in start...end {
+            let base = self.range(of: index).location
+            var markers = lines[index].markers
+            if index == start, newPhrase != nil, markers.isEmpty, let time = original.time {
+                markers = [PhraseMarker(offset: original.text.utf16.count, time: time, raw: original.suffix)]
+            }
+            var previousOffset = 0
+            for marker in markers {
+                let position = base + marker.offset
+                let phraseStart = base + previousOffset
+                previousOffset = marker.offset
+                if inserted.isEmpty, range.length > 0,
+                    range.location <= phraseStart, NSMaxRange(range) >= position
+                {
+                    continue
+                }
+                let mapped: Int
+                if position < range.location || (newPhrase != nil && position == range.location) {
+                    mapped = position
+                }
+                else if position <= NSMaxRange(range) {
+                    mapped = range.location + inserted.utf16.count
+                }
+                else {
+                    mapped = position + inserted.utf16.count - range.length
+                }
+                phraseMarkers.append((mapped, marker))
+            }
+        }
+        if let time = newPhrase {
+            phraseMarkers.append(
+                (
+                    range.location + inserted.utf16.count,
+                    PhraseMarker(offset: 0, time: time, raw: " <!-- gday:t=\(Self.timestamp(time)) -->")
+                ))
+        }
         var replacement: [Line] = []
         for (index, piece) in pieces.enumerated() {
             var line = Line(text: piece, newline: index == pieces.count - 1 ? lines[end].newline : "\n")
@@ -174,10 +354,22 @@ struct NotesDocument: Equatable {
                 line.suffix =
                     inherited && original.hasContent
                     ? original.suffix : line.time.map { " <!-- gday:t=\(Self.timestamp($0)) -->" } ?? ""
+                if inherited && !original.markers.isEmpty {
+                    line.time = index == 0 ? original.time : time(at: range.location)
+                    line.suffix = line.time.map { " <!-- gday:t=\(Self.timestamp($0)) -->" } ?? ""
+                }
             }
             replacement.append(line)
         }
         lines.replaceSubrange(start...end, with: replacement)
+        for (position, var marker) in phraseMarkers {
+            let line = lineIndex(at: position)
+            guard lines[line].hasContent else { continue }
+            marker.offset = min(lines[line].text.utf16.count, max(0, position - self.range(of: line).location))
+            lines[line].markers.append(marker)
+            lines[line].suffix = ""
+            lines[line].time = lines[line].markers.first?.time
+        }
         normalizeBlocks()
     }
     private static func fenceToken(_ text: String) -> String? {
@@ -205,6 +397,12 @@ struct NotesDocument: Equatable {
             let trimmed = lines[index].text.trimmingCharacters(in: .whitespaces)
             let opening = fence == nil && (Self.isFence(trimmed) || Self.isTableStart(lines, index))
             if opening {
+                if !lines[index].markers.isEmpty, let time = lines[index].markers.first?.time {
+                    lines[index].prefix = "<!-- gday:t=\(Self.timestamp(time)) -->\n"
+                    lines[index].time = time
+                    lines[index].markers = []
+                    lines[index].suffix = ""
+                }
                 if !lines[index].suffix.isEmpty {
                     lines[index].prefix =
                         lines[index].suffix.trimmingCharacters(in: .whitespaces)
@@ -220,6 +418,7 @@ struct NotesDocument: Equatable {
             }
             else if fence != nil || (table && trimmed.contains("|")) {
                 lines[index].time = nil
+                lines[index].markers = []
                 lines[index].suffix = ""
                 lines[index].prefix = ""
                 if let token = fence, Self.closesFence(trimmed, token: token) { fence = nil }

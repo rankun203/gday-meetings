@@ -112,12 +112,13 @@ extension GdayServerService {
         if status == "COMPLETED" { throw ServiceError("The completed task contains no transcript output.") }
         return .pending
     }
-    func ensureArchiveAvailable() async throws {
+    @discardableResult func ensureArchiveAvailable() async throws -> Bool {
         let capabilities = try await ServiceHTTP.json(
             authorizedRequest("api/platform/capabilities"), trace: Self.trace("capabilities request"))
         guard capabilities["meetingImports"] as? Bool == true else {
             throw ServiceError("Upgrade the server to support existing-meeting imports.")
         }
+        return capabilities["meetingImageArtifacts"] as? Bool == true
     }
     func importArchive(_ body: [String: Any]) async throws -> [String: Any] {
         try await ensureArchiveAvailable()
@@ -125,7 +126,7 @@ extension GdayServerService {
         r.httpMethod = "POST"
         r.timeoutInterval = 900
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try JSONSerialization.data(withJSONObject: body)
+        r.httpBody = try ArchiveNoteImages.requestData(body)
         let (data, response) = try await ServiceHTTP.data(
             for: r, trace: Self.trace("meeting archive (text and \((body["audio"] as? [Any])?.count ?? 0) audio links)")
         )

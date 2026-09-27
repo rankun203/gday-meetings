@@ -1,6 +1,7 @@
 import {
   importMeeting,
   getMeetingImport,
+  getMeetingArtifact,
   meetingImportInput,
 } from '../../../../../server/import-meeting'
 import { platformAccess } from '../../../../../server/platform-access'
@@ -59,6 +60,20 @@ async function route(request: Request, { params }: Context) {
       request.method === 'GET' &&
       parts[0] === 'meetings' &&
       parts[1] === 'import' &&
+      parts[3] === 'artifacts' &&
+      parts.length >= 5
+    ) {
+      return await getMeetingArtifact(
+        await cms(),
+        parts[2],
+        parts.slice(4).join('/'),
+        req,
+      )
+    }
+    if (
+      request.method === 'GET' &&
+      parts[0] === 'meetings' &&
+      parts[1] === 'import' &&
       parts.length === 3
     )
       return Response.json(await getMeetingImport(await cms(), parts[2], req), {
@@ -70,6 +85,7 @@ async function route(request: Request, { params }: Context) {
         {
           durableTasks: true,
           meetingImports: true,
+          meetingImageArtifacts: true,
           transcription: Boolean(worker),
           protocolVersion: 1,
           ...(await transcriptionLanguages(worker)),
