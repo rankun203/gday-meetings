@@ -64,7 +64,7 @@ struct MeetingTranscriptView: View {
                                 speaker: usesCheckpoint
                                     ? ""
                                     : meeting.speakerName(
-                                        for: segment, people: store.people, includesSuggestion: false,
+                                        for: segment, people: store.people,
                                         compactProviderLabel: true),
                                 showsSpeakerColumn: showsSpeakers,
                                 seek: canPlay(meeting) ? { seek(segment.start, meeting: meeting) } : nil

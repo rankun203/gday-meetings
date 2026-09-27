@@ -23,7 +23,7 @@ struct SpeakerLabelPresentationTests {
         let segment = TranscriptSegment(start: 0, end: 1, speaker: speaker.label, text: "Hello", speakerID: speaker.id)
         meeting.speakers = [speaker]
         #expect(
-            meeting.speakerName(for: segment, people: [person], includesSuggestion: false, compactProviderLabel: true)
+            meeting.speakerName(for: segment, people: [person], compactProviderLabel: true)
                 == person.name)
         #expect(meeting.speakerName(for: segment, people: [], compactProviderLabel: true) == "sys_01")
         #expect(meeting.speakerName(for: segment, people: []) == "sys_SPEAKER_01")

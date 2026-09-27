@@ -93,7 +93,7 @@ struct MeetingSpeakersView: View {
                     $0.embedding != nil && ($0.voiceScope?.hasPrefix("runpod:") ?? false)
                 }) {
                     Text(
-                        "Confirm a match or assign a person to recognize their voice in future transcripts from this provider."
+                        "Assign a person to recognize their voice in future transcripts from this provider. You can change any match."
                     )
                     .font(.callout).foregroundStyle(.secondary)
                 }
@@ -147,15 +147,7 @@ struct MeetingSpeakersView: View {
 
     @ViewBuilder private func identity(_ speaker: MeetingSpeaker) -> some View {
         if let person = store.people.first(where: { $0.id == speaker.personID }) {
-            HStack(spacing: 6) {
-                Text(person.name)
-                if speaker.confirmed {
-                    Label("Confirmed", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
-                }
-                else {
-                    Text("Suggested Match").font(.caption).foregroundStyle(.secondary)
-                }
-            }
+            Text(person.name)
         }
         else {
             Text("Unassigned").foregroundStyle(.secondary)
@@ -164,12 +156,6 @@ struct MeetingSpeakersView: View {
 
     @ViewBuilder private func actions(_ speaker: MeetingSpeaker) -> some View {
         HStack(spacing: 8) {
-            if let personID = speaker.personID, !speaker.confirmed {
-                Button("Confirm") {
-                    store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
-                }
-                Button("Reject") { store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil) }
-            }
             Menu(speaker.personID == nil ? "Assign Person" : "Reassign") {
                 ForEach(store.people) { person in
                     Button(person.name) {

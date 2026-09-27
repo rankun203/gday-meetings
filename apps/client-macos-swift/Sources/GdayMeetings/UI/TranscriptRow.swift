@@ -15,15 +15,23 @@ struct TranscriptRow<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 if let seek {
-                    Button(action: seek) {
-                        timestampLabel.frame(minHeight: 32, alignment: .topTrailing)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                    .modifier(ActionHover(cornerRadius: 6))
-                    .foregroundStyle(.tint)
-                    .help("Play from this point")
-                    .accessibilityLabel("Play from \(Self.timestamp(start))")
+                    timestampLabel.hidden()
+                        .overlay(alignment: .trailing) {
+                            Button(action: seek) {
+                                Text(Self.timestamp(start)).monospacedDigit().fixedSize()
+                                    .padding(.horizontal, 6)
+                                    .frame(minHeight: 32)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .modifier(ActionHover(cornerRadius: 6))
+                            .foregroundStyle(.tint)
+                            .help("Play from this point")
+                            .accessibilityLabel("Play from \(Self.timestamp(start))")
+                            // Cancel the trailing inset without moving the text column.
+                            .offset(x: 6)
+                        }
+                        .frame(minHeight: 32, alignment: .topTrailing)
                 }
                 else {
                     timestampLabel.foregroundStyle(.secondary)

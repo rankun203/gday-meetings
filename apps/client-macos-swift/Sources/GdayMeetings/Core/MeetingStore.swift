@@ -28,6 +28,14 @@ final class MeetingStore: ObservableObject {
     /// block recording. Progress is transient: outcomes appear in the content
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
+    @Published var managedTasks: [ManagedTaskRecord] = []
+    var isSchedulingManagedTasks = false
+    var managedTaskOperations: [UUID: Task<Void, Never>] = [:]
+    var managedTaskWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    var transcriptionPollDelay: Duration = .seconds(2)
+    /// Automatic completions coalesce to the newest saved transcript while a summary is running.
+    var pendingAutomaticSummaries = Set<UUID>()
+    var scheduledAutomaticSummaries = Set<UUID>()
     @Published var errorMessage: String?
     @Published var recordingPermissionNeeded: RecordingPermission?
     /// Capture diagnostics text. Not shown in the interface, so it is not published:
@@ -90,6 +98,11 @@ final class MeetingStore: ObservableObject {
                 settings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsURL))
             }
             for index in meetings.indices {
+                // Keep existing speaker snapshots unchanged for resumable transcription jobs.
+                for personID in meetings[index].speakers.compactMap(\.personID)
+                where !meetings[index].personIDs.contains(personID) {
+                    meetings[index].personIDs.append(personID)
+                }
                 meetings[index].notes = try notesStorage.load(meetings[index].id, fallback: meetings[index].notes)
                 // No editor undo session exists during startup. Keep conflict-copy assets too.
                 let folder = directory(for: meetings[index].id)
@@ -118,6 +131,11 @@ final class MeetingStore: ObservableObject {
                         errorMessage = error.localizedDescription
                     }
                 }
+            }
+            do { try restoreManagedTasks() }
+            catch {
+                // A task-history error must not make the meeting library read-only.
+                errorMessage = "Couldn’t load saved tasks. \(error.localizedDescription)"
             }
         }
         catch let error as NewerLibraryVersionError {
@@ -183,6 +201,7 @@ final class MeetingStore: ObservableObject {
             return false
         }
         do {
+            settings.migratePendingSummaryPrompt()
             let settingsData = try JSONEncoder().encode(settings)
             let persist = {
                 try ProviderCredentialPersistence.writeSettings(
@@ -238,12 +257,10 @@ final class MeetingStore: ObservableObject {
         save()
         return meeting.id
     }
-    func updateMeeting(_ meeting: Meeting) {
-        guard canSave else { return }
-        if let i = meetings.firstIndex(where: { $0.id == meeting.id }) {
-            meetings[i] = meeting
-            save()
-        }
+    @discardableResult func updateMeeting(_ meeting: Meeting) -> Bool {
+        guard canSave, let index = meetings.firstIndex(where: { $0.id == meeting.id }) else { return false }
+        meetings[index] = meeting
+        return save()
     }
     func deleteMeeting(id: UUID) {
         guard canSave else { return }
@@ -459,12 +476,13 @@ final class MeetingStore: ObservableObject {
             }
         }
         let finalizedLive = liveTranscript.draft.flatMap { $0.meetingID == id ? $0 : nil }
-        if let finalizedLive { _ = adoptLiveTranscript(finalizedLive) }
+        let adoptedLive = finalizedLive.map { adoptLiveTranscript($0) } ?? false
         recordingID = nil
         recordingStartedAt = nil
         recordingMeter.reset()
         captureTransition = false
         isFinalizingRecording = false
+        if adoptedLive { scheduleAutomaticSummary(id: id) }
         // A separate task, so callers awaiting the stop return once audio is saved.
         if !stopFailed && transcribeAfter
             && settings.shouldAutomaticallyTranscribe(

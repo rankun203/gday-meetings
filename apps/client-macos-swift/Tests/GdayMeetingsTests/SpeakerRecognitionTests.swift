@@ -47,7 +47,7 @@ import Testing
         #expect(recognized.speakers.allSatisfy { $0.personID == nil && !$0.confirmed })
     }
 
-    @Test func confirmingReassigningAndRejectingPersistWithoutDuplicatingSamples() throws {
+    @Test func assigningReassigningAndRemovingPersistWithoutDuplicatingSamples() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -77,7 +77,7 @@ import Testing
         #expect(reopened.meetings.first?.speakers[0].personID == nil)
     }
 
-    @Test func recognitionUsesOnlyCompatibleConfirmedSamplesAndOnePersonPerTrack() {
+    @Test func recognitionUsesOnlyCompatibleAssignedSamplesAndOnePersonPerTrack() {
         let person = Person(
             name: "Alex",
             voiceSamples: [
@@ -97,14 +97,42 @@ import Testing
             MeetingSpeaker(
                 label: "F", track: "other", providerName: "RunPod", voiceScope: "runpod:test", embedding: [1, 0, 0]),
         ]
-        SpeakerRecognition.suggest(&speakers, people: [person])
+        SpeakerRecognition.match(&speakers, people: [person])
         #expect(speakers[0].personID == person.id)
         #expect(speakers[1].personID == nil)
         #expect(speakers[2].personID == person.id)
         #expect(speakers.dropFirst(3).allSatisfy { $0.personID == nil })
-        #expect(speakers.allSatisfy { !$0.confirmed })
+        #expect(speakers.allSatisfy { $0.confirmed == ($0.personID != nil) })
         #expect(SpeakerRecognition.similarity([0, 0], [1, 0]) == nil)
         #expect(SpeakerRecognition.similarity([.infinity], [1]) == nil)
+    }
+
+    @Test func existingAutomaticMatchLoadsAsAssignedWithoutLearningItsVoice() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        let personID = store.addPerson(name: "Alex")
+        var meeting = Meeting(title: "Automatic match")
+        let speaker = MeetingSpeaker(
+            label: "sys_SPEAKER_01", track: "system", providerName: "RunPod",
+            voiceScope: "runpod:test", embedding: [1, 0], personID: personID, confidence: 0.91)
+        // Older libraries stored automatic matches with confirmed=false and
+        // omitted them from the meeting's People associations.
+        meeting.speakers = [speaker]
+        meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
+        try store.insertImportedMeeting(meeting)
+        let reopened = MeetingStore(dataDirectory: root)
+        let saved = try #require(reopened.meetings.first)
+        #expect(saved.personIDs == [personID])
+        #expect(saved.speakers == meeting.speakers)
+        #expect(saved.speakerName(for: saved.transcript[0], people: reopened.people) == "Alex")
+        #expect(reopened.people[0].voiceSamples.isEmpty)
+        let markdown = root.appendingPathComponent("automatic.md")
+        try reopened.exportMeeting(id: meeting.id, to: markdown)
+        #expect(try String(contentsOf: markdown, encoding: .utf8).contains("**Alex:** Hello"))
+        reopened.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: nil)
+        #expect(reopened.meetings[0].personIDs.isEmpty)
+        #expect(reopened.people[0].voiceSamples.isEmpty)
     }
 
     @Test func assigningWhileTranscribingPreservesSavedResultForExplicitReplacement() throws {
@@ -256,21 +284,21 @@ import Testing
         }
     }
 
-    @Test func rejectingSuggestionKeepsLegacyManualPersonAssociation() throws {
+    @Test func removingAssignmentRemovesSpeakerPersonAssociation() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         let person = store.addPerson(name: "Alex")
         var meeting = Meeting()
-        let suggestion = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod", personID: person)
+        let match = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod", personID: person)
         meeting.personIDs = [person]
-        meeting.speakers = [suggestion]
+        meeting.speakers = [match]
         try store.insertImportedMeeting(meeting)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: suggestion.id, personID: nil)
-        #expect(store.meetings[0].personIDs == [person])
+        store.assignSpeaker(meetingID: meeting.id, speakerID: match.id, personID: nil)
+        #expect(store.meetings[0].personIDs.isEmpty)
         #expect(store.meetings[0].speakers[0].personID == nil)
         meeting.replaceSpeakers([])
-        #expect(meeting.personIDs == [person])
+        #expect(meeting.personIDs.isEmpty)
     }
 
     @Test func voiceDataHasNoOutboundPrivacyRoute() {

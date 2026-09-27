@@ -59,6 +59,11 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var endpoint = ""
     var apiKey = ""
     var model = ""
+    var summarizationPrompt: String?
+    var summaryPrompt: String {
+        get { summarizationPrompt ?? SummaryPrompt.defaultInstructions }
+        set { summarizationPrompt = newValue }
+    }
     var uploadProviderID: UUID?
     var isEnabled = true
     var enabledCapabilities: Set<ProviderCapability> = []
@@ -67,7 +72,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         name = kind.title
     }
     enum CodingKeys: String, CodingKey {
-        case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID
+        case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
     }
     func supports(_ capability: ProviderCapability) -> Bool {
         isEnabled && kind.capabilities.contains(capability) && enabledCapabilities.contains(capability)

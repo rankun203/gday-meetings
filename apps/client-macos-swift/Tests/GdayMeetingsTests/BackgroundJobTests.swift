@@ -56,11 +56,8 @@ private final class BackgroundResponseGate: @unchecked Sendable {
             }
         }
         defer { operation.cancel() }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !gate.hasRequest && ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        try #require(gate.hasRequest, "The provider request must reach the loopback fixture.")
+        let receivedRequest = try await waitForMainActorTestCondition { gate.hasRequest }
+        try #require(receivedRequest, "The provider request must reach the loopback fixture.")
         let kind: BackgroundJob.Kind = chat ? .chat : .summary
         #expect(store.isJobRunning(kind, .meeting(id)))
         #expect(store.canStartRecording)
@@ -132,7 +129,8 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         store.updateMeeting(meeting)
         #expect(store.beginJob(.transcription, .meeting(first), progress: "Transcribing…"))
         await store.summarize(id: second)
-        #expect(store.errorMessage == "Choose and enable a summary provider in Settings → Defaults.")
+        #expect(store.errorMessage == nil)
+        #expect(store.managedTasks.last?.errorMessage == "Choose and enable a summary provider in Settings → Defaults.")
         #expect(!store.isJobRunning(.summary, .meeting(second)))
         #expect(store.isJobRunning(.transcription, .meeting(first)))
         #expect(store.canStartRecording)
@@ -152,7 +150,8 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         // Both return before provider validation or network requests.
         #expect(store.errorMessage == nil)
         await store.transcribe(id: second)
-        #expect(store.errorMessage == "Choose a transcription provider in Settings → Defaults.")
+        #expect(store.errorMessage == nil)
+        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → Defaults.")
         store.endJob(.importAudio, .meeting(first))
         #expect(!store.isImportingAudio)
     }

@@ -5,7 +5,7 @@ import Foundation
 /// while other meetings keep their actions. Recording start and stop are not
 /// jobs; they use the recording state in MeetingStore.
 struct BackgroundJob: Identifiable, Equatable {
-    enum Kind: Hashable {
+    enum Kind: String, Codable, Hashable {
         case transcription, summary, chat, archive, contextChat, importAudio
     }
     enum Scope: Hashable {
@@ -40,6 +40,9 @@ extension MeetingStore {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
         guard let index = backgroundJobs.firstIndex(where: { $0.key == key }) else { return }
         backgroundJobs[index].progress = progress
+        if let taskIndex = managedTasks.firstIndex(where: { $0.key == key && $0.state.isActive }) {
+            managedTasks[taskIndex].progress = progress
+        }
     }
     func endJob(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)

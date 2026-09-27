@@ -81,7 +81,10 @@ struct AppSettings: Codable, Equatable {
     var serviceProviders: [ServiceProvider] = []
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
+    /// Retained until an OpenAI provider without custom instructions can receive it.
+    var pendingSummaryPromptMigration: String?
     var defaultLanguage = "en"
+    var autoSummarize = false
     var autoTranscribe = false
     var autoTranscribeEvenWithLiveTranscript = false
     var showLiveTranscript = true
@@ -93,13 +96,12 @@ struct AppSettings: Codable, Equatable {
     var automaticVoiceProcessing = true
     /// `nil` records from the macOS default input.
     var microphoneDevice: MicrophoneDeviceChoice?
-    var summarizationPrompt =
-        "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
-        case serviceProviders, transcriptionProviderID, summaryProviderID, defaultLanguage, autoTranscribe,
+        case serviceProviders, transcriptionProviderID, summaryProviderID, pendingSummaryPromptMigration,
+            defaultLanguage, autoTranscribe, autoSummarize,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript,
             captureSystemAudio,
-            captureMicrophone, recordingFormat, summarizationPrompt, automaticVoiceProcessing, microphoneDevice
+            captureMicrophone, recordingFormat, automaticVoiceProcessing, microphoneDevice
     }
 
 }
@@ -225,10 +227,24 @@ extension MeetingTag {
 }
 
 extension AppSettings {
+    private enum LegacySummaryKeys: String, CodingKey { case summarizationPrompt }
     /// Evaluate after live recognition finishes for the recording being saved.
     /// Empty sessions and provisional text do not count as finalized live text.
     func shouldAutomaticallyTranscribe(hasUsableFinalizedLiveTranscript: Bool) -> Bool {
         autoTranscribe && (autoTranscribeEvenWithLiveTranscript || !hasUsableFinalizedLiveTranscript)
+    }
+
+    /// Keep dormant instructions across saves until there is a suitable provider.
+    /// A selected provider takes precedence; without one, use the first LLM provider.
+    mutating func migratePendingSummaryPrompt() {
+        guard let prompt = pendingSummaryPromptMigration,
+            let index = serviceProviders.firstIndex(where: {
+                $0.kind == .openAICompatible && (summaryProviderID == nil || $0.id == summaryProviderID)
+                    && $0.summarizationPrompt == nil
+            })
+        else { return }
+        serviceProviders[index].summarizationPrompt = prompt
+        pendingSummaryPromptMigration = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -238,6 +254,7 @@ extension AppSettings {
         transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
+        autoSummarize = try values.decodeIfPresent(Bool.self, forKey: .autoSummarize) ?? false
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
         autoTranscribeEvenWithLiveTranscript =
             try values.decodeIfPresent(Bool.self, forKey: .autoTranscribeEvenWithLiveTranscript) ?? false
@@ -248,9 +265,17 @@ extension AppSettings {
         // A new key: the legacy `microphoneVoiceProcessing` preference stays ignored.
         automaticVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .automaticVoiceProcessing) ?? true
         microphoneDevice = try? values.decodeIfPresent(MicrophoneDeviceChoice.self, forKey: .microphoneDevice)
-        summarizationPrompt =
-            try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
-            ?? "Summarize this meeting with decisions, key points, and action items. Do not invent information."
+        pendingSummaryPromptMigration = try values.decodeIfPresent(String.self, forKey: .pendingSummaryPromptMigration)
+        let legacy = try decoder.container(keyedBy: LegacySummaryKeys.self)
+        if pendingSummaryPromptMigration == nil,
+            let prompt = try legacy.decodeIfPresent(String.self, forKey: .summarizationPrompt),
+            !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            prompt != "Summarize this meeting with decisions, key points, and action items. Do not invent information."
+        {
+            pendingSummaryPromptMigration = prompt
+        }
+        migratePendingSummaryPrompt()
+
     }
 }
 

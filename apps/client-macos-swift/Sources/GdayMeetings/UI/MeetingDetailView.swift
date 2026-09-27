@@ -163,21 +163,21 @@ struct MeetingDetailView: View {
                         store.isJobRunning(.summary, .meeting(meetingID))
                             || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
                 }
-                editor("Summary", binding: text(\.summary))
+                MeetingMarkdownReadingView(
+                    meetingID: meetingID, markdown: meeting.summary, showsTimestamps: false,
+                    emptyMessage: "No summary yet. Choose Generate Summary to create one."
+                )
+                .accessibilityLabel("Summary")
+                .background(.background, in: RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
             }
         case 3: todos(meeting)
         default: chat(meeting)
         }
     }
 
-    private func editor(_ label: String, binding: Binding<String>) -> some View {
-        // HIG accessibility: standard editable text, semantic fonts and system colors
-        // respect contrast and assistive technologies without custom event handling.
-        // https://developer.apple.com/design/human-interface-guidelines/accessibility
-        TextEditor(text: binding).font(.body).accessibilityLabel(label)
-            .padding(8).background(.background, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
-    }
     private func todos(_ meeting: Meeting) -> some View {
         VStack {
             HStack {

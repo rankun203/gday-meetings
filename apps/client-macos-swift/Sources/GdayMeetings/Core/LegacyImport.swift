@@ -26,7 +26,6 @@ extension MeetingStore {
             legacyRoot = url
         }
         var personMap: [String: UUID] = [:]
-        var confirmedSamples: [String: [LegacyVoiceSample]] = [:]
         // Rust samples identify their session, but not the speaker label. Keep
         // that provenance separate rather than inventing a label assignment.
         var sessionIDs: [String: UUID] = [:]
@@ -61,7 +60,6 @@ extension MeetingStore {
                                 else { return nil }
                                 return LegacyVoiceSample(embedding: embedding, session_id: session)
                             }
-                        confirmedSamples[folder.lastPathComponent] = samples
                         person.voiceSamples = samples.map {
                             PersonVoiceSample(
                                 meetingID: sessionID($0.session_id), speakerID: UUID(),
@@ -120,18 +118,11 @@ extension MeetingStore {
                     let confidence =
                         speakerIndex[label]?["confidence"] as? Double
                         ?? segment["attribution_confidence"] as? Double
-                    let hasConfirmedSample =
-                        legacyPersonID.flatMap { confirmedSamples[$0] }?.contains {
-                            $0.session_id == folder.lastPathComponent && $0.embedding == embedding
-                        } ?? false
-                    // A score of 1 can also be an automatic exact match. Only
-                    // the confirmed sample store proves a reviewed assignment.
-                    let confirmed = personID != nil && hasConfirmedSample
                     let speaker = MeetingSpeaker(
                         label: label, track: track, providerName: "Rust Import", voiceScope: "legacy:rust",
-                        embedding: embedding, personID: personID, confidence: confidence, confirmed: confirmed)
+                        embedding: embedding, personID: personID, confidence: confidence, confirmed: personID != nil)
                     meeting.speakers.append(speaker)
-                    if confirmed, let personID, !meeting.personIDs.contains(personID) {
+                    if let personID, !meeting.personIDs.contains(personID) {
                         meeting.personIDs.append(personID)
                     }
                     return TranscriptSegment(

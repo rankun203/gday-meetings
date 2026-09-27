@@ -28,7 +28,7 @@ enum UIPreview {
                 try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
             }
             let person = store.addPerson(name: "Alex Morgan")
-            let suggested = store.addPerson(name: "Sam Chen")
+            let matched = store.addPerson(name: "Sam Chen")
             let previewTag = store.addTag(name: "Preview")
             let projectTag = store.addTag(name: "Planning")
             if var conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }) {
@@ -37,12 +37,30 @@ enum UIPreview {
                     voiceScope: "preview:synthetic", embedding: [1, 0], personID: person, confirmed: true)
                 let second = MeetingSpeaker(
                     label: "sys_SPEAKER_01", track: "system", providerName: "RunPod",
-                    voiceScope: "preview:synthetic", embedding: [0, 1], personID: suggested, confidence: 0.91)
+                    voiceScope: "preview:synthetic", embedding: [0, 1], personID: matched, confidence: 0.91)
                 let third = MeetingSpeaker(
                     label: "mic_SPEAKER_00", track: "microphone", providerName: "RunPod",
                     voiceScope: "preview:synthetic", embedding: [0.5, 0.5])
                 conversation.replaceSpeakers([first, second, third])
                 conversation.tagIDs = [previewTag, projectTag]
+                conversation.summary = """
+                    ### Key points
+
+                    - Review the **release plan** with the team.
+                    - Keep the meeting notes up to date.
+
+                    ### Decisions
+
+                    | Topic | Decision |
+                    | --- | --- |
+                    | Release | Start with the Mac app |
+                    | Review | Meet on Friday |
+
+                    ### Action items
+
+                    - [ ] Alex: Update the schedule.
+                    - [x] Sam: Check the meeting notes.
+                    """
                 conversation.notes = """
                     # Release plan <!-- gday:t=0:05 -->
 
@@ -126,6 +144,9 @@ enum UIPreview {
                 second.uploadProviderID = store.settings.serviceProviders.first { $0.kind == .filedrop }?.id
                 store.settings.serviceProviders.append(second)
             }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks") {
+                seedTasks(store)
+            }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {
@@ -141,6 +162,41 @@ enum UIPreview {
         }
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         return store
+    }
+
+    /// Explicit fixtures exercise queue controls without starting provider work.
+    @MainActor private static func seedTasks(_ store: MeetingStore) {
+        guard let conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }),
+            let single = store.meetings.first(where: { $0.title == "Synthetic single track" })
+        else { return }
+        let queuedID = store.createMeeting(title: "Synthetic queued recording")
+        let failedID = store.createMeeting(title: "Synthetic summary retry")
+        store.managedTasks = [
+            ManagedTaskRecord(
+                kind: .transcription, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "Preview RunPod", state: .running,
+                progress: "Waiting for RunPod to finish processing…", isPreview: true),
+            ManagedTaskRecord(
+                kind: .summary, meetingID: single.id, meetingTitle: single.title,
+                providerName: "Preview Language Model", state: .running,
+                progress: "Writing summary…", isPreview: true),
+            ManagedTaskRecord(
+                kind: .transcription, meetingID: queuedID, meetingTitle: "Synthetic queued recording",
+                providerName: "Preview RunPod", state: .queued,
+                progress: "Waiting for a transcription slot", isPreview: true),
+            ManagedTaskRecord(
+                kind: .summary, meetingID: failedID, meetingTitle: "Synthetic summary retry",
+                providerName: "Preview Language Model", state: .failed, progress: "Needs attention",
+                errorMessage: "The provider connection was interrupted. Retry to generate the summary.", isPreview: true
+            ),
+            ManagedTaskRecord(
+                kind: .summary, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "Preview Language Model", state: .completed, progress: "Completed",
+                finishedAt: Date(), isPreview: true),
+        ]
+        for task in store.managedTasks where task.state.isActive {
+            store.backgroundJobs.append(BackgroundJob(key: task.key, progress: task.progress))
+        }
     }
 
     /// Parses only the explicitly supplied test file. Values are never logged or

@@ -4,6 +4,26 @@ import Testing
 @testable import GdayMeetings
 
 struct DataPrivacyTests {
+    @Test func automaticSummariesDescribeTranscriptTriggeredTextTransfer() {
+        var llm = ServiceProvider(kind: .openAICompatible)
+        llm.endpoint = "https://llm.example.com/v1"
+        llm.model = "summary-model"
+        llm.enabledCapabilities = [.summarization]
+        var settings = AppSettings()
+        settings.serviceProviders = [llm]
+        settings.summaryProviderID = llm.id
+        #expect(!DataPrivacy.routes(PrivacyContext(settings: settings)).contains { $0.trigger == .afterTranscription })
+        settings.autoSummarize = true
+        let automatic = DataPrivacy.routes(PrivacyContext(settings: settings)).filter {
+            $0.trigger == .afterTranscription
+        }
+        #expect(automatic.count == 1)
+        #expect(automatic.first?.data == [.meetingDetails, .notes, .transcripts, .peopleAndTags, .settings])
+        #expect(PrivacyDestination.phrase([.afterTranscription]).contains("Automatically Summarize is on"))
+        settings.serviceProviders[0].isEnabled = false
+        #expect(!DataPrivacy.routes(PrivacyContext(settings: settings)).contains { $0.trigger == .afterTranscription })
+    }
+
     private func row(_ rows: [PrivacyRow], _ type: PrivacyDataType) -> PrivacyRow {
         rows.first { $0.type == type }!
     }
@@ -141,11 +161,13 @@ struct DataPrivacyTests {
         settings.summaryProviderID = llm.id
         let rows = DataPrivacy.rows(PrivacyContext(settings: settings))
         let expected = "Sent to Team LLM (localhost:11434) when you generate a summary or send a chat message"
-        for type in [PrivacyDataType.meetingDetails, .notes, .transcripts, .summaries, .chat, .settings] {
+        for type in [
+            PrivacyDataType.meetingDetails, .notes, .transcripts, .summaries, .chat, .peopleAndTags, .settings,
+        ] {
             #expect(texts(rows, type) == [expected])
         }
-        #expect(row(rows, .settings).note == "Only Summary Instructions are sent.")
-        for type in [PrivacyDataType.audio, .todos, .peopleAndTags, .credentials, .logs] {
+        #expect(row(rows, .settings).note == "Only the Summary Prompt is sent.")
+        for type in [PrivacyDataType.audio, .todos, .credentials, .logs] {
             #expect(!row(rows, type).leavesMac)
         }
 

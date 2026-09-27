@@ -24,7 +24,13 @@ This uses the production SwiftUI screens with a clearly marked preview banner, g
 
 The bundle flag `GdayUIPreview` enables this mode; developers can also launch the executable with `--ui-preview`. The separate preview bundle identifier isolates window/preferences state and lets the normal app remain open. Do not use preview results as evidence of real capture, permissions, or speaker output. A provider check validates its documented connection operation; a successful transcription test validates the tested service path. Neither establishes performance or accuracy for other recordings.
 
-The synthetic conversation includes multiple tags and confirmed, suggested, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignments, confirmation, rejection, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, and Tags; providers are configured in Settings.
+The synthetic conversation includes multiple tags and manually assigned, automatically matched, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignment, reassignment, removal, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, Tags, and Tasks; providers are configured in Settings.
+
+## Task queue
+
+Launch the Preview executable with `--synthetic-tasks` to add two running tasks, one queued transcription, one summary needing attention, and one completed summary. These rows are explicitly synthetic and never submit provider work. The bottom status initially reads **2 running · 1 queued · 1 needs attention**. Click it or choose **Tasks** in the sidebar to open the full-width queue panel.
+
+Check **Open Meeting**, **Run Next**, **Remove from Queue**, **Stop Waiting**, **Retry**, and **Dismiss**. Synthetic Retry completes locally; stopping or removing a synthetic task updates its state without cancelling a remote job. Run Next changes queue order but does not execute synthetic work. Verify section updates, task counts, keyboard access, and action wrapping at narrow widths in light and dark appearance. Ordinary Preview launches have no synthetic tasks. Real provider tasks started deliberately in Preview use the production queue and can submit content.
 
 ## Provider testing
 

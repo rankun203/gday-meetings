@@ -256,6 +256,20 @@ private struct ServiceProviderPanel: View {
                         .disabled(hasChanges)
                 }
             }
+            if draft.kind == .openAICompatible {
+                Section("Summary Prompt") {
+                    TextEditor(text: $draft.summaryPrompt)
+                        .font(.body)
+                        .frame(height: 180)
+                        .accessibilityLabel("Summary Prompt")
+                    Text(
+                        "Used when generating summaries with this provider. Language and current time are added for each meeting."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                    Button("Restore Default") { draft.summaryPrompt = SummaryPrompt.defaultInstructions }
+                        .disabled(draft.summaryPrompt == SummaryPrompt.defaultInstructions)
+                }
+            }
             Section("Capabilities") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }, id: \.self) {
                     capability in

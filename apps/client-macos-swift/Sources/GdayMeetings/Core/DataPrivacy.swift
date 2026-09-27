@@ -28,7 +28,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
         case .meetingDetails: "Title, date, duration, language, and recording devices"
         case .peopleAndTags: "Names, email addresses, notes, and speaker assignments"
         case .voiceSamples:
-            "Voice patterns from transcription results and confirmed speaker matches. Recognition runs on this Mac."
+            "Voice patterns from transcription results and speaker assignments. Recognition runs on this Mac."
         case .credentials: "Provider API keys and website sign-in, stored in Keychain"
         default: nil
         }
@@ -53,7 +53,7 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
 
 /// What sends data. Cases are in sentence order: automatic first, then actions.
 enum PrivacyTrigger: Int, Comparable {
-    case afterRecording, transcribe, summarizeOrChat, archive
+    case afterRecording, afterTranscription, transcribe, summarizeOrChat, archive
     /// Opening an enabled provider's panel checks it and lists its models; saving and
     /// Check Connection happen in that panel.
     case openProvider
@@ -62,7 +62,7 @@ enum PrivacyTrigger: Int, Comparable {
     /// Load Languages, which only website providers offer. RunPod's list is built in.
     case loadLanguages
     static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-    /// Completes "when you …". `afterRecording` is not a user action.
+    /// Completes "when you …". Automatic triggers are not user actions.
     fileprivate var action: String? {
         switch self {
         case .transcribe: "transcribe a meeting"
@@ -71,7 +71,7 @@ enum PrivacyTrigger: Int, Comparable {
         case .openProvider: "open the provider in Settings"
         case .editProvider: "edit the provider in Settings"
         case .loadLanguages: "choose Load Languages"
-        case .afterRecording: nil
+        case .afterRecording, .afterTranscription: nil
         }
     }
 }
@@ -99,6 +99,9 @@ struct PrivacyDestination: Identifiable, Equatable {
     static func phrase(_ triggers: [PrivacyTrigger]) -> String {
         var parts: [String] = []
         if triggers.contains(.afterRecording) { parts.append("after recording when automatic transcription applies") }
+        if triggers.contains(.afterTranscription) {
+            parts.append("after a transcript is saved when Automatically Summarize is on")
+        }
         let actions = triggers.compactMap(\.action)
         if !actions.isEmpty { parts.append("when you " + join(actions)) }
         return parts.joined(separator: " and ")
@@ -190,15 +193,21 @@ enum DataPrivacy {
             }
         }
 
-        // Summaries and chat send meeting context and Summary Instructions; to-dos are not included.
+        // Summaries and chat send meeting context and Summary Prompt; to-dos are not included.
         if let summarizer = provider(settings.summaryProviderID), summarizer.kind == .openAICompatible,
             summarizer.supports(.summarization), hasText(summarizer.model),
             (try? ProviderEndpoint.base(summarizer.endpoint)) != nil
         {
             routes.append(
                 .init(
-                    data: [.meetingDetails, .notes, .transcripts, .summaries, .chat, .settings],
+                    data: [.meetingDetails, .notes, .transcripts, .summaries, .chat, .peopleAndTags, .settings],
                     trigger: .summarizeOrChat, receivers: [summarizer]))
+            if settings.autoSummarize {
+                routes.append(
+                    .init(
+                        data: [.meetingDetails, .notes, .transcripts, .peopleAndTags, .settings],
+                        trigger: .afterTranscription, receivers: [summarizer]))
+            }
         }
 
         for website in providers where website.kind == .gdayWebsite && signedIn(website) {
@@ -275,7 +284,7 @@ enum DataPrivacy {
         case .meetingDetails where kinds.contains(.runpod):
             return "RunPod receives only the meeting language."
         case .settings where !destinations.isEmpty:
-            return "Only Summary Instructions are sent."
+            return "Only the Summary Prompt is sent."
         default:
             return nil
         }

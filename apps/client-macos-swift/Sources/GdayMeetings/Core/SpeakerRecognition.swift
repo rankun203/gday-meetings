@@ -12,6 +12,7 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable {
     var embedding: [Double]?
     var personID: UUID?
     var confidence: Double?
+    /// Legacy library key retained for older clients. Assignment is determined by personID.
     var confirmed = false
 }
 
@@ -41,7 +42,7 @@ enum SpeakerRecognition {
         return max(-1, min(1, dot / sqrt(a.reduce(0) { $0 + $1 * $1 } * b.reduce(0) { $0 + $1 * $1 })))
     }
 
-    static func suggest(_ speakers: inout [MeetingSpeaker], people: [Person]) {
+    static func match(_ speakers: inout [MeetingSpeaker], people: [Person]) {
         var scores: [(speaker: Int, person: UUID, score: Double)] = []
         for (index, speaker) in speakers.enumerated() {
             guard let scope = speaker.voiceScope, let embedding = speaker.embedding else { continue }
@@ -75,7 +76,7 @@ enum SpeakerRecognition {
             }
             speakers[match.speaker].personID = match.person
             speakers[match.speaker].confidence = match.score
-            speakers[match.speaker].confirmed = false
+            speakers[match.speaker].confirmed = true
             assigned.insert(match.speaker)
             claimed[track, default: []].insert(match.person)
         }
@@ -105,7 +106,7 @@ enum SpeakerRecognition {
                 speaker: segment.speaker ?? "",
                 text: segment.text, speakerID: speakerID)
         }
-        suggest(&speakers, people: people)
+        match(&speakers, people: people)
         return (result, speakers)
     }
 }
@@ -126,27 +127,28 @@ extension Meeting {
     }
 
     func speakerName(
-        for segment: TranscriptSegment, people: [Person], includesSuggestion: Bool = true,
+        for segment: TranscriptSegment, people: [Person],
         compactProviderLabel: Bool = false
     ) -> String {
         guard let speaker = speakers.first(where: { $0.id == segment.speakerID }),
             let person = people.first(where: { $0.id == speaker.personID })
         else { return compactProviderLabel ? SpeakerLabelPresentation.display(segment.speaker) : segment.speaker }
-        return speaker.confirmed || !includesSuggestion ? person.name : "\(person.name) (Suggested)"
+        return person.name
     }
 
     mutating func replaceSpeakers(_ replacement: [MeetingSpeaker]) {
-        let previous = Set(speakers.filter(\.confirmed).compactMap(\.personID))
+        let previous = Set(speakers.compactMap(\.personID))
         personIDs.removeAll { previous.contains($0) }
         speakers = replacement
-        for speaker in replacement where speaker.confirmed {
+        for index in speakers.indices { speakers[index].confirmed = speakers[index].personID != nil }
+        for speaker in speakers {
             if let id = speaker.personID, !personIDs.contains(id) { personIDs.append(id) }
         }
     }
 }
 
 extension MeetingStore {
-    /// Save the assignment and confirmed sample together through the library's
+    /// Save the assignment and explicitly assigned sample together through the library's
     /// atomic save/rollback path. Reassignment removes its earlier training sample.
     func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) {
         guard libraryWritable, var meeting = meetings.first(where: { $0.id == meetingID }),

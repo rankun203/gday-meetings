@@ -74,8 +74,12 @@ struct DefaultsSettingsView: View {
                 capability: .summarization, selection: setting(\.summaryProviderID),
                 caption: "Summaries and chat send the selected transcript and notes to this provider."
             ) {
-                TextField("Summary Instructions", text: setting(\.summarizationPrompt), axis: .vertical)
-                    .lineLimit(3...6)
+                Toggle("Automatically Summarize", isOn: setting(\.autoSummarize))
+                    .toggleStyle(.checkbox)
+                Text(
+                    "Generates a summary after a live transcript is saved or transcription finishes. If both finish, each generates a summary."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

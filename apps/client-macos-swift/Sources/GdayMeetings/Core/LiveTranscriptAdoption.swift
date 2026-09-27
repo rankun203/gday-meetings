@@ -43,7 +43,6 @@ extension MeetingStore {
         meeting.transcript = draft.segments
         meeting.liveTranscriptAdopted = true
         meeting.replaceSpeakers([])
-        updateMeeting(meeting)
-        return meetings.first(where: { $0.id == meeting.id })?.transcript == draft.segments
+        return updateMeeting(meeting)
     }
 }

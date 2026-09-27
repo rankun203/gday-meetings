@@ -12,7 +12,8 @@ import Testing
         let store = try store()
         let id = store.createMeeting(title: "Offline recording")
         await store.transcribe(id: id)
-        #expect(store.errorMessage == "Choose a transcription provider in Settings → Defaults.")
+        #expect(store.errorMessage == nil)
+        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → Defaults.")
         #expect(store.meetings.first?.transcriptionAttempt == nil)
         #expect(store.backgroundJobs.isEmpty)
     }

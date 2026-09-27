@@ -30,7 +30,11 @@ struct MeetingNotesWorkspace: View {
                     .allowsHitTesting(!reading)
                     .accessibilityHidden(reading)
                 if reading {
-                    NotesReadingView(meetingID: meetingID)
+                    MeetingMarkdownReadingView(
+                        meetingID: meetingID,
+                        markdown: store.meetings.first { $0.id == meetingID }?.notes ?? "",
+                        showsTimestamps: true,
+                        emptyMessage: "No notes yet. Choose Edit Notes to add notes.")
                 }
             }
         }
@@ -43,17 +47,19 @@ struct MeetingNotesWorkspace: View {
     }
 }
 
-private struct NotesReadingView: View {
+struct MeetingMarkdownReadingView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     let meetingID: UUID
-    private var markdown: String { store.meetings.first { $0.id == meetingID }?.notes ?? "" }
+    let markdown: String
+    let showsTimestamps: Bool
+    let emptyMessage: String
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ForEach(NotesReadingDocument(markdown).blocks) { block in
                     HStack(alignment: .top, spacing: 12) {
-                        if let time = block.time {
+                        if showsTimestamps, let time = block.time {
                             Button(NotesDocument.timestamp(time)) { play(time) }
                                 .buttonStyle(.link).font(.caption).monospacedDigit()
                                 .help("Play from this point")
@@ -63,14 +69,14 @@ private struct NotesReadingView: View {
                                 )
                                 .frame(width: 45, alignment: .trailing)
                         }
-                        else {
+                        else if showsTimestamps {
                             Color.clear.frame(width: 45, height: 1)
                         }
                         content(block.content).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("No notes yet. Choose Edit Notes to add notes.").foregroundStyle(.secondary)
+                    Text(emptyMessage).foregroundStyle(.secondary)
                 }
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }

@@ -2,21 +2,17 @@ import Foundation
 
 extension MeetingStore {
     func transcribe(id: UUID, providerID: UUID? = nil) async {
-        guard !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
-            recordingID != id,
-            let meeting = meetings.first(where: { $0.id == id })
-        else { return }
-        do {
-            let provider = try transcriptionProvider(for: meeting, providerID: providerID)
-            guard beginJob(.transcription, .meeting(id), progress: "Transcribing with \(provider.name)…") else {
-                return
-            }
-            defer { endJob(.transcription, .meeting(id)) }
-            try await transcribeWithProvider(id: id, provider: provider)
+        guard let taskID = queueTranscription(id: id, providerID: providerID) else { return }
+        await waitForManagedTask(taskID)
+    }
+
+    func performTranscription(id: UUID, providerID: UUID?) async throws {
+        guard let meeting = meetings.first(where: { $0.id == id }) else {
+            throw ServiceError("This meeting no longer exists.")
         }
-        catch {
-            errorMessage = error.localizedDescription
-        }
+        let provider = try transcriptionProvider(for: meeting, providerID: providerID)
+        setJobProgress(.transcription, .meeting(id), "Starting transcription with \(provider.name)…")
+        try await transcribeWithProvider(id: id, provider: provider)
     }
 
     var eligibleTranscriptionProviders: [ServiceProvider] {
@@ -47,45 +43,75 @@ extension MeetingStore {
         return provider
     }
 
-    func summaryProvider() throws -> OpenAISummaryProvider {
-        guard let id = settings.summaryProviderID,
+    func summaryProvider(providerID: UUID? = nil) throws -> OpenAISummaryProvider {
+        guard let id = providerID ?? settings.summaryProviderID,
             let provider = settings.serviceProviders.first(where: { $0.id == id }),
             provider.kind == .openAICompatible, provider.supports(.summarization)
         else { throw ServiceError("Choose and enable a summary provider in Settings → Defaults.") }
         return OpenAISummaryProvider(provider: provider)
     }
-    func summarize(id: UUID) async {
-        guard !isJobRunning(.summary, .meeting(id)), let meeting = meetings.first(where: { $0.id == id }) else {
+    /// Called only after a transcript has been committed to the local library.
+    func scheduleAutomaticSummary(id: UUID) {
+        guard settings.autoSummarize, libraryWritable,
+            let meeting = meetings.first(where: { $0.id == id }),
+            meeting.transcript.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { return }
+        pendingAutomaticSummaries.insert(id)
+        startPendingAutomaticSummary(id: id)
+    }
+
+    func startPendingAutomaticSummary(id: UUID) {
+        guard settings.autoSummarize else {
+            pendingAutomaticSummaries.remove(id)
             return
+        }
+        guard pendingAutomaticSummaries.contains(id), !scheduledAutomaticSummaries.contains(id),
+            !isJobRunning(.summary, .meeting(id))
+        else { return }
+        scheduledAutomaticSummaries.insert(id)
+        Task { [weak self] in
+            guard let self else { return }
+            self.scheduledAutomaticSummaries.remove(id)
+            guard self.settings.autoSummarize else {
+                self.pendingAutomaticSummaries.remove(id)
+                return
+            }
+            // A manual summary may have started before this task received its turn.
+            // Leave pending work for that request's completion in that case.
+            guard !self.isJobRunning(.summary, .meeting(id)),
+                self.pendingAutomaticSummaries.remove(id) != nil
+            else { return }
+            self.queueSummary(id: id, automatically: true)
+        }
+    }
+
+    func summarize(id: UUID) async {
+        guard let taskID = queueSummary(id: id) else { return }
+        await waitForManagedTask(taskID)
+    }
+
+    func performSummary(id: UUID, providerID: UUID?) async throws {
+        guard let meeting = meetings.first(where: { $0.id == id }) else {
+            throw ServiceError("This meeting no longer exists.")
         }
         guard !meeting.transcript.isEmpty || !meeting.notes.isEmpty else {
-            errorMessage = "Add notes or transcribe the meeting before generating a summary."
-            return
+            throw ServiceError("Add notes or transcribe the meeting before generating a summary.")
         }
-        guard beginJob(.summary, .meeting(id), progress: "Writing summary…") else { return }
-        defer { endJob(.summary, .meeting(id)) }
-        do {
-            let result = try await summaryProvider().complete(
-                messages: [
-                    LLMMessage(
-                        role: "system",
-                        content: settings.summarizationPrompt
-                            + "\nInclude explicit action items as Markdown checkboxes (- [ ] Action). Only include actions supported by the meeting."
-                    ), LLMMessage(role: "user", content: context(meeting)),
-                ])
-            if var current = meetings.first(where: { $0.id == id }) {
-                guard current.summary == meeting.summary else {
-                    throw ServiceError(
-                        "The summary changed during processing. Copy those edits before generating another summary.")
-                }
-                current.summary = result
-                let known = Set(current.todos.map { $0.title.lowercased() })
-                current.todos += Self.actionItems(from: result).filter { !known.contains($0.title.lowercased()) }
-                updateMeeting(current)
+        setJobProgress(.summary, .meeting(id), "Writing summary…")
+        let provider = try summaryProvider(providerID: providerID)
+        let result = try await provider.complete(
+            messages: SummaryPrompt.messages(provider: provider.provider, meeting: meeting, people: people))
+        try Task.checkCancellation()
+        if var current = meetings.first(where: { $0.id == id }) {
+            guard current.summary == meeting.summary else {
+                throw ServiceError("The summary changed during processing. Generate another summary to replace it.")
             }
-        }
-        catch {
-            errorMessage = error.localizedDescription
+            current.summary = result
+            let known = Set(current.todos.map { $0.title.lowercased() })
+            current.todos += Self.actionItems(from: result).filter { !known.contains($0.title.lowercased()) }
+            guard updateMeeting(current) else {
+                throw ServiceError(errorMessage ?? "Couldn’t save the summary.")
+            }
         }
     }
     func sendChat(id: UUID, message: String) async {

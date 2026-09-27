@@ -96,16 +96,17 @@ extension MeetingStore {
                 try saveTranscriptionAttempt(attempt, meetingID: id)
             }
             guard let taskID = attempt.taskID else { throw ServiceError("The provider returned no job ID.") }
-            for _ in 0..<150 {
+            while true {
                 try Task.checkCancellation()
-                setJobProgress(.transcription, .meeting(id), "Transcribing with \(provider.name)…")
+                setJobProgress(.transcription, .meeting(id), "Waiting for \(provider.name)…")
                 switch try await server.task(id: taskID) {
-                case .pending: try await Task.sleep(for: .seconds(2))
+                case .pending: try await Task.sleep(for: transcriptionPollDelay)
                 case .failed(let message):
                     attempt.failure = message
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                     throw ServiceError(message + " Discard the pending request before starting another transcription.")
                 case .complete(let segments):
+                    try Task.checkCancellation()
                     let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
                     let result = recognized.segments
                     attempt.resultSpeakers = recognized.speakers
@@ -115,9 +116,6 @@ extension MeetingStore {
                     return
                 }
             }
-            throw ServiceError(
-                "\(provider.name) is still transcribing this meeting. Choose Resume Transcription later to check the same job."
-            )
         case .runpod:
             try await transcribeOnRunPod(id: id, provider: provider, meeting: meeting, attempt: &attempt)
         case .openAICompatible, .filedrop:
@@ -223,16 +221,17 @@ extension MeetingStore {
         attempt: inout ProviderTranscriptionAttempt
     ) async throws {
         guard let jobID = attempt.taskID else { throw ServiceError("The transcription has no RunPod job ID.") }
-        for _ in 0..<150 {
+        while true {
             try Task.checkCancellation()
-            setJobProgress(.transcription, .meeting(id), "Transcribing with \(runpod.provider.name)…")
+            setJobProgress(.transcription, .meeting(id), "Waiting for \(runpod.provider.name)…")
             switch try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) {
-            case .pending: try await Task.sleep(for: .seconds(2))
+            case .pending: try await Task.sleep(for: transcriptionPollDelay)
             case .failed(let message):
                 attempt.failure = message
                 try saveTranscriptionAttempt(attempt, meetingID: id)
                 throw ServiceError(message + " Discard the pending request before starting another transcription.")
             case .complete(let segments):
+                try Task.checkCancellation()
                 let expected = Set(attempt.inputs.map(\.trackName))
                 guard segments.allSatisfy({ expected.contains($0.track) }) else {
                     throw ServiceError("RunPod returned a transcript for an unexpected audio track.")
@@ -246,9 +245,7 @@ extension MeetingStore {
                 return
             }
         }
-        throw ServiceError(
-            "\(runpod.provider.name) is still transcribing this meeting. Choose Resume Transcription later to check the same job. RunPod keeps completed results for 30 minutes."
-        )
+
     }
 
     func saveTranscriptionAttempt(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) throws {
@@ -282,7 +279,7 @@ extension MeetingStore {
         latest.transcript = result
         latest.restoreSpeakerIdentities()
         latest.transcriptionAttempt = nil
-        updateMeeting(latest)
+        if updateMeeting(latest) { scheduleAutomaticSummary(id: meetingID) }
     }
 
     func saveTranscriptionResult(_ result: [TranscriptSegment], attempt: ProviderTranscriptionAttempt, meetingID: UUID)
@@ -304,8 +301,10 @@ extension MeetingStore {
         latest.restoreSpeakerIdentities()
         latest.transcriptionAttempt = nil
         errorMessage = nil
-        updateMeeting(latest)
-        if let errorMessage { throw ServiceError(errorMessage) }
+        guard updateMeeting(latest) else {
+            throw ServiceError(errorMessage ?? "Couldn’t save the transcript.")
+        }
+        scheduleAutomaticSummary(id: meetingID)
     }
 }
 

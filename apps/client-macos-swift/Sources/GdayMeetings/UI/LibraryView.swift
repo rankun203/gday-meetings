@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum LibraryDestination: Hashable { case meetings, people, tags }
+private enum LibraryDestination: Hashable { case meetings, people, tags, tasks }
 
 struct LibraryView: View {
     /// Splits after the first sentence; a single-sentence message has no body.
@@ -92,6 +92,7 @@ struct LibraryView: View {
                             Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                             Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                             Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
+                            Label("Tasks", systemImage: "list.bullet.rectangle").tag(LibraryDestination.tasks)
                         }
                         .opacity(sidebarRowsVisible ? 1 : 0)
                         .animation(nil, value: sidebarRowsVisible)
@@ -108,117 +109,128 @@ struct LibraryView: View {
                 .background(.bar)
                 .frame(width: sidebarExpanded ? 180 : 0, alignment: .leading)
                 .clipped()
-                HSplitView {
-                    Group {
-                        switch destination {
-                        case .people: PeopleView(selection: $selectedPerson)
-                        case .tags: TagsView(selection: $selectedTag)
-                        default:
-                            ScrollViewReader { scroll in
-                                List(selection: $selectedMeeting) {
-                                    ForEach(filteredMeetings) { meeting in
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            HStack {
-                                                Text(meeting.title).font(.headline).lineLimit(1)
-                                                if store.recordingID == meeting.id {
-                                                    Label(
-                                                        store.isFinalizingRecording ? "Saving audio" : "Recording",
-                                                        systemImage: store.isFinalizingRecording
-                                                            ? "externaldrive" : "record.circle"
-                                                    ).foregroundStyle(
-                                                        store.isFinalizingRecording ? Color.secondary : Color.red
-                                                    ).labelStyle(.iconOnly)
+                if destination == .tasks {
+                    TaskQueueView(showMeeting: showMeeting)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                else {
+                    HSplitView {
+                        Group {
+                            switch destination {
+                            case .people: PeopleView(selection: $selectedPerson)
+                            case .tags: TagsView(selection: $selectedTag)
+                            default:
+                                ScrollViewReader { scroll in
+                                    List(selection: $selectedMeeting) {
+                                        ForEach(filteredMeetings) { meeting in
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                HStack {
+                                                    Text(meeting.title).font(.headline).lineLimit(1)
+                                                    if store.recordingID == meeting.id {
+                                                        Label(
+                                                            store.isFinalizingRecording ? "Saving audio" : "Recording",
+                                                            systemImage: store.isFinalizingRecording
+                                                                ? "externaldrive" : "record.circle"
+                                                        ).foregroundStyle(
+                                                            store.isFinalizingRecording ? Color.secondary : Color.red
+                                                        ).labelStyle(.iconOnly)
+                                                    }
+                                                    else if playback.meetingID == meeting.id {
+                                                        Image(
+                                                            systemName: playback.isPlaying
+                                                                ? "speaker.wave.2.fill" : "pause.circle"
+                                                        ).foregroundStyle(.tint).accessibilityLabel(
+                                                            playback.isPlaying ? "Playing" : "Playback paused")
+                                                    }
                                                 }
-                                                else if playback.meetingID == meeting.id {
-                                                    Image(
-                                                        systemName: playback.isPlaying
-                                                            ? "speaker.wave.2.fill" : "pause.circle"
-                                                    ).foregroundStyle(.tint).accessibilityLabel(
-                                                        playback.isPlaying ? "Playing" : "Playback paused")
+                                                HStack(spacing: 6) {
+                                                    Text(
+                                                        meeting.createdAt,
+                                                        format: .dateTime.month().day().hour().minute())
+                                                    if meeting.duration > 0 {
+                                                        Text("·")
+                                                        Text(playbackTime(meeting.duration)).monospacedDigit()
+                                                    }
+                                                    if let archive = store.archiveStatuses[meeting.id] {
+                                                        MeetingArchiveListIcon(status: archive)
+                                                    }
+                                                }.font(.caption).foregroundStyle(.secondary)
+                                                if !meeting.summary.isEmpty {
+                                                    Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(
+                                                        .secondary)
                                                 }
-                                            }
-                                            HStack(spacing: 6) {
-                                                Text(meeting.createdAt, format: .dateTime.month().day().hour().minute())
-                                                if meeting.duration > 0 {
-                                                    Text("·")
-                                                    Text(playbackTime(meeting.duration)).monospacedDigit()
-                                                }
-                                                if let archive = store.archiveStatuses[meeting.id] {
-                                                    MeetingArchiveListIcon(status: archive)
-                                                }
-                                            }.font(.caption).foregroundStyle(.secondary)
-                                            if !meeting.summary.isEmpty {
-                                                Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(
-                                                    .secondary)
-                                            }
-                                        }.padding(.vertical, 4).tag(meeting.id)
-                                    }
-                                }
-                                .listStyle(.inset)
-                                .contentMargins(.top, 0, for: .scrollContent)
-                                .scrollBounceBehavior(.basedOnSize)
-                                // Native primary action: single click selects, double click plays.
-                                // https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:)
-                                .contextMenu(forSelectionType: UUID.self) { ids in
-                                    if let id = ids.first, let meeting = store.meetings.first(where: { $0.id == id }) {
-                                        if !meeting.audioFiles.isEmpty {
-                                            Button("Play", systemImage: "play.fill") {
-                                                playback.play(meeting: meeting, files: store.audioURLs(for: meeting))
-                                            }
-                                            .disabled(recordingActive)
+                                            }.padding(.vertical, 4).tag(meeting.id)
                                         }
-                                        Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
-                                        Button("Delete Meeting…", role: .destructive) { deleting = meeting }
-                                            .disabled(store.recordingID == meeting.id)
                                     }
-                                } primaryAction: { ids in
-                                    guard !recordingActive, let id = ids.first,
-                                        let meeting = store.meetings.first(where: { $0.id == id })
-                                    else { return }
-                                    let files = store.audioURLs(for: meeting)
-                                    guard !files.isEmpty else { return }
-                                    playback.play(meeting: meeting, files: files)
-                                }
-                                .modifier(AudioFileDrop())
-                                .navigationTitle("Meetings")
-                                .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
-                                .onChange(of: store.meetings.map(\.id)) { previous, current in
-                                    // Inserting above the visible rows can retain the native list's
-                                    // old scroll position, leaving the new first row partly clipped.
-                                    // Reveal additions without changing selection or playback. Edits,
-                                    // deletions, search changes and track imports keep their position.
-                                    let existing = Set(previous)
-                                    guard current.contains(where: { !existing.contains($0) }),
-                                        let added = filteredMeetings.first(where: { !existing.contains($0.id) })
-                                    else { return }
-                                    // Center the added row. For the first row, native scrolling
-                                    // clamps to the document beginning, preserving the list inset.
-                                    // Top or minimum alignment scrolls that native space away.
-                                    scroll.scrollTo(added.id, anchor: .center)
+                                    .listStyle(.inset)
+                                    .contentMargins(.top, 0, for: .scrollContent)
+                                    .scrollBounceBehavior(.basedOnSize)
+                                    // Native primary action: single click selects, double click plays.
+                                    // https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:)
+                                    .contextMenu(forSelectionType: UUID.self) { ids in
+                                        if let id = ids.first,
+                                            let meeting = store.meetings.first(where: { $0.id == id })
+                                        {
+                                            if !meeting.audioFiles.isEmpty {
+                                                Button("Play", systemImage: "play.fill") {
+                                                    playback.play(
+                                                        meeting: meeting, files: store.audioURLs(for: meeting))
+                                                }
+                                                .disabled(recordingActive)
+                                            }
+                                            Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
+                                            Button("Delete Meeting…", role: .destructive) { deleting = meeting }
+                                                .disabled(store.recordingID == meeting.id)
+                                        }
+                                    } primaryAction: { ids in
+                                        guard !recordingActive, let id = ids.first,
+                                            let meeting = store.meetings.first(where: { $0.id == id })
+                                        else { return }
+                                        let files = store.audioURLs(for: meeting)
+                                        guard !files.isEmpty else { return }
+                                        playback.play(meeting: meeting, files: files)
+                                    }
+                                    .modifier(AudioFileDrop())
+                                    .navigationTitle("Meetings")
+                                    .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
+                                    .onChange(of: store.meetings.map(\.id)) { previous, current in
+                                        // Inserting above the visible rows can retain the native list's
+                                        // old scroll position, leaving the new first row partly clipped.
+                                        // Reveal additions without changing selection or playback. Edits,
+                                        // deletions, search changes and track imports keep their position.
+                                        let existing = Set(previous)
+                                        guard current.contains(where: { !existing.contains($0) }),
+                                            let added = filteredMeetings.first(where: { !existing.contains($0.id) })
+                                        else { return }
+                                        // Center the added row. For the first row, native scrolling
+                                        // clamps to the document beginning, preserving the list inset.
+                                        // Top or minimum alignment scrolls that native space away.
+                                        scroll.scrollTo(added.id, anchor: .center)
+                                    }
                                 }
                             }
-                        }
-                    }.frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
-                    Group {
-                        if destination == .meetings, let id = selectedMeeting,
-                            store.meetings.contains(where: { $0.id == id })
-                        {
-                            MeetingDetailView(meetingID: id).id(id)
-                        }
-                        else if destination == .people, let id = selectedPerson,
-                            let person = store.people.first(where: { $0.id == id })
-                        {
-                            ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
-                        }
-                        else if destination == .tags, let id = selectedTag,
-                            let tag = store.tags.first(where: { $0.id == id })
-                        {
-                            ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
-                        }
-                        else {
-                            emptySelection
-                        }
-                    }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                        }.frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
+                        Group {
+                            if destination == .meetings, let id = selectedMeeting,
+                                store.meetings.contains(where: { $0.id == id })
+                            {
+                                MeetingDetailView(meetingID: id).id(id)
+                            }
+                            else if destination == .people, let id = selectedPerson,
+                                let person = store.people.first(where: { $0.id == id })
+                            {
+                                ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
+                            }
+                            else if destination == .tags, let id = selectedTag,
+                                let tag = store.tags.first(where: { $0.id == id })
+                            {
+                                ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
+                            }
+                            else {
+                                emptySelection
+                            }
+                        }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             .navigationTitle("")
@@ -333,21 +345,7 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                // Progress for background jobs, including during a recording. It shows
-                // the newest job and a count of the others, and disappears when all end.
-                if !store.backgroundJobs.isEmpty {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        if store.backgroundJobs.count > 1 {
-                            Text("\(store.backgroundJobs.count - 1) more in progress").font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        Spacer()
-                    }.padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
-                        .accessibilityElement(children: .combine)
-                        .help(store.backgroundJobs.map(store.progressText).joined(separator: "\n"))
-                }
+                TaskQueueStatusButton { destination = .tasks }
             }
         }
         .sheet(isPresented: $store.presentsRecordingSetup) {
@@ -410,6 +408,7 @@ struct LibraryView: View {
         switch destination {
         case .people: "People"
         case .tags: "Tags"
+        case .tasks: "Tasks"
         default: "Meetings"
         }
     }
