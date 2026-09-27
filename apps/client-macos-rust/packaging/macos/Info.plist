@@ -5,9 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.gdaymeetings.macos.rust</string>
     <key>CFBundleName</key>
-    <string>Gday Meetings</string>
+    <string>Gday Meetings Rust</string>
     <key>CFBundleDisplayName</key>
-    <string>Gday Meetings</string>
+    <string>Gday Meetings Rust</string>
     <key>CFBundleExecutable</key>
     <string>gday-meetings-client</string>
     <key>CFBundlePackageType</key>

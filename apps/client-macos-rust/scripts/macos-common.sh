@@ -8,7 +8,7 @@ fi
 client_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 target_dir="$client_dir/target"
 bundle_dir="${GDAY_MEETINGS_BUNDLE_DIR:-$target_dir/macos}"
-app_path="$bundle_dir/Gday Meetings.app"
+app_path="$bundle_dir/Gday Meetings Rust.app"
 executable="$app_path/Contents/MacOS/gday-meetings-client"
 log_dir="${GDAY_MEETINGS_LOG_DIR:-$HOME/Library/Logs/Gday Meetings}"
 

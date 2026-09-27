@@ -36,7 +36,7 @@ make doctor
 make install
 ```
 
-`make install` checks prerequisites, compiles the release binary, creates the app bundle, signs it locally, verifies the signature, stages a separate installer copy, and opens a dedicated Finder window in icon view. Drag **Gday Meetings.app** onto **Applications**, then open the installed app. Your default Finder view is unchanged. macOS may request permission for the terminal to control Finder; if declined, the installer opens normally and prints a reminder to press **Command-1** for icon view. Quit an existing copy before replacing it. Finder may request permission to write to Applications; do not run `sudo make`.
+`make install` checks prerequisites, compiles the release binary, creates the app bundle, signs it locally, verifies the signature, stages a separate installer copy, and opens a dedicated Finder window in icon view. Drag **Gday Meetings Rust.app** onto **Applications**, then open the installed app. Your default Finder view is unchanged. macOS may request permission for the terminal to control Finder; if declined, the installer opens normally and prints a reminder to press **Command-1** for icon view. Quit an existing copy before replacing it. Finder may request permission to write to Applications; do not run `sudo make`.
 
 Signing is automatic and **ad-hoc**: no Apple Developer account, paid membership, certificate, or provisioning profile is required. This is a local build, not a notarized distribution. Neither these scripts nor the app disable Gatekeeper.
 

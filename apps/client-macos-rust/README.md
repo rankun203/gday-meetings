@@ -33,7 +33,7 @@ make doctor
 make install
 ```
 
-This builds an ad-hoc signed `Gday Meetings.app` and opens a Finder folder with an Applications shortcut. Drag the app onto Applications, then double-click the installed app. It starts the local server and opens the browser UI. The Rust app uses bundle identifier `com.gdaymeetings.macos.rust` and stores data in `~/.local/share/com.gdaymeetings.macos.rust`. On first launch it atomically moves the historical `~/.local/share/org.rankun.meeting-notes` directory only when the new destination is absent; it never merges two existing libraries. Quit older client versions before migration. Changing the bundle identity requires granting microphone and system-audio permissions again. The Swift app has its own incompatible storage schema under `~/.local/share/com.gdaymeetings.macos`; do not point either client directly at the other library. The installer folder is a separate copy, so dragging it away does not remove the development build. Close a running installed app before replacing it in Finder.
+This builds an ad-hoc signed `Gday Meetings Rust.app` and opens a Finder folder with an Applications shortcut. Drag the app onto Applications, then double-click the installed app. It starts the local server and opens the browser UI. The Rust app uses bundle identifier `com.gdaymeetings.macos.rust` and stores data in `~/.local/share/com.gdaymeetings.macos.rust`. On first launch it atomically moves the historical `~/.local/share/org.rankun.meeting-notes` directory only when the new destination is absent; it never merges two existing libraries. Quit older client versions before migration. Changing the bundle identity requires granting microphone and system-audio permissions again. The Swift app has its own incompatible storage schema under `~/.local/share/com.gdaymeetings.macos`; do not point either client directly at the other library. The installer folder is a separate copy, so dragging it away does not remove the development build. Close a running installed app before replacing it in Finder.
 
 This workflow uses built-in `ditto`, `codesign` and Finder; it does not need a DMG builder or copy over `/Applications` automatically. For command-line-only installation, `cargo install --git https://github.com/rankun203/meeting-notes gday-meetings-client` remains available.
 
@@ -73,8 +73,8 @@ make start
 make start CLIENT_ARGS="--port 8080 --data-dir ~/my-recordings"
 ```
 
-This builds and signs `apps/client-macos-rust/target/macos/Gday Meetings.app`, then launches it
-through macOS LaunchServices. Allow **Gday Meetings** to use your microphone and
+This builds and signs `apps/client-macos-rust/target/macos/Gday Meetings Rust.app`, then launches it
+through macOS LaunchServices. Allow **Gday Meetings Rust** to use your microphone and
 record system audio when you start a recording. The launcher stays in the
 foreground and streams daemon logs to your terminal (also saved in
 `~/Library/Logs/Gday Meetings/client.YYYY-MM-DD.log`). Press **Ctrl+C** to stop the daemon and finalize

@@ -398,7 +398,7 @@ mod cli_tests {
     fn finder_launch_starts_the_ui_and_browser() {
         let cli = parse_cli(
             vec!["gday-meetings-client".into()],
-            Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
+            Path::new("/Applications/Gday Meetings Rust.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
             port: 0, web_ui: true, open_browser: true, data_dir: None, ..
@@ -418,7 +418,7 @@ mod cli_tests {
         let cli = parse_cli(
             ["gday-meetings-client", "serve", "--port", "8080", "--data-dir", "/tmp/test-meetings", "--web-ui"]
                 .map(OsString::from).to_vec(),
-            Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
+            Path::new("/Applications/Gday Meetings Rust.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
             port: 8080, web_ui: true, open_browser: false, data_dir: Some(_), ..
