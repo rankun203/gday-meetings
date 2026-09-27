@@ -7,25 +7,36 @@ struct MeetingNotesWorkspace: View {
     let meetingID: UUID
     @ViewState private var reading = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "Notes View",
-                selection: Binding(
-                    get: { reading },
-                    set: { value in
-                        if store.flushNotes() { reading = value }
-                    })
-            ) {
-                Text("Edit").tag(false)
-                Text("Read").tag(true)
-            }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
-            if reading {
-                NotesReadingView(meetingID: meetingID)
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button {
+                    if store.flushNotes() { reading.toggle() }
+                } label: {
+                    Image(systemName: reading ? "pencil" : "book")
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(reading ? "Edit notes" : "Read notes")
+                .accessibilityLabel(reading ? "Edit Notes" : "Read Notes")
+                .accessibilityValue(reading ? "Reading mode" : "Editing mode")
             }
-            else {
-                MeetingNotesEditor(meetingID: meetingID)
+            .padding(8)
+            ZStack {
+                MeetingNotesEditor(meetingID: meetingID, showsPanelBorder: false, editingEnabled: !reading)
+                    .opacity(reading ? 0 : 1)
+                    .allowsHitTesting(!reading)
+                    .accessibilityHidden(reading)
+                if reading {
+                    NotesReadingView(meetingID: meetingID)
+                }
             }
         }
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
         .task(id: meetingID) { store.openNotes(id: meetingID) }
         .onDisappear { store.closeNotes(id: meetingID) }
         .id(meetingID)
@@ -59,12 +70,10 @@ private struct NotesReadingView: View {
                     }
                 }
                 if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("No notes yet. Choose Edit to add notes.").foregroundStyle(.secondary)
+                    Text("No notes yet. Choose Edit Notes to add notes.").foregroundStyle(.secondary)
                 }
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
     }
     @ViewBuilder private func content(_ block: NotesReadingDocument.Content) -> some View {
         switch block {
