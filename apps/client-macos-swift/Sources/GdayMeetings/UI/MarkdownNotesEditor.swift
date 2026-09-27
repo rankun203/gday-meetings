@@ -6,11 +6,13 @@ struct MeetingNotesEditor: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     let meetingID: UUID
+    var showsPanelBorder = true
+    var editingEnabled = true
     var body: some View {
         MarkdownNotesEditor(
             meetingID: meetingID,
             markdown: store.meetings.first { $0.id == meetingID }?.notes ?? "",
-            editable: store.libraryWritable,
+            editable: store.libraryWritable && editingEnabled,
             clock: {
                 NotesDocument.clock(
                     recording: store.recordingID == meetingID ? store.recordingDuration : nil,
@@ -36,7 +38,10 @@ struct MeetingNotesEditor: View {
             }
         )
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10).stroke(
+                Color(nsColor: .separatorColor).opacity(showsPanelBorder ? 0.6 : 0))
+        )
         .onDisappear { _ = store.flushNotes() }
         .id(meetingID)
     }
@@ -84,8 +89,14 @@ struct MarkdownNotesEditor: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let text = scroll.documentView as? NotesTextView else { return }
+        update(text)
+    }
+    func update(_ text: NotesTextView) {
         text.editor = self
         text.isEditable = editable
+        if !editable, text.window?.firstResponder === text {
+            text.window?.makeFirstResponder(nil)
+        }
         if text.document.markdown != markdown { text.load(markdown) }
         text.needsLayout = true
     }
@@ -367,16 +378,9 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         super.mouseDown(with: event)
     }
     override func cursorUpdate(with event: NSEvent) {
-        if images.setResizeCursor(at: convert(event.locationInWindow, from: nil)) { return }
-        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        if event.modifierFlags.contains(.command), document.time(at: index) != nil,
-            editor?.canPlay() == true
-        {
-            NSCursor.pointingHand.set()
-        }
-        else {
-            super.cursorUpdate(with: event)
-        }
+        if updateImageCursor(event) { return }
+        super.cursorUpdate(with: event)
+        updateTimelineHover(event)
     }
     override func updateTrackingAreas() {
         if let notesTrackingArea { removeTrackingArea(notesTrackingArea) }
@@ -389,20 +393,32 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         super.updateTrackingAreas()
     }
     override func mouseMoved(with event: NSEvent) {
-        updateTimelineHover(event)
+        if updateImageCursor(event) { return }
         super.mouseMoved(with: event)
+        updateTimelineHover(event)
     }
     override func flagsChanged(with event: NSEvent) {
-        updateTimelineHover(event)
+        if updateImageCursor(event) { return }
         super.flagsChanged(with: event)
+        updateTimelineHover(event)
     }
     override func mouseExited(with event: NSEvent) {
         gutterButtons.forEach { $0.highlight(false) }
         super.mouseExited(with: event)
     }
+    private func hoverPosition(_ event: NSEvent) -> NSPoint {
+        let location =
+            event.type == .flagsChanged
+            ? (window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow) : event.locationInWindow
+        return convert(location, from: nil)
+    }
+    private func updateImageCursor(_ event: NSEvent) -> Bool {
+        guard images.setImageCursor(at: hoverPosition(event)) else { return false }
+        gutterButtons.forEach { $0.highlight(false) }
+        return true
+    }
     private func updateTimelineHover(_ event: NSEvent) {
-        let position = convert(window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow, from: nil)
-        if images.setResizeCursor(at: position) { return }
+        let position = hoverPosition(event)
         let index = characterIndexForInsertion(at: position)
         let time =
             event.modifierFlags.contains(.command) && editor?.canPlay() == true

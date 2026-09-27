@@ -184,12 +184,12 @@ import QuickLookUI
                 y: text.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + bottom + 8)
         }
     }
-    func setResizeCursor(at point: NSPoint) -> Bool {
-        guard let text, text.isEditable else { return false }
+    func setImageCursor(at point: NSPoint) -> Bool {
+        guard let text else { return false }
         for view in views where !view.isHidden {
             let local = view.convert(point, from: text)
-            if view.resizeHandle.contains(local) {
-                NotesImageView.resizeCursor.set()
+            if let cursor = view.cursor(at: local) {
+                cursor.set()
                 return true
             }
         }
@@ -214,21 +214,40 @@ import QuickLookUI
     override func draw(_ dirtyRect: NSRect) {
         image?.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
-    var resizeHandle: NSRect { NSRect(x: bounds.maxX - 24, y: bounds.maxY - 24, width: 24, height: 24) }
-    static var resizeCursor: NSCursor {
+    var resizeHandle: NSRect {
+        let width = min(32, bounds.width)
+        let height = min(32, bounds.height)
+        return NSRect(x: bounds.maxX - width, y: bounds.maxY - height, width: width, height: height)
+    }
+    func cursor(at point: NSPoint) -> NSCursor? {
+        guard bounds.contains(point) else { return nil }
+        return text?.isEditable == true && resizeHandle.contains(point) ? Self.resizeCursor : .arrow
+    }
+    static let resizeCursor: NSCursor = {
         if #available(macOS 15.0, *) {
             return .frameResize(position: .bottomRight, directions: .all)
         }
         let image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: nil)!
         image.size = NSSize(width: 18, height: 18)
         return NSCursor(image: image, hotSpot: NSPoint(x: 9, y: 9))
-    }
+    }()
     override func resetCursorRects() {
         super.resetCursorRects()
+        addCursorRect(bounds, cursor: .arrow)
         guard text?.isEditable == true else { return }
         addCursorRect(
             resizeHandle,
             cursor: Self.resizeCursor)
+    }
+    override func cursorUpdate(with event: NSEvent) {
+        cursor(at: convert(event.locationInWindow, from: nil))?.set()
+    }
+    override func mouseMoved(with event: NSEvent) {
+        if let cursor = cursor(at: convert(event.locationInWindow, from: nil)) {
+            cursor.set()
+            return
+        }
+        super.mouseMoved(with: event)
     }
     override func mouseDown(with event: NSEvent) {
         guard let text else { return }
@@ -239,13 +258,17 @@ import QuickLookUI
         let point = convert(event.locationInWindow, from: nil)
         text.setSelectedRange(reference.range)
         window?.makeFirstResponder(text)
-        guard text.isEditable, point.x >= bounds.maxX - 24, point.y >= bounds.maxY - 24 else { return }
+        guard text.isEditable, resizeHandle.contains(point) else { return }
         let initialWidth = Double(frame.width)
         let aspect = frame.height / frame.width
         let initialX = text.convert(event.locationInWindow, from: nil).x
         let cursor = Self.resizeCursor
         cursor.push()
-        defer { NSCursor.pop() }
+        defer {
+            NSCursor.pop()
+            let point = convert(window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow, from: nil)
+            (self.cursor(at: point) ?? .iBeam).set()
+        }
         var proposed = initialWidth
         let outline = NSView(frame: frame)
         outline.wantsLayer = true
@@ -256,6 +279,7 @@ import QuickLookUI
         let maximum = max(24, Double(text.bounds.width - text.textContainerInset.width * 2 - 10))
         while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if next.type == .leftMouseUp { break }
+            cursor.set()
             proposed = min(
                 maximum, max(24, initialWidth + Double(text.convert(next.locationInWindow, from: nil).x - initialX)))
             outline.frame.size = CGSize(width: proposed, height: proposed * aspect)
