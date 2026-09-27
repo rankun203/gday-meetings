@@ -63,13 +63,19 @@ struct LiveTranscriptView: View {
     private func styledText(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> AttributedString {
         var text = AttributedString(phrase.text)
         if provisional, controller.enabled,
-            phrase.id == LiveTranscriptPresentation.activePhraseID(controller.partials),
-            let range = LiveTranscriptPresentation.newestWordRange(in: phrase),
-            let attributedRange = Range(range, in: text)
+            phrase.id == LiveTranscriptPresentation.activePhraseID(controller.partials)
         {
-            text[attributedRange].foregroundColor = .red
+            let ranges = LiveTranscriptPresentation.recentWordRanges(in: phrase)
+            for (index, range) in ranges.enumerated() {
+                guard let attributedRange = Range(range, in: text) else { continue }
+                text[attributedRange].foregroundColor = index == ranges.count - 1 ? .red : trailingWordColor
+            }
         }
         return text
+    }
+    private var trailingWordColor: Color {
+        if #available(macOS 15, *) { return .red.mix(with: .primary, by: 0.5) }
+        return Color(nsColor: NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed)
     }
     private func phraseView(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> some View {
         TranscriptRow(start: phrase.start, source: phrase.source.title, provisional: provisional) {

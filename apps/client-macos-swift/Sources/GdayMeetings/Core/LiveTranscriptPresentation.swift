@@ -37,10 +37,21 @@ enum LiveTranscriptPresentation {
         if let word = timedWords.max(by: { $0.end < $1.end }) {
             let token = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !token.isEmpty, let matched = phrase.text.range(of: token, options: .backwards) {
-                return lastWord(in: phrase.text, range: matched) ?? matched
+                return lastWord(in: phrase.text, range: matched)
+                    ?? lastWord(in: phrase.text, range: phrase.text.startIndex..<matched.upperBound)
             }
         }
         return lastWord(in: phrase.text, range: phrase.text.startIndex..<phrase.text.endIndex)
+    }
+
+    /// The reference holds its two-word trail until recognition changes or
+    /// finalizes. Re-derive from replacement text; never retain stale offsets.
+    static func recentWordRanges(in phrase: LiveTranscriptPhrase) -> [Range<String.Index>] {
+        guard let newest = newestWordRange(in: phrase) else { return [] }
+        if let previous = lastWord(in: phrase.text, range: phrase.text.startIndex..<newest.lowerBound) {
+            return [previous, newest]
+        }
+        return [newest]
     }
 
     private static func lastWord(in text: String, range: Range<String.Index>) -> Range<String.Index>? {

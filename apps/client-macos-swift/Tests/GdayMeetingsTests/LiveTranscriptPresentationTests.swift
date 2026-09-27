@@ -62,3 +62,35 @@ struct LiveTranscriptPresentationTests {
         #expect(LiveTranscriptPresentation.activePhraseID(partials) == other.id)
     }
 }
+
+extension LiveTranscriptPresentationTests {
+    @Test func recentTrailAdvancesOnlyWithRecognitionText() {
+        for (text, expected) in [
+            ("So it seems the last", ["the", "last"]),
+            ("So it seems the last word is", ["word", "is"]),
+            ("So it seems the last word is red and the", ["and", "the"]),
+        ] {
+            let value = phrase(text)
+            let ranges = LiveTranscriptPresentation.recentWordRanges(in: value)
+            #expect(ranges.map { String(value.text[$0]) } == expected)
+            #expect(LiveTranscriptPresentation.recentWordRanges(in: value) == ranges)
+        }
+    }
+    @Test func correctedTrailUsesOnlyReplacementText() {
+        let initial = phrase("We will meat tomorrow")
+        var corrected = initial
+        corrected.text = "We will meet on Tuesday."
+        #expect(
+            LiveTranscriptPresentation.recentWordRanges(in: corrected).map { String(corrected.text[$0]) } == [
+                "on", "Tuesday",
+            ])
+        let one = phrase("Hello!")
+        #expect(LiveTranscriptPresentation.recentWordRanges(in: one).map { String(one.text[$0]) } == ["Hello"])
+    }
+    @Test func timedPunctuationDoesNotReplaceTheNewestWord() {
+        var value = phrase("Hello, world!")
+        value.words = [.init(text: "!", start: 2, end: 2.1)]
+        #expect(
+            LiveTranscriptPresentation.recentWordRanges(in: value).map { String(value.text[$0]) } == ["Hello", "world"])
+    }
+}
