@@ -36,6 +36,7 @@ enum SummaryPrompt {
         - Include a TODO section with action items and owners near the top, right after attendees. If there are no action items, write "No action items."
         - Use markdown checkbox syntax: `- [ ] **Owner**: task description` (incomplete) or `- [x] **Owner**: task description` (completed). One item per owner; if ambiguous, assign to the most likely owner; if shared, create separate items per person.
         - Cite every key point, decision, action item, or claim with an inline [MM:SS] timestamp from the transcript. Always add a space before the first timestamp: `text [12:45]` not `text[12:45]`. Chain multiple: [12:45][15:20].
+        - When using an attached Notes image, cite it with a descriptive Markdown link using its supplied assets/ path. Do not embed the image in the summary or invent image paths.
         - When providing Chinese content, add a space between Chinese characters and English letters or Arabic numerals.
         """
 

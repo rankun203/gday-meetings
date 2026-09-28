@@ -108,12 +108,15 @@ extension LLMService {
         var request = try ServiceHTTP.request(
             endpoint,
             json: [
-                "model": model, "messages": messages.map { ["role": $0.role, "content": $0.content] }, "stream": true,
+                "model": model, "messages": messages.map(\.requestValue), "stream": true,
             ])
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         return try await ServiceHTTP.consumeStream(
-            request, trace: .init(provider: provider, data: "meeting text (\(messages.count) messages)")
+            request,
+            trace: .init(
+                provider: provider,
+                data: "meeting text and \(messages.reduce(0) { $0 + ($1.images?.count ?? 0) }) notes images")
         ) { bytes, response in
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw ServiceHTTPStatusError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
@@ -130,6 +133,11 @@ extension LLMService {
                     }
                 }
                 let object = try ServiceHTTP.decode(data, response)
+                if let choices = object["choices"] as? [[String: Any]],
+                    let reason = choices.first?["finish_reason"] as? String, reason != "stop"
+                {
+                    throw ServiceError("The provider stopped before completing the summary. Try again.")
+                }
                 guard let choices = object["choices"] as? [[String: Any]],
                     let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String,
                     !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

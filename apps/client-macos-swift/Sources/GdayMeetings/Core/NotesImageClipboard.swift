@@ -24,7 +24,10 @@ enum NotesImageClipboard {
         var retained = markdown
         let files = try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        for file in files where file.lastPathComponent.hasPrefix("notes (changed on disk") && file.pathExtension == "md"
+        for file in files
+        where file.lastPathComponent == "summary.md"
+            || (file.lastPathComponent.hasPrefix("notes (changed on disk") && file.pathExtension == "md")
+            || (file.lastPathComponent.hasPrefix("summary (changed on disk") && file.pathExtension == "md")
         {
             let properties = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard properties.isSymbolicLink != true, properties.isRegularFile == true else { continue }

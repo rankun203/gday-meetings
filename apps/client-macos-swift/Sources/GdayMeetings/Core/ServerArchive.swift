@@ -109,10 +109,11 @@ extension MeetingStore {
                     "summary.md": meeting.summary, "todos.json": try json(meeting.todos),
                     "chat.json": try json(meeting.chat),
                 ]
-                let hasImages = !NotesAssets.tokens(in: meeting.notes).isEmpty
+                let imageReferences = meeting.notes + "\n" + meeting.summary
+                let hasImages = !NotesAssets.tokens(in: imageReferences).isEmpty
                 if supportsImages {
                     try NotesImageStore.ensurePreviews(in: meeting.notes, directory: folder)
-                    artifacts.merge(try ArchiveNoteImages.artifacts(notes: meeting.notes, directory: folder)) {
+                    artifacts.merge(try ArchiveNoteImages.artifacts(notes: imageReferences, directory: folder)) {
                         _, new in new
                     }
                 }
@@ -178,7 +179,10 @@ extension MeetingStore {
                 let oldArtifacts = oldBody["artifacts"] as? [String: Any],
                 let notes = oldArtifacts["notes.md"] as? String
             {
-                checkpoint.omittedNoteImages = NotesAssets.tokens(in: notes).contains { oldArtifacts[$0.path] == nil }
+                let summary = oldArtifacts["summary.md"] as? String ?? ""
+                checkpoint.omittedNoteImages = NotesAssets.tokens(in: notes + "\n" + summary).contains {
+                    oldArtifacts[$0.path] == nil
+                }
             }
             for index in checkpoint.audio.indices where checkpoint.audio[index].url == nil {
                 let item = checkpoint.audio[index]
@@ -220,7 +224,7 @@ extension MeetingStore {
             try Self.saveArchive(checkpoint, to: checkpointURL)
             if checkpoint.omittedNoteImages == true {
                 errorMessage =
-                    "Meeting text and audio were archived. Images in notes weren’t archived because this server doesn’t support image attachments. Export the meeting to keep a portable copy with its images."
+                    "Meeting text and audio were archived. Images linked from Notes or Summary weren’t archived because this server doesn’t support image attachments. Export the meeting to keep a portable copy with its images."
             }
         }
         catch {

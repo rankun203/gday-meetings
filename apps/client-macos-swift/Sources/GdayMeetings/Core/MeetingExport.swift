@@ -47,7 +47,7 @@ enum MeetingExport {
 
     static func write(_ meeting: Meeting, directory: URL, to url: URL) throws {
         try NotesImageStore.ensurePreviews(in: meeting.notes, directory: directory)
-        let files = try NotesAssets.referencedFiles(in: meeting.notes, directory: directory)
+        let files = try NotesAssets.referencedFiles(in: meeting.notes + "\n" + meeting.summary, directory: directory)
         let manager = FileManager.default
         let parent = url.deletingLastPathComponent()
         let stage = parent.appendingPathComponent(".gday-export-\(UUID().uuidString)")
@@ -122,8 +122,10 @@ enum MeetingExport {
             output = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         }
         else {
+            var exported = meeting
+            exported.summary = NotesAssets.rewritingReferences(in: meeting.summary, paths: paths)
             output = Data(
-                markdown(meeting, notes: NotesAssets.rewritingReferences(in: meeting.notes, paths: paths)).utf8)
+                markdown(exported, notes: NotesAssets.rewritingReferences(in: meeting.notes, paths: paths)).utf8)
         }
         if let sidecar { try manager.moveItem(at: stage.appendingPathComponent("assets"), to: sidecar) }
         do { try output.write(to: url, options: .atomic) }
@@ -150,11 +152,12 @@ enum MeetingExport {
             let raw = object["notesAssets"]
         else { return }
         guard let manifest = raw as? [String: String] else {
-            throw MeetingError.message("The exported notes image manifest is invalid.")
+            throw MeetingError.message("The exported image manifest is invalid.")
         }
-        let referenced = Set(NotesAssets.tokens(in: notes).map(\.path))
+        let summary = object["summary"] as? String ?? ""
+        let referenced = Set(NotesAssets.tokens(in: notes + "\n" + summary).map(\.path))
         guard Set(manifest.keys) == referenced else {
-            throw MeetingError.message("The exported notes image manifest doesn’t match the notes.")
+            throw MeetingError.message("The exported image manifest doesn’t match Notes and Summary.")
         }
         var files: [String: URL] = [:]
         for (path, relative) in manifest {

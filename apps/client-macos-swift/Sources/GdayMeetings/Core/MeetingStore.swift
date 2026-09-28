@@ -1002,11 +1002,11 @@ final class MeetingStore: ObservableObject {
             try? FileManager.default.removeItem(at: importedDirectory)
             throw MeetingError.message(errorMessage ?? "Could not save imported meeting.")
         }
-        if !NotesAssets.tokens(in: meeting.notes).isEmpty,
+        if !NotesAssets.tokens(in: meeting.notes + "\n" + meeting.summary).isEmpty,
             (try JSONSerialization.jsonObject(with: archiveData) as? [String: Any])?["notesAssets"] == nil
         {
             errorMessage =
-                "Meeting text was imported. Its JSON file did not include an image manifest, so images in notes were not imported."
+                "Meeting text was imported. Its JSON file did not include an image manifest, so images linked from Notes or Summary were not imported."
         }
     }
 }

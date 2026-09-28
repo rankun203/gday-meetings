@@ -26,6 +26,8 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
         switch self {
         case .audio: "Microphone and system audio tracks. Live transcription audio is processed on this Mac."
         case .meetingDetails: "Title, date, duration, language, and recording devices"
+        case .notes:
+            "Notes text and referenced images. Summary providers receive images when Image Input supports them; chat sends text only."
         case .peopleAndTags: "Names, email addresses, notes, and speaker assignments"
         case .voiceSamples:
             "Voice patterns from transcription results and speaker assignments. Recognition runs on this Mac."

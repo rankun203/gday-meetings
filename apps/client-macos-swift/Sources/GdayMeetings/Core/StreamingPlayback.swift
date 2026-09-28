@@ -24,6 +24,7 @@ final class StreamingPlayback: @unchecked Sendable {
         let ended: Bool
         let revision: UUID
         let error: String?
+        let requiresReload: Bool
     }
     var onUpdate: (@Sendable (Snapshot) -> Void)?
     private let queue = DispatchQueue(label: "com.gdaymeetings.playback", qos: .userInitiated)
@@ -36,6 +37,7 @@ final class StreamingPlayback: @unchecked Sendable {
     private var configurationObserver: NSObjectProtocol?
     private var playing = false
     private var closed = false
+    private var requiresReload = false
     private var origin: Int64 = 0
     private var produced: Int64 = 0
     private var totalFrames: Int64 = 0
@@ -108,13 +110,26 @@ final class StreamingPlayback: @unchecked Sendable {
             configurationObserver = NotificationCenter.default.addObserver(
                 forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
             ) { [weak self] _ in
-                self?.queue.async { [weak self] in
-                    guard let self, !self.closed else { return }
-                    self.fail("Audio output changed. Press Play to resume with the current device.")
-                }
+                self?.audioConfigurationChanged()
             }
             try fill()
             return Double(totalFrames) / 48000
+        }
+    }
+
+    /// A prepared, paused engine also receives route notifications. Invalidate it
+    /// for the next explicit Play, but only report an interrupted playback session.
+    func audioConfigurationChanged() {
+        queue.async { [weak self] in
+            guard let self, !self.closed else { return }
+            let interrupted = self.playing
+            self.requiresReload = true
+            self.playing = false
+            self.engine?.pause()
+            self.timer?.cancel()
+            self.timer = nil
+            self.publish(
+                error: interrupted ? "Audio output changed. Press Play to resume with the current device." : nil)
         }
     }
 
@@ -254,7 +269,7 @@ final class StreamingPlayback: @unchecked Sendable {
             Snapshot(
                 time: position, playing: playing,
                 ended: !playing && produced >= totalFrames && position >= Double(totalFrames) / 48000,
-                revision: revision, error: error))
+                revision: revision, error: error, requiresReload: requiresReload))
     }
     private func fail(_ message: String) {
         playing = false

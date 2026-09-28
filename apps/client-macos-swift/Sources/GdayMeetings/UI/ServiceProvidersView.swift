@@ -185,6 +185,12 @@ private struct ServiceProviderPanel: View {
                             ModelComboBox(text: $draft.model, models: models)
                         }
                         modelStatus
+                        Picker("Image Input", selection: imageInputBinding) {
+                            Text("Automatic").tag(0)
+                            Text("Supports Images").tag(1)
+                            Text("Text Only").tag(2)
+                        }
+                        Text(imageInputDescription).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 else {
@@ -301,6 +307,28 @@ private struct ServiceProviderPanel: View {
             checkID = UUID()
             checkTask?.cancel()
             signInTask?.cancel()
+        }
+    }
+
+    private var imageInputBinding: Binding<Int> {
+        Binding(
+            get: {
+                guard let value = draft.summaryImageOverride, value.matches(draft) else { return 0 }
+                return value.supported ? 1 : 2
+            },
+            set: { value in
+                draft.summaryImageOverride =
+                    value == 0 ? nil : .init(endpoint: draft.endpoint, model: draft.model, supported: value == 1)
+            })
+    }
+    private var imageInputDescription: String {
+        switch SummaryImageSupport.resolve(draft, models: models) {
+        case true:
+            "Summaries include images from Notes, resized to at most 2,400 pixels. Up to 20 images, totaling 20 MB before encoding, are sent to this provider."
+        case false:
+            "Summaries include Notes text only. Images aren’t sent to this model."
+        case nil:
+            "Image support is unknown. For notes with images, choose Supports Images if the model accepts them, or Text Only to omit them."
         }
     }
 
@@ -460,7 +488,8 @@ private struct ServiceProviderPanel: View {
         case .liveTranscription: "Transcribes audio during recording."
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
-        case .summarization: "Summaries send the selected transcript and notes to this provider."
+        case .summarization:
+            "Summaries send the selected transcript and notes to this provider, including images when Image Input supports them."
         case .search: "No search provider is available."
         case .playback: "Remote playback requires uploading original audio."
         case .fileTransfer: "Temporary audio links expire automatically."

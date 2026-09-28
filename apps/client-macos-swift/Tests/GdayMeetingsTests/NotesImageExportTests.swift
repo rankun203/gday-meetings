@@ -121,7 +121,25 @@ import Testing
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
         try store.importArchive(url: file)
         #expect(store.meetings.first?.notes == meeting.notes)
-        #expect(store.errorMessage?.contains("images in notes were not imported") == true)
+        #expect(store.errorMessage?.contains("images linked from Notes or Summary were not imported") == true)
+    }
+
+    @Test func legacySummaryOnlyJSONReportsMissingAttachments() throws {
+        let (root, original) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = original
+        meeting.notes = ""
+        meeting.summary = "See the [diagram](assets/original.png)."
+        let file = root.appendingPathComponent("legacy-summary.json")
+        try JSONEncoder().encode(meeting).write(to: file)
+        let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
+        try store.importArchive(url: file)
+        let imported = try #require(store.meetings.first)
+        #expect(imported.summary == meeting.summary)
+        #expect(store.errorMessage?.contains("images linked from Notes or Summary were not imported") == true)
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: store.directory(for: imported.id).appendingPathComponent("assets/original.png").path))
     }
 
     @Test func archiveHashIncludesImageBytesAndRequestLimitIsEncodedSize() throws {
@@ -152,5 +170,59 @@ import Testing
                 #"{"origin":"https://example.invalid","externalID":"x","importKey":"x","snapshot":"e30=","audio":[]}"#
                     .utf8))
         #expect(legacy.omittedNoteImages == nil)
+    }
+
+    @Test func summaryOnlyImagesSurviveCleanupAndExportRoundTrip() throws {
+        let (root, original) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = original
+        meeting.notes = "The diagram was moved to the summary."
+        meeting.summary = "Review the [diagram](assets/original.png)."
+        try meeting.summary.write(to: root.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
+        let retained = try NotesImageClipboard.retainedMarkdown(directory: root, markdown: meeting.notes)
+        var removed: [String] = []
+        try NotesImageStore.cleanup(
+            directory: root, markdown: retained, trash: { removed.append($0.lastPathComponent) })
+        #expect(!removed.contains("original.png"))
+        #expect(removed.contains("display.png"))
+
+        let markdown = root.appendingPathComponent("summary.md-export.md")
+        try MeetingExport.write(meeting, directory: root, to: markdown)
+        #expect(try String(contentsOf: markdown, encoding: .utf8).contains("summary.md-export-assets/original.png"))
+        let bundle = root.appendingPathComponent("summary.textbundle")
+        try MeetingExport.write(meeting, directory: root, to: bundle)
+        #expect(try Data(contentsOf: bundle.appendingPathComponent("assets/original.png")) == png)
+
+        let json = root.appendingPathComponent("summary-export.json")
+        try MeetingExport.write(meeting, directory: root, to: json)
+        let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-summary-library"))
+        try store.importArchive(url: json)
+        let imported = try #require(store.meetings.first)
+        #expect(imported.summary == meeting.summary)
+        #expect(
+            try Data(contentsOf: store.directory(for: imported.id).appendingPathComponent("assets/original.png")) == png
+        )
+
+        let artifacts = try ArchiveNoteImages.artifacts(notes: meeting.notes + "\n" + meeting.summary, directory: root)
+        let image = try #require(artifacts["assets/original.png"] as? [String: Any])
+        #expect(Data(base64Encoded: try #require(image["data"] as? String)) == png)
+        #expect(artifacts["assets/display.png"] == nil)
+    }
+
+    @Test func summaryLinksKeepAssetSafetyAndIgnoreCodeAndExternalLinks() throws {
+        let (root, _) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text =
+            "[Diagram](assets/original.png) [Guide](guide.md) [Web](https://example.invalid/image.png) ` [Code](assets/missing.png) `"
+        #expect(NotesAssets.tokens(in: text).map(\.path) == ["assets/original.png"])
+        #expect(throws: (any Error).self) {
+            try NotesAssets.referencedFiles(in: "[Invalid](assets/%2e%2e/outside.png)", directory: root)
+        }
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("assets/link.png"),
+            withDestinationURL: root.appendingPathComponent("assets/original.png"))
+        #expect(throws: (any Error).self) {
+            try NotesAssets.referencedFiles(in: "[Invalid](assets/link.png)", directory: root)
+        }
     }
 }

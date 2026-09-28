@@ -198,6 +198,20 @@ enum ServiceHTTP {
 struct LLMMessage: Codable {
     let role: String
     let content: String
+    var images: [LLMImage]? = nil
+    var requestValue: [String: Any] {
+        guard let images, !images.isEmpty else { return ["role": role, "content": content] }
+        var parts: [[String: Any]] = [["type": "text", "text": content]]
+        for image in images {
+            parts.append(["type": "text", "text": "Notes image: \(image.path)"])
+            parts.append(["type": "image_url", "image_url": ["url": image.dataURL]])
+        }
+        return ["role": role, "content": parts]
+    }
+}
+struct LLMImage: Codable, Sendable {
+    let path: String
+    let dataURL: String
 }
 enum LLMService {
     static func complete(
@@ -213,11 +227,14 @@ enum LLMService {
         var r = try ServiceHTTP.request(
             endpoint,
             json: [
-                "model": model, "messages": messages.map { ["role": $0.role, "content": $0.content] }, "stream": false,
+                "model": model, "messages": messages.map(\.requestValue), "stream": false,
             ])
         if !apiKey.isEmpty { r.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         let result = try await ServiceHTTP.json(
-            r, trace: .init(provider: provider, data: "meeting text (\(messages.count) messages)"))
+            r,
+            trace: .init(
+                provider: provider,
+                data: "meeting text and \(messages.reduce(0) { $0 + ($1.images?.count ?? 0) }) notes images"))
         guard let choices = result["choices"] as? [[String: Any]],
             let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String
         else { throw ServiceError("The AI provider returned no message.") }

@@ -64,6 +64,8 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var endpoint = ""
     var apiKey = ""
     var model = ""
+    // Scoped to the exact endpoint/model; switching either returns to automatic detection.
+    var summaryImageOverride: SummaryImageOverride?
     var summarizationPrompt: String?
     var summaryPrompt: String {
         get { summarizationPrompt ?? SummaryPrompt.defaultInstructions }
@@ -79,6 +81,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
+        case summaryImageOverride
     }
     func supports(_ capability: ProviderCapability) -> Bool {
         isEnabled && kind.capabilities.contains(capability) && enabledCapabilities.contains(capability)

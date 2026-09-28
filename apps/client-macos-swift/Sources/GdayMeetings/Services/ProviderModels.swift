@@ -3,6 +3,7 @@ import Foundation
 struct ProviderModel: Codable, Equatable, Identifiable {
     let id: String
     let name: String?
+    var inputModalities: [String]? = nil
 }
 
 /// Reads an OpenAI-compatible `GET {endpoint}/models` list. The request sends only
@@ -46,7 +47,9 @@ enum ProviderModelList {
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty || trimmed.count > 200 || trimmed == id ? nil : trimmed
             }
-            models.append(ProviderModel(id: id, name: name))
+            let architecture = entry["architecture"] as? [String: Any]
+            let modalities = architecture?["input_modalities"] as? [String]
+            models.append(ProviderModel(id: id, name: name, inputModalities: modalities))
         }
         guard !models.isEmpty else { throw ServiceError("This endpoint returned an empty model list.") }
         return models.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }

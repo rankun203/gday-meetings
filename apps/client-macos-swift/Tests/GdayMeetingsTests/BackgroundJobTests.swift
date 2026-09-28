@@ -87,7 +87,9 @@ private final class BackgroundResponseGate: @unchecked Sendable {
             #expect(saved.chat.map(\.content) == ["What did we decide?", "Provider answer"])
         }
         else {
-            #expect(saved.summary == "Provider answer")
+            #expect(saved.summary.isEmpty)
+            #expect(store.managedTasks.last?.state == .failed)
+            #expect(store.managedTasks.last?.errorMessage?.contains("transcript or notes changed") == true)
         }
     }
 

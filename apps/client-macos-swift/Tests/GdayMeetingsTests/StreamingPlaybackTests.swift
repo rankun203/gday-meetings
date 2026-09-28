@@ -6,6 +6,26 @@ import Testing
 @testable import GdayMeetings
 
 struct StreamingPlaybackTests {
+    @Test(arguments: [false, true])
+    func routeChangeOnlyReportsInterruptedPlayback(wasPlaying: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
+        try OpusFixture.all[0].data.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = StreamingPlayback(manualRendering: true)
+        _ = try await player.prepare(files: [url])
+        if wasPlaying { try await player.play(rate: 1) }
+        let updates = AsyncStream<StreamingPlayback.Snapshot>.makeStream()
+        player.onUpdate = { updates.continuation.yield($0) }
+        player.audioConfigurationChanged()
+        var iterator = updates.stream.makeAsyncIterator()
+        let snapshot = try #require(await iterator.next())
+        #expect(snapshot.requiresReload)
+        #expect(!snapshot.playing)
+        #expect((snapshot.error != nil) == wasPlaying)
+        await player.shutdown()
+        updates.continuation.finish()
+    }
+
     @Test(arguments: OpusFixture.all) func opusIncrementalDecodeSeekAndEnd(fixture: OpusFixture) throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
         try fixture.data.write(to: url)

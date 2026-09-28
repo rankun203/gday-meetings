@@ -101,14 +101,20 @@ extension MeetingStore {
         let provider = try summaryProvider(providerID: providerID)
         summaryDrafts[id] = ""
         defer { summaryDrafts.removeValue(forKey: id) }
+        let messages = try await summaryMessages(provider: provider.provider, meeting: meeting)
         let result = try await provider.complete(
-            messages: SummaryPrompt.messages(provider: provider.provider, meeting: meeting, people: people),
+            messages: messages,
             onPartial: { [weak self] text in
                 guard !Task.isCancelled else { return }
                 self?.summaryDrafts[id] = text
             })
         try Task.checkCancellation()
         if var current = self.meeting(id: id) {
+            guard current.transcript == meeting.transcript && current.notes == meeting.notes else {
+                throw ServiceError(
+                    "The transcript or notes changed during processing. Generate another summary to include the changes."
+                )
+            }
             guard current.summary == meeting.summary else {
                 throw ServiceError("The summary changed during processing. Generate another summary to replace it.")
             }

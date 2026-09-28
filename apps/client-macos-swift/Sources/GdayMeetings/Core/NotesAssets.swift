@@ -14,7 +14,7 @@ enum NotesAssets {
             !excluded.contains { NSIntersectionRange($0, range).length > 0 }
         }
         var values: [NotesAssetToken] = []
-        func collect(_ pattern: String, in range: NSRange, group: Int) {
+        func collect(_ pattern: String, in range: NSRange, group: Int, assetsOnly: Bool = false) {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
             for match in regex.matches(in: markdown, range: range) where visible(match.range) {
                 let capture = match.range(at: group)
@@ -24,12 +24,16 @@ enum NotesAssets {
                 // External and fragment references remain literal and are never fetched.
                 if let scheme = URLComponents(string: decoded)?.scheme, !scheme.isEmpty { continue }
                 if decoded.hasPrefix("//") || decoded.hasPrefix("#") { continue }
+                if assetsOnly && !decoded.hasPrefix("assets/") { continue }
                 values.append(.init(range: capture, path: decoded))
             }
         }
         collect(
             #"!\[(?:\\.|[^\]\\\n])*\]\(<?([^\s<>\)]+)>?(?:\s+\"[^\"]*\")?\)"#,
             in: NSRange(location: 0, length: source.length), group: 1)
+        collect(
+            #"(?<!!)\[(?:\\.|[^\]\\\n])*\]\(<?([^\s<>\)]+)>?(?:\s+\"[^\"]*\")?\)"#,
+            in: NSRange(location: 0, length: source.length), group: 1, assetsOnly: true)
         if let tags = try? NSRegularExpression(pattern: #"<[A-Za-z][^>\n]*>"#) {
             for tag in tags.matches(in: markdown, range: NSRange(location: 0, length: source.length))
             where visible(tag.range) {

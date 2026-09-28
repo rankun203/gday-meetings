@@ -72,6 +72,8 @@ enum UIPreview {
                     This line has no recording time.
                     """
                 let image = try writeNotesImage(directory: store.directory(for: conversation.id))
+                conversation.summary +=
+                    "\n\nSee the [planning diagram](\(NotesAssets.encodedPath(image.originalPath))). [00:32]"
                 let resizedImage = try NotesImageStore.resized(
                     image, width: 180, directory: store.directory(for: conversation.id))
                 conversation.notes +=

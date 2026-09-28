@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import QuickLookUI
 import SwiftUI
 
 /// One selectable document, rather than separately selectable SwiftUI paragraphs.
@@ -72,6 +73,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
     var interactiveTasks = false
     var directory: URL?
     private(set) var hoverLine: Int?
+    private var imagePreviewWindow: NSWindowController?
     private var tracking: NSTrackingArea?
     private var scrollObserver: NSObjectProtocol?
     private var observedOrigin: NSPoint?
@@ -299,12 +301,35 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             })?.value,
             let image = try? NotesAssets.safeURL(relativePath: path, directory: configuration.directory)
         {
-            NSWorkspace.shared.open(image)
+            showImage(image)
+        }
+        else if url.scheme == nil, let configuration,
+            let image = try? NotesAssets.safeURL(relativePath: url.path, directory: configuration.directory)
+        {
+            showImage(image)
         }
         else if ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") {
             NSWorkspace.shared.open(url)
         }
         return true
+    }
+    private func showImage(_ image: URL) {
+        guard NotesImageStore.isImage(image) else {
+            NSSound.beep()
+            return
+        }
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        panel.title = image.lastPathComponent
+        guard let preview = QLPreviewView(frame: panel.contentView!.bounds, style: .normal) else { return }
+        preview.autoresizingMask = [.width, .height]
+        preview.previewItem = image as NSURL
+        panel.contentView?.addSubview(preview)
+        imagePreviewWindow?.close()
+        imagePreviewWindow = NSWindowController(window: panel)
+        panel.center()
+        imagePreviewWindow?.showWindow(nil)
     }
 }
 

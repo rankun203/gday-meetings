@@ -146,4 +146,84 @@ import Testing
         settings.autoExtractTodos = false
         #expect(try !JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)).autoExtractTodos)
     }
+
+    @Test(arguments: ["length", "content_filter", "tool_calls"])
+    func incompleteJSONResponseKeepsSavedSummary(reason: String) async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(body: "{\"choices\":[{\"finish_reason\":\"\(reason)\",\"message\":{\"content\":\"Partial text\"}}]}")
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        await store.summarize(id: id)
+        #expect(store.managedTasks.last?.state == .failed)
+        #expect(store.meeting(id: id)?.summary == "Saved summary")
+        #expect(store.summaryDrafts[id] == nil)
+        #expect(server.requests.count == 1)
+    }
+
+    @Test func summarySurvivesCallerCancellationAndPlaybackRouteChange() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(
+                headers: ["Content-Type": "text/event-stream"],
+                bodyChunks: [Data(Self.first.utf8), Data(Self.second.utf8), Data(Self.end.utf8)], chunkDelay: 0.3)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        let caller = Task { await store.summarize(id: id) }
+        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        let taskID = try #require(store.managedTasks.last?.id)
+        caller.cancel()
+        let player = StreamingPlayback(manualRendering: true)
+        let updates = AsyncStream<StreamingPlayback.Snapshot>.makeStream()
+        player.onUpdate = { updates.continuation.yield($0) }
+        player.audioConfigurationChanged()
+        var iterator = updates.stream.makeAsyncIterator()
+        let snapshot = try #require(await iterator.next())
+        #expect(snapshot.requiresReload)
+        #expect(snapshot.error == nil)
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .running)
+        await player.shutdown()
+        updates.continuation.finish()
+        await caller.value
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .completed)
+        #expect(store.meeting(id: id)?.summary == "### Summary\n\n- [ ] Send résumé 👋")
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func inputChangedDuringStreamKeepsSavedSummary(changeTranscript: Bool) async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(
+                headers: ["Content-Type": "text/event-stream"],
+                bodyChunks: [Data(Self.first.utf8), Data(Self.end.utf8)], chunkDelay: 0.3)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        let taskID = try #require(store.queueSummary(id: id))
+        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        var changed = try #require(store.meeting(id: id))
+        if changeTranscript {
+            changed.transcript = [.init(text: "A later transcript.")]
+        }
+        else {
+            changed.notes += " Additional notes."
+        }
+        store.updateMeeting(changed)
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
+        #expect(store.meeting(id: id)?.summary == "Saved summary")
+        #expect(store.summaryDrafts[id] == nil)
+    }
 }

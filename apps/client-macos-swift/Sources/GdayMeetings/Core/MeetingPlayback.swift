@@ -48,6 +48,7 @@ final class MeetingPlayback: ObservableObject {
     private let prepareAudio: AudioPreparer
     private let readWaveform: WaveformLoader
     private var transport: StreamingPlayback?
+    private var transportNeedsReload = false
     private var playTask: Task<Void, Never>?
     private var sourceMeeting: Meeting?
     private var sourceFiles: [URL] = []
@@ -83,7 +84,9 @@ final class MeetingPlayback: ObservableObject {
     func select(meeting: Meeting, files: [URL], track: Int = -1) {
         guard !isPlaybackBlocked else { return }
         let track = Self.validTrack(track, count: files.count)
-        if meetingID == meeting.id, sourceFiles == files, selectedTrack == track, errorMessage == nil {
+        if meetingID == meeting.id, sourceFiles == files, selectedTrack == track, errorMessage == nil,
+            !transportNeedsReload
+        {
             title = meeting.title
             sourceMeeting = meeting
             return
@@ -94,7 +97,7 @@ final class MeetingPlayback: ObservableObject {
 
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {
         guard !isPlaybackBlocked else { return }
-        if meetingID == meeting.id, sourceFiles == files, errorMessage == nil {
+        if meetingID == meeting.id, sourceFiles == files, errorMessage == nil, !transportNeedsReload {
             title = meeting.title
             sourceMeeting = meeting
             wantsPlayback = true
@@ -107,7 +110,7 @@ final class MeetingPlayback: ObservableObject {
 
     func play() {
         guard hasSelection, !isPlaybackBlocked else { return }
-        if errorMessage != nil {
+        if errorMessage != nil || transportNeedsReload {
             guard let meeting = sourceMeeting else { return }
             load(meeting: meeting, files: sourceFiles, track: selectedTrack, position: currentTime, autoplay: true)
             return
@@ -179,6 +182,10 @@ final class MeetingPlayback: ObservableObject {
     }
 
     private func startPlayback() {
+        if transportNeedsReload {
+            play()
+            return
+        }
         guard let transport, !isSeeking else { return }
         let operation = generation
         playTask?.cancel()
@@ -357,7 +364,9 @@ final class MeetingPlayback: ObservableObject {
                 try Task.checkCancellation()
                 transport.onUpdate = { [weak self] snapshot in
                     Task { @MainActor in
-                        guard let self, self.generation == operation, self.seekGeneration == snapshot.revision,
+                        guard let self, self.generation == operation else { return }
+                        if snapshot.requiresReload { self.transportNeedsReload = true }
+                        guard self.seekGeneration == snapshot.revision,
                             !self.isSeeking
                         else { return }
                         self.currentTime = snapshot.time
@@ -413,6 +422,7 @@ final class MeetingPlayback: ObservableObject {
         pause()
         transport?.close(removing: temporaryURLs)
         transport = nil
+        transportNeedsReload = false
         temporaryURLs = []
     }
 
