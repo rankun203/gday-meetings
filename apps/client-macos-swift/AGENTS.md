@@ -38,6 +38,7 @@ Read the relevant documents before changing the app:
 - [Language picker width](../../docs/worklogs/2026-09-28-language-picker-width.md): complete selected labels and concise speaker guidance.
 - [Transcript history versions](../../docs/worklogs/2026-09-28-transcript-history-versions.md): stable generation identities and provider labels.
 - [Meeting title header](../../docs/worklogs/2026-09-28-meeting-title-header.md): compact playback control and deliberate title editing.
+- [Meeting header folder](../../docs/worklogs/2026-09-28-meeting-header-folder.md): Command-click opens the displayed meeting's folder.
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.

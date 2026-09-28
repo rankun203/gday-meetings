@@ -4,6 +4,7 @@ import SwiftUI
 struct MeetingTitleView: View {
     @Binding var title: String
     var editable: Bool
+    var openFolder: () -> Void
     @ViewState private var draft = ""
     @ViewState private var isEditing = false
 
@@ -16,11 +17,18 @@ struct MeetingTitleView: View {
                 Text(Self.displayTitle(title))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { begin() }
+                    .gesture(
+                        TapGesture().modifiers(.command).onEnded { openFolder() }
+                            .exclusively(before: TapGesture(count: 2).onEnded { begin() })
+                    )
                     .accessibilityLabel(title)
                     .accessibilityAction(named: "Edit Title") { begin() }
-                    .contextMenu { Button("Edit Title", action: begin).disabled(!editable) }
-                    .help(title)
+                    .accessibilityAction(named: "Open Meeting Folder", openFolder)
+                    .contextMenu {
+                        Button("Edit Title", action: begin).disabled(!editable)
+                        Button("Open Meeting Folder", action: openFolder)
+                    }
+                    .help("\(title)\nDouble-click to edit. Command-click to open the meeting folder in Finder.")
             }
         }
         .font(.title2.weight(.semibold))

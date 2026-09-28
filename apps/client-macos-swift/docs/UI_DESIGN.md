@@ -34,6 +34,7 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 - Place the compact play/pause control immediately before the title, vertically centered in one row.
 - Show the title as one line of plain text with tail truncation. For a stored multiline title, show its first line followed by an ellipsis; retain the complete saved title and expose it to accessibility and help.
 - Double-click the title to edit. Enter commits, Escape cancels, and leaving the field commits. Keep edits in a local draft until completion rather than saving each keystroke. Provide **Edit Title** through the context menu and accessibility action.
+- Command-click the title to open that meeting's folder in Finder. Provide **Open Meeting Folder** through the context menu and accessibility action. Keep ordinary clicks and the title layout unchanged.
 - Normal reading must not expand header height for long titles. Date, language, and tags remain below the title row.
 
 ## Meeting keyboard and Finder actions

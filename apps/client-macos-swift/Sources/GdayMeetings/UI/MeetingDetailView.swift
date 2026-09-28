@@ -45,8 +45,10 @@ struct MeetingDetailView: View {
                 if store.recordingID != meetingID && !meeting.audioFiles.isEmpty {
                     playbackButton(meeting)
                 }
-                MeetingTitleView(title: text(\.title), editable: store.libraryWritable)
-                    .layoutPriority(1)
+                MeetingTitleView(title: text(\.title), editable: store.libraryWritable) {
+                    NSWorkspace.shared.open(store.directory(for: meetingID))
+                }
+                .layoutPriority(1)
             }
             if store.recordingID != meetingID {
                 ViewThatFits(in: .horizontal) {
