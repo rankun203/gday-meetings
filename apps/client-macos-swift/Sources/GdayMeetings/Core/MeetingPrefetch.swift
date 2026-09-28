@@ -51,6 +51,7 @@ extension MeetingStore {
         let pageCount = min(10, max(2, (lookAhead - distance + 39) / Self.meetingPageSize))
         let edge = backwards ? meetingCatalog.first : meetingCatalog.last
         let query = meetingSearch
+        let excludedTags = excludedTagIDs
         let generation = meetingPrefetch.generation
         let pageSize = Self.meetingPageSize
         isLoadingMeetingPage = true
@@ -63,7 +64,7 @@ extension MeetingStore {
                     try Task.checkCancellation()
                     let page = try index.page(
                         after: backwards ? nil : cursor, before: backwards ? cursor : nil,
-                        limit: pageSize, query: query)
+                        limit: pageSize, query: query, excludingTagIDs: excludedTags)
                     if backwards {
                         fetched.insert(contentsOf: page, at: 0)
                         cursor = page.first
@@ -81,7 +82,7 @@ extension MeetingStore {
                     hasMore =
                         !(try index.page(
                             after: backwards ? nil : cursor, before: backwards ? cursor : nil,
-                            limit: 1, query: query)).isEmpty
+                            limit: 1, query: query, excludingTagIDs: excludedTags)).isEmpty
                 }
                 return (fetched, hasMore)
             }

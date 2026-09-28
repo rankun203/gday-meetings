@@ -58,14 +58,16 @@ struct Person: Codable, Identifiable, Equatable {
     var email = ""
     var notes = ""
     var voiceSamples: [PersonVoiceSample] = []
-    enum CodingKeys: String, CodingKey { case id, name, email, notes, voiceSamples }
+    var tagIDs: [UUID] = []
+    enum CodingKeys: String, CodingKey { case id, name, email, notes, voiceSamples, tagIDs }
 
 }
 struct MeetingTag: Codable, Identifiable, Equatable {
     var id = UUID()
     var name = ""
     var color = "blue"
-    enum CodingKeys: String, CodingKey { case id, name, color }
+    var isExcluded = false
+    enum CodingKeys: String, CodingKey { case id, name, color, isExcluded }
 
 }
 enum RecordingFormat: String, Codable, CaseIterable {
@@ -197,6 +199,7 @@ extension Person {
         name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
         email = try values.decodeIfPresent(String.self, forKey: .email) ?? ""
         voiceSamples = try values.decodeIfPresent([PersonVoiceSample].self, forKey: .voiceSamples) ?? []
+        tagIDs = try values.decodeIfPresent([UUID].self, forKey: .tagIDs) ?? []
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
     }
 }
@@ -208,6 +211,7 @@ extension MeetingTag {
         id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
         color = try values.decodeIfPresent(String.self, forKey: .color) ?? "blue"
+        isExcluded = try values.decodeIfPresent(Bool.self, forKey: .isExcluded) ?? false
     }
 }
 

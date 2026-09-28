@@ -5,6 +5,7 @@ struct PeopleView: View {
     @EnvironmentObject private var store: MeetingStore
     @ViewState private var name = ""
     @ViewState private var deleting: Person?
+    @ViewState private var showExcluded = false
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
@@ -13,17 +14,22 @@ struct PeopleView: View {
                     name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding()
             List(selection: $selection) {
-                ForEach(store.people) { person in
+                ForEach(showExcluded ? store.people : store.listedPeople) { person in
                     HStack {
                         Label(person.name, systemImage: "person.crop.circle")
                         Spacer()
+                        if !store.excludedTagIDs.isDisjoint(with: person.tagIDs) {
+                            Text("Excluded").font(.caption).foregroundStyle(.secondary)
+                        }
                         Button("Delete Person…", systemImage: "trash", role: .destructive) { deleting = person }.help(
                             "Delete person"
                         ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(person.id)
                 }
             }
+            Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox).padding(.horizontal).padding(.bottom)
         }.navigationTitle("People")
+            .focusedValue(\.directoryControlFocus, true)
             .confirmationDialog(
                 "Delete \(deleting?.name ?? "person")?",
                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
@@ -70,6 +76,7 @@ struct TagsView: View {
                                     store.updateTag(changed)
                                 }))
                         Spacer()
+                        if tag.isExcluded { Text("Excluded").font(.caption).foregroundStyle(.secondary) }
                         Text("\((try? store.libraryIndex?.count(tagID: tag.id)) ?? 0)").foregroundStyle(
                             .secondary)
                         Button("Delete Tag…", systemImage: "trash", role: .destructive) { deleting = tag }.help(
@@ -89,7 +96,7 @@ struct TagsView: View {
                     deleting = nil
                 }
             } message: {
-                Text("The tag will be removed from all meetings.")
+                Text("The tag will be removed from all meetings and people.")
             }
     }
     private func add() {

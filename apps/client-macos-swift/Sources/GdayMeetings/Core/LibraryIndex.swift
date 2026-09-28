@@ -196,24 +196,42 @@ final class LibraryIndex: @unchecked Sendable {
         }
         return result
     }
-    func count(personID: UUID? = nil, tagID: UUID? = nil) throws -> Int {
+    private static let exclusionClause =
+        "NOT EXISTS (SELECT 1 FROM relations hidden WHERE hidden.meeting=m.id AND hidden.kind='tag' AND hidden.target IN (SELECT value FROM json_each(?)))"
+
+    private func encodedTagIDs(_ ids: Set<UUID>) throws -> String {
+        String(decoding: try JSONEncoder().encode(ids.map(\.uuidString).sorted()), as: UTF8.self)
+    }
+
+    func count(personID: UUID? = nil, tagID: UUID? = nil, excludingTagIDs: Set<UUID> = []) throws -> Int {
         lock.lock()
         defer { lock.unlock() }
         let target = personID ?? tagID
-        let stmt = try statement(
-            target == nil ? "SELECT count(*) FROM meetings" : "SELECT count(*) FROM relations WHERE kind=? AND target=?"
-        )
+        let sql: String
+        if excludingTagIDs.isEmpty {
+            sql =
+                target == nil
+                ? "SELECT count(*) FROM meetings" : "SELECT count(*) FROM relations WHERE kind=? AND target=?"
+        }
+        else {
+            sql =
+                "SELECT count(*) FROM meetings m WHERE "
+                + (target == nil ? "" : "m.id IN (SELECT meeting FROM relations WHERE kind=? AND target=?) AND ")
+                + Self.exclusionClause
+        }
+        let stmt = try statement(sql)
         defer { release(stmt) }
         if let target {
             bind(personID == nil ? "tag" : "person", 1, stmt)
             bind(target.uuidString, 2, stmt)
         }
+        if !excludingTagIDs.isEmpty { bind(try encodedTagIDs(excludingTagIDs), target == nil ? 1 : 3, stmt) }
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw failure() }
         return Int(sqlite3_column_int64(stmt, 0))
     }
     func page(
         after: MeetingListEntry? = nil, before: MeetingListEntry? = nil, limit: Int = 20, query: String = "",
-        personID: UUID? = nil, tagID: UUID? = nil
+        personID: UUID? = nil, tagID: UUID? = nil, excludingTagIDs: Set<UUID> = []
     ) throws -> [MeetingListEntry] {
         lock.lock()
         defer { lock.unlock() }
@@ -223,6 +241,7 @@ final class LibraryIndex: @unchecked Sendable {
         if related { clauses += ["r.kind=?", "r.target=?"] }
         if after != nil || before != nil { clauses.append("(\(order)) \(before == nil ? ">" : "<") (?,?)") }
         if !query.isEmpty { clauses.append("m.id IN (SELECT id FROM search WHERE search MATCH ?)") }
+        if !excludingTagIDs.isEmpty { clauses.append(Self.exclusionClause) }
         let from =
             related
             ? "relations r INDEXED BY relation_seek CROSS JOIN meetings m ON m.id=r.meeting"
@@ -248,6 +267,10 @@ final class LibraryIndex: @unchecked Sendable {
         }
         if !query.isEmpty {
             bind("\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\"", position, stmt)
+            position += 1
+        }
+        if !excludingTagIDs.isEmpty {
+            bind(try encodedTagIDs(excludingTagIDs), position, stmt)
             position += 1
         }
         sqlite3_bind_int(stmt, position, Int32(limit))

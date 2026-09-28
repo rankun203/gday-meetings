@@ -24,8 +24,27 @@ struct ContextDetailView: View {
                     TextField("Email", text: personBinding(person, \.email))
                     TextField("Notes", text: personBinding(person, \.notes), axis: .vertical).lineLimit(1...4)
                 }
+                PersonTagsView(personID: personID)
             }
-            Text("\(page.total) associated meetings").foregroundStyle(.secondary)
+            HStack {
+                Text("\(page.total) associated meetings").foregroundStyle(.secondary)
+                Spacer()
+                if let tagID {
+                    Toggle(
+                        "Excluded",
+                        isOn: Binding(
+                            get: { store.tags.first(where: { $0.id == tagID })?.isExcluded ?? false },
+                            set: { excluded in
+                                guard var tag = store.tags.first(where: { $0.id == tagID }) else { return }
+                                tag.isExcluded = excluded
+                                store.updateTag(tag)
+                            }
+                        )
+                    )
+                    .toggleStyle(.checkbox)
+                    .help("Hide meetings and people with this tag from the main lists and meeting search.")
+                }
+            }
             List(meetings) { meeting in
                 Button {
                     guard store.ensureMeetingLoaded(id: meeting.id) else { return }
@@ -74,6 +93,7 @@ struct ContextDetailView: View {
                         || meetings.isEmpty)
             }
         }.padding(20).navigationTitle(title)
+            .focusedValue(\.directoryControlFocus, true)
             .task { await load() }
             .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
                 if let selectedMeeting {

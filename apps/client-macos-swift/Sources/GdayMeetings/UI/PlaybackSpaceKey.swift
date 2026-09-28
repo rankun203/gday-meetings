@@ -1,16 +1,32 @@
 import AppKit
 import SwiftUI
 
+private struct DirectoryControlFocusKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+extension FocusedValues {
+    var directoryControlFocus: Bool? {
+        get { self[DirectoryControlFocusKey.self] }
+        set { self[DirectoryControlFocusKey.self] = newValue }
+    }
+}
+
 /// Window-local transport shortcut. Editable controls must retain ordinary spaces.
 struct PlaybackSpaceKey: NSViewRepresentable {
     let playback: MeetingPlayback
+    @FocusedValue(\.directoryControlFocus) private var directoryControlFocus
 
     func makeNSView(context: Context) -> KeyView { KeyView() }
-    func updateNSView(_ view: KeyView, context: Context) { view.playback = playback }
+    func updateNSView(_ view: KeyView, context: Context) {
+        view.playback = playback
+        view.controlHasFocus = directoryControlFocus == true
+    }
     static func dismantleNSView(_ view: KeyView, coordinator: ()) { view.stopMonitoring() }
 
     final class KeyView: NSView {
         weak var playback: MeetingPlayback?
+        var controlHasFocus = false
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -21,6 +37,7 @@ struct PlaybackSpaceKey: NSViewRepresentable {
                 guard let self, let window = self.window,
                     event.window === window, window.isKeyWindow,
                     window.attachedSheet == nil,
+                    !self.controlHasFocus,
                     event.charactersIgnoringModifiers == " ",
                     event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
                     !Self.isEditingText(window.firstResponder),

@@ -345,9 +345,15 @@ final class MeetingStore: ObservableObject {
                 }
             }
             catch { libraryDataStatus.error = "Couldn’t refresh the index. Rebuild it in Data settings." }
+            let exclusionChanged = Set(lastSavedLibrary.tags.filter(\.isExcluded).map(\.id)) != excludedTagIDs
             lastSavedLibrary = LibrarySnapshot(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
-            refreshMeetingPagesAfterSave(previousIDs: [])
+            if exclusionChanged {
+                resetMeetingPages()
+            }
+            else {
+                refreshMeetingPagesAfterSave(previousIDs: [])
+            }
             return true
         }
         catch {
@@ -402,11 +408,17 @@ final class MeetingStore: ObservableObject {
                 people = try FileEntityStorage.load(Person.self, kind: "people", directory: dataDirectory)
                 lastSavedLibrary.people = people
             }
+            let previousExcluded = excludedTagIDs
             if tags == lastSavedLibrary.tags {
                 tags = try FileEntityStorage.load(MeetingTag.self, kind: "tags", directory: dataDirectory)
                 lastSavedLibrary.tags = tags
             }
-            refreshMeetingPagesAfterSave(previousIDs: [])
+            if previousExcluded != excludedTagIDs {
+                resetMeetingPages()
+            }
+            else {
+                refreshMeetingPagesAfterSave(previousIDs: [])
+            }
             refreshMeetingPageAvailabilityAfterIndexCommit()
         }
         catch { libraryDataStatus.error = error.localizedDescription }
@@ -623,6 +635,11 @@ final class MeetingStore: ObservableObject {
         save()
         return tag.id
     }
+    var excludedTagIDs: Set<UUID> { Set(tags.filter(\.isExcluded).map(\.id)) }
+    var listedPeople: [Person] {
+        let excluded = excludedTagIDs
+        return people.filter { excluded.isDisjoint(with: $0.tagIDs) }
+    }
     func updateTag(_ tag: MeetingTag) {
         guard canSave else { return }
         if let i = tags.firstIndex(where: { $0.id == tag.id }) {
@@ -633,6 +650,7 @@ final class MeetingStore: ObservableObject {
     func deleteTag(id: UUID) {
         guard canSave, removeRelationships(tagID: id) else { return }
         tags.removeAll { $0.id == id }
+        for index in people.indices { people[index].tagIDs.removeAll { $0 == id } }
         contextualChats.removeValue(forKey: Self.contextChatKey(tagID: id))
         save()
     }

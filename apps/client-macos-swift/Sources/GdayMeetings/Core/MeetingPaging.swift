@@ -153,7 +153,9 @@ extension MeetingStore {
         defer { isLoadingMeetingPage = false }
         do {
             let next =
-                try libraryIndex?.page(after: meetingCatalog.last, limit: Self.meetingPageSize, query: meetingSearch)
+                try libraryIndex?.page(
+                    after: meetingCatalog.last, limit: Self.meetingPageSize, query: meetingSearch,
+                    excludingTagIDs: excludedTagIDs)
                 ?? []
             meetingCatalog.append(contentsOf: next)
             if meetingCatalog.count > Self.meetingWindowLimit {
@@ -174,9 +176,13 @@ extension MeetingStore {
             return
         }
         do {
-            let more = !(try libraryIndex?.page(after: meetingCatalog.last, limit: 1, query: meetingSearch) ?? [])
+            let more =
+                !(try libraryIndex?.page(
+                    after: meetingCatalog.last, limit: 1, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? [])
                 .isEmpty
-            let previous = !(try libraryIndex?.page(before: meetingCatalog.first, limit: 1, query: meetingSearch) ?? [])
+            let previous =
+                !(try libraryIndex?.page(
+                    before: meetingCatalog.first, limit: 1, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? [])
                 .isEmpty
             if more != meetingPageHasMore {
                 objectWillChange.send()
@@ -193,7 +199,9 @@ extension MeetingStore {
         defer { isLoadingMeetingPage = false }
         do {
             let previous =
-                try libraryIndex?.page(before: first, limit: Self.meetingPageSize, query: meetingSearch) ?? []
+                try libraryIndex?.page(
+                    before: first, limit: Self.meetingPageSize, query: meetingSearch, excludingTagIDs: excludedTagIDs)
+                ?? []
             meetingCatalog.insert(contentsOf: previous, at: 0)
             if meetingCatalog.count > Self.meetingWindowLimit {
                 meetingCatalog.removeLast(meetingCatalog.count - Self.meetingWindowLimit)
@@ -209,16 +217,23 @@ extension MeetingStore {
         resetMeetingPages()
     }
     func refreshMeetingPagesAfterSave(previousIDs: Set<UUID>) {
+        meetingPrefetch.reset()
+        isLoadingMeetingPage = false
         let count = max(Self.meetingPageSize, meetingCatalog.count)
         do {
             let first = meetingCatalog.first
             if meetingPageHasPrevious, let first {
-                let following = try libraryIndex?.page(after: first, limit: count - 1, query: meetingSearch) ?? []
+                let following =
+                    try libraryIndex?.page(
+                        after: first, limit: count, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? []
                 let updated = try libraryIndex?.entry(id: first.id)
-                meetingCatalog = updated.map { [$0] + following } ?? following
+                meetingCatalog = Array(
+                    (updated.flatMap { excludedTagIDs.isDisjoint(with: $0.tagIDs) ? [$0] + following : nil }
+                        ?? following).prefix(count))
             }
             else {
-                meetingCatalog = try libraryIndex?.page(limit: count, query: meetingSearch) ?? []
+                meetingCatalog =
+                    try libraryIndex?.page(limit: count, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? []
             }
             visibleMeetingIDs = meetingCatalog.map(\.id)
             meetingPageHasMore = meetingCatalog.count == count

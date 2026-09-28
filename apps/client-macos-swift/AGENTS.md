@@ -43,6 +43,7 @@ Read the relevant documents before changing the app:
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
+- [Tag exclusion](../../docs/worklogs/2026-09-28-tag-exclusion.md): excluded meeting and person lists, person tags, and recovery controls.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 
 Keep this index complete: whenever app documentation is added, moved, or renamed, update its link here in the same change. Every document under `docs/` must have a direct link from this file.
