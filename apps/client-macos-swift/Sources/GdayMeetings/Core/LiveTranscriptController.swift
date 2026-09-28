@@ -199,6 +199,8 @@ final class LiveTranscriptController: ObservableObject {
     }
     func receive(_ value: LiveTranscriptPhrase, final: Bool, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }
+        var value = value
+        value.text = value.text.trimmingCharacters(in: .whitespacesAndNewlines)
         partials = LiveTranscriptPhrase.replacingPartials(
             partials, with: value, final: final || token != generation)
         if final {

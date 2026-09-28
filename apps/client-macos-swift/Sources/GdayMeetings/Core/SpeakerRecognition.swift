@@ -104,7 +104,7 @@ enum SpeakerRecognition {
             return TranscriptSegment(
                 start: segment.start, end: segment.end,
                 speaker: segment.speaker ?? "",
-                text: segment.text, speakerID: speakerID)
+                text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines), speakerID: speakerID)
         }
         match(&speakers, people: people)
         return (result, speakers)

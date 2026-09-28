@@ -180,12 +180,17 @@ struct LiveTranscriptTests {
                 controller.receive(
                     .init(
                         session: UUID(), source: .microphone, start: 1,
-                        end: 2, text: "Last phrase"), final: true, token: token)
+                        end: 2, text: " \tLast  phrase\n",
+                        words: [.init(text: " phrase", start: 1.5, end: 2)]), final: true, token: token)
                 return true
             }, cancel: nil)
         await controller.finish()
-        #expect(controller.draft?.phrases.last?.text == "Last phrase")
-        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID)?.phrases.last?.text == "Last phrase")
+        #expect(controller.draft?.phrases.last?.text == "Last  phrase")
+        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID)?.phrases.last?.text == "Last  phrase")
+        let phrase = try #require(controller.draft?.phrases.last)
+        #expect(phrase.words == [.init(text: " phrase", start: 1.5, end: 2)])
+        let highlighted = try #require(LiveTranscriptPresentation.newestWordRange(in: phrase))
+        #expect(String(phrase.text[highlighted]) == "phrase")
         controller.receive(
             .init(
                 session: UUID(), source: .microphone, start: 3,

@@ -40,6 +40,7 @@ Read the relevant documents before changing the app:
 - [Meeting title header](../../docs/worklogs/2026-09-28-meeting-title-header.md): compact playback control and deliberate title editing.
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
+- [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 
