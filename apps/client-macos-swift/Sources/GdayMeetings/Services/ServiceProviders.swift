@@ -1,5 +1,10 @@
 import Foundation
 
+enum ThisMacProvider {
+    static let id = UUID(uuidString: "5987605A-1329-46E3-906D-2EC2D08B4D16")!
+    static let capabilities: Set<ProviderCapability> = [.liveTranscription]
+}
+
 enum TranscriptionLanguage {
     static func isExplicit(_ language: String) -> Bool {
         let value = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -70,6 +75,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     init(kind: ServiceProviderKind) {
         self.kind = kind
         name = kind.title
+        enabledCapabilities = kind.capabilities
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
@@ -276,13 +282,18 @@ struct OpenAISummaryProvider: SummarizationProvider {
             .init(role: "system", content: instructions), .init(role: "user", content: transcript),
         ])
     }
-    func complete(messages: [LLMMessage]) async throws -> String {
+    func complete(messages: [LLMMessage], onPartial: (@MainActor (String) -> Void)? = nil) async throws -> String {
         guard provider.kind == .openAICompatible, provider.supports(.summarization) else {
             throw ServiceError("Enable Summaries for this provider before sending meeting text.")
         }
         _ = try ProviderEndpoint.base(provider.endpoint)
         guard !provider.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ServiceError("Enter a model name for \(provider.name).")
+        }
+        if let onPartial {
+            return try await LLMService.stream(
+                baseURL: provider.endpoint, apiKey: provider.apiKey, model: provider.model,
+                messages: messages, provider: provider.name, onPartial: onPartial)
         }
         return try await LLMService.complete(
             baseURL: provider.endpoint, apiKey: provider.apiKey, model: provider.model, messages: messages,

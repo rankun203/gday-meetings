@@ -37,23 +37,17 @@ struct MeetingDetailView: View {
             }
             MeetingContentTabs(selection: $tab)
             meetingContent(meeting).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }.padding(24)
+        }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
     }
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                // Let the native multiline editor measure the title's line
-                // height while focused, rather than using a single-line field editor.
-                TextField("Meeting title", text: text(\.title), axis: .vertical)
-                    .font(.title2.weight(.semibold)).textFieldStyle(.plain)
-                    .lineLimit(1...3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
-                    .accessibilityLabel("Meeting title")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
                 if store.recordingID != meetingID && !meeting.audioFiles.isEmpty {
                     playbackButton(meeting)
                 }
+                MeetingTitleView(title: text(\.title), editable: store.libraryWritable)
+                    .layoutPriority(1)
             }
             if store.recordingID != meetingID {
                 ViewThatFits(in: .horizontal) {
@@ -110,14 +104,13 @@ struct MeetingDetailView: View {
                 systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill"
             )
             .labelStyle(.iconOnly)
-            .font(.title3)
-            .frame(width: 44, height: 44)
+            .font(.body)
+            .frame(width: 28, height: 28)
         }
-        .buttonStyle(ActionButtonStyle(cornerRadius: 22))
-        .modifier(MeetingGlassSurface())
+        .buttonStyle(MeetingPlaybackButtonStyle())
         .disabled(
             playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading)
-                || store.audioURLs(for: meeting).isEmpty
+                || meeting.audioFiles.isEmpty
         )
         .help(
             playback.isPlaybackBlocked
@@ -164,16 +157,23 @@ struct MeetingDetailView: View {
                             || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
                 }
                 MeetingMarkdownReadingView(
-                    meetingID: meetingID, markdown: meeting.summary, showsTimestamps: false,
-                    emptyMessage: "No summary yet. Choose Generate Summary to create one."
+                    meetingID: meetingID, markdown: store.summaryDrafts[meetingID] ?? meeting.summary,
+                    showsTimestamps: false,
+                    emptyMessage: store.summaryDrafts[meetingID] != nil
+                        ? "Writing summary…" : "No summary yet. Choose Generate Summary to create one.",
+                    changed: store.libraryWritable && store.summaryDrafts[meetingID] == nil
+                        ? { value in change { $0.summary = value } } : nil
                 )
                 .accessibilityLabel("Summary")
                 .background(.background, in: RoundedRectangle(cornerRadius: 10))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
+                if !meeting.todos.isEmpty {
+                    DisclosureGroup("To-Dos") { todos(meeting).frame(minHeight: 120, maxHeight: 240) }
+                        .disclosureGroupStyle(AppDisclosureStyle())
+                }
             }
-        case 3: todos(meeting)
         default: chat(meeting)
         }
     }

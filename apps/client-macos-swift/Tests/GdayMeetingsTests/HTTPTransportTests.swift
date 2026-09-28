@@ -17,6 +17,8 @@ final class HTTPFixture: @unchecked Sendable {
         var status = 200
         var headers: [String: String] = [:]
         var body = "{}"
+        var bodyChunks: [Data]?
+        var chunkDelay: TimeInterval = 0
     }
     private let listener: NWListener
     private let queue = DispatchQueue(label: "com.gdaymeetings.macos.tests.http")
@@ -114,13 +116,36 @@ final class HTTPFixture: @unchecked Sendable {
             let request = Request(method: String(line[0]), target: String(line[1]), headers: headers, body: body)
             self.received.append(request)
             let response = self.respond(request)
+            let chunks = response.bodyChunks ?? [Data(response.body.utf8)]
+            let type = response.headers.first { $0.key.lowercased() == "content-type" }?.value ?? "application/json"
             var responseHead =
-                "HTTP/1.1 \(response.status) Fixture\r\nContent-Type: application/json\r\nContent-Length: \(response.body.utf8.count)\r\nConnection: close\r\n"
-            for (key, value) in response.headers { responseHead += "\(key): \(value)\r\n" }
+                "HTTP/1.1 \(response.status) Fixture\r\nContent-Type: \(type)\r\nContent-Length: \(chunks.reduce(0) { $0 + $1.count })\r\nConnection: close\r\n"
+            for (key, value) in response.headers where key.lowercased() != "content-type" {
+                responseHead += "\(key): \(value)\r\n"
+            }
             connection.send(
-                content: Data((responseHead + "\r\n" + response.body).utf8),
-                completion: .contentProcessed { _ in connection.cancel() })
+                content: Data((responseHead + "\r\n").utf8),
+                completion: .contentProcessed { _ in
+                    self.send(chunks, index: 0, delay: response.chunkDelay, to: connection)
+                })
         }
+    }
+    private func send(_ chunks: [Data], index: Int, delay: TimeInterval, to connection: NWConnection) {
+        guard index < chunks.count else {
+            connection.cancel()
+            return
+        }
+        connection.send(
+            content: chunks[index],
+            completion: .contentProcessed { error in
+                guard error == nil else {
+                    connection.cancel()
+                    return
+                }
+                self.queue.asyncAfter(deadline: .now() + delay) {
+                    self.send(chunks, index: index + 1, delay: delay, to: connection)
+                }
+            })
     }
     private static func chunks(_ data: Data) -> Data? {
         var cursor = data.startIndex

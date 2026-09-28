@@ -26,7 +26,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
 }
 struct Meeting: Codable, Identifiable, Equatable {
-    var id = UUID()
+    var id = MeetingIdentity.newID()
     var title = "Untitled Meeting"
     var language = "en"
     var createdAt = Date()
@@ -34,6 +34,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     var notes = ""
     var summary = ""
     var transcript: [TranscriptSegment] = []
+    var transcriptSource: TranscriptSource?
     var liveTranscriptAdopted = false
     var speakers: [MeetingSpeaker] = []
     var personIDs: [UUID] = []
@@ -43,10 +44,11 @@ struct Meeting: Codable, Identifiable, Equatable {
     var todos: [MeetingTodo] = []
     var recordingProfile: RecordingProfile?
     var transcriptionAttempt: ProviderTranscriptionAttempt?
+    var completedTaskIDs: [String: UUID] = [:]
     enum CodingKeys: String, CodingKey {
         case id, title, language, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat,
             todos,
-            recordingProfile, transcriptionAttempt, speakers, liveTranscriptAdopted
+            recordingProfile, transcriptionAttempt, speakers, liveTranscriptAdopted, completedTaskIDs, transcriptSource
     }
 
 }
@@ -81,12 +83,17 @@ struct AppSettings: Codable, Equatable {
     var serviceProviders: [ServiceProvider] = []
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
-    /// Retained until an OpenAI provider without custom instructions can receive it.
-    var pendingSummaryPromptMigration: String?
     var defaultLanguage = "en"
     var autoSummarize = false
+    var autoExtractTodos = true
     var autoTranscribe = false
     var autoTranscribeEvenWithLiveTranscript = false
+    var liveTranscriptionProviderID: UUID? = ThisMacProvider.id
+    var thisMacCapabilities: Set<ProviderCapability> = ThisMacProvider.capabilities
+    var liveTranscriptionEnabled: Bool {
+        showLiveTranscript && liveTranscriptionProviderID == ThisMacProvider.id
+            && thisMacCapabilities.contains(.liveTranscription)
+    }
     var showLiveTranscript = true
     var captureSystemAudio = true
     var captureMicrophone = true
@@ -97,44 +104,20 @@ struct AppSettings: Codable, Equatable {
     /// `nil` records from the macOS default input.
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
-        case serviceProviders, transcriptionProviderID, summaryProviderID, pendingSummaryPromptMigration,
-            defaultLanguage, autoTranscribe, autoSummarize,
-            autoTranscribeEvenWithLiveTranscript, showLiveTranscript,
+        case serviceProviders, transcriptionProviderID, summaryProviderID,
+            defaultLanguage, autoTranscribe, autoSummarize, autoExtractTodos,
+            autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
             captureSystemAudio,
             captureMicrophone, recordingFormat, automaticVoiceProcessing, microphoneDevice
     }
 
 }
-/// `library.json` format contract:
-/// - Increase `currentVersion` for every layout change, including data moved
-///   out of `library.json`, and add the step from the previous version to
-///   `migrations`.
-/// - This build opens versions up to `currentVersion`, migrating older ones
-///   after keeping a backup. It never opens or rewrites a newer version, and it
-///   always saves `currentVersion`, so a save cannot lower the version.
-struct MeetingLibrary: Codable {
-    static let currentVersion = 4
-    typealias Migration = (inout MeetingLibrary) throws -> Void
-    /// Version 2 retains speaker identity and confirmed voice samples. New fields
-    /// decode empty in version 1; no existing speaker name implies a person.
-    static let migrations: [Int: Migration] = [
-        1: { library in
-            for index in library.meetings.indices { library.meetings[index].restoreSpeakerIdentities() }
-        },
-        // Sidecar file work runs in LibraryFormat before the version advances.
-        2: { _ in },
-        // Image assets are created lazily; existing Markdown and files stay intact.
-        // The version guard prevents older editors from rewriting richer notes.
-        3: { _ in },
-    ]
-
+/// In-memory baseline for dirty checking and rollback; never serialized as a library.
+struct LibrarySnapshot {
     var contextualChats: [String: [ChatMessage]] = [:]
-    var version = MeetingLibrary.currentVersion
     var meetings: [Meeting] = []
     var people: [Person] = []
     var tags: [MeetingTag] = []
-    enum CodingKeys: String, CodingKey { case version, meetings, people, tags, contextualChats }
-
 }
 enum MeetingError: LocalizedError {
     case message(String)
@@ -183,6 +166,7 @@ extension Meeting {
     init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        completedTaskIDs = try values.decodeIfPresent([String: UUID].self, forKey: .completedTaskIDs) ?? [:]
         id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Untitled Meeting"
         language = try values.decodeIfPresent(String.self, forKey: .language) ?? "en"
@@ -191,6 +175,7 @@ extension Meeting {
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
         summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? ""
         transcript = try values.decodeIfPresent([TranscriptSegment].self, forKey: .transcript) ?? []
+        transcriptSource = try values.decodeIfPresent(TranscriptSource.self, forKey: .transcriptSource)
         liveTranscriptAdopted = try values.decodeIfPresent(Bool.self, forKey: .liveTranscriptAdopted) ?? false
         speakers = try values.decodeIfPresent([MeetingSpeaker].self, forKey: .speakers) ?? []
         personIDs = try values.decodeIfPresent([UUID].self, forKey: .personIDs) ?? []
@@ -227,24 +212,10 @@ extension MeetingTag {
 }
 
 extension AppSettings {
-    private enum LegacySummaryKeys: String, CodingKey { case summarizationPrompt }
     /// Evaluate after live recognition finishes for the recording being saved.
     /// Empty sessions and provisional text do not count as finalized live text.
     func shouldAutomaticallyTranscribe(hasUsableFinalizedLiveTranscript: Bool) -> Bool {
         autoTranscribe && (autoTranscribeEvenWithLiveTranscript || !hasUsableFinalizedLiveTranscript)
-    }
-
-    /// Keep dormant instructions across saves until there is a suitable provider.
-    /// A selected provider takes precedence; without one, use the first LLM provider.
-    mutating func migratePendingSummaryPrompt() {
-        guard let prompt = pendingSummaryPromptMigration,
-            let index = serviceProviders.firstIndex(where: {
-                $0.kind == .openAICompatible && (summaryProviderID == nil || $0.id == summaryProviderID)
-                    && $0.summarizationPrompt == nil
-            })
-        else { return }
-        serviceProviders[index].summarizationPrompt = prompt
-        pendingSummaryPromptMigration = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -255,50 +226,32 @@ extension AppSettings {
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoSummarize = try values.decodeIfPresent(Bool.self, forKey: .autoSummarize) ?? false
+        autoExtractTodos = try values.decodeIfPresent(Bool.self, forKey: .autoExtractTodos) ?? true
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
         autoTranscribeEvenWithLiveTranscript =
             try values.decodeIfPresent(Bool.self, forKey: .autoTranscribeEvenWithLiveTranscript) ?? false
+        liveTranscriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .liveTranscriptionProviderID)
+        thisMacCapabilities =
+            try values.decodeIfPresent(Set<ProviderCapability>.self, forKey: .thisMacCapabilities)
+            ?? ThisMacProvider.capabilities
         showLiveTranscript = try values.decodeIfPresent(Bool.self, forKey: .showLiveTranscript) ?? true
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
-        // A new key: the legacy `microphoneVoiceProcessing` preference stays ignored.
         automaticVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .automaticVoiceProcessing) ?? true
         microphoneDevice = try? values.decodeIfPresent(MicrophoneDeviceChoice.self, forKey: .microphoneDevice)
-        pendingSummaryPromptMigration = try values.decodeIfPresent(String.self, forKey: .pendingSummaryPromptMigration)
-        let legacy = try decoder.container(keyedBy: LegacySummaryKeys.self)
-        if pendingSummaryPromptMigration == nil,
-            let prompt = try legacy.decodeIfPresent(String.self, forKey: .summarizationPrompt),
-            !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            prompt != "Summarize this meeting with decisions, key points, and action items. Do not invent information."
-        {
-            pendingSummaryPromptMigration = prompt
-        }
-        migratePendingSummaryPrompt()
 
     }
 }
 
-extension MeetingLibrary {
-    init(from decoder: Decoder) throws {
-        self.init()
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        contextualChats = try values.decodeIfPresent([String: [ChatMessage]].self, forKey: .contextualChats) ?? [:]
-        // Files written before the key existed use the version 1 layout.
-        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        meetings = try values.decodeIfPresent([Meeting].self, forKey: .meetings) ?? []
-        people = try values.decodeIfPresent([Person].self, forKey: .people) ?? []
-        tags = try values.decodeIfPresent([MeetingTag].self, forKey: .tags) ?? []
-    }
-}
-
-// Only the library index omits notes; standalone meeting JSON retains Markdown.
+// Export encoders may omit notes when publishing a separate Markdown sidecar.
 extension CodingUserInfoKey {
     static let notesInSidecars = CodingUserInfoKey(rawValue: "notesInSidecars")!
 }
 extension Meeting {
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(completedTaskIDs, forKey: .completedTaskIDs)
         try values.encode(id, forKey: .id)
         try values.encode(title, forKey: .title)
         try values.encode(language, forKey: .language)
@@ -307,6 +260,7 @@ extension Meeting {
         if encoder.userInfo[.notesInSidecars] as? Bool != true { try values.encode(notes, forKey: .notes) }
         try values.encode(summary, forKey: .summary)
         try values.encode(transcript, forKey: .transcript)
+        try values.encodeIfPresent(transcriptSource, forKey: .transcriptSource)
         try values.encode(liveTranscriptAdopted, forKey: .liveTranscriptAdopted)
         try values.encode(speakers, forKey: .speakers)
         try values.encode(personIDs, forKey: .personIDs)

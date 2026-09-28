@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContextDetailView: View {
     @EnvironmentObject private var store: MeetingStore
+    @Environment(\.showManagedTask) private var showManagedTask
     let title: String
     let personID: UUID?
     let tagID: UUID?
@@ -10,13 +11,10 @@ struct ContextDetailView: View {
         store.contextualChats[MeetingStore.contextChatKey(personID: personID, tagID: tagID)] ?? []
     }
     @ViewState private var selectedMeeting: UUID?
-    private var meetings: [Meeting] {
-        store.meetings.filter { meeting in
-            if let personID { return meeting.personIDs.contains(personID) }
-            if let tagID { return meeting.tagIDs.contains(tagID) }
-            return false
-        }.sorted { $0.createdAt > $1.createdAt }
-    }
+    @ViewState private var page = AssociatedMeetingPage()
+    @ViewState private var loading = false
+    @ViewState private var pageError: String?
+    private var meetings: [MeetingListEntry] { page.entries }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.largeTitle)
@@ -27,9 +25,10 @@ struct ContextDetailView: View {
                     TextField("Notes", text: personBinding(person, \.notes), axis: .vertical).lineLimit(1...4)
                 }
             }
-            Text("\(meetings.count) associated meetings").foregroundStyle(.secondary)
+            Text("\(page.total) associated meetings").foregroundStyle(.secondary)
             List(meetings) { meeting in
                 Button {
+                    guard store.ensureMeetingLoaded(id: meeting.id) else { return }
                     selectedMeeting = meeting.id
                 } label: {
                     HStack {
@@ -39,8 +38,23 @@ struct ContextDetailView: View {
                     }
                 }.buttonStyle(ActionButtonStyle())
             }.frame(minHeight: 100, maxHeight: 200)
+            HStack {
+                Button("Newer") { Task { await load(before: meetings.first) } }
+                    .disabled(loading || !page.hasNewer)
+                Button("Older") { Task { await load(after: meetings.last) } }
+                    .disabled(loading || !page.hasOlder)
+                Spacer()
+                if loading { ProgressView().controlSize(.small) }
+                Text("\(meetings.count) shown").font(.caption).foregroundStyle(.secondary)
+            }
+            if let pageError {
+                HStack {
+                    Text(pageError).font(.caption).foregroundStyle(.secondary)
+                    Button("Try Again") { Task { await load() } }.disabled(loading)
+                }
+            }
             Divider()
-            Text("Ask across these meetings").font(.headline)
+            Text("Ask about the 20 most recent meetings").font(.headline)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(messages) { message in
@@ -60,6 +74,7 @@ struct ContextDetailView: View {
                         || meetings.isEmpty)
             }
         }.padding(20).navigationTitle(title)
+            .task { await load() }
             .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
                 if let selectedMeeting {
                     VStack {
@@ -69,8 +84,31 @@ struct ContextDetailView: View {
                         }.padding()
                         MeetingDetailView(meetingID: selectedMeeting)
                     }.frame(width: 800, height: 650)
+                        .environment(\.showManagedTask) { id in
+                            self.selectedMeeting = nil
+                            showManagedTask(id)
+                        }
                 }
             }
+    }
+    private func load(after: MeetingListEntry? = nil, before: MeetingListEntry? = nil) async {
+        guard !loading, let index = store.libraryIndex else { return }
+        loading = true
+        defer { loading = false }
+        let personID = personID
+        let tagID = tagID
+        do {
+            let next = try await Task.detached(priority: .userInitiated) {
+                try AssociatedMeetingPage.read(
+                    index: index, personID: personID, tagID: tagID, after: after, before: before)
+            }.value
+            guard !Task.isCancelled else { return }
+            page = next
+            pageError = nil
+        }
+        catch {
+            pageError = "Couldn’t load associated meetings. " + error.localizedDescription
+        }
     }
     private func personBinding(_ person: Person, _ path: WritableKeyPath<Person, String>) -> Binding<String> {
         Binding(
@@ -86,5 +124,30 @@ struct ContextDetailView: View {
         guard !question.isEmpty else { return }
         draft = ""
         Task { _ = await store.sendContextChat(personID: personID, tagID: tagID, message: question) }
+    }
+}
+
+struct AssociatedMeetingPage {
+    var entries: [MeetingListEntry] = []
+    var total = 0
+    var hasNewer = false
+    var hasOlder = false
+
+    static func read(
+        index: LibraryIndex, personID: UUID?, tagID: UUID?, after: MeetingListEntry? = nil,
+        before: MeetingListEntry? = nil
+    ) throws -> Self {
+        let entries = try index.page(after: after, before: before, limit: 20, personID: personID, tagID: tagID)
+        if entries.isEmpty && (after != nil || before != nil) {
+            return try read(index: index, personID: personID, tagID: tagID)
+        }
+        let total = try index.count(personID: personID, tagID: tagID)
+        let newer =
+            try entries.first.map { !(try index.page(before: $0, limit: 1, personID: personID, tagID: tagID)).isEmpty }
+            ?? false
+        let older =
+            try entries.last.map { !(try index.page(after: $0, limit: 1, personID: personID, tagID: tagID)).isEmpty }
+            ?? false
+        return Self(entries: entries, total: total, hasNewer: newer, hasOlder: older)
     }
 }

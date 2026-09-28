@@ -37,34 +37,26 @@ struct NotesDocumentTests {
 }
 
 @MainActor struct NotesStorageTests {
-    @Test func migrateSaveReloadAndStandaloneExport() async throws {
+    @Test func saveReloadAndStandaloneExport() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let meeting = Meeting(title: "Old", notes: "Original <!-- gday:t=0:12 -->")
-        var library = MeetingLibrary(meetings: [meeting])
-        library.version = 2
-        let original = try JSONEncoder().encode(library)
-        try original.write(to: folder.appendingPathComponent("library.json"))
         let store = MeetingStore(dataDirectory: folder)
-        #expect(store.errorMessage == nil)
-        #expect(store.meetings[0].notes == meeting.notes)
-        #expect(try Data(contentsOf: folder.appendingPathComponent("library-v2-backup.json")) == original)
-        let object =
-            try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("library.json")))
-            as! [String: Any]
-        #expect((object["meetings"] as! [[String: Any]])[0]["notes"] == nil)
-        let metadataBefore = try Data(contentsOf: folder.appendingPathComponent("library.json"))
-        store.editNotes(id: meeting.id, text: "Edited")
-        #expect(try Data(contentsOf: folder.appendingPathComponent("library.json")) == metadataBefore)
-        await store.finalizeForQuit()
+        let id = store.createMeeting(title: "Notes")
+        store.editNotes(id: id, text: "Original <!-- gday:t=0:12 -->")
+        #expect(store.flushNotes())
+        let metadataURL = store.directory(for: id).appendingPathComponent("metadata.json")
+        let metadataBefore = try Data(contentsOf: metadataURL)
+        store.editNotes(id: id, text: "Edited")
+        #expect(try Data(contentsOf: metadataURL) == metadataBefore)
+        #expect(await store.finalizeForQuit())
         let restored = MeetingStore(dataDirectory: folder)
-        #expect(restored.meetings[0].notes == "Edited")
-        let exported = try JSONEncoder().encode(restored.meetings[0])
+        let meeting = try #require(restored.meeting(id: id))
+        #expect(meeting.notes == "Edited")
+        let exported = try JSONEncoder().encode(meeting)
         #expect(try JSONDecoder().decode(Meeting.self, from: exported).notes == "Edited")
         #expect(
-            try FileManager.default.attributesOfItem(atPath: store.notesStorage.url(meeting.id).path)[.posixPermissions]
-                as? Int == 0o600)
+            try FileManager.default.attributesOfItem(atPath: store.notesStorage.url(id).path)[.posixPermissions] as? Int
+                == 0o600)
     }
     @Test func externalEditsReloadAndConflictsArePreserved() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -130,7 +122,7 @@ extension NotesStorageTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
         let id = store.createMeeting()
-        let index = folder.appendingPathComponent("library.json")
+        let index = store.directory(for: id).appendingPathComponent("metadata.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
         var meeting = store.meetings[0]
@@ -252,7 +244,7 @@ extension NotesStorageTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
         let id = store.createMeeting()
-        let index = folder.appendingPathComponent("library.json")
+        let index = store.directory(for: id).appendingPathComponent("metadata.json")
         let metadata = try Data(contentsOf: index)
         store.editNotes(id: id, text: "First edit")
         store.editNotes(id: id, text: "Latest edit")

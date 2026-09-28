@@ -22,6 +22,7 @@ struct ProviderTranscriptionAttempt: Codable, Equatable {
     /// The exact provider code is saved before upload and remains fixed on retry.
     var providerLanguage: String?
     var failure: String?
+    var remoteJobExpired: Bool?
 }
 
 extension ProviderTranscriptionAttempt {
@@ -36,6 +37,7 @@ extension ProviderTranscriptionAttempt {
 
 extension MeetingStore {
     func transcribeWithProvider(id: UUID, provider: ServiceProvider) async throws {
+        guard ensureMeetingLoaded(id: id) else { throw ServiceError("This meeting no longer exists.") }
         guard libraryWritable else {
             throw ServiceError("Restore the local library before transcribing. Job progress must be saved first.")
         }
@@ -47,6 +49,8 @@ extension MeetingStore {
         else {
             throw ServiceError("Resume the pending transcription with its original provider and address.")
         }
+        try bindManagedTranscriptionAttempt(attempt, meetingID: id)
+        if attempt.remoteJobExpired == true { throw MissingTranscriptionJob() }
         if attempt.taskID == nil && attempt.result == nil {
             try TranscriptionLanguage.validate(attempt.language)
         }
@@ -96,10 +100,27 @@ extension MeetingStore {
                 try saveTranscriptionAttempt(attempt, meetingID: id)
             }
             guard let taskID = attempt.taskID else { throw ServiceError("The provider returned no job ID.") }
+            var pollFailures = 0
             while true {
                 try Task.checkCancellation()
                 setJobProgress(.transcription, .meeting(id), "Waiting for \(provider.name)…")
-                switch try await server.task(id: taskID) {
+                let status: ServerTaskResult
+                do { status = try await server.task(id: taskID) }
+                catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
+                    attempt.remoteJobExpired = true
+                    try saveTranscriptionAttempt(attempt, meetingID: id)
+                    throw MissingTranscriptionJob()
+                }
+                catch {
+                    try Task.checkCancellation()
+                    guard Self.isTransientTranscriptionError(error) else { throw error }
+                    pollFailures += 1
+                    setJobProgress(.transcription, .meeting(id), "Connection interrupted. Retrying \(provider.name)…")
+                    try await Task.sleep(for: transcriptionRetryDelay(failures: pollFailures))
+                    continue
+                }
+                pollFailures = 0
+                switch status {
                 case .pending: try await Task.sleep(for: transcriptionPollDelay)
                 case .failed(let message):
                     attempt.failure = message
@@ -221,10 +242,28 @@ extension MeetingStore {
         attempt: inout ProviderTranscriptionAttempt
     ) async throws {
         guard let jobID = attempt.taskID else { throw ServiceError("The transcription has no RunPod job ID.") }
+        var pollFailures = 0
         while true {
             try Task.checkCancellation()
             setJobProgress(.transcription, .meeting(id), "Waiting for \(runpod.provider.name)…")
-            switch try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) {
+            let status: ProviderTranscriptionStatus
+            do { status = try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) }
+            catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
+                attempt.remoteJobExpired = true
+                try saveTranscriptionAttempt(attempt, meetingID: id)
+                throw MissingTranscriptionJob()
+            }
+            catch {
+                try Task.checkCancellation()
+                guard Self.isTransientTranscriptionError(error) else { throw error }
+                pollFailures += 1
+                setJobProgress(
+                    .transcription, .meeting(id), "Connection interrupted. Retrying \(runpod.provider.name)…")
+                try await Task.sleep(for: transcriptionRetryDelay(failures: pollFailures))
+                continue
+            }
+            pollFailures = 0
+            switch status {
             case .pending: try await Task.sleep(for: transcriptionPollDelay)
             case .failed(let message):
                 attempt.failure = message
@@ -248,14 +287,24 @@ extension MeetingStore {
 
     }
 
+    private static func isTransientTranscriptionError(_ error: Error) -> Bool {
+        if let error = error as? URLError { return error.code != .cancelled }
+        if let error = error as? ServiceHTTPStatusError { return error.statusCode == 429 || error.statusCode >= 500 }
+        return false
+    }
+
+    private func transcriptionRetryDelay(failures: Int) -> Duration {
+        min(max(transcriptionPollDelay, .milliseconds(1)) * (1 << min(failures, 4)), .seconds(30))
+    }
+
     func saveTranscriptionAttempt(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) throws {
         guard var latest = meetings.first(where: { $0.id == meetingID }) else {
             throw ServiceError("This meeting was deleted.")
         }
         latest.transcriptionAttempt = attempt
         errorMessage = nil
-        updateMeeting(latest)
-        if let errorMessage { throw ServiceError("Couldn't save transcription progress: \(errorMessage)") }
+        guard updateMeeting(latest) else { throw ServiceError(errorMessage ?? "Couldn’t save transcription progress.") }
+        try bindManagedTranscriptionAttempt(attempt, meetingID: meetingID)
     }
 
     func clearTranscriptionAttempt(meetingID: UUID) throws {
@@ -269,6 +318,14 @@ extension MeetingStore {
         if let errorMessage { throw ServiceError(errorMessage) }
     }
 
+    private func transcriptSource(_ attempt: ProviderTranscriptionAttempt) -> TranscriptSource {
+        TranscriptSource(
+            id: UUID(uuidString: attempt.idempotencyKey) ?? UUID(),
+            providerName: settings.serviceProviders.first(where: { $0.id == attempt.providerID })?.name
+                ?? attempt.kind.title,
+            generatedAt: Date())
+    }
+
     func applySavedTranscriptionResult(meetingID: UUID) {
         guard !isJobRunning(.transcription, .meeting(meetingID)),
             var latest = meetings.first(where: { $0.id == meetingID }),
@@ -277,9 +334,16 @@ extension MeetingStore {
         guard preserveTranscript(latest) else { return }
         latest.replaceSpeakers(latest.transcriptionAttempt?.resultSpeakers ?? [])
         latest.transcript = result
+        if let attempt = latest.transcriptionAttempt {
+            latest.transcriptSource = transcriptSource(attempt)
+        }
         latest.restoreSpeakerIdentities()
+        markManagedTaskCompletion(on: &latest, kind: .transcription)
         latest.transcriptionAttempt = nil
-        if updateMeeting(latest) { scheduleAutomaticSummary(id: meetingID) }
+        if updateMeeting(latest) {
+            reconcileManagedTaskCompletion(for: latest, kind: .transcription)
+            scheduleAutomaticSummary(id: meetingID)
+        }
     }
 
     func saveTranscriptionResult(_ result: [TranscriptSegment], attempt: ProviderTranscriptionAttempt, meetingID: UUID)
@@ -298,7 +362,9 @@ extension MeetingStore {
         }
         latest.replaceSpeakers(attempt.resultSpeakers ?? [])
         latest.transcript = result
+        latest.transcriptSource = transcriptSource(attempt)
         latest.restoreSpeakerIdentities()
+        markManagedTaskCompletion(on: &latest, kind: .transcription)
         latest.transcriptionAttempt = nil
         errorMessage = nil
         guard updateMeeting(latest) else {

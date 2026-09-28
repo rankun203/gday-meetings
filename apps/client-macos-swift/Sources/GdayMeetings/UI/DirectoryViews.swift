@@ -70,7 +70,7 @@ struct TagsView: View {
                                     store.updateTag(changed)
                                 }))
                         Spacer()
-                        Text("\(store.meetings.filter { $0.tagIDs.contains(tag.id) }.count)").foregroundStyle(
+                        Text("\((try? store.libraryIndex?.count(tagID: tag.id)) ?? 0)").foregroundStyle(
                             .secondary)
                         Button("Delete Tag…", systemImage: "trash", role: .destructive) { deleting = tag }.help(
                             "Delete tag"

@@ -3,6 +3,7 @@ import SwiftUI
 struct TaskQueueView: View {
     @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
+    var focusedTaskID: UUID? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -10,6 +11,9 @@ struct TaskQueueView: View {
                 Text("Tasks").font(.largeTitle.bold())
                 Spacer()
                 Text(store.taskQueueSummary).foregroundStyle(.secondary)
+            }
+            if let error = store.managedTaskJournalError {
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
             }
             if store.managedTasks.isEmpty && store.taskQueueOtherJobs.isEmpty {
                 ContentUnavailableView(
@@ -21,41 +25,37 @@ struct TaskQueueView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
-                        taskSection("Running", states: [.running])
-                        if !store.taskQueueOtherJobs.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Other Activity").font(.headline)
-                                ForEach(store.taskQueueOtherJobs) { job in
-                                    HStack(spacing: 12) {
-                                        ProgressView().controlSize(.small)
-                                        Text(store.progressText(for: job)).frame(
-                                            maxWidth: .infinity, alignment: .leading)
-                                        if let id = job.meetingID {
-                                            Button("Open Meeting") { showMeeting(id) }
-                                        }
-                                    }.padding(12).taskQueueCard()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 20) {
+                            ForEach(store.tasksNewestFirst) { record in taskRow(record).id(record.id) }
+                            if !store.taskQueueOtherJobs.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Other Activity").font(.headline)
+                                    ForEach(store.taskQueueOtherJobs) { job in
+                                        HStack(spacing: 12) {
+                                            ProgressView().controlSize(.small)
+                                            Text(store.progressText(for: job)).frame(
+                                                maxWidth: .infinity, alignment: .leading)
+                                            if let id = job.meetingID {
+                                                Button("Open Meeting") { showMeeting(id) }
+                                            }
+                                        }.padding(12).taskQueueCard()
+                                    }
                                 }
                             }
-                        }
-                        taskSection("Queued", states: [.queued])
-                        taskSection("Needs Attention", states: [.failed])
-                        taskSection("Recent", states: [.completed, .cancelled])
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .task(id: focusedTaskID) {
+                        guard let focusedTaskID else { return }
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        proxy.scrollTo(focusedTaskID, anchor: .center)
+                    }
                 }
             }
         }.padding(24)
-    }
-
-    @ViewBuilder private func taskSection(_ title: String, states: [ManagedTaskState]) -> some View {
-        let records = store.managedTasks.filter { states.contains($0.state) }
-        if !records.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.headline)
-                ForEach(records) { record in taskRow(record) }
-            }
-        }
     }
 
     private func taskRow(_ record: ManagedTaskRecord) -> some View {
@@ -68,11 +68,26 @@ struct TaskQueueView: View {
                     Image(systemName: icon(record.state)).foregroundStyle(.secondary).padding(.top, 3)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.meetingTitle).font(.headline).textSelection(.enabled)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(record.meetingTitle).font(.headline).textSelection(.enabled)
+                        Spacer()
+                        Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel(
+                                "Created " + record.createdAt.formatted(date: .complete, time: .shortened))
+                    }
                     Text(operation(record.kind) + providerSuffix(record)).font(.subheadline).foregroundStyle(.secondary)
                     Text(record.progress).font(.callout).textSelection(.enabled)
                     if let error = record.errorMessage, !error.isEmpty {
                         Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    if record.recovery == .restartRequired {
+                        Text("Restart sends the recording to the provider again.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if record.attemptKey != nil && !record.state.isActive && record.state != .completed {
+                        Text("Dismiss discards this saved request. The provider may continue processing it.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     if record.state == .running {
                         Text("The provider may continue processing after you stop waiting.")
@@ -88,10 +103,16 @@ struct TaskQueueView: View {
                 VStack(alignment: .leading, spacing: 8) { actions(record) }
             }
         }.padding(14).taskQueueCard()
+            .overlay {
+                if record.id == focusedTaskID {
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
     }
 
     @ViewBuilder private func actions(_ record: ManagedTaskRecord) -> some View {
-        if store.meetings.contains(where: { $0.id == record.meetingID }) {
+        if store.containsMeeting(id: record.meetingID) {
             Button("Open Meeting") { showMeeting(record.meetingID) }
         }
         if record.state == .queued || record.state == .running {
@@ -101,6 +122,9 @@ struct TaskQueueView: View {
             Button(record.state == .queued ? "Remove from Queue" : "Stop Waiting") {
                 store.cancelManagedTask(id: record.id)
             }
+        }
+        if store.canRestartManagedTask(record) {
+            Button("Restart") { store.restartManagedTask(id: record.id) }
         }
         if store.canRetryManagedTask(record) {
             Button(store.managedTaskActionTitle(record)) { store.retryManagedTask(id: record.id) }
@@ -125,6 +149,7 @@ struct TaskQueueView: View {
         case .chat, .contextChat: "Chat"
         case .archive: "Archive"
         case .importAudio: "Audio Import"
+        default: "Other Task"
         }
     }
 
@@ -166,6 +191,10 @@ struct TaskQueueStatusButton: View {
 }
 
 extension MeetingStore {
+    var showsTaskQueueStatus: Bool {
+        managedTasks.contains { $0.state.isActive || $0.state == .failed } || !taskQueueOtherJobs.isEmpty
+    }
+
     var taskQueueOtherJobs: [BackgroundJob] {
         backgroundJobs.filter { job in
             !managedTasks.contains { record in

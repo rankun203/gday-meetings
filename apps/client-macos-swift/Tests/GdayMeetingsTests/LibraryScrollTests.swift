@@ -7,12 +7,18 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct LibraryScrollTests {
-    @Test func addingMeetingsPreservesNativeTopSpacing() throws {
+    @Test func addingMeetingsPreservesNativeTopSpacing() async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-list-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
         for index in 0..<26 { store.createMeeting(title: "Meeting \(index)") }
+        let indexingDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while store.libraryDataStatus.isBuilding && ContinuousClock.now < indexingDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        store.resetMeetingPages()
+        #expect(!store.visibleMeetingIDs.isEmpty)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 600),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)

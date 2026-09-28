@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Meeting language is an offline app setting, independent of provider configuration.
@@ -10,7 +11,7 @@ struct MeetingLanguagePicker: View {
     var body: some View {
         HStack(spacing: 4) {
             if compact {
-                languagePicker.labelsHidden().frame(width: 120)
+                languagePicker.labelsHidden().frame(width: compactWidth)
             }
             else {
                 languagePicker
@@ -36,6 +37,12 @@ struct MeetingLanguagePicker: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+    private var compactWidth: CGFloat {
+        let label = AppLanguages.name(for: selection) as NSString
+        let textWidth = label.size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]).width
+        // Reserve native menu padding and arrows; long names remain bounded.
+        return min(280, max(80, ceil(textWidth) + 40))
     }
     private var languagePicker: some View {
         // Display an alias as its standard choice without rewriting the saved code.

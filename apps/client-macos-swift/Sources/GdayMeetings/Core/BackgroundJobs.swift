@@ -5,8 +5,20 @@ import Foundation
 /// while other meetings keep their actions. Recording start and stop are not
 /// jobs; they use the recording state in MeetingStore.
 struct BackgroundJob: Identifiable, Equatable {
-    enum Kind: String, Codable, Hashable {
-        case transcription, summary, chat, archive, contextChat, importAudio
+    struct Kind: RawRepresentable, Codable, Hashable {
+        let rawValue: String
+        init(rawValue: String) { self.rawValue = rawValue }
+        static let transcription = Self(rawValue: "transcription")
+        static let summary = Self(rawValue: "summary")
+        static let chat = Self(rawValue: "chat")
+        static let archive = Self(rawValue: "archive")
+        static let contextChat = Self(rawValue: "contextChat")
+        static let importAudio = Self(rawValue: "importAudio")
+        init(from decoder: Decoder) throws { rawValue = try decoder.singleValueContainer().decode(String.self) }
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
     enum Scope: Hashable {
         case meeting(UUID)
@@ -32,6 +44,7 @@ extension MeetingStore {
     /// scope; callers check and begin without suspending, so the check can't race.
     func beginJob(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, progress: String) -> Bool {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
+        guard !isChangingLibrary else { return false }
         guard !backgroundJobs.contains(where: { $0.key == key }) else { return false }
         backgroundJobs.append(BackgroundJob(key: key, progress: progress))
         return true
@@ -40,9 +53,7 @@ extension MeetingStore {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
         guard let index = backgroundJobs.firstIndex(where: { $0.key == key }) else { return }
         backgroundJobs[index].progress = progress
-        if let taskIndex = managedTasks.firstIndex(where: { $0.key == key && $0.state.isActive }) {
-            managedTasks[taskIndex].progress = progress
-        }
+        recordManagedTaskProgress(key, progress: progress)
     }
     func endJob(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)

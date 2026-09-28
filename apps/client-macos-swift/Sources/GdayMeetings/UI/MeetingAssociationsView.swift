@@ -93,7 +93,7 @@ struct MeetingSpeakersView: View {
                     $0.embedding != nil && ($0.voiceScope?.hasPrefix("runpod:") ?? false)
                 }) {
                     Text(
-                        "Assign a person to recognize their voice in future transcripts from this provider. You can change any match."
+                        "Assign a person to recognize their voice in future transcripts from this provider."
                     )
                     .font(.callout).foregroundStyle(.secondary)
                 }

@@ -7,7 +7,7 @@ struct MeetingContentTabs: View {
     @Binding var selection: Int
     @FocusState private var focusedTab: Int?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let titles = ["Transcript", "Notes", "Summary", "To-Dos", "Chat"]
+    private let titles = ["Transcript", "Notes", "Summary", "Chat"]
 
     var body: some View {
         HStack(spacing: 2) {

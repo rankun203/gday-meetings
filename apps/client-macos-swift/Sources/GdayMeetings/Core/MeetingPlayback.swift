@@ -9,7 +9,9 @@ import Foundation
 /// https://developer.apple.com/design/human-interface-guidelines/accessibility
 @MainActor
 final class MeetingPlayback: ObservableObject {
-    @Published private(set) var meetingID: UUID?
+    @Published private(set) var meetingID: UUID? {
+        didSet { progress.setMeeting(meetingID) }
+    }
     @Published private(set) var title = ""
     @Published private(set) var trackNames: [String] = []
     @Published private(set) var selectedTrack = -1
@@ -35,6 +37,11 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var isLoadingWaveforms = false
     @Published private(set) var mutedTracks: Set<Int> = []
     var hasSelection: Bool { meetingID != nil }
+
+    /// Original library file, independent of the currently browsed meeting or decoder temporaries.
+    func audioURL(forTrack index: Int) -> URL? {
+        sourceFiles.indices.contains(index) ? sourceFiles[index] : nil
+    }
 
     typealias AudioPreparer = @Sendable (URL) async throws -> PreparedPlaybackAudio
     typealias WaveformLoader = @Sendable (URL, URL) async throws -> AudioWaveform
@@ -95,6 +102,7 @@ final class MeetingPlayback: ObservableObject {
             return
         }
         load(meeting: meeting, files: files, track: -1, position: position, autoplay: true)
+        progress.seek(to: currentTime)
     }
 
     func play() {
@@ -135,7 +143,7 @@ final class MeetingPlayback: ObservableObject {
         guard hasSelection, seconds.isFinite else { return }
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
         pendingPosition = target
-        currentTime = target
+        progress.seek(to: target)
         hasEnded = duration > 0 && target >= duration
         if isLoading { return }
         guard let transport else { return }
@@ -412,25 +420,70 @@ final class MeetingPlayback: ObservableObject {
 
 @MainActor
 final class PlaybackProgress: ObservableObject {
-    @Published private(set) var time: Double = 0
-    @Published private(set) var scrubTime: Double?
-    @Published var isPlaying = false
-    var rate: Double = 1
+    struct Snapshot: Equatable {
+        var meetingID: UUID?
+        var time: Double = 0
+        var scrubTime: Double?
+        var isPlaying = false
+        var rate: Double = 1
+        var seekRevision: UInt64 = 0
+        var displayedTime: Double { scrubTime ?? time }
+    }
+    @Published private(set) var snapshot = Snapshot()
+    var time: Double { snapshot.time }
+    var scrubTime: Double? { snapshot.scrubTime }
+    var isPlaying: Bool {
+        get { snapshot.isPlaying }
+        set {
+            guard newValue != snapshot.isPlaying else { return }
+            snapshot.isPlaying = newValue
+        }
+    }
+    var rate: Double {
+        get { snapshot.rate }
+        set {
+            guard newValue != snapshot.rate else { return }
+            snapshot.rate = newValue
+        }
+    }
     private var sampledAt = ProcessInfo.processInfo.systemUptime
+
+    func setMeeting(_ id: UUID?) {
+        guard id != snapshot.meetingID else { return }
+        var next = snapshot
+        next.meetingID = id
+        next.time = 0
+        next.scrubTime = nil
+        next.isPlaying = false
+        sampledAt = ProcessInfo.processInfo.systemUptime
+        snapshot = next
+    }
+
+    /// Seek intent and its position arrive atomically through the shared clock.
+    /// Subscribers decide whether to reveal the position; controls never address them.
+    func seek(to value: Double) {
+        guard value.isFinite else { return }
+        var next = snapshot
+        next.time = value
+        next.scrubTime = nil
+        next.seekRevision &+= 1
+        sampledAt = ProcessInfo.processInfo.systemUptime
+        snapshot = next
+    }
 
     /// Briefly interpolate between audio samples, but never run away on stalls.
     func animatedTime(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Double {
         guard scrubTime == nil, isPlaying else { return displayedTime }
         return time + min(0.05, max(0, uptime - sampledAt)) * rate
     }
-    var displayedTime: Double { scrubTime ?? time }
+    var displayedTime: Double { snapshot.displayedTime }
     func scrub(to value: Double?) {
         guard value == nil || value!.isFinite, scrubTime != value else { return }
-        scrubTime = value
+        snapshot.scrubTime = value
     }
     func update(_ value: Double, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard value.isFinite, value != time else { return }
         sampledAt = uptime
-        time = value
+        snapshot.time = value
     }
 }

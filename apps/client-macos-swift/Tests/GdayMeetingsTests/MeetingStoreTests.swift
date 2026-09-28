@@ -24,19 +24,19 @@ import Testing
         meeting.todos = [MeetingTodo(title: "Send update")]
         store.updateMeeting(meeting)
         let restored = MeetingStore(dataDirectory: url)
-        #expect(restored.meetings.first?.id == id)
-        #expect(restored.meetings.first?.notes == "Decision preserved")
-        #expect(restored.meetings.first?.transcript == meeting.transcript)
+        #expect(restored.meeting(id: id)?.id == id)
+        #expect(restored.meeting(id: id)?.notes == "Decision preserved")
+        #expect(restored.meeting(id: id)?.transcript == meeting.transcript)
         restored.deletePerson(id: person)
         restored.deleteTag(id: tag)
         let final = MeetingStore(dataDirectory: url)
-        #expect(final.meetings.first?.personIDs.isEmpty == true)
-        #expect(final.meetings.first?.tagIDs.isEmpty == true)
+        #expect(final.meeting(id: id)?.personIDs.isEmpty == true)
+        #expect(final.meeting(id: id)?.tagIDs.isEmpty == true)
     }
     @Test func corruptLibraryNeverOverwritten() throws {
         let url = try directory()
         defer { try? FileManager.default.removeItem(at: url) }
-        let file = url.appendingPathComponent("library.json")
+        let file = url.appendingPathComponent("settings.json")
         let content = Data("{broken".utf8)
         try content.write(to: file)
         let store = MeetingStore(dataDirectory: url)
@@ -114,11 +114,13 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         store.createMeeting(title: "Saved")
-        let path = root.appendingPathComponent("library.json")
-        let backup = root.appendingPathComponent("backup.json")
-        try FileManager.default.moveItem(at: path, to: backup)
+        let id = try #require(store.meetings.first?.id)
+        let path = store.directory(for: id).appendingPathComponent("metadata.json")
+        try FileManager.default.removeItem(at: path)
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
-        store.createMeeting(title: "Cannot save")
+        var changed = try #require(store.meeting(id: id))
+        changed.title = "Cannot save"
+        #expect(!store.updateMeeting(changed))
         #expect(store.meetings.count == 1)
         #expect(store.meetings.first?.title == "Saved")
         #expect(store.errorMessage != nil)

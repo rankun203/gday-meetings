@@ -93,4 +93,29 @@ import Testing
         #expect(identity.personID == nil)
         #expect(applied.transcriptionAttempt == nil)
     }
+
+    @Test func completedProviderResultSelectsNewSourceAndPreservesLiveVersion() throws {
+        let store = try store()
+        let id = store.createMeeting(title: "Live then provider")
+        var meeting = try #require(store.meeting(id: id))
+        let liveSource = TranscriptSource(id: UUID(), providerName: "This Mac", generatedAt: Date())
+        meeting.transcript = [.init(text: "Live words")]
+        meeting.transcriptSource = liveSource
+        meeting.liveTranscriptAdopted = true
+        store.updateMeeting(meeting)
+        let otherID = store.createMeeting(title: "Another meeting")
+        let other = try #require(store.meeting(id: otherID))
+        let result = [TranscriptSegment(text: "Provider words")]
+        let attempt = ProviderTranscriptionAttempt(
+            providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: meeting.title,
+            originalTranscript: meeting.transcript, result: result)
+        try store.saveTranscriptionResult(result, attempt: attempt, meetingID: id)
+        let applied = try #require(store.meeting(id: id))
+        #expect(applied.transcript.map(\.text) == ["Provider words"])
+        #expect(applied.transcriptSource?.id != liveSource.id)
+        #expect(applied.transcriptSource?.providerName == "RunPod")
+        let history = try TranscriptRevisions.read(at: store.directory(for: id)).revisions
+        #expect(history.contains { $0.id == liveSource.id && $0.segments == meeting.transcript })
+        #expect(store.meeting(id: otherID)?.transcript == other.transcript)
+    }
 }

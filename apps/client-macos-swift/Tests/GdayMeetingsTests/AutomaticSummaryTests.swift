@@ -107,7 +107,7 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         #expect(!bodies[0].contains("Completed provider words"))
         #expect(bodies[1].contains("Completed provider words"))
         #expect(!bodies[1].contains("Saved live words"))
-        #expect(MeetingStore(dataDirectory: root).meetings.first?.summary == "Summary 2")
+        #expect(MeetingStore(dataDirectory: root).meeting(id: id)?.summary == "Summary 2")
         #expect(store.pendingAutomaticSummaries.isEmpty)
     }
 
@@ -164,7 +164,7 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         let id = store.createMeeting(title: "Failed save")
         let original = try #require(store.meetings.first)
         let attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
-        let index = root.appendingPathComponent("library.json")
+        let index = store.directory(for: id).appendingPathComponent("metadata.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: true)
         #expect(throws: (any Error).self) {

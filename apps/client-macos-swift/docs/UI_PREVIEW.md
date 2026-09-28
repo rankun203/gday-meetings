@@ -30,7 +30,13 @@ The synthetic conversation includes multiple tags and manually assigned, automat
 
 Launch the Preview executable with `--synthetic-tasks` to add two running tasks, one queued transcription, one summary needing attention, and one completed summary. These rows are explicitly synthetic and never submit provider work. The bottom status initially reads **2 running · 1 queued · 1 needs attention**. Click it or choose **Tasks** in the sidebar to open the full-width queue panel.
 
-Check **Open Meeting**, **Run Next**, **Remove from Queue**, **Stop Waiting**, **Retry**, and **Dismiss**. Synthetic Retry completes locally; stopping or removing a synthetic task updates its state without cancelling a remote job. Run Next changes queue order but does not execute synthetic work. Verify section updates, task counts, keyboard access, and action wrapping at narrow widths in light and dark appearance. Ordinary Preview launches have no synthetic tasks. Real provider tasks started deliberately in Preview use the production queue and can submit content.
+Check **Open Meeting**, **Run Next**, **Remove from Queue**, **Stop Waiting**, **Retry**, and **Dismiss**. Synthetic Retry completes locally; stopping or removing a synthetic task updates its state without cancelling a remote job. Run Next changes queue order but does not execute synthetic work. Verify newest-first ordering, task counts, keyboard access, and action wrapping at narrow widths in light and dark appearance. Ordinary Preview launches have no synthetic tasks. Real provider tasks started deliberately in Preview use the production queue and can submit content.
+
+Use `--synthetic-pagination` to add 45 older meetings, load the first 20, then scroll through later pages. Search for **Unique last-page search phrase** to find content outside the first page. Use `--synthetic-summary-stream` to display a synthetic summary draft that grows for about 32 seconds in Synthetic conversation. This fixture makes no network requests and does not replace the saved summary; transport streaming is tested separately with a loopback server.
+
+## Long transcript
+
+Launch with `--synthetic-long-transcript` to replace Synthetic conversation's transcript with 10,000 alternating short and wrapped segments. Scroll its Transcript tab and confirm timestamp/speaker alignment remains stable. Double-click text or choose **Edit Transcript** from its contextual menu to edit. Return or leaving the editor saves; Escape cancels. Only the active segment creates an editor. This synthetic fixture checks layout and editing; use the full app with an isolated real library for end-to-end CPU, memory, and perceived scrolling measurements.
 
 ## Provider testing
 

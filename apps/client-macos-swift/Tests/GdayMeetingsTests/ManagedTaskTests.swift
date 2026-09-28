@@ -72,7 +72,9 @@ private final class QueueProviderState: @unchecked Sendable {
         #expect(store.queueTranscription(id: meetings[2]) == nil)
         #expect(store.isJobRunning(.transcription, .meeting(meetings[2])))
         store.prioritizeManagedTask(id: tasks[3])
-        #expect(store.managedTasks.first { $0.state == .queued }?.id == tasks[3])
+        #expect(
+            store.managedTasks.filter { $0.state == .queued }.max(by: { $0.queuePriority < $1.queuePriority })?.id
+                == tasks[3])
         store.removeManagedTask(id: tasks[2])
         #expect(!store.managedTasks.contains { $0.id == tasks[2] })
         try await waitUntil { state.count >= 2 }
@@ -173,12 +175,11 @@ private final class QueueProviderState: @unchecked Sendable {
         store.queueSummary(id: ids[2])
         store.queueSummary(id: ids[3])
         store.settings.autoSummarize = false
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !store.backgroundJobs.isEmpty && ContinuousClock.now < deadline {
+        let finished = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
             #expect(store.managedTasks.filter { $0.state == .running }.count <= 1)
-            try await Task.sleep(for: .milliseconds(1))
+            return store.backgroundJobs.isEmpty
         }
-        #expect(store.backgroundJobs.isEmpty)
+        try #require(finished)
         #expect(store.managedTasks.first { $0.id == automatic }?.state == .cancelled)
         #expect(server.requests.count == 3)
     }
@@ -192,33 +193,45 @@ private final class QueueProviderState: @unchecked Sendable {
         let recovered = MeetingStore(dataDirectory: root)
         #expect(recovered.managedTasks.isEmpty)
         #expect(recovered.backgroundJobs.isEmpty)
-        #expect(recovered.meetings.first?.transcriptionAttempt?.taskID == id.uuidString)
+        #expect(recovered.meeting(id: id)?.transcriptionAttempt?.taskID == id.uuidString)
     }
 
-    @Test func queuedIntentsRecoverWithoutStartingRequests() async throws {
+    @Test func unfinishedTranscriptionsResumeAutomaticallyWithoutResubmission() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let state = QueueProviderState()
+        state.finish()
         let server = try HTTPFixture { _ in state.response() }
         try await server.start()
         defer { server.stop() }
-        let store = MeetingStore(dataDirectory: root)
-        let provider = configure(store, origin: server.origin)
-        store.saveSettings()
-        let first = try savedAttempt(store, provider: provider, title: "First")
-        let second = try savedAttempt(store, provider: provider, title: "Second")
-        let third = store.createMeeting(title: "Not submitted yet")
-        let taskIDs = try [first, second, third].map { try #require(store.queueTranscription(id: $0)) }
-        #expect(store.managedTasks.last?.state == .queued)
+        // Match a relaunch: the original store and its file monitor must stop
+        // before a new owner starts recovering the same journal.
+        let provider: ServiceProvider
+        weak var originalStore: MeetingStore?
+        do {
+            let store = MeetingStore(dataDirectory: root)
+            originalStore = store
+            provider = configure(store, origin: server.origin)
+            store.saveSettings()
+            let ids = try (0..<2).map { try savedAttempt(store, provider: provider, title: "Recover \($0)") }
+            for id in ids {
+                let attempt = try #require(store.meetings.first { $0.id == id }?.transcriptionAttempt)
+                let row = ManagedTaskRecord(
+                    kind: .transcription, meetingID: id, meetingTitle: "Recover",
+                    providerID: provider.id, state: .running, attemptKey: attempt.idempotencyKey,
+                    remoteJobID: attempt.taskID)
+                try store.managedTaskJournal.upsert(row)
+            }
+        }
+        #expect(originalStore == nil)
         let recovered = MeetingStore(dataDirectory: root)
-        #expect(recovered.managedTasks.count == 3)
-        #expect(recovered.managedTasks.allSatisfy { $0.state == .failed && $0.interrupted })
-        #expect(recovered.backgroundJobs.isEmpty)
-        #expect(recovered.managedTaskOperations.isEmpty)
-        #expect(
-            recovered.managedTasks.contains { $0.meetingID == third && $0.errorMessage?.contains("queued") == true })
-        for taskID in taskIDs { store.cancelManagedTask(id: taskID) }
-        for taskID in taskIDs { await store.waitForManagedTask(taskID) }
-        #expect(!server.requests.contains { $0.target.contains(third.uuidString) })
+        // Test stores do not load Keychain; restore the synthetic credential before recovery runs.
+        recovered.settings.serviceProviders = [provider]
+        recovered.transcriptionPollDelay = .milliseconds(1)
+        try await waitUntil { recovered.managedTasks.allSatisfy { $0.state == .completed } }
+        #expect(recovered.managedTasks.count == 2)
+        #expect(server.requests.count == 2)
+        #expect(server.requests.allSatisfy { $0.method == "GET" && $0.target.contains("/status/") })
+        #expect(recovered.meetings.allSatisfy { $0.transcriptionAttempt == nil })
     }
 }

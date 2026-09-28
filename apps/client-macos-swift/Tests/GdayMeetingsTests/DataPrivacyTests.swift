@@ -50,10 +50,14 @@ struct DataPrivacyTests {
         return website
     }
 
-    @Test func everythingStaysOnThisMacWithoutProviders() {
+    @Test func noProviderTransmissionWithoutProviders() {
         let rows = DataPrivacy.rows(PrivacyContext(settings: AppSettings()))
         #expect(rows.map(\.type) == PrivacyDataType.allCases)
-        #expect(rows.allSatisfy { !$0.leavesMac && $0.note == nil })
+        #expect(rows.allSatisfy { !$0.sendsToProvider && $0.note == nil })
+        #expect(row(rows, .notes).storageStatus == "Saved in Data Folder")
+        #expect(row(rows, .voiceSamples).storageStatus == "Saved in Data Folder")
+        #expect(row(rows, .credentials).storageStatus == "Stored in Keychain on This Mac")
+        #expect(row(rows, .logs).storageStatus == "Saved on This Mac")
     }
 
     @Test func runpodSendsAudioThroughFiledrop() {
@@ -71,7 +75,7 @@ struct DataPrivacyTests {
         #expect(texts(rows, .meetingDetails) == ["Sent to RunPod (api.runpod.ai) when you transcribe a meeting"])
         #expect(row(rows, .meetingDetails).note == "RunPod receives only the meeting language.")
         for type in [PrivacyDataType.notes, .transcripts, .summaries, .todos, .chat, .peopleAndTags, .settings, .logs] {
-            #expect(!row(rows, type).leavesMac)
+            #expect(!row(rows, type).sendsToProvider)
         }
         #expect(
             texts(rows, .credentials) == [
@@ -111,11 +115,11 @@ struct DataPrivacyTests {
         var settings = AppSettings()
         settings.serviceProviders = [runpod, filedrop]
         settings.transcriptionProviderID = runpod.id
-        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .audio).leavesMac)
+        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .audio).sendsToProvider)
         runpod.uploadProviderID = nil
         filedrop.isEnabled = true
         settings.serviceProviders = [runpod, filedrop]
-        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .audio).leavesMac)
+        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .audio).sendsToProvider)
     }
 
     @Test func pendingAttemptKeepsItsOriginalProvider() {
@@ -133,7 +137,7 @@ struct DataPrivacyTests {
         var settings = AppSettings()
         settings.serviceProviders = [website]
         settings.transcriptionProviderID = website.id
-        #expect(DataPrivacy.rows(PrivacyContext(settings: settings)).allSatisfy { !$0.leavesMac })
+        #expect(DataPrivacy.rows(PrivacyContext(settings: settings)).allSatisfy { !$0.sendsToProvider })
 
         let rows = DataPrivacy.rows(
             PrivacyContext(settings: settings, signedInWebsiteOrigin: "https://meet.example.com"))
@@ -147,7 +151,7 @@ struct DataPrivacyTests {
             texts(rows, .credentials) == [
                 "Sent to Office Website (meet.example.com) to authenticate when you transcribe a meeting, choose Archive to Server, open the provider in Settings, or choose Load Languages"
             ])
-        #expect(!row(rows, .settings).leavesMac)
+        #expect(!row(rows, .settings).sendsToProvider)
     }
 
     @Test func openAICompatibleSummariesSendMeetingTextButNotToDos() {
@@ -168,11 +172,11 @@ struct DataPrivacyTests {
         }
         #expect(row(rows, .settings).note == "Only the Summary Prompt is sent.")
         for type in [PrivacyDataType.audio, .todos, .credentials, .logs] {
-            #expect(!row(rows, type).leavesMac)
+            #expect(!row(rows, type).sendsToProvider)
         }
 
         settings.serviceProviders[0].model = ""
-        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .notes).leavesMac)
+        #expect(!row(DataPrivacy.rows(PrivacyContext(settings: settings)), .notes).sendsToProvider)
     }
 
     @Test func serverArchiveDoesNotNeedACapability() {
@@ -188,13 +192,13 @@ struct DataPrivacyTests {
         ] {
             #expect(texts(rows, type) == [archive])
         }
-        #expect(!row(rows, .settings).leavesMac)
-        #expect(!row(rows, .logs).leavesMac)
+        #expect(!row(rows, .settings).sendsToProvider)
+        #expect(!row(rows, .logs).sendsToProvider)
 
         settings.serviceProviders[0].isEnabled = false
         let disabled = DataPrivacy.rows(
             PrivacyContext(settings: settings, signedInWebsiteOrigin: "https://meet.example.com"))
-        #expect(!row(disabled, .notes).leavesMac)
+        #expect(!row(disabled, .notes).sendsToProvider)
     }
 
     @Test func disabledProvidersSendCredentialsOnlyWhileEditingModels() {
@@ -244,6 +248,6 @@ struct DataPrivacyTests {
         #expect(settings.serviceProviders.allSatisfy { DataPrivacy.host($0.endpoint).hasSuffix(".invalid") })
         let rows = DataPrivacy.rows(PrivacyContext(settings: settings))
         #expect(row(rows, .audio).destinations.count == 2)
-        #expect(row(rows, .notes).leavesMac)
+        #expect(row(rows, .notes).sendsToProvider)
     }
 }

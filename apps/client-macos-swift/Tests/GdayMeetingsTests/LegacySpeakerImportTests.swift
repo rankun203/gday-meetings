@@ -84,7 +84,7 @@ struct LegacySpeakerImportTests {
         SpeakerRecognition.match(&current, people: store.people)
         #expect(current[0].personID == nil)
         let reopened = MeetingStore(dataDirectory: destination)
-        #expect(reopened.meetings.first?.speakers == meeting.speakers)
+        #expect(reopened.meeting(id: meeting.id)?.speakers == meeting.speakers)
         #expect(reopened.people.first { $0.id == alex.id }?.voiceSamples == alex.voiceSamples)
     }
 

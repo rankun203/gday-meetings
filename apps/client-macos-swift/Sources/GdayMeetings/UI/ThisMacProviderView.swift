@@ -1,12 +1,8 @@
 import Speech
 import SwiftUI
 
-enum ThisMacProvider {
-    static let id = UUID(uuidString: "5987605A-1329-46E3-906D-2EC2D08B4D16")!
-    static let capabilities: Set<ProviderCapability> = [.liveTranscription]
-}
-
 struct ThisMacProviderView: View {
+    @EnvironmentObject private var store: MeetingStore
     @ViewState private var models: [SpeechModelOption] = []
     @ViewState private var message = "Checking speech models…"
     var body: some View {
@@ -19,7 +15,23 @@ struct ThisMacProviderView: View {
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Live Transcription") {
+            Section("Capabilities") {
+                Toggle(
+                    "Live Transcription",
+                    isOn: Binding(
+                        get: { store.settings.thisMacCapabilities.contains(.liveTranscription) },
+                        set: { enabled in
+                            if enabled {
+                                store.settings.thisMacCapabilities.insert(.liveTranscription)
+                            }
+                            else {
+                                store.settings.thisMacCapabilities.remove(.liveTranscription)
+                            }
+                            store.saveSettings()
+                        }))
+                Text("Transcribes audio during recording.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Speech Models") {
                 if models.isEmpty { Text(message).foregroundStyle(.secondary) }
                 ForEach(models) { model in
                     if #available(macOS 26.0, *) {

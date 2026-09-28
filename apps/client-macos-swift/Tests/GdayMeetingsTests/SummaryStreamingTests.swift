@@ -1,0 +1,149 @@
+import Foundation
+import Testing
+
+@testable import GdayMeetings
+
+@MainActor struct SummaryStreamingTests {
+    nonisolated private static let first =
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"### Summary\\n\\n\"}}]}\r\n\r\n"
+    nonisolated private static let second =
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"- [ ] Send résumé 👋\"}}]}\n\n"
+    nonisolated private static let end =
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+    private func directory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+    private func setup(_ store: MeetingStore, origin: String) -> UUID {
+        var provider = ServiceProvider(kind: .openAICompatible)
+        provider.endpoint = origin + "/v1"
+        provider.model = "fixture"
+        provider.enabledCapabilities = [.summarization]
+        store.settings.serviceProviders = [provider]
+        store.settings.summaryProviderID = provider.id
+        let id = store.createMeeting(title: "Streaming summary")
+        var meeting = store.meetings[0]
+        meeting.notes = "Send the report."
+        meeting.summary = "Saved summary"
+        store.updateMeeting(meeting)
+        return id
+    }
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(condition())
+    }
+
+    @Test func parserHandlesUTF8CRLFCommentsAndSplitEvents() throws {
+        var parser = CompletionEventDecoder()
+        let multiline = Self.first.replacingOccurrences(of: "{\"choices\":", with: "{\r\ndata: \"choices\":")
+        let stream = "\u{FEFF}: heartbeat\r\n\r\n" + multiline + Self.second + Self.end
+        var updates: [String] = []
+        for byte in stream.utf8 {
+            if try parser.receive(byte) { updates.append(parser.text) }
+        }
+        #expect(updates == ["### Summary\n\n", "### Summary\n\n- [ ] Send résumé 👋"])
+        #expect(try parser.result() == updates.last)
+        #expect(parser.done)
+    }
+
+    @Test func partialErrorAndLengthLimitNeverCountAsComplete() throws {
+        for suffix in [
+            "", "data: {\"error\":{\"message\":\"failure\"}}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        ] {
+            #expect(throws: (any Error).self) {
+                var parser = CompletionEventDecoder()
+                for byte in (Self.first + suffix).utf8 { _ = try parser.receive(byte) }
+                _ = try parser.result()
+            }
+        }
+    }
+
+    @Test(arguments: [false, true]) func streamShowsDraftBeforeSavingAndRespectsTodoSetting(extract: Bool) async throws
+    {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Split a UTF-8 scalar and an SSE JSON event across separate TCP writes.
+        let bytes = Data(Self.second.utf8)
+        let split = try #require(bytes.firstIndex(of: 0xC3)) + 1
+        let server = try HTTPFixture { _ in
+            .init(
+                headers: ["Content-Type": "text/event-stream"],
+                bodyChunks: [
+                    Data(Self.first.utf8), Data(bytes[..<split]), Data(bytes[split...]), Data(Self.end.utf8),
+                ], chunkDelay: 0.15)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        store.settings.autoExtractTodos = extract
+        let taskID = try #require(store.queueSummary(id: id))
+        try await waitUntil { store.summaryDrafts[id]?.contains("### Summary") == true }
+        #expect(store.meetings[0].summary == "Saved summary")
+        #expect(store.meetings[0].todos.isEmpty)
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .completed)
+        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.meetings[0].summary == "### Summary\n\n- [ ] Send résumé 👋")
+        #expect(store.meetings[0].todos.count == (extract ? 1 : 0))
+        #expect(MeetingStore(dataDirectory: root).meeting(id: id)?.summary == store.meetings[0].summary)
+        #expect(server.requests.count == 1)
+        let request = try #require(server.requests.first)
+        let json = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+        #expect(json["stream"] as? Bool == true)
+    }
+
+    @Test(arguments: [false, true]) func cancellationAndTruncationKeepSavedSummary(cancel: Bool) async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(
+                headers: ["Content-Type": "text/event-stream"],
+                bodyChunks: [Data(Self.first.utf8), Data(": heartbeat\n\n".utf8)], chunkDelay: 0.4)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        let taskID = try #require(store.queueSummary(id: id))
+        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        if cancel { store.cancelManagedTask(id: taskID) }
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == (cancel ? .cancelled : .failed))
+        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.meetings[0].summary == "Saved summary")
+        #expect(store.meetings[0].todos.isEmpty)
+    }
+
+    @Test func streamCannotOverwriteSummaryChangedDuringRequest() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(
+                headers: ["Content-Type": "text/event-stream"],
+                bodyChunks: [Data(Self.first.utf8), Data(Self.end.utf8)], chunkDelay: 0.2)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = setup(store, origin: server.origin)
+        let taskID = try #require(store.queueSummary(id: id))
+        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        var changed = store.meetings[0]
+        changed.summary = "Changed elsewhere"
+        store.updateMeeting(changed)
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
+        #expect(store.meetings[0].summary == "Changed elsewhere")
+        #expect(store.summaryDrafts[id] == nil)
+    }
+
+    @Test func todoExtractionDefaultsOnAndPersistsOff() throws {
+        #expect(AppSettings().autoExtractTodos)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)).autoExtractTodos)
+        var settings = AppSettings()
+        settings.autoExtractTodos = false
+        #expect(try !JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)).autoExtractTodos)
+    }
+}

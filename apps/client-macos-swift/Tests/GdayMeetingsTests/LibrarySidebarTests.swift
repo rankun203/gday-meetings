@@ -44,8 +44,20 @@ struct LibrarySidebarTests {
         if observedBeforeCompletion {
             #expect(control.expanded && !control.rowsVisible)
         }
-        await settle(0.4)
+        // Completion depends on rendered animation frames, not elapsed wall
+        // time. Parallel main-actor tests can consume the entire former 0.4 s
+        // wait before SwiftUI gets another frame. Wait for the actual callback.
+        var completedExpansion = false
+        control.completed = { expanded in completedExpansion = expanded }
+        let completionDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !control.rowsVisible && ContinuousClock.now < completionDeadline {
+            await settle(0.02)
+        }
         #expect(control.rowsVisible)
+        // The earlier observation may already have seen the finished animation.
+        // When it did not, the matching expansion completion must have fired.
+        if observedBeforeCompletion { #expect(completedExpansion) }
+        control.completed = nil
         control.toggle(reduceMotion: true)
         await settle(0.02)
         #expect(!control.expanded && !control.rowsVisible)

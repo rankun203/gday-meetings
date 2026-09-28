@@ -46,7 +46,7 @@ enum UIPreview {
                 conversation.summary = """
                     ### Key points
 
-                    - Review the **release plan** with the team.
+                    - Review the **release plan** with the team. [00:06][00:11]
                     - Keep the meeting notes up to date.
 
                     ### Decisions
@@ -102,6 +102,8 @@ enum UIPreview {
                         ),
                     ])
                 }
+                conversation.transcriptSource = TranscriptSource(
+                    id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
                 store.updateMeeting(conversation)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 live.accept(
@@ -144,6 +146,35 @@ enum UIPreview {
                 second.uploadProviderID = store.settings.serviceProviders.first { $0.kind == .filedrop }?.id
                 store.settings.serviceProviders.append(second)
             }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-long-transcript"),
+                var meeting = store.meetings.first(where: { $0.title == "Synthetic conversation" })
+            {
+                meeting.transcript = (0..<10_000).map { index in
+                    let label = index.isMultiple(of: 2) ? "sys_SPEAKER_00" : "mic_SPEAKER_00"
+                    return TranscriptSegment(
+                        start: Double(index * 6), end: Double(index * 6 + 5),
+                        speaker: label,
+                        text: "Segment \(index + 1). "
+                            + (index.isMultiple(of: 3)
+                                ? "Review the release plan, delivery dates, and decisions. This longer paragraph exercises wrapped transcript rows while scrolling."
+                                : "Keep the meeting notes up to date."),
+                        speakerID: meeting.speakers.first(where: { $0.label == label })?.id)
+                }
+                store.updateMeeting(meeting)
+            }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-pagination") {
+                for index in 1...45 {
+                    var meeting = Meeting(title: String(format: "Pagination meeting %02d", index))
+                    meeting.createdAt = Date().addingTimeInterval(-Double(index) * 3_600)
+                    meeting.notes = index == 45 ? "Unique last-page search phrase" : "Synthetic notes for pagination."
+                    meeting.transcript = [.init(text: "Synthetic transcript \(index)")]
+                    try store.insertImportedMeeting(meeting)
+                }
+                store.resetMeetingPages(evictLoaded: true)
+            }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-summary-stream") {
+                seedSummaryStream(store)
+            }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks") {
                 seedTasks(store)
             }
@@ -164,6 +195,27 @@ enum UIPreview {
         return store
     }
 
+    /// A visible draft fixture uses no provider, credentials, or network request.
+    @MainActor private static func seedSummaryStream(_ store: MeetingStore) {
+        guard let meeting = store.meetings.first(where: { $0.title == "Synthetic conversation" }) else { return }
+        let fragments =
+            ["# Release review\n\n", "## Key points\n\n"]
+            + (1...30).map {
+                "- Streaming preview point \($0) arrives without waiting for the full summary.\n"
+            }
+        Task { @MainActor [weak store] in
+            guard let store else { return }
+            guard store.beginJob(.summary, .meeting(meeting.id), progress: "Writing summary…") else { return }
+            defer { store.endJob(.summary, .meeting(meeting.id)) }
+            store.summaryDrafts[meeting.id] = ""
+            for fragment in fragments {
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { return }
+                store.summaryDrafts[meeting.id, default: ""] += fragment
+            }
+        }
+    }
+
     /// Explicit fixtures exercise queue controls without starting provider work.
     @MainActor private static func seedTasks(_ store: MeetingStore) {
         guard let conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }),
@@ -171,28 +223,38 @@ enum UIPreview {
         else { return }
         let queuedID = store.createMeeting(title: "Synthetic queued recording")
         let failedID = store.createMeeting(title: "Synthetic summary retry")
+        let expiredID = store.createMeeting(title: "Synthetic expired transcription")
+        let now = Date()
         store.managedTasks = [
             ManagedTaskRecord(
                 kind: .transcription, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Preview RunPod", state: .running,
-                progress: "Waiting for RunPod to finish processing…", isPreview: true),
+                progress: "Waiting for RunPod to finish processing…", createdAt: now.addingTimeInterval(-300),
+                isPreview: true),
             ManagedTaskRecord(
                 kind: .summary, meetingID: single.id, meetingTitle: single.title,
                 providerName: "Preview Language Model", state: .running,
-                progress: "Writing summary…", isPreview: true),
+                progress: "Writing summary…", createdAt: now.addingTimeInterval(-240), isPreview: true),
             ManagedTaskRecord(
                 kind: .transcription, meetingID: queuedID, meetingTitle: "Synthetic queued recording",
                 providerName: "Preview RunPod", state: .queued,
-                progress: "Waiting for a transcription slot", isPreview: true),
+                progress: "Waiting for a transcription slot", createdAt: now.addingTimeInterval(-180), isPreview: true),
             ManagedTaskRecord(
                 kind: .summary, meetingID: failedID, meetingTitle: "Synthetic summary retry",
                 providerName: "Preview Language Model", state: .failed, progress: "Needs attention",
-                errorMessage: "The provider connection was interrupted. Retry to generate the summary.", isPreview: true
+                errorMessage: "The provider connection was interrupted. Retry to generate the summary.",
+                createdAt: now.addingTimeInterval(-120), isPreview: true
             ),
             ManagedTaskRecord(
                 kind: .summary, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Preview Language Model", state: .completed, progress: "Completed",
-                finishedAt: Date(), isPreview: true),
+                createdAt: now.addingTimeInterval(-360), finishedAt: now, isPreview: true),
+            ManagedTaskRecord(
+                kind: .transcription, meetingID: expiredID, meetingTitle: "Synthetic expired transcription",
+                providerName: "Preview RunPod", state: .failed, progress: "Needs attention",
+                errorMessage: MissingTranscriptionJob().localizedDescription,
+                createdAt: now.addingTimeInterval(-60), isPreview: true, recovery: .restartRequired,
+                attemptKey: "preview-expired-request", remoteJobID: "preview-expired-job"),
         ]
         for task in store.managedTasks where task.state.isActive {
             store.backgroundJobs.append(BackgroundJob(key: task.key, progress: task.progress))
@@ -402,7 +464,8 @@ struct PreviewContainer<Content: View>: View {
                             }
                         }.padding(18).frame(maxWidth: 500)
                     }
-                }.padding(.horizontal, 12).padding(.vertical, 6)
+                }.disclosureGroupStyle(AppDisclosureStyle())
+                    .padding(.horizontal, 12).padding(.vertical, 6)
             }
             content()
         }

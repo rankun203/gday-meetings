@@ -47,7 +47,19 @@ struct DefaultsSettingsView: View {
                 ).font(.caption).foregroundStyle(.secondary)
             }
             Section("Live Transcription") {
-                LabeledContent("Provider", value: "This Mac")
+                Picker("Provider", selection: setting(\.liveTranscriptionProviderID)) {
+                    Text("None").tag(nil as UUID?)
+                    if store.settings.thisMacCapabilities.contains(.liveTranscription) {
+                        Text("This Mac").tag(Optional(ThisMacProvider.id))
+                    }
+                    else if let selected = store.settings.liveTranscriptionProviderID {
+                        Text("Provider Unavailable").tag(Optional(selected))
+                    }
+                }
+                if !store.settings.thisMacCapabilities.contains(.liveTranscription) {
+                    Text("Turn on Live Transcription for This Mac in Service Providers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Show Live Transcript", isOn: setting(\.showLiveTranscript))
                 Text(
                     "Transcribes audio on this Mac and shows text in Transcript while recording. Requires macOS 26 or later and a supported speech model."
@@ -71,15 +83,12 @@ struct DefaultsSettingsView: View {
                 }
             }
             CapabilityDefaultSection(
-                capability: .summarization, selection: setting(\.summaryProviderID),
-                caption: "Summaries and chat send the selected transcript and notes to this provider."
+                capability: .summarization, selection: setting(\.summaryProviderID)
             ) {
                 Toggle("Automatically Summarize", isOn: setting(\.autoSummarize))
                     .toggleStyle(.checkbox)
-                Text(
-                    "Generates a summary after a live transcript is saved or transcription finishes. If both finish, each generates a summary."
-                )
-                .font(.caption).foregroundStyle(.secondary)
+                Toggle("Automatically Extract To-Dos", isOn: setting(\.autoExtractTodos))
+                    .toggleStyle(.checkbox)
             }
         }
     }
@@ -92,11 +101,11 @@ struct CapabilityDefaultSection<Extra: View>: View {
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     let capability: ProviderCapability
     @Binding var selection: UUID?
-    let caption: String
+    let caption: String?
     @ViewBuilder var extra: Extra
 
     init(
-        capability: ProviderCapability, selection: Binding<UUID?>, caption: String,
+        capability: ProviderCapability, selection: Binding<UUID?>, caption: String? = nil,
         @ViewBuilder extra: () -> Extra = { EmptyView() }
     ) {
         self.capability = capability
@@ -137,7 +146,7 @@ struct CapabilityDefaultSection<Extra: View>: View {
                 }
             }
             extra
-            Text(caption).font(.caption).foregroundStyle(.secondary)
+            if let caption { Text(caption).font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

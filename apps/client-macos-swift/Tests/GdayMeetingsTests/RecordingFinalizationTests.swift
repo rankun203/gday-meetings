@@ -20,7 +20,7 @@ import Testing
         try await store.finalizeRecordingAudio(id: id, format: .m4a)
         #expect(!FileManager.default.fileExists(atPath: source.path))
         let reloaded = MeetingStore(dataDirectory: root)
-        #expect(reloaded.meetings.first?.audioFiles == ["microphone.m4a"])
+        #expect(reloaded.meeting(id: id)?.audioFiles == ["microphone.m4a"])
         let result = try AVAudioFile(forReading: folder.appendingPathComponent("microphone.m4a"))
         #expect(abs(Double(result.length) / result.fileFormat.sampleRate - 0.1) < 0.05)
     }
@@ -39,7 +39,7 @@ import Testing
         var meeting = try #require(store.meetings.first)
         meeting.audioFiles = [source.lastPathComponent]
         store.updateMeeting(meeting)
-        let library = root.appendingPathComponent("library.json")
+        let library = store.directory(for: id).appendingPathComponent("metadata.json")
         try files.moveItem(at: library, to: root.appendingPathComponent("saved-library.json"))
         try files.createDirectory(at: library, withIntermediateDirectories: false)
         await #expect(throws: (any Error).self) { try await store.finalizeRecordingAudio(id: id, format: .m4a) }

@@ -14,6 +14,7 @@ struct LibraryView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @ViewState private var destination: LibraryDestination? = .meetings
+    @ViewState private var focusedTaskID: UUID?
     @ViewState private var selectedMeeting: UUID?
     @ViewState private var selectedPerson: UUID?
     @ViewState private var selectedTag: UUID?
@@ -35,30 +36,15 @@ struct LibraryView: View {
         store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
     }
     private func showMeeting(_ id: UUID) {
+        guard store.ensureMeetingLoaded(id: id) else { return }
         selectedMeeting = id
         destination = .meetings
     }
 
-    private var filteredMeetings: [Meeting] {
-        store.meetings.filter { meeting in
-            search.isEmpty
-                || ([meeting.title, NotesDocument(meeting.notes).text, meeting.summary] + meeting.transcript.map(\.text))
-                    .joined(
-                        separator: " "
-                    ).localizedCaseInsensitiveContains(search)
-        }.sorted { $0.createdAt > $1.createdAt }
-    }
+    private var filteredMeetings: [MeetingListEntry] { store.visibleMeetingEntries }
 
-    @ViewBuilder private var emptyMeetings: some View {
-        if store.newerLibraryVersion != nil {
-            // The library is read-only; recording and import would not be saved.
-            ContentUnavailableView(
-                NewerLibraryVersionError.title, systemImage: "exclamationmark.triangle",
-                description: Text(NewerLibraryVersionError.recovery))
-        }
-        else {
-            meetingsPlaceholder
-        }
+    private var emptyMeetings: some View {
+        LibraryIndexPlaceholder(status: store.libraryDataStatus) { meetingsPlaceholder }
     }
 
     private var meetingsPlaceholder: some View {
@@ -76,6 +62,45 @@ struct LibraryView: View {
         }
     }
 
+    private var meetingList: some View {
+        NativeMeetingList(
+            entries: filteredMeetings, selection: $selectedMeeting, revealID: store.latestCreatedMeetingID,
+            recordingID: store.recordingID, isFinalizing: store.isFinalizingRecording,
+            playingID: playback.meetingID, isPlaying: playback.isPlaying, canPlay: !recordingActive,
+            archiveStatuses: store.archiveStatuses,
+            viewportChanged: { store.prefetchMeetings($0) },
+            play: { id in
+                guard !recordingActive, let meeting = store.meeting(id: id) else { return }
+                let files = store.audioURLs(for: meeting)
+                if !files.isEmpty { playback.play(meeting: meeting, files: files) }
+            },
+            reveal: { id in NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)]) },
+            export: { id in if let meeting = store.meeting(id: id) { MeetingPanels.export(meeting, store: store) } },
+            delete: { id in deleting = store.meeting(id: id) }
+        )
+        .modifier(AudioFileDrop())
+        .navigationTitle("Meetings")
+        .overlay {
+            if store.isSearchingMeetings || (filteredMeetings.isEmpty && store.isLoadingMeetingPage) {
+                ProgressView("Loading meetings…")
+            }
+            else if filteredMeetings.isEmpty && store.meetingPageError == nil {
+                emptyMeetings
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let error = store.meetingPageError {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(error).font(.caption)
+                    Button("Try Again") { Task { await store.searchMeetingPages(search) } }
+                }.padding(12).background(.regularMaterial)
+            }
+        }
+        .onChange(of: store.latestCreatedMeetingID) { _, id in
+            if let id, !store.visibleMeetingIDs.contains(id) { store.resetMeetingPages() }
+        }
+    }
+
     var body: some View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
         // Content columns are independent of the window toolbar.
@@ -86,7 +111,12 @@ struct LibraryView: View {
                     List(
                         selection: Binding(
                             get: { sidebarRowsVisible ? destination : nil },
-                            set: { if sidebarRowsVisible { destination = $0 } })
+                            set: {
+                                if sidebarRowsVisible {
+                                    focusedTaskID = nil
+                                    destination = $0
+                                }
+                            })
                     ) {
                         Group {
                             Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
@@ -110,7 +140,7 @@ struct LibraryView: View {
                 .frame(width: sidebarExpanded ? 180 : 0, alignment: .leading)
                 .clipped()
                 if destination == .tasks {
-                    TaskQueueView(showMeeting: showMeeting)
+                    TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 else {
@@ -120,94 +150,7 @@ struct LibraryView: View {
                             case .people: PeopleView(selection: $selectedPerson)
                             case .tags: TagsView(selection: $selectedTag)
                             default:
-                                ScrollViewReader { scroll in
-                                    List(selection: $selectedMeeting) {
-                                        ForEach(filteredMeetings) { meeting in
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                HStack {
-                                                    Text(meeting.title).font(.headline).lineLimit(1)
-                                                    if store.recordingID == meeting.id {
-                                                        Label(
-                                                            store.isFinalizingRecording ? "Saving audio" : "Recording",
-                                                            systemImage: store.isFinalizingRecording
-                                                                ? "externaldrive" : "record.circle"
-                                                        ).foregroundStyle(
-                                                            store.isFinalizingRecording ? Color.secondary : Color.red
-                                                        ).labelStyle(.iconOnly)
-                                                    }
-                                                    else if playback.meetingID == meeting.id {
-                                                        Image(
-                                                            systemName: playback.isPlaying
-                                                                ? "speaker.wave.2.fill" : "pause.circle"
-                                                        ).foregroundStyle(.tint).accessibilityLabel(
-                                                            playback.isPlaying ? "Playing" : "Playback paused")
-                                                    }
-                                                }
-                                                HStack(spacing: 6) {
-                                                    Text(
-                                                        meeting.createdAt,
-                                                        format: .dateTime.month().day().hour().minute())
-                                                    if meeting.duration > 0 {
-                                                        Text("·")
-                                                        Text(playbackTime(meeting.duration)).monospacedDigit()
-                                                    }
-                                                    if let archive = store.archiveStatuses[meeting.id] {
-                                                        MeetingArchiveListIcon(status: archive)
-                                                    }
-                                                }.font(.caption).foregroundStyle(.secondary)
-                                                if !meeting.summary.isEmpty {
-                                                    Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(
-                                                        .secondary)
-                                                }
-                                            }.padding(.vertical, 4).tag(meeting.id)
-                                        }
-                                    }
-                                    .listStyle(.inset)
-                                    .contentMargins(.top, 0, for: .scrollContent)
-                                    .scrollBounceBehavior(.basedOnSize)
-                                    // Native primary action: single click selects, double click plays.
-                                    // https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:)
-                                    .contextMenu(forSelectionType: UUID.self) { ids in
-                                        if let id = ids.first,
-                                            let meeting = store.meetings.first(where: { $0.id == id })
-                                        {
-                                            if !meeting.audioFiles.isEmpty {
-                                                Button("Play", systemImage: "play.fill") {
-                                                    playback.play(
-                                                        meeting: meeting, files: store.audioURLs(for: meeting))
-                                                }
-                                                .disabled(recordingActive)
-                                            }
-                                            Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
-                                            Button("Delete Meeting…", role: .destructive) { deleting = meeting }
-                                                .disabled(store.recordingID == meeting.id)
-                                        }
-                                    } primaryAction: { ids in
-                                        guard !recordingActive, let id = ids.first,
-                                            let meeting = store.meetings.first(where: { $0.id == id })
-                                        else { return }
-                                        let files = store.audioURLs(for: meeting)
-                                        guard !files.isEmpty else { return }
-                                        playback.play(meeting: meeting, files: files)
-                                    }
-                                    .modifier(AudioFileDrop())
-                                    .navigationTitle("Meetings")
-                                    .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
-                                    .onChange(of: store.meetings.map(\.id)) { previous, current in
-                                        // Inserting above the visible rows can retain the native list's
-                                        // old scroll position, leaving the new first row partly clipped.
-                                        // Reveal additions without changing selection or playback. Edits,
-                                        // deletions, search changes and track imports keep their position.
-                                        let existing = Set(previous)
-                                        guard current.contains(where: { !existing.contains($0) }),
-                                            let added = filteredMeetings.first(where: { !existing.contains($0.id) })
-                                        else { return }
-                                        // Center the added row. For the first row, native scrolling
-                                        // clamps to the document beginning, preserving the list inset.
-                                        // Top or minimum alignment scrolls that native space away.
-                                        scroll.scrollTo(added.id, anchor: .center)
-                                    }
-                                }
+                                meetingList
                             }
                         }.frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
                         Group {
@@ -227,7 +170,11 @@ struct LibraryView: View {
                                 ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
                             }
                             else {
-                                emptySelection
+                                LibraryIndexPlaceholder(
+                                    status: store.libraryDataStatus,
+                                    enabled: destination == .meetings && filteredMeetings.isEmpty,
+                                    showsProgress: false
+                                ) { emptySelection }
                             }
                         }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -345,16 +292,34 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                TaskQueueStatusButton { destination = .tasks }
+                VStack(spacing: 0) {
+                    if store.showsTaskQueueStatus {
+                        TaskQueueStatusButton {
+                            focusedTaskID = nil
+                            destination = .tasks
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: store.showsTaskQueueStatus)
             }
         }
         .sheet(isPresented: $store.presentsRecordingSetup) {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
         }
         .background(PlaybackSpaceKey(playback: playback))
+        .environment(\.showManagedTask) { id in
+            focusedTaskID = id
+            destination = .tasks
+        }
         .onAppear {
+            if let selectedMeeting { _ = store.ensureMeetingLoaded(id: selectedMeeting) }
             sidebarControl?.connect(
                 expanded: $sidebarExpanded, rows: $sidebarRowsVisible, toggle: toggleSidebar(reduceMotion:))
+        }
+        .task(id: search) { await store.searchMeetingPages(search) }
+        .onChange(of: selectedMeeting) { _, id in
+            if let id { _ = store.ensureMeetingLoaded(id: id) }
         }
         .onDisappear { sidebarControl?.disconnect() }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
@@ -387,20 +352,20 @@ struct LibraryView: View {
                     + " If macOS asks you to relaunch, reopen the app before recording. macOS may not show another prompt for an existing permission decision."
             )
         }
-        .confirmationDialog(
-            "Delete \(deleting?.title ?? "meeting")?",
+        .alert(
+            "Move “\(deleting?.title ?? "meeting")” to Trash?",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Meeting", role: .destructive) {
-                if let meeting = deleting {
-                    store.deleteMeeting(id: meeting.id)
-                    if selectedMeeting == meeting.id { selectedMeeting = nil }
-                }
+            presenting: deleting
+        ) { meeting in
+            Button("Move to Trash", role: .destructive) {
+                if store.deleteMeeting(id: meeting.id), selectedMeeting == meeting.id { selectedMeeting = nil }
                 deleting = nil
             }
-        } message: {
-            Text("This deletes the meeting and its saved audio. This cannot be undone.")
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { deleting = nil }
+                .keyboardShortcut(.cancelAction)
+        } message: { _ in
+            Text("The meeting and its saved files will be moved to the Trash. You can restore them in Finder.")
         }
     }
 
@@ -575,6 +540,55 @@ private struct RecordingToolbarForeground: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if isEnabled {
             content.foregroundStyle(.red)
+        }
+        else {
+            content
+        }
+    }
+}
+
+/// Observe progress locally so an indexing counter does not redraw the meeting list.
+private struct LibraryIndexPlaceholder<Content: View>: View {
+    @ObservedObject var status: LibraryDataStatus
+    var enabled = true
+    var showsProgress = true
+    let content: Content
+
+    init(
+        status: LibraryDataStatus, enabled: Bool = true, showsProgress: Bool = true, @ViewBuilder content: () -> Content
+    ) {
+        self.status = status
+        self.enabled = enabled
+        self.showsProgress = showsProgress
+        self.content = content()
+    }
+
+    var body: some View {
+        if enabled && status.isBuilding {
+            VStack(spacing: 12) {
+                if showsProgress {
+                    ProgressView().controlSize(.large)
+                    Text("Building Index").font(.headline)
+                    if status.isDiscovering {
+                        Text("\(status.discoveredFolders.formatted()) meeting folders checked")
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    else if status.processed > 0 {
+                        Text("\(status.processed.formatted()) meetings processed")
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    else {
+                        Text("Reading meeting folders…").foregroundStyle(.secondary)
+                    }
+                }
+                else {
+                    Text("Meetings will appear as they are indexed.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         else {
             content

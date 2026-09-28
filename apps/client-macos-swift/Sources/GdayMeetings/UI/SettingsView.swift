@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject private var store: MeetingStore
     @AppStorage("settingsTab") private var settingsTab = "defaults"
 
     /// Tabs that were folded into Defaults. A saved selection of one of them
@@ -14,13 +15,16 @@ struct SettingsView: View {
         // Settings scene; labeled native form controls support keyboard/VoiceOver.
         // https://developer.apple.com/design/human-interface-guidelines/settings
         TabView(selection: $settingsTab) {
-            DefaultsSettingsView()
+            DefaultsSettingsView().disabled(store.isChangingLibrary)
                 .tabItem { Label("Defaults", systemImage: "slider.horizontal.3") }
                 .tag("defaults")
-            ServiceProvidersView()
+            ServiceProvidersView().disabled(store.isChangingLibrary)
                 .tabItem { Label("Service Providers", systemImage: "server.rack") }
                 .tag("providers")
-            DataPrivacyView()
+            DataSettingsView()
+                .tabItem { Label("Data", systemImage: "externaldrive") }
+                .tag("data")
+            DataPrivacyView().disabled(store.isChangingLibrary)
                 .tabItem { Label("Data Privacy", systemImage: "hand.raised") }
                 .tag("privacy")
         }

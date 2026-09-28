@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// HIG Playing Audio: familiar transport controls stay available while people
@@ -5,6 +6,7 @@ import SwiftUI
 /// https://developer.apple.com/design/human-interface-guidelines/playing-audio
 struct MeetingPlayerBar: View {
     @EnvironmentObject private var playback: MeetingPlayback
+    @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
     @ViewState private var tracksExpanded = false
     @ViewState private var tracksSpaceExpanded = false
@@ -18,7 +20,13 @@ struct MeetingPlayerBar: View {
             Divider()
             HStack(spacing: 14) {
                 Button {
-                    if let id = playback.meetingID { showMeeting(id) }
+                    guard let id = playback.meetingID else { return }
+                    if NSEvent.modifierFlags.contains(.command) {
+                        revealMeeting()
+                    }
+                    else {
+                        showMeeting(id)
+                    }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "waveform")
@@ -40,7 +48,8 @@ struct MeetingPlayerBar: View {
                 }
                 .buttonStyle(ActionButtonStyle())
                 .frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
-                .help("Show the meeting that is playing")
+                .help("Show the meeting. Command-click to reveal its folder in Finder.")
+                .accessibilityAction(named: "Reveal in Finder") { revealMeeting() }
                 .accessibilityLabel("Show meeting: \(playback.title)")
 
                 HStack(spacing: 9) {
@@ -131,6 +140,13 @@ struct MeetingPlayerBar: View {
                             HStack(spacing: 14) {
                                 HStack {
                                     Text(name).font(.caption).lineLimit(1)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            if NSEvent.modifierFlags.contains(.command) { revealTrack(index) }
+                                        }
+                                        .help("Command-click to reveal this audio file in Finder.")
+                                        .accessibilityAction(named: "Reveal in Finder") { revealTrack(index) }
+                                        .contextMenu { Button("Reveal in Finder") { revealTrack(index) } }
                                     Spacer()
                                     Button {
                                         playback.toggleMute(index)
@@ -189,6 +205,16 @@ struct MeetingPlayerBar: View {
         .background(.bar)
         .onChange(of: playback.meetingID) { _, _ in resetTracks() }
         .onDisappear { resetTracks() }
+    }
+
+    private func revealMeeting() {
+        guard let id = playback.meetingID else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)])
+    }
+
+    private func revealTrack(_ index: Int) {
+        guard let url = playback.audioURL(forTrack: index) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private var tracksHeight: CGFloat {

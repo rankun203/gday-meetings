@@ -67,6 +67,7 @@ import Testing
         #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
         #expect(store.people.first { $0.id == second }?.voiceSamples.count == 1)
         let reopened = MeetingStore(dataDirectory: root)
+        _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
         #expect(saved.personIDs == [second])
         #expect(saved.speakerName(for: saved.transcript[0], people: reopened.people) == "Sam")
@@ -116,12 +117,13 @@ import Testing
         let speaker = MeetingSpeaker(
             label: "sys_SPEAKER_01", track: "system", providerName: "RunPod",
             voiceScope: "runpod:test", embedding: [1, 0], personID: personID, confidence: 0.91)
-        // Older libraries stored automatic matches with confirmed=false and
-        // omitted them from the meeting's People associations.
+        // File imports may contain a person assignment without the derived
+        // meeting association. Loading normalizes the association.
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
         try store.insertImportedMeeting(meeting)
         let reopened = MeetingStore(dataDirectory: root)
+        _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
         #expect(saved.personIDs == [personID])
         #expect(saved.speakers == meeting.speakers)
@@ -158,27 +160,11 @@ import Testing
         }
         #expect(store.meetings[0].transcript[0].text == "Original")
         let reopened = MeetingStore(dataDirectory: root)
+        _ = try #require(reopened.meeting(id: meeting.id))
         reopened.applySavedTranscriptionResult(meetingID: meeting.id)
         #expect(reopened.meetings[0].transcript[0].text == "Replacement")
         #expect(reopened.meetings[0].speakers == replacement.speakers)
         #expect(reopened.meetings[0].personIDs.isEmpty)
-    }
-
-    @Test func versionOneMigrationKeepsLabelsWithoutGuessingPersonLinks() throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let data = Data(
-            #"{"version":1,"meetings":[{"title":"Old","transcript":[{"speaker":"Alex","text":"Hello"},{"speaker":"Alex","text":"Again"}]}],"people":[{"name":"Alex"}]}"#
-                .utf8)
-        try data.write(to: root.appendingPathComponent("library.json"))
-        let store = MeetingStore(dataDirectory: root)
-        #expect(store.errorMessage == nil)
-        let meeting = try #require(store.meetings.first)
-        #expect(meeting.speakers.count == 1)
-        #expect(meeting.speakers[0].personID == nil)
-        #expect(meeting.transcript[0].speakerID == meeting.transcript[1].speakerID)
-        #expect(store.people[0].voiceSamples.isEmpty)
-        #expect(try Data(contentsOf: root.appendingPathComponent("library-v1-backup.json")) == data)
     }
 
     @Test func exportsResolveNamesAndExcludeVoiceDataAndPersonDeletionClearsLinks() throws {
@@ -247,7 +233,7 @@ import Testing
         var meeting = Meeting()
         meeting.speakers = [speaker]
         try store.insertImportedMeeting(meeting)
-        let file = root.appendingPathComponent("library.json")
+        let file = store.directory(for: meeting.id).appendingPathComponent("metadata.json")
         try FileManager.default.moveItem(at: file, to: root.appendingPathComponent("before.json"))
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
         store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
@@ -306,7 +292,7 @@ import Testing
         settings.serviceProviders = [provider()]
         settings.transcriptionProviderID = settings.serviceProviders[0].id
         let row = DataPrivacy.rows(.init(settings: settings)).first { $0.type == .voiceSamples }
-        #expect(row?.leavesMac == false)
+        #expect(row?.sendsToProvider == false)
         #expect(row?.type.contents?.contains("Recognition runs on this Mac") == true)
     }
 }

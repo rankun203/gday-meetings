@@ -76,6 +76,31 @@ struct MeetingPlaybackTests {
         withExtendedLifetime(subscription) {}
     }
 
+    @Test func clockPublishesCoherentSeekAndMeetingChanges() {
+        let clock = PlaybackProgress()
+        let meetingID = UUID()
+        clock.setMeeting(meetingID)
+        clock.scrub(to: 30)
+        var received: [PlaybackProgress.Snapshot] = []
+        let subscription = clock.$snapshot.dropFirst().sink { received.append($0) }
+        clock.seek(to: 42)
+        #expect(received.count == 1)
+        #expect(received[0].meetingID == meetingID)
+        #expect(received[0].displayedTime == 42)
+        #expect(received[0].scrubTime == nil)
+        #expect(received[0].seekRevision == 1)
+        clock.update(43)
+        #expect(clock.snapshot.seekRevision == 1)
+        clock.seek(to: 43)
+        #expect(clock.snapshot.seekRevision == 2)
+        clock.isPlaying = true
+        clock.setMeeting(UUID())
+        #expect(clock.time == 0)
+        #expect(clock.scrubTime == nil)
+        #expect(!clock.isPlaying)
+        withExtendedLifetime(subscription) {}
+    }
+
     @Test func progressUpdatesDoNotInvalidatePlaybackControls() {
         let playback = MeetingPlayback()
         var controlUpdates = 0

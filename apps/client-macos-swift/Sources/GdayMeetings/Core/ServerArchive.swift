@@ -60,7 +60,7 @@ extension MeetingStore {
         guard flushNotes() else { return }
         // Only this meeting's own recording blocks archiving; its audio is still being written.
         guard recordingID != id, libraryWritable, !isJobRunning(.importAudio, .meeting(id)),
-            let meeting = meetings.first(where: { $0.id == id }),
+            let meeting = self.meeting(id: id),
             beginJob(.archive, .meeting(id), progress: "Preparing the meeting archive…")
         else { return }
         errorMessage = nil

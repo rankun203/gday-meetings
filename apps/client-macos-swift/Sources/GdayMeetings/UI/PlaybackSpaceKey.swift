@@ -33,7 +33,7 @@ struct PlaybackSpaceKey: NSViewRepresentable {
         }
 
         static func isEditingText(_ responder: NSResponder?) -> Bool {
-            if let text = responder as? NSTextView { return text.isEditable }
+            if let text = responder as? NSTextView { return text.isEditable || text is MarkdownReadingTextView }
             if let field = responder as? NSTextField { return field.isEditable }
             return false
         }

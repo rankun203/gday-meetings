@@ -5,6 +5,7 @@ import SwiftUI
 struct TranscriptionActionButton: View {
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.showManagedTask) private var showManagedTask
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var confirming = false
     let meeting: Meeting
@@ -18,7 +19,18 @@ struct TranscriptionActionButton: View {
     }
     var body: some View {
         Group {
-            if meeting.transcriptionAttempt?.result != nil {
+            if let task = store.managedTasks.first(where: {
+                $0.meetingID == meeting.id && $0.kind == .transcription && $0.state.isActive
+            }) {
+                Button(
+                    task.state == .queued ? "Queued · Show Task" : "Transcribing…",
+                    systemImage: "list.bullet.rectangle"
+                ) {
+                    showManagedTask(task.id)
+                }
+                .help("Show this transcription in Tasks")
+            }
+            else if meeting.transcriptionAttempt?.result != nil {
                 Button("Apply Saved Transcript…", systemImage: "text.bubble") { confirming = true }
                     .disabled(busy)
             }

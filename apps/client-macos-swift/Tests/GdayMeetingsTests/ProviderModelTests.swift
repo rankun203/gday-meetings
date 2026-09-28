@@ -72,6 +72,7 @@ import Testing
     @Test func cachePersistsPerProviderAndEndpoint() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let provider = llm()
         let removed = llm()
         let models = [ProviderModel(id: "openai/gpt-4o", name: nil)]
@@ -86,7 +87,7 @@ import Testing
 
         let reloaded = ProviderMetadataCache<[ProviderModel]>(directory: directory, fileName: "models.json")
         #expect(reloaded.entry(providerID: provider.id, fingerprint: fingerprint)?.value == models)
-        #expect(reloaded.entries[removed.id] == nil)
+        #expect(reloaded.entry(providerID: removed.id, fingerprint: "old") == nil)
         var moved = provider
         moved.endpoint = "https://other.example/v1"
         #expect(reloaded.entry(providerID: provider.id, fingerprint: ProviderModelList.fingerprint(moved)) == nil)
@@ -94,8 +95,11 @@ import Testing
         rekeyed.apiKey = "other"
         #expect(ProviderModelList.fingerprint(rekeyed) == fingerprint)
         // The file holds neither the key nor the endpoint.
-        let file = try String(contentsOf: directory.appendingPathComponent("models.json"), encoding: .utf8)
+        let file = try String(
+            contentsOf: directory.appendingPathComponent("providers/\(provider.id.uuidString)/models.json"),
+            encoding: .utf8)
         #expect(!file.contains("synthetic") && !file.contains("openrouter"))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("models.json").path))
     }
 
     @Test func disabledProvidersAreNeverChecked() async {
@@ -114,6 +118,27 @@ import Testing
             }
         }
     }
+
+    @Test func providerCachesKeepOtherDataAndDoNotLoadRootCache() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let id = UUID()
+        let models = ProviderMetadataCache<[ProviderModel]>(directory: directory, fileName: "models.json")
+        let languages = ProviderMetadataCache<[String]>(directory: directory, fileName: "languages.json")
+        languages.store(
+            .init(providerID: id, fingerprint: "languages", value: ["en"], fetchedAt: Date()), keeping: [id])
+        let entry = ProviderMetadataCache<[ProviderModel]>.Entry(
+            providerID: id, fingerprint: "models", value: [.init(id: "model", name: nil)], fetchedAt: Date())
+        try JSONEncoder().encode(entry).write(to: directory.appendingPathComponent("provider-models.json"))
+        #expect(models.entry(providerID: id, fingerprint: "models") == nil)
+        models.store(entry, keeping: [id])
+        models.store(entry, keeping: [])
+        let reopenedModels = ProviderMetadataCache<[ProviderModel]>(directory: directory, fileName: "models.json")
+        let reopenedLanguages = ProviderMetadataCache<[String]>(directory: directory, fileName: "languages.json")
+        #expect(reopenedModels.entry(providerID: id, fingerprint: "models") == nil)
+        #expect(reopenedLanguages.entry(providerID: id, fingerprint: "languages")?.value == ["en"])
+    }
 }
 
 @MainActor @Test func readOnlyLibraryGainsNoCacheFile() throws {
@@ -121,9 +146,9 @@ import Testing
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let cache = ProviderMetadataCache<[ProviderModel]>(
-        directory: directory, fileName: "provider-models.json", canWrite: { false })
+        directory: directory, fileName: "models.json", canWrite: { false })
     let id = UUID()
     cache.store(.init(providerID: id, fingerprint: "f", value: [], fetchedAt: Date()), keeping: [id])
     #expect(cache.entry(providerID: id, fingerprint: "f") != nil)
-    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("provider-models.json").path))
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("providers").path))
 }

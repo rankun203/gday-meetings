@@ -41,7 +41,7 @@ import Testing
         #expect(store.saveSettings())
         let restored = MeetingStore(dataDirectory: root)
         #expect(restored.settings.defaultLanguage == "ja")
-        #expect(restored.meetings.first { $0.id == chinese }?.language == "zh-cn")
+        #expect(restored.meeting(id: chinese)?.language == "zh-cn")
     }
 
     @Test func attemptSnapshotsMeetingLanguageAndRequestKeepsRegionalCode() throws {

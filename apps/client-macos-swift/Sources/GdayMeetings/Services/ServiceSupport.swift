@@ -7,6 +7,13 @@ struct ServiceError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct ServiceHTTPStatusError: LocalizedError {
+    let statusCode: Int
+    var errorDescription: String? {
+        "The server rejected the request (HTTP \(statusCode)). Check the server address and sign-in."
+    }
+}
+
 // Keep migration policy independent of Security so failure paths can be tested
 // without reading or changing the user's real credentials.
 protocol CredentialStorage {
@@ -126,7 +133,7 @@ enum ServiceHTTP {
         let (data, response) = try await data(for: request, trace: trace)
         return try decode(data, response)
     }
-    /// Every outbound request goes through `data` or `upload` so it appears in the network log.
+    /// Every outbound request goes through `data`, `upload`, or `consumeStream` so it appears in the network log.
     static func data(for request: URLRequest, trace: NetworkTrace) async throws -> (Data, URLResponse) {
         try await logged(request, trace: trace, bytesSent: request.httpBody?.count ?? 0) {
             try await session.data(for: request)
@@ -160,9 +167,7 @@ enum ServiceHTTP {
     }
     static func decode(_ data: Data, _ response: URLResponse) throws -> [String: Any] {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ServiceError(
-                "The server rejected the request (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)). Check the server address and sign-in."
-            )
+            throw ServiceHTTPStatusError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ServiceError("The server returned an invalid response.")

@@ -1,9 +1,16 @@
 import Foundation
 
+struct TranscriptSource: Codable, Equatable {
+    var id: UUID
+    var providerName: String
+    var generatedAt: Date
+}
+
 struct TranscriptRevision: Codable, Identifiable, Equatable {
     var id = UUID()
     var savedAt = Date()
     var title: String
+    var source: TranscriptSource? = nil
     var segments: [TranscriptSegment]
     var speakers: [MeetingSpeaker]
 }
@@ -19,17 +26,33 @@ struct TranscriptRevisions: Codable {
         }
         return result
     }
-    static func preserve(_ meeting: Meeting, at directory: URL, title: String = "Previous Transcript") throws {
+    static func preserve(_ meeting: Meeting, at directory: URL) throws {
         guard !meeting.transcript.isEmpty else { return }
         var value = try read(at: directory)
-        if let last = value.revisions.last, last.segments == meeting.transcript, last.speakers == meeting.speakers {
-            return
+        let revision = current(meeting)
+        if let index = value.revisions.firstIndex(where: { $0.id == revision.id }) {
+            guard value.revisions[index] != revision else { return }
+            value.revisions[index] = revision
         }
-        value.revisions.append(
-            TranscriptRevision(title: title, segments: meeting.transcript, speakers: meeting.speakers))
+        else {
+            value.revisions.append(revision)
+        }
         try PrivateTranscriptFile.write(
             try JSONEncoder().encode(value), name: "transcript-revisions.json", at: directory)
     }
+    static func current(_ meeting: Meeting) -> TranscriptRevision {
+        TranscriptRevision(
+            id: meeting.transcriptSource?.id ?? meeting.id,
+            savedAt: meeting.transcriptSource?.generatedAt ?? meeting.createdAt,
+            title: meeting.transcriptSource?.providerName ?? "Transcript", source: meeting.transcriptSource,
+            segments: meeting.transcript, speakers: meeting.speakers)
+    }
+    static func choices(_ revisions: [TranscriptRevision], current meeting: Meeting) -> [TranscriptRevision] {
+        var values = revisions.filter { $0.id != (meeting.transcriptSource?.id ?? meeting.id) }
+        if !meeting.transcript.isEmpty { values.append(current(meeting)) }
+        return values.sorted { $0.savedAt > $1.savedAt }
+    }
+
 }
 
 enum PrivateTranscriptFile {
@@ -70,8 +93,12 @@ extension MeetingStore {
         }
     }
     func restoreTranscript(_ revision: TranscriptRevision, meetingID: UUID) {
-        guard var meeting = meetings.first(where: { $0.id == meetingID }), preserveTranscript(meeting) else { return }
+        guard var meeting = self.meeting(id: meetingID), preserveTranscript(meeting) else { return }
         meeting.transcript = revision.segments
+        meeting.transcriptSource =
+            revision.source
+            ?? TranscriptSource(
+                id: revision.id, providerName: "Transcript", generatedAt: revision.savedAt)
         // A deleted person must not be recreated by restoring a transcript.
         meeting.replaceSpeakers(
             revision.speakers.map { speaker in

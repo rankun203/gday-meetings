@@ -12,7 +12,7 @@ final class NotesStorage {
     private var watchedID: UUID?
     init(directory: URL) { self.directory = directory }
     func url(_ id: UUID) -> URL {
-        directory.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent("notes.md")
+        MeetingFolderStorage.folder(id: id, directory: directory).appendingPathComponent("notes.md")
     }
     func load(_ id: UUID, fallback: String) throws -> String {
         let file = url(id)

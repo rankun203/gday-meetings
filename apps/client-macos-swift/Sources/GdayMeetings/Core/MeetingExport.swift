@@ -21,7 +21,7 @@ enum MeetingExportFormat: String, CaseIterable {
 extension MeetingStore {
     func exportMeeting(id: UUID, to url: URL) throws {
         guard flushNotes() else { throw MeetingError.message(errorMessage ?? "Couldn’t save meeting notes.") }
-        guard var meeting = meetings.first(where: { $0.id == id }) else {
+        guard var meeting = self.meeting(id: id) else {
             throw MeetingError.message("Meeting no longer exists.")
         }
         meeting.transcriptionAttempt = nil

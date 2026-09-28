@@ -51,7 +51,7 @@ import UniformTypeIdentifiers
         store.updateMeeting(meeting)
         _ = try await store.importAudioFiles([first, second], into: meeting.id)
         let restored = MeetingStore(dataDirectory: store.dataDirectory)
-        let added = try #require(restored.meetings.first(where: { $0.id == meeting.id }))
+        let added = try #require(restored.meeting(id: meeting.id))
         #expect(added.audioFiles == ["voice.wav", "voice-2.wav", "voice-3.wav"])
         #expect(added.duration == 2)
         #expect(added.notes == "Keep notes")
@@ -75,7 +75,7 @@ import UniformTypeIdentifiers
         #expect(
             try FileManager.default.contentsOfDirectory(atPath: store.directory(for: id).path).sorted() == existingFiles
         )
-        let library = store.dataDirectory.appendingPathComponent("library.json")
+        let library = store.directory(for: id).appendingPathComponent("metadata.json")
         try FileManager.default.moveItem(at: library, to: root.appendingPathComponent("backup.json"))
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: false)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }

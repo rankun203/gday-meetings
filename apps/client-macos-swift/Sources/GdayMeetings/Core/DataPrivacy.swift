@@ -78,7 +78,7 @@ enum PrivacyTrigger: Int, Comparable {
 
 /// A path data can take off this Mac. Capabilities add routes declaratively; a
 /// capability that processes data on this Mac (for example, on-device
-/// Live Transcription) adds a route with no receivers, so its data stays local.
+/// Live Transcription) adds a route with no receivers, so it does not send data to a provider.
 struct PrivacyRoute {
     let data: Set<PrivacyDataType>
     let trigger: PrivacyTrigger
@@ -120,8 +120,21 @@ struct PrivacyRow: Identifiable, Equatable {
     let destinations: [PrivacyDestination]
     let note: String?
     var id: PrivacyDataType { type }
-    var leavesMac: Bool { !destinations.isEmpty }
-    static let localStatus = "Stays on this Mac"
+    var sendsToProvider: Bool { !destinations.isEmpty }
+    var storageStatus: String {
+        switch type {
+        case .credentials: "Stored in Keychain on This Mac"
+        case .logs: "Saved on This Mac"
+        default: "Saved in Data Folder"
+        }
+    }
+    var storageSymbol: String {
+        switch type {
+        case .credentials: "key"
+        case .logs: "laptopcomputer"
+        default: "folder"
+        }
+    }
 }
 
 /// Inputs that decide where data can go. Keep this free of services so the

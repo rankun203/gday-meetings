@@ -80,7 +80,7 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(store.backgroundJobs.isEmpty)
         #expect(store.canStartRecording)
         #expect(store.errorMessage == nil)
-        let saved = try #require(MeetingStore(dataDirectory: root).meetings.first { $0.id == id })
+        let saved = try #require(MeetingStore(dataDirectory: root).meeting(id: id))
         #expect(saved.title == edited.title)
         #expect(saved.notes == edited.notes)
         if chat {
@@ -156,11 +156,11 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(!store.isImportingAudio)
     }
 
-    @Test func corruptLibraryCannotStartRecording() throws {
+    @Test func corruptSettingsCannotStartRecording() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try Data("{broken".utf8).write(to: root.appendingPathComponent("library.json"))
+        try Data("{broken".utf8).write(to: root.appendingPathComponent("settings.json"))
         let store = MeetingStore(dataDirectory: root)
         #expect(!store.canStartRecording)
     }
@@ -174,14 +174,16 @@ private final class BackgroundResponseGate: @unchecked Sendable {
             providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: "Pending transcription")
         try store.saveTranscriptionAttempt(attempt, meetingID: id)
         #expect(store.beginJob(.transcription, .meeting(id), progress: "Transcribing…"))
-        store.deleteMeeting(id: id)
+        #expect(!store.deleteMeeting(id: id))
         #expect(store.meetings.contains { $0.id == id })
         #expect(throws: (any Error).self) { try store.clearTranscriptionAttempt(meetingID: id) }
         #expect(store.meetings.first?.transcriptionAttempt == attempt)
         store.endJob(.transcription, .meeting(id))
         try store.clearTranscriptionAttempt(meetingID: id)
         #expect(store.meetings.first?.transcriptionAttempt == nil)
-        store.deleteMeeting(id: id)
+        #expect(store.deleteMeeting(id: id))
         #expect(store.meetings.isEmpty)
+        #expect(!store.containsMeeting(id: id))
+        #expect(store.meetingPageError == nil)
     }
 }

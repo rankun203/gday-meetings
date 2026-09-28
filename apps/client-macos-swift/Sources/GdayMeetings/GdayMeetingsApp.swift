@@ -4,13 +4,15 @@ import SwiftUI
 
 @main
 struct GdayMeetingsApp: App {
+    @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
     @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        Window("Meetings", id: "main") {
             PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
+                .disabled(store.isChangingLibrary)
                 .onAppear {
                     delegate.store = store
                     if UIPreview.enabled, !playback.hasSelection, let meeting = store.meetings.first {
@@ -30,11 +32,20 @@ struct GdayMeetingsApp: App {
             // HIG: expose frequent commands in the menu bar, with standard shortcuts.
             // https://developer.apple.com/design/human-interface-guidelines/designing-for-macos
             CommandGroup(replacing: .newItem) {
-                Button("New Meeting") { _ = store.createMeeting(title: "Untitled Meeting") }
-                    .keyboardShortcut("n")
+                Button("New Recording…") {
+                    openWindow(id: "main")
+                    store.presentsRecordingSetup = true
+                }
+                .keyboardShortcut("n")
+                .disabled(
+                    !store.libraryWritable || store.recordingID != nil || store.isStartingRecording
+                        || store.isFinalizingRecording)
                 Button("Import Audio…") { MeetingPanels.importAudio(store) }.keyboardShortcut("o")
+                    .disabled(!store.libraryWritable)
                 Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
+                    .disabled(!store.libraryWritable)
                 Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
+                    .disabled(!store.libraryWritable)
             }
             CommandMenu("Format") {
                 Button("Bold") { NSApp.sendAction(#selector(NotesTextView.markdownBold(_:)), to: nil, from: nil) }
@@ -151,7 +162,7 @@ private struct RecordingMenuView: View {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         } label: {
-            Label("Show app", systemImage: "macwindow")
+            Label("Show App", systemImage: "macwindow")
         }
         Divider()
         Button {

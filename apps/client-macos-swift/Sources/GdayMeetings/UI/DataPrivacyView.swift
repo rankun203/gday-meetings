@@ -11,7 +11,7 @@ struct DataPrivacyView: View {
             rows: DataPrivacy.rows(
                 PrivacyContext(
                     settings: store.settings, signedInWebsiteOrigin: server.connected ? server.origin : nil,
-                    pendingTranscriptions: PrivacyContext.pending(in: store.meetings)))
+                    pendingTranscriptions: store.pendingMeetingTranscriptions))
         ) { MeetingPanels.exportLogs(store) }
     }
 }
@@ -25,7 +25,7 @@ struct DataPrivacyForm: View {
         Form {
             Section {
                 Text(
-                    "Meetings are saved on this Mac. Data is sent only to the service providers listed below, at the times shown."
+                    "Meeting files are saved in your data folder. If you choose a synced folder, its cloud service controls synchronization. The providers below receive data when the listed actions run."
                 )
                 .foregroundStyle(.secondary)
             }
@@ -61,9 +61,9 @@ private struct DataPrivacyRowView: View {
                 if let contents = row.type.contents {
                     Text(contents).font(.caption).foregroundStyle(.secondary)
                 }
-                // Symbols distinguish local and sent data without relying on color.
+                // Symbols distinguish file storage and provider transmissions without relying on color.
                 if row.destinations.isEmpty {
-                    Label(PrivacyRow.localStatus, systemImage: "laptopcomputer")
+                    Label(row.storageStatus, systemImage: row.storageSymbol)
                         .foregroundStyle(.secondary)
                 }
                 else {

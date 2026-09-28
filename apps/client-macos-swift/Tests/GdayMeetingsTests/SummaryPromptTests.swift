@@ -4,75 +4,14 @@ import Testing
 @testable import GdayMeetings
 
 struct SummaryPromptTests {
-    @Test func oldProvidersUseRustDefaultAndRoundTripCustomPrompt() throws {
+    @Test func providersUseRustDefaultAndRoundTripCustomPrompt() throws {
         var provider = ServiceProvider(kind: .openAICompatible)
-        let oldData = try JSONEncoder().encode(provider)
-        let restored = try JSONDecoder().decode(ServiceProvider.self, from: oldData)
+        let data = try JSONEncoder().encode(provider)
+        let restored = try JSONDecoder().decode(ServiceProvider.self, from: data)
         #expect(restored.summaryPrompt == SummaryPrompt.defaultInstructions)
         provider.summaryPrompt = "Only list decisions."
         let custom = try JSONDecoder().decode(ServiceProvider.self, from: JSONEncoder().encode(provider))
         #expect(custom.summaryPrompt == "Only list decisions.")
-    }
-
-    @Test func legacyCustomPromptMigratesOnlyToSelectedProvider() throws {
-        let selected = ServiceProvider(kind: .openAICompatible)
-        let other = ServiceProvider(kind: .openAICompatible)
-        var settings = AppSettings()
-        settings.serviceProviders = [selected, other]
-        settings.summaryProviderID = selected.id
-        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
-        json["summarizationPrompt"] = "Keep it brief."
-        let migrated = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(migrated.serviceProviders[0].summaryPrompt == "Keep it brief.")
-        #expect(migrated.serviceProviders[1].summaryPrompt == SummaryPrompt.defaultInstructions)
-        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(migrated)) as? [String: Any])
-        #expect(encoded["summarizationPrompt"] == nil)
-    }
-
-    @Test func legacyStockPromptUsesRustDefaultAndProviderCustomWinsMigration() throws {
-        var provider = ServiceProvider(kind: .openAICompatible)
-        var settings = AppSettings()
-        settings.summaryProviderID = provider.id
-        settings.serviceProviders = [provider]
-        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
-        json["summarizationPrompt"] =
-            "Summarize this meeting with decisions, key points, and action items. Do not invent information."
-        var restored = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(restored.serviceProviders[0].summaryPrompt == SummaryPrompt.defaultInstructions)
-        provider.summaryPrompt = "Provider instructions."
-        settings.serviceProviders = [provider]
-        json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
-        json["summarizationPrompt"] = "Old global instructions."
-        restored = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(restored.serviceProviders[0].summaryPrompt == "Provider instructions.")
-        #expect(restored.pendingSummaryPromptMigration == "Old global instructions.")
-    }
-
-    @Test func dormantLegacyPromptMovesToUnselectedLLMProvider() throws {
-        let provider = ServiceProvider(kind: .openAICompatible)
-        var settings = AppSettings()
-        settings.serviceProviders = [ServiceProvider(kind: .runpod), provider]
-        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
-        json["summarizationPrompt"] = "Dormant instructions."
-        let restored = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(restored.summaryProviderID == nil)
-        #expect(restored.serviceProviders[1].summaryPrompt == "Dormant instructions.")
-        #expect(restored.pendingSummaryPromptMigration == nil)
-    }
-
-    @Test func dormantLegacyPromptSurvivesWithoutProvidersAndMigratesLater() throws {
-        let data = Data(#"{"summarizationPrompt":"Keep these instructions."}"#.utf8)
-        let restored = try JSONDecoder().decode(AppSettings.self, from: data)
-        #expect(restored.pendingSummaryPromptMigration == "Keep these instructions.")
-        var savedAgain = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(restored))
-        #expect(savedAgain.pendingSummaryPromptMigration == "Keep these instructions.")
-        savedAgain.serviceProviders.append(ServiceProvider(kind: .openAICompatible))
-        savedAgain.migratePendingSummaryPrompt()
-        #expect(savedAgain.serviceProviders[0].summaryPrompt == "Keep these instructions.")
-        #expect(savedAgain.pendingSummaryPromptMigration == nil)
-        let migrated = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(savedAgain))
-        #expect(migrated.serviceProviders[0].summaryPrompt == "Keep these instructions.")
-        #expect(migrated.pendingSummaryPromptMigration == nil)
     }
 
     @Test func summaryRequestUsesProviderPromptAndCitableMeetingContext() throws {

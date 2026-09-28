@@ -151,7 +151,7 @@ extension MeetingStore {
     /// Save the assignment and explicitly assigned sample together through the library's
     /// atomic save/rollback path. Reassignment removes its earlier training sample.
     func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) {
-        guard libraryWritable, var meeting = meetings.first(where: { $0.id == meetingID }),
+        guard libraryWritable, var meeting = self.meeting(id: meetingID),
             let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }),
             personID == nil || people.contains(where: { $0.id == personID })
         else { return }

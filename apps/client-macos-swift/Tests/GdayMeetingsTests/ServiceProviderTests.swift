@@ -8,14 +8,39 @@ struct ServiceProviderTests {
         var provider = ServiceProvider(kind: .runpod)
         #expect(provider.endpoint.isEmpty)
         #expect(provider.apiKey.isEmpty)
-        #expect(provider.enabledCapabilities.isEmpty)
+        #expect(provider.enabledCapabilities == provider.kind.capabilities)
         provider.apiKey = "test-secret"
         let encoded = try JSONEncoder().encode(provider)
         #expect(!String(decoding: encoded, as: UTF8.self).contains("test-secret"))
         let restored = try JSONDecoder().decode(ServiceProvider.self, from: encoded)
         #expect(restored.id == provider.id)
         #expect(restored.apiKey.isEmpty)
-        #expect(!restored.supports(.transcription))
+        #expect(restored.supports(.transcription))
+    }
+    @Test func newProvidersEnableSupportedCapabilitiesAndEditsRetainChoices() throws {
+        for kind in ServiceProviderKind.allCases {
+            var provider = ServiceProvider(kind: kind)
+            #expect(provider.enabledCapabilities == kind.capabilities)
+            provider.enabledCapabilities = []
+            provider.name = "Edited"
+            let restored = try JSONDecoder().decode(ServiceProvider.self, from: JSONEncoder().encode(provider))
+            #expect(restored.enabledCapabilities.isEmpty)
+        }
+    }
+
+    @Test func liveTranscriptionRequiresSelectedEnabledCapability() throws {
+        var settings = AppSettings()
+        #expect(settings.liveTranscriptionEnabled)
+        settings.thisMacCapabilities = []
+        #expect(!settings.liveTranscriptionEnabled)
+        settings.thisMacCapabilities = ThisMacProvider.capabilities
+        settings.liveTranscriptionProviderID = nil
+        #expect(!settings.liveTranscriptionEnabled)
+        let restored = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        #expect(restored.liveTranscriptionProviderID == nil)
+        settings.liveTranscriptionProviderID = ThisMacProvider.id
+        settings.showLiveTranscript = false
+        #expect(!settings.liveTranscriptionEnabled)
     }
     @Test func runpodSubmissionUsesRemoteURLsOnly() throws {
         var provider = ServiceProvider(kind: .runpod)
@@ -45,6 +70,7 @@ struct ServiceProviderTests {
     }
     @Test func disabledCapabilitiesPreventSubmissions() throws {
         var provider = ServiceProvider(kind: .runpod)
+        provider.enabledCapabilities = []
         provider.endpoint = "https://api.runpod.ai/v2/example"
         provider.apiKey = "test-key"
         let tracks = [

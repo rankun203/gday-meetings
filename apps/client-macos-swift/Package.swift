@@ -17,6 +17,7 @@ let package = Package(
     platforms: [.macOS("14.2")],
     products: [.executable(name: "GdayMeetings", targets: ["GdayMeetings"])],
     targets: [
+        .systemLibrary(name: "CSQLite"),
         .target(name: "AudioCaptureBridge", publicHeadersPath: "include"),
         .target(
             name: "OpusFileBridge", publicHeadersPath: "include",
@@ -26,7 +27,7 @@ let package = Package(
                     audioRoot + "/lib/libopusfile.a", audioRoot + "/lib/libopus.a", audioRoot + "/lib/libogg.a",
                 ])
             ]),
-        .executableTarget(name: "GdayMeetings", dependencies: ["AudioCaptureBridge", "OpusFileBridge"]),
+        .executableTarget(name: "GdayMeetings", dependencies: ["AudioCaptureBridge", "OpusFileBridge", "CSQLite"]),
         .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"]),
     ]
 )
