@@ -4,6 +4,30 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MarkdownReadingTests {
+    @Test func listMarkersFollowBodyColorAcrossAppearances() throws {
+        let rendered = MarkdownReadingRenderer.render(
+            "- Bullet item\n\n1. Numbered item", timestamps: false, emptyMessage: "",
+            directory: URL(fileURLWithPath: "/tmp"), interactiveTasks: false)
+        for label in ["•", "1."] {
+            let range = (rendered.string as NSString).range(of: label)
+            #expect(range.location != NSNotFound)
+            let marker = try #require(
+                rendered.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor)
+            let body = try #require(
+                rendered.attribute(.foregroundColor, at: NSMaxRange(range) + 1, effectiveRange: nil) as? NSColor)
+            var values: [CGFloat] = []
+            for name in [NSAppearance.Name.aqua, .darkAqua] {
+                let appearance = try #require(NSAppearance(named: name))
+                appearance.performAsCurrentDrawingAppearance {
+                    let foreground = marker.usingColorSpace(.sRGB)!
+                    #expect(foreground == body.usingColorSpace(.sRGB))
+                    values.append(foreground.redComponent)
+                }
+            }
+            #expect(values[1] > values[0])
+        }
+    }
+
     @Test func cjkBoldLabelsRenderAndCopyWithSourceBoundaries() {
         let source = "**结论：**示例一已完成。[00:18] **结论：**示例二已完成。"
         let map = MarkdownSelectionSourceMap(source: source)

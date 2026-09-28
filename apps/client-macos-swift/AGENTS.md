@@ -30,6 +30,7 @@ Read the relevant documents before changing the app:
 - [Resource audit](../../docs/worklogs/2026-09-28-resource-audit.md): sampled resource usage and shared playback clock.
 - [Associated meeting pages](../../docs/worklogs/2026-09-28-associated-meeting-pages.md): bounded navigation through person and tag meetings.
 - [Markdown reading](../../docs/worklogs/2026-09-28-markdown-reading.md): selection, citations, task markers, and compact previews.
+- [Markdown marker colors](../../docs/worklogs/2026-09-28-markdown-marker-color.md): appearance-aware list bullets and numbers.
 - [Transcript layout lifecycle](../../docs/worklogs/2026-09-28-transcript-layout-lifecycle.md): stable initial placement and whole-surface scrolling.
 - [Meeting Trash keyboard actions](../../docs/worklogs/2026-09-28-meeting-trash-keyboard.md): Delete confirmation and recoverable deletion.
 - [Finder shortcuts](../../docs/worklogs/2026-09-28-finder-shortcuts.md): meeting and audio file reveal actions.

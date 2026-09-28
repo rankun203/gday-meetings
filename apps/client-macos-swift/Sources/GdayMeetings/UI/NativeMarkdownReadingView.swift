@@ -479,7 +479,10 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                     of: #"^\s*(?:[-+*]|\d+\.)\s+(?:\[[ xX]\]\s*)?"#, options: .regularExpression)
                 copyKind = .text(prefix: prefixRange.map { String(blockSource[$0]) } ?? "- ")
                 value = inline(text, font: bodyFont)
-                value.insert(NSAttributedString(string: bullet + "\t", attributes: [.font: bodyFont]), at: 0)
+                value.insert(
+                    NSAttributedString(
+                        string: bullet + "\t", attributes: [.font: bodyFont, .foregroundColor: NSColor.labelColor]),
+                    at: 0)
                 let listIndent: CGFloat = bullet == "•" ? 18 : 22
                 if bullet == "•" {
                     value.addAttribute(
