@@ -70,3 +70,35 @@ The supplied Attendees screenshot and the captured Preview Summary showed small 
 **Technical debt:** The marker update still renders a candidate attributed document to obtain correct copy metadata, but only task attributes are applied to the live document. This work happens on content changes, never on pointer movement or scrolling. A future block renderer can remove that parse cost if profiling warrants it. The existing incomplete CommonMark support remains unchanged. Stored extracted task data is retained for export; no data migration or deletion is introduced.
 
 **API reference:** [AppKit text storage](https://developer.apple.com/documentation/appkit/nstextview/textstorage) distinguishes attribute updates from character replacement. The fix retains native text storage and tracking areas instead of using a separate per-row view or compensating scroll animation.
+
+## Notes control alignment
+
+**Problem and design:** The user requested right alignment for the Notes mode control. Captured the existing Preview with the control on the left. Place the same compact control against the document card’s right edge on its own row.
+
+**Implemented solution:** Move the flexible spacer before the picker and update the UI design rule. Mode behavior and dimensions remain unchanged.
+
+**Validation:** The rebuilt Preview screenshot confirms the control aligns with the card’s right edge. Switching to Read works. Checked system light appearance; the full appearance and window-size matrix was not repeated for this alignment-only change. No new behavioral test was needed.
+
+**Technical debt:** None.
+
+## Chinese bold labels
+
+**Problem and evidence:** The supplied Summary screenshot shows literal `**` around a Chinese conclusion label. Read-only inspection of that meeting’s `summary.md` confirmed a bold label followed immediately by body text, with no separating space after the closing marker. The native Markdown parser treats this punctuation boundary as literal text.
+
+**Implemented solution:** At reading time, insert a space after a bold CJK label ending in Chinese punctuation when the next character is a letter or digit. Exclude inline code and escaped markers. Keep the original saved source and full-block copy; use parser-input positions for partial selection so repeated labels retain correct boundaries. Add the case to the synthetic Preview.
+
+**Validation:** All 10 focused Markdown tests and the final full run of 427 tests in 85 suites passed, along with formatting, lint, and the release Preview build. Coverage includes repeated labels, native bold font traits, partial and full-source copying, citations, escaped markers, and literal inline code. The final Preview screenshot shows the generic Chinese label in bold, body text in regular weight, and a clickable timestamp with no literal markers. The first parallel test run failed the existing hover-delay timing check; an isolated retry and the full rerun passed. Builds retain the existing missing Command Line Tools library/framework search-path warnings; no new deprecation warnings were introduced.
+
+**Technical debt:** This is a narrow reader compatibility adjustment for generated CJK labels, not a replacement Markdown parser. It adds a visible separator without rewriting stored documents. Retain it until the parser supports the intended adjacent-punctuation rendering or summaries consistently emit the separator; keep source-copy tests during any replacement.
+
+**Reference:** [CommonMark emphasis rules](https://spec.commonmark.org/spec#emphasis-and-strong-emphasis) require a closing marker after punctuation to be followed by whitespace or punctuation. The reader adjustment deliberately accepts the generated label style shown in the screenshot.
+
+## Synthetic examples only
+
+**Problem:** Some regression text and a Rust comment used project-specific content or attendee names. Benchmark documents named a personal meeting and its library identifier.
+
+**Implemented solution:** Replace those examples with generic wording, remove personal benchmark identifiers, and add an explicit synthetic-content rule to repository instructions. Search the repository for known meeting titles, attendee names, project terms, and Chinese passages; preserve genuine application identifiers and unrelated dependency metadata.
+
+**Validation and limits:** Reviewed source, tests, fixtures, comments, and documentation matches. This sanitizes the current repository tree; it does not rewrite published Git history or alter personal meeting content. Existing benchmark measurements remain historical observations, with identifying labels removed.
+
+**Technical debt:** Previously published text can remain in Git history; a history rewrite would require a separate coordinated change because it replaces commit identities.

@@ -13,6 +13,7 @@ scope: repository-workflow
 - Every document must include front matter.
 - All UI text and documentation across every app must follow Apple's clarity guidance as summarized in that document. This includes labels, messages, accessibility text, examples, design documents, and worklogs.
 - Review all added or changed wording against the guide before finishing. When editing an existing document or UI flow, check its surrounding wording for consistency. Use concrete descriptions and actions; remove vague reassurance and promotional filler.
+- Use synthetic, generic content in code, tests, previews, comments, and documentation. Never copy real meeting titles, attendee names, transcript passages, project details, or library identifiers from the user's data into the repository. Reproduce bugs with the smallest synthetic example that preserves the relevant structure.
 
 ## UI design before implementation
 

@@ -6,16 +6,48 @@ struct MarkdownSelectionSourceMap {
     let source: String
     let parsed: AttributedString
     let rendered: String
+    private let parserSource: String
 
     init(source: String) {
         self.source = source
+        parserSource = Self.spacedCJKLabels(source)
         parsed =
             (try? AttributedString(
-                markdown: source,
+                markdown: parserSource,
                 options: .init(
                     interpretedSyntax: .inlineOnlyPreservingWhitespace, appliesSourcePositionAttributes: true)))
             ?? AttributedString(source)
         rendered = String(parsed.characters)
+    }
+
+    /// CommonMark treats punctuation before a closing delimiter differently when
+    /// another word follows it. Give generated CJK labels a visible word boundary.
+    private static func spacedCJKLabels(_ source: String) -> String {
+        guard source.contains("**"),
+            let regex = try? NSRegularExpression(
+                pattern:
+                    #"(?<![\\*])\*\*([^*\n]*[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}][^*\n]*[：，。！？；、])\*\*(?=[\p{L}\p{N}])"#
+            )
+        else { return source }
+        let matches = regex.matches(in: source, range: NSRange(location: 0, length: source.utf16.count))
+        guard !matches.isEmpty,
+            let original = try? AttributedString(
+                markdown: source,
+                options: .init(
+                    interpretedSyntax: .inlineOnlyPreservingWhitespace, appliesSourcePositionAttributes: true))
+        else { return source }
+        let codeRanges = original.runs.compactMap { run -> NSRange? in
+            guard run.inlinePresentationIntent?.contains(.code) == true,
+                let position = run.markdownSourcePosition, let range = Range(position, in: source)
+            else { return nil }
+            return NSRange(range, in: source)
+        }
+        let result = NSMutableString(string: source)
+        for match in matches.reversed() {
+            guard !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
+            result.insert(" ", at: NSMaxRange(match.range))
+        }
+        return result as String
     }
 
     func markdown(in selection: NSRange) -> String {
@@ -47,8 +79,8 @@ struct MarkdownSelectionSourceMap {
             let intent = run.inlinePresentationIntent
             let code = intent?.contains(.code) == true
             var raw = Self.escape(visible)
-            if let position = run.markdownSourcePosition, let range = Range(position, in: source) {
-                let original = String(source[range])
+            if let position = run.markdownSourcePosition, let range = Range(position, in: parserSource) {
+                let original = String(parserSource[range])
                 raw =
                     Self.sourceSlice(original, rendered: displayed, selection: local, code: code)
                     ?? Self.escape(visible)

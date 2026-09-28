@@ -4,6 +4,24 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MarkdownReadingTests {
+    @Test func cjkBoldLabelsRenderAndCopyWithSourceBoundaries() {
+        let source = "**结论：**示例一已完成。[00:18] **结论：**示例二已完成。"
+        let map = MarkdownSelectionSourceMap(source: source)
+        #expect(map.rendered == "结论： 示例一已完成。[00:18] 结论： 示例二已完成。")
+        #expect(map.markdown(in: NSRange(location: 0, length: map.rendered.utf16.count)) == source)
+        let label = (map.rendered as NSString).range(of: "结论：", options: .backwards)
+        #expect(map.markdown(in: label) == "**结论：**")
+        let body = (map.rendered as NSString).range(of: "示例二")
+        #expect(map.markdown(in: body) == "示例二")
+        let rendered = MarkdownReadingRenderer.inline(source, font: .systemFont(ofSize: 14))
+        let font = rendered.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+        #expect(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
+        #expect(rendered.string.contains("00:18"))
+        let code = MarkdownSelectionSourceMap(source: "`**结论：**示例` and **结论：**正文")
+        #expect(code.rendered == "**结论：**示例 and 结论： 正文")
+        let escaped = MarkdownSelectionSourceMap(source: #"\*\*结论：\*\*示例"#)
+        #expect(escaped.rendered == "**结论：**示例")
+    }
     @Test func repeatedTaskTogglesPreserveViewportSelectionAndHover() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 240),
@@ -21,7 +39,7 @@ import Testing
         window.contentView = scroll
         let markdown =
             "| Topic | Decision |\n| --- | --- |\n| Release | Friday |\n\n"
-            + (0..<35).map { "- [ ] **Person \($0)**: " + String(repeating: "检查订单与环境配置。 ", count: 5) + "[00:12]" }
+            + (0..<35).map { "- [ ] **Person \($0)**: " + String(repeating: "检查示例文字与格式。 ", count: 5) + "[00:12]" }
             .joined(separator: "\n")
         text.source = markdown
         text.interactiveTasks = true

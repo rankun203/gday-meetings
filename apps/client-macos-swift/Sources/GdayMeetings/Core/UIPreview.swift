@@ -58,6 +58,8 @@ enum UIPreview {
 
                     ### Action items
 
+                    **结论：**检查示例格式。[00:06]
+
                     - [ ] Alex: Update the schedule.
                     - [x] Sam: Check the meeting notes.
                     """

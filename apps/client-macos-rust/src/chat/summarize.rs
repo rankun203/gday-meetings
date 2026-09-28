@@ -246,7 +246,7 @@ async fn extract_todos(content: &str, people_manager: &PeopleManager) -> Vec<Val
             let after_bold = &text[bold_cap.get(0).unwrap().end()..];
             task_text = after_bold.trim_start_matches(&[' ', '–', '—', '-', ':'][..]).trim().to_string();
 
-            // Split on / , & and to handle multi-person TODOs like "Ian Jiang/Kun/Elliott"
+            // Split on / , & and to handle multi-person TODOs like "Alex/Sam/Jordan"
             let name_parts: Vec<&str> = regex::Regex::new(r"[/,&]|\band\b")
                 .unwrap()
                 .split(&raw_name)

@@ -80,7 +80,7 @@ ProMotion is a measurement target: about 8.3 ms per frame at 120 Hz, not an anim
 
 # Validation and benchmark plan
 
-Use separate development benchmark libraries, never duplicate inside the user's normal library. Copy the `search vs ai overview weekly` meeting 1,000 times; copy source `55D3791A-2D68-42EF-B0B2-8B672E032E37` 100,000 times. Copies need unique identities and consistent metadata references. Use independent APFS copy-on-write clones for large immutable media where available; document this so disk usage and cold media-read results are not misleading. Do not create hard links for mutable documents. Never enable automatic provider work in benchmark settings.
+Use separate development benchmark libraries, never duplicate inside the user's normal library. Create 1,000 copies of a synthetic long meeting and 100,000 copies of a synthetic short meeting. Copies need unique identities and consistent metadata references. Use independent APFS copy-on-write clones for large immutable media where available; document this so disk usage and cold media-read results are not misleading. Do not create hard links for mutable documents. Never enable automatic provider work in benchmark settings.
 
 Launch the packaged full app against these libraries using GDAY_SWIFT_DATA_DIR, not UI Preview or a test host. Measure indexing duration, first-page availability, startup/idle CPU, RSS/peak memory, and page navigation. Distinguish initial rebuild and warm-index launch. Exercise folder discovery, agent file edits, index deletion/rebuild, malformed metadata, restart recovery, and paging beyond 20 records. Ask the user to test real scrolling after handing off the full benchmark app. No fabricated 120 Hz claim from screenshots.
 

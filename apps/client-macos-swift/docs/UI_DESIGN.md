@@ -103,6 +103,8 @@ Render checked and unchecked task markers at the same 14-point size with a 22-po
 
 Parse only when content or reading configuration changes. Playback progress and scrolling must not rebuild the Markdown document. Single-line meeting summary previews use one line of space; whitespace-only lines do not reserve height.
 
+Render generated bold CJK labels such as `**结论：**正文` as a bold label followed by a space and the body. Preserve the saved source and full-source copy. Keep escaped markers and inline code literal.
+
 ## Provider capabilities
 
 New service providers start with all capabilities that their app adapter supports enabled. Saving an edited provider preserves capabilities the user turned off. Do not display capabilities without an implementation.
@@ -117,4 +119,4 @@ Task hover backgrounds use equal padding around the first through last line's ty
 
 Checkbox toggles update only the task’s checked state, marker, strikethrough, and copy metadata. Preserve displayed characters, paragraph layout, selection, and viewport. Hover responds to pointer entry, movement, and cursor updates; layout-only bounds notifications must not clear it.
 
-Notes has a compact native segmented Edit/Read icon control on its own leading-aligned action row, above the document card. Keep both modes visible and expose their names to accessibility and help. Flush pending edits before switching.
+Notes has a compact native segmented Edit/Read icon control aligned to the right on its own action row, above the document card. Keep both modes visible and expose their names to accessibility and help. Flush pending edits before switching.

@@ -8,6 +8,7 @@ struct MeetingNotesWorkspace: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack {
+                Spacer()
                 Picker(
                     "Notes View",
                     selection: Binding(
@@ -23,7 +24,6 @@ struct MeetingNotesWorkspace: View {
                 .labelsHidden()
                 .frame(width: 76)
                 .accessibilityLabel("Notes View")
-                Spacer()
             }
             ZStack {
                 MeetingNotesEditor(meetingID: meetingID, showsPanelBorder: false, editingEnabled: !reading)
