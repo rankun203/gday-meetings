@@ -6,7 +6,6 @@ struct MeetingDetailView: View {
     let meetingID: UUID
     @ViewState private var tab = 0
     @ViewState private var chatDraft = ""
-    @ViewState private var todoDraft = ""
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
@@ -169,64 +168,12 @@ struct MeetingDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
-                if !meeting.todos.isEmpty {
-                    DisclosureGroup("To-Dos") { todos(meeting).frame(minHeight: 120, maxHeight: 240) }
-                        .disclosureGroupStyle(AppDisclosureStyle())
-                }
+
             }
         default: chat(meeting)
         }
     }
 
-    private func todos(_ meeting: Meeting) -> some View {
-        VStack {
-            HStack {
-                TextField("New to-do", text: $todoDraft).onSubmit(addTodo)
-                Button("Add", action: addTodo).disabled(
-                    todoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            List {
-                ForEach(meeting.todos) { todo in
-                    HStack {
-                        Toggle(
-                            isOn: Binding(
-                                get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.isCompleted ?? false },
-                                set: { value in
-                                    change { meeting in
-                                        if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) {
-                                            meeting.todos[index].isCompleted = value
-                                        }
-                                    }
-                                })
-                        ) { Text("Completed").hidden() }.labelsHidden().accessibilityLabel(
-                            "Mark \(todo.title) complete")
-                        TextField(
-                            "To-do",
-                            text: Binding(
-                                get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.title ?? "" },
-                                set: { value in
-                                    change { meeting in
-                                        if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) {
-                                            meeting.todos[index].title = value
-                                        }
-                                    }
-                                })
-                        ).strikethrough(todo.isCompleted)
-                        Spacer()
-                        Button("Delete To-Do", systemImage: "trash", role: .destructive) {
-                            change { $0.todos.removeAll { $0.id == todo.id } }
-                        }.labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover()).help("Delete to-do")
-                    }
-                }
-            }
-        }
-    }
-    private func addTodo() {
-        let title = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return }
-        change { $0.todos.append(MeetingTodo(title: title)) }
-        todoDraft = ""
-    }
     private func chat(_ meeting: Meeting) -> some View {
         VStack {
             ScrollViewReader { proxy in

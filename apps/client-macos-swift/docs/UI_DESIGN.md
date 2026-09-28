@@ -99,7 +99,7 @@ Summary and Notes reading mode share one selectable document. Dragging or keyboa
 
 Unordered lists use a 15-point bullet glyph beside 14-point body text, with an 18-point text inset. Align wrapped lines with the text, keeping the dot close to its item.
 
-Render checked and unchecked task markers at the same 14-point size with a 22-point marker column. The complete wrapped task row is clickable and shows subtle rounded hover feedback with a pointing-hand cursor. A drag must select text instead of toggling; citation links and double-click selection take precedence. Completion persists into its Markdown source. Keep source text in reading mode otherwise read-only. Timestamps such as **[12:39]**, **[81:32]**, and **[1:21:32]** are playback links; a range uses its starting timestamp. Links have visible color and pointing-hand hover feedback. Inline code remains literal. Existing extracted to-dos live in a collapsed **To-Dos** section in Summary rather than a separate tab.
+Render checked and unchecked task markers at the same 14-point size with a 22-point marker column. The complete wrapped task row is clickable and shows subtle rounded hover feedback with a pointing-hand cursor. A drag must select text instead of toggling; citation links and double-click selection take precedence. Completion persists into its Markdown source. Keep source text in reading mode otherwise read-only. Timestamps such as **[12:39]**, **[81:32]**, and **[1:21:32]** are playback links; a range uses its starting timestamp. Links have visible color and pointing-hand hover feedback. Inline code remains literal. Meeting tasks are presented through Markdown checkboxes in Summary. Do not add a separate To-Dos tab or panel.
 
 Parse only when content or reading configuration changes. Playback progress and scrolling must not rebuild the Markdown document. Single-line meeting summary previews use one line of space; whitespace-only lines do not reserve height.
 
@@ -114,3 +114,7 @@ This Mac uses the same Capabilities section pattern, with a Live Transcription t
 Copy selected reading text as Markdown, using source positions rather than a text search. Preserve complete source for a fully selected block. For partial blocks, retain only selected words with balanced inline formatting and the relevant heading, list, task, or code syntax. A selected part of a timestamp copies its complete original citation. Selected table cells form a valid Markdown table; unselected cells remain blank. Do not add words from unselected headings or cells. Normal editing clipboard behavior is unchanged.
 
 Task hover backgrounds use equal padding around the first through last line's typographic bounds. Center the checkbox on the first line's text, excluding additional paragraph leading; do not shift text to fit a background.
+
+Checkbox toggles update only the task’s checked state, marker, strikethrough, and copy metadata. Preserve displayed characters, paragraph layout, selection, and viewport. Hover responds to pointer entry, movement, and cursor updates; layout-only bounds notifications must not clear it.
+
+Notes has a compact native segmented Edit/Read icon control on its own leading-aligned action row, above the document card. Keep both modes visible and expose their names to accessibility and help. Flush pending edits before switching.

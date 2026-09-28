@@ -6,23 +6,25 @@ struct MeetingNotesWorkspace: View {
     let meetingID: UUID
     @ViewState private var reading = false
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             HStack {
-                Spacer()
-                Button {
-                    if store.flushNotes() { reading.toggle() }
-                } label: {
-                    Image(systemName: reading ? "pencil" : "book")
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+                Picker(
+                    "Notes View",
+                    selection: Binding(
+                        get: { reading },
+                        set: { value in if store.flushNotes() { reading = value } }
+                    )
+                ) {
+                    Image(systemName: "pencil").help("Edit notes").accessibilityLabel("Edit Notes").tag(false)
+                    Image(systemName: "book").help("Read notes").accessibilityLabel("Read Notes").tag(true)
                 }
-                .buttonStyle(.bordered)
+                .pickerStyle(.segmented)
                 .controlSize(.small)
-                .help(reading ? "Edit notes" : "Read notes")
-                .accessibilityLabel(reading ? "Edit Notes" : "Read Notes")
-                .accessibilityValue(reading ? "Reading mode" : "Editing mode")
+                .labelsHidden()
+                .frame(width: 76)
+                .accessibilityLabel("Notes View")
+                Spacer()
             }
-            .padding(8)
             ZStack {
                 MeetingNotesEditor(meetingID: meetingID, showsPanelBorder: false, editingEnabled: !reading)
                     .opacity(reading ? 0 : 1)
@@ -37,10 +39,10 @@ struct MeetingNotesWorkspace: View {
                         changed: store.libraryWritable ? { store.editNotes(id: meetingID, text: $0) } : nil)
                 }
             }
+            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
         }
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
         .task(id: meetingID) { store.openNotes(id: meetingID) }
         .onDisappear { store.closeNotes(id: meetingID) }
         .id(meetingID)

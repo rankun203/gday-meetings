@@ -41,6 +41,12 @@ struct NativeMarkdownReadingView: NSViewRepresentable {
                 || text.emptyMessage != emptyMessage || text.interactiveTasks != (changed != nil)
                 || text.directory != directory
         else { return }
+        if text.timestamps == showsTimestamps, text.emptyMessage == emptyMessage,
+            text.interactiveTasks == (changed != nil), text.directory == directory,
+            text.applyTaskToggle(markdown)
+        {
+            return
+        }
         text.source = markdown
         text.timestamps = showsTimestamps
         text.emptyMessage = emptyMessage
@@ -65,9 +71,10 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
     var emptyMessage = ""
     var interactiveTasks = false
     var directory: URL?
-    private var hoverLine: Int?
+    private(set) var hoverLine: Int?
     private var tracking: NSTrackingArea?
     private var scrollObserver: NSObjectProtocol?
+    private var observedOrigin: NSPoint?
     struct TaskRegion {
         let line: Int
         let checked: Bool
@@ -92,6 +99,41 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                     range
                 ))
         }
+    }
+    /// A checkbox changes decoration and copy metadata, never the displayed characters or paragraph layout.
+    @discardableResult func applyTaskToggle(_ markdown: String) -> Bool {
+        guard interactiveTasks, let source, let storage = textStorage, let directory else { return false }
+        let oldLines = source.components(separatedBy: "\n")
+        let newLines = markdown.components(separatedBy: "\n")
+        guard oldLines.count == newLines.count else { return false }
+        let differences = oldLines.indices.filter { oldLines[$0] != newLines[$0] }
+        guard differences.count == 1, let line = differences.first,
+            MarkdownReadingRenderer.togglingTask(in: source, line: line) == markdown,
+            let task = taskRanges.first(where: { $0.line == line })
+        else { return false }
+        let rendered = MarkdownReadingRenderer.render(
+            markdown, timestamps: timestamps, emptyMessage: emptyMessage, directory: directory,
+            interactiveTasks: true)
+        guard rendered.string == storage.string else { return false }
+        var blockRange = NSRange()
+        _ = storage.attribute(
+            .markdownCopyBlock, at: task.range.location, longestEffectiveRange: &blockRange,
+            in: NSRange(location: 0, length: storage.length))
+        let keys: [NSAttributedString.Key] = [
+            .attachment, .strikethroughStyle, .markdownTaskChecked, .markdownCopyBlock,
+        ]
+        storage.beginEditing()
+        for key in keys {
+            storage.removeAttribute(key, range: blockRange)
+            rendered.enumerateAttribute(key, in: blockRange) { value, range, _ in
+                if let value { storage.addAttribute(key, value: value, range: range) }
+            }
+        }
+        storage.endEditing()
+        self.source = markdown
+        refreshTaskRanges()
+        needsDisplay = true
+        return true
     }
     func taskRegions() -> [TaskRegion] {
         guard let window, !taskRanges.isEmpty else { return [] }
@@ -174,11 +216,17 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
         if window != nil, let clip = enclosingScrollView?.contentView {
+            window?.acceptsMouseMovedEvents = true
+            observedOrigin = clip.bounds.origin
             clip.postsBoundsChangedNotifications = true
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.setHovered(nil) }
+                MainActor.assumeIsolated {
+                    guard let self, let clip = self.enclosingScrollView?.contentView else { return }
+                    if self.observedOrigin != clip.bounds.origin { self.setHovered(nil) }
+                    self.observedOrigin = clip.bounds.origin
+                }
             }
         }
     }
@@ -187,24 +235,21 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         hoverLine = line
         needsDisplay = true
     }
-    override func mouseMoved(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
+    func updateHover(at point: NSPoint) {
         let row = taskRegions().first { $0.frame.contains(point) }
         setHovered(row?.line)
-        if row != nil {
-            NSCursor.pointingHand.set()
-        }
-        else {
-            super.mouseMoved(with: event)
-        }
+        if row != nil { NSCursor.pointingHand.set() }
+    }
+    override func mouseEntered(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+        if hoverLine == nil { super.mouseMoved(with: event) }
     }
     override func cursorUpdate(with event: NSEvent) {
-        if taskRegions().contains(where: { $0.frame.contains(convert(event.locationInWindow, from: nil)) }) {
-            NSCursor.pointingHand.set()
-        }
-        else {
-            super.cursorUpdate(with: event)
-        }
+        updateHover(at: convert(event.locationInWindow, from: nil))
+        if hoverLine == nil { super.cursorUpdate(with: event) }
     }
     override func mouseExited(with event: NSEvent) {
         setHovered(nil)
@@ -226,6 +271,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             return
         }
         _ = window?.nextEvent(matching: .leftMouseUp)
+        updateHover(at: point)
         if let source { configuration?.changed?(MarkdownReadingRenderer.togglingTask(in: source, line: row.line)) }
     }
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {

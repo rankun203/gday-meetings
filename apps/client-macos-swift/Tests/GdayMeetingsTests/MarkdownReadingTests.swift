@@ -4,6 +4,88 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MarkdownReadingTests {
+    @Test func repeatedTaskTogglesPreserveViewportSelectionAndHover() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        let text = MarkdownReadingTextView(usingTextLayoutManager: true)
+        text.frame = scroll.bounds
+        text.isEditable = false
+        text.isSelectable = true
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.textContainer?.widthTracksTextView = true
+        text.textContainerInset = NSSize(width: 18, height: 16)
+        scroll.documentView = text
+        window.contentView = scroll
+        let markdown =
+            "| Topic | Decision |\n| --- | --- |\n| Release | Friday |\n\n"
+            + (0..<35).map { "- [ ] **Person \($0)**: " + String(repeating: "检查订单与环境配置。 ", count: 5) + "[00:12]" }
+            .joined(separator: "\n")
+        text.source = markdown
+        text.interactiveTasks = true
+        text.directory = URL(fileURLWithPath: "/tmp")
+        text.textStorage!.setAttributedString(
+            MarkdownReadingRenderer.render(
+                markdown, timestamps: false, emptyMessage: "", directory: text.directory!, interactiveTasks: true))
+        text.refreshTaskRanges()
+        window.contentView?.layoutSubtreeIfNeeded()
+        text.textLayoutManager?.ensureLayout(for: text.textLayoutManager!.documentRange)
+        text.sizeToFit()
+        // Finish the initial size-to-fit invalidation before comparing subsequent edits.
+        window.contentView?.layoutSubtreeIfNeeded()
+        text.textLayoutManager?.ensureLayout(for: text.textLayoutManager!.documentRange)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 650))
+        let row = try #require(text.taskRegions().first(where: { $0.frame.minY >= text.visibleRect.minY }))
+        let point = NSPoint(x: row.frame.midX, y: row.frame.midY)
+        text.updateHover(at: point)
+        let selected = (text.string as NSString).range(of: "Person 8")
+        text.setSelectedRange(selected)
+        let origin = scroll.contentView.bounds.origin
+        let display = text.string
+        // TextKit 2 may refine its estimated document frame as offscreen fragments
+        // are visited. Compare actual laid-out text geometry, not that estimate.
+        let endRange = NSRange(location: text.string.utf16.count - 2, length: 1)
+        let lastLine = text.firstRect(forCharacterRange: endRange, actualRange: nil)
+        for _ in 0..<6 {
+            let next = MarkdownReadingRenderer.togglingTask(in: text.source!, line: row.line)
+            #expect(text.applyTaskToggle(next))
+            window.contentView?.layoutSubtreeIfNeeded()
+            text.textLayoutManager?.ensureLayout(for: text.textLayoutManager!.documentRange)
+            #expect(text.string == display)
+            #expect(text.selectedRange() == selected)
+            #expect(abs(scroll.contentView.bounds.origin.y - origin.y) < 1)
+            #expect(abs(text.firstRect(forCharacterRange: endRange, actualRange: nil).minY - lastLine.minY) < 1)
+            #expect(text.hoverLine == row.line)
+            let updated = try #require(text.taskRegions().first(where: { $0.line == row.line }))
+            #expect(abs(updated.frame.minY - row.frame.minY) < 1)
+            var taskLocation: Int?
+            text.textStorage!.enumerateAttribute(
+                .markdownTaskLine, in: NSRange(location: 0, length: text.string.utf16.count)
+            ) { value, range, stop in
+                if value as? Int == row.line {
+                    taskLocation = range.location
+                    stop.pointee = true
+                }
+            }
+            let marker = try #require(taskLocation)
+            let strike =
+                text.textStorage!.attribute(
+                    .strikethroughStyle, at: marker + 2, effectiveRange: nil) as? Int
+            #expect((strike == NSUnderlineStyle.single.rawValue) == updated.checked)
+            #expect(
+                MarkdownReadingSelectionCopy.markdown(
+                    from: text.textStorage!, selection: NSRange(location: 0, length: text.string.utf16.count)
+                ).contains(next.components(separatedBy: "\n")[row.line]))
+            // Cursor-update and entry events must restore hover after it is cleared on exit.
+            text.updateHover(at: NSPoint(x: -100, y: -100))
+            #expect(text.hoverLine == nil)
+            text.updateHover(at: point)
+            #expect(text.hoverLine == row.line)
+        }
+        #expect(!text.applyTaskToggle(text.source! + "\nNew paragraph"))
+    }
     @Test func citationsSupportLongMinutesAndHours() {
         #expect(MarkdownReadingRenderer.citationTime("81:32") == 4892)
         #expect(MarkdownReadingRenderer.citationTime("1:21:32") == 4892)
