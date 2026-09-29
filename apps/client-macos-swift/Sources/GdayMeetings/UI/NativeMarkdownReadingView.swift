@@ -83,6 +83,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         let frame: NSRect
     }
     private var codeRanges: [(range: NSRange, body: String)] = []
+    private(set) var inlineCodeRanges: [NSRange] = []
     private var codeButtons: [Int: NSButton] = [:]
     struct TaskRegion {
         let line: Int
@@ -98,6 +99,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
     func refreshTaskRanges() {
         taskRanges.removeAll(keepingCapacity: true)
         codeRanges.removeAll(keepingCapacity: true)
+        inlineCodeRanges.removeAll(keepingCapacity: true)
         guard let storage = textStorage else { return }
         storage.enumerateAttribute(.markdownTaskLine, in: NSRange(location: 0, length: storage.length)) {
             value, range, _ in
@@ -115,6 +117,10 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                 let body = storage.attribute(.markdownCodeBody, at: range.location, effectiveRange: nil) as? String
             else { return }
             self.codeRanges.append((range, body))
+        }
+        storage.enumerateAttribute(.markdownInlineCode, in: NSRange(location: 0, length: storage.length)) {
+            value, range, _ in
+            if value as? Bool == true { self.inlineCodeRanges.append(range) }
         }
         for button in codeButtons.values { button.removeFromSuperview() }
         codeButtons.removeAll()
@@ -213,6 +219,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         NSPasteboard.general.setString(markdown, forType: .string)
     }
     override func draw(_ dirtyRect: NSRect) {
+        drawInlineCodeBackgrounds(in: dirtyRect)
         let code = codeRegions()
         for region in code where region.frame.intersects(dirtyRect) {
             NSColor.labelColor.withAlphaComponent(0.055).setFill()
@@ -227,34 +234,64 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         super.draw(dirtyRect)
     }
 
-    /// Geometry comes from the same native text layout used for selection.
-    /// No attachments or separate text views interrupt cross-block selection.
+    /// Document-coordinate geometry remains valid for offscreen and partially visible blocks.
+    func textRangeRects(_ range: NSRange, glyphBounds: Bool = false) -> [NSRect] {
+        var result: [NSRect] = []
+        let font = textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        func bounds(_ frame: NSRect, baseline: CGFloat) -> NSRect {
+            guard glyphBounds, let font else { return frame }
+            return NSRect(
+                x: frame.minX, y: baseline - font.ascender,
+                width: frame.width, height: font.ascender - font.descender)
+        }
+        if let layout = textLayoutManager, let content = layout.textContentManager,
+            let start = content.location(content.documentRange.location, offsetBy: range.location),
+            let end = content.location(start, offsetBy: range.length),
+            let textRange = NSTextRange(location: start, end: end)
+        {
+            layout.ensureLayout(for: textRange)
+            layout.enumerateTextSegments(in: textRange, type: .standard, options: [.rangeNotRequired]) {
+                _, frame, baseline, _ in
+                result.append(
+                    bounds(frame, baseline: frame.minY + baseline).offsetBy(
+                        dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y))
+                return true
+            }
+        }
+        else if let layout = layoutManager, let container = textContainer {
+            // NSTextTable makes AppKit select its supported TextKit 1 compatibility path.
+            layout.ensureLayout(for: container)
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            layout.enumerateEnclosingRects(
+                forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+            ) { frame, _ in
+                var measured = frame
+                if glyphBounds {
+                    let glyph = min(
+                        NSMaxRange(glyphs) - 1,
+                        max(
+                            glyphs.location,
+                            layout.glyphIndex(for: NSPoint(x: frame.minX + 0.5, y: frame.midY), in: container)))
+                    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    measured = bounds(frame, baseline: line.minY + layout.location(forGlyphAt: glyph).y)
+                }
+                result.append(measured.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y))
+            }
+        }
+        return result
+    }
+
     func codeRegions() -> [CodeRegion] {
-        guard let window, !codeRanges.isEmpty else { return [] }
-        func rect(_ index: Int) -> NSRect {
-            let screen = firstRect(forCharacterRange: NSRange(location: index, length: 1), actualRange: nil)
-            return convert(window.convertFromScreen(screen), from: nil)
-        }
-        var low = 0
-        var high = codeRanges.count
-        while low < high {
-            let middle = (low + high) / 2
-            if rect(NSMaxRange(codeRanges[middle].range) - 1).maxY + 12 < visibleRect.minY {
-                low = middle + 1
-            }
-            else {
-                high = middle
-            }
-        }
         var result: [CodeRegion] = []
-        for block in codeRanges.dropFirst(low) {
-            let first = rect(block.range.location)
-            if first.minY - 8 > visibleRect.maxY { break }
-            let last = rect(NSMaxRange(block.range) - 1)
+        for block in codeRanges {
+            let range = NSRange(location: block.range.location, length: max(1, block.range.length - 1))
+            let rects = textRangeRects(range)
+            guard let first = rects.first else { continue }
+            let extent = rects.dropFirst().reduce(first) { $0.union($1) }
             let frame = NSRect(
-                x: textContainerOrigin.x, y: first.minY - 8,
+                x: textContainerOrigin.x, y: extent.minY - 8,
                 width: max(0, bounds.width - textContainerOrigin.x * 2),
-                height: max(32, last.maxY - first.minY + 20))
+                height: max(32, extent.height + 20))
             if frame.intersects(visibleRect) {
                 result.append(CodeRegion(range: block.range, body: block.body, frame: frame))
             }
@@ -533,7 +570,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             if run.inlinePresentationIntent?.contains(.code) == true {
                 codeRanges.append(range)
                 styled = .monospacedSystemFont(ofSize: font.pointSize * 0.9, weight: .regular)
-                result.addAttribute(.backgroundColor, value: NSColor.quaternaryLabelColor, range: range)
+                result.addAttribute(.markdownInlineCode, value: true, range: range)
             }
             result.addAttribute(.font, value: styled, range: range)
             offset += length
@@ -570,6 +607,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                 result.replaceCharacters(in: range, with: replacement)
             }
         }
+        MarkdownInlineCodeAppearance.applyPadding(to: result)
         return result
     }
 

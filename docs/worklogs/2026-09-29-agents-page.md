@@ -47,3 +47,13 @@ Existing guides are never overwritten. This preserves customization but leaves g
 Opening Agents reads the saved guide. It does not launch a coding agent or send meeting content. Installing an agent and running a copied command remain user actions.
 
 Final preview check: the rebuilt isolated app displays both launch labels as body text, Copy Code buttons floating at the upper right of their code blocks, and the expanded guide below. Cursor behavior is covered by the event-level regression; the UI automation interface does not provide a hover action.
+
+## Shared Markdown styling repair
+
+The next preview reproduced missing fenced-code backgrounds after scrolling, matching the reported clipped launch block and unstyled long code samples. The intended design keeps a continuous rounded background around every code block, preserves floating Copy Code controls, and adds subtle padded rounded backgrounds to inline code. Notes reading mode, Summary, and Agents share this renderer.
+
+Block geometry now uses text-layout segments in document coordinates instead of screen-coordinate input-method rectangles. List parsing ignores HTML-like placeholders inside backticks so those rows retain normal bullets. Existing AppKit table compatibility remains: when NSTextTable selects TextKit 1, geometry uses its layout manager; ordinary documents use TextKit 2. No new schema or storage debt.
+
+The first rebuilt preview confirmed both long code samples retain continuous backgrounds through scrolling, and the ID/speaker rows use bullets. It also exposed excess inline background height from line leading; the final measurement uses glyph baselines and font bounds, with 1-point vertical and 3-point horizontal padding. All 31 focused Markdown tests passed, including both text-layout engines, long-document scrolling, source selection/copy, citation mapping, and cursor behavior. Lint and whitespace checks passed. Existing Command Line Tools linker-path warnings remain; no source deprecation warnings were reported.
+
+Final release Preview build passed. Screenshots in light and dark appearance confirmed compact rounded inline backgrounds and persistent fenced-code backgrounds while scrolling. The shared renderer and both layout-engine tests cover Notes reading mode and Summary; those screens were not separately replayed in this final visual pass.

@@ -77,7 +77,7 @@ struct NotesReadingDocument {
             else if text.contains("![") || text.lowercased().contains("<img") {
                 append(.literal(text))
             }
-            else if text.range(of: #"<[!/A-Za-z][^>]*>"#, options: .regularExpression) != nil {
+            else if Self.containsHTMLOutsideCode(text) {
                 // This focused reader does not reinterpret nested block/HTML
                 // structure. Keep its source visible rather than flatten it.
                 append(.literal(text))
@@ -106,6 +106,15 @@ struct NotesReadingDocument {
             }
         }
     }
+    private static func containsHTMLOutsideCode(_ source: String) -> Bool {
+        // Angle-bracket placeholders inside code spans are literal code, not HTML.
+        let pattern = #"(`+)([\s\S]*?)\1(?!`)"#
+        let code = try? NSRegularExpression(pattern: pattern)
+        let range = NSRange(source.startIndex..., in: source)
+        let withoutCode = code?.stringByReplacingMatches(in: source, range: range, withTemplate: "") ?? source
+        return withoutCode.range(of: #"<[!/A-Za-z][^>]*>"#, options: .regularExpression) != nil
+    }
+
     static func cells(_ line: String) -> [String] {
         var source = line.trimmingCharacters(in: .whitespaces)
         if source.hasPrefix("|") { source.removeFirst() }

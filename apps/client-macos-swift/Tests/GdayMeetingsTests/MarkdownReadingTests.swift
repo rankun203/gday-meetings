@@ -4,6 +4,57 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MarkdownReadingTests {
+    @Test func inlineCodeBackgroundUsesGlyphHeightInBothLayoutEngines() throws {
+        for modern in [true, false] {
+            let text = MarkdownReadingTextView(usingTextLayoutManager: modern)
+            text.frame = NSRect(x: 0, y: 0, width: 480, height: 300)
+            text.textContainer?.widthTracksTextView = true
+            text.textContainerInset = NSSize(width: 18, height: 16)
+            text.textStorage!.setAttributedString(
+                MarkdownReadingRenderer.render(
+                    "First `token` line.\n\nSecond `token` line.", timestamps: false, emptyMessage: "",
+                    directory: URL(fileURLWithPath: "/tmp"), interactiveTasks: false))
+            text.refreshTaskRanges()
+            var previousBottom: CGFloat = 0
+            #expect(text.inlineCodeRanges.count == 2)
+            for range in text.inlineCodeRanges {
+                let font = try #require(
+                    text.textStorage!.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+                let line = try #require(text.textRangeRects(range).first)
+                let glyph = try #require(text.textRangeRects(range, glyphBounds: true).first)
+                let background = MarkdownInlineCodeAppearance.backgroundFrame(for: glyph, last: true)
+                #expect(abs(background.height - (font.ascender - font.descender + 2)) < 0.001)
+                #expect(glyph.minY >= line.minY)
+                #expect(glyph.maxY <= line.maxY + 0.001)
+                #expect(abs(glyph.minY - background.minY - 1) < 0.001)
+                #expect(abs(background.maxY - glyph.maxY - 1) < 0.001)
+                #expect(background.minY > previousBottom)
+                previousBottom = background.maxY
+            }
+        }
+    }
+
+    @Test func inlineCodePaddingPreservesCharactersCitationMappingAndMarkdownCopy() throws {
+        let source = "Read [00:12] `token` and `token𝛑` here."
+        let rendered = MarkdownReadingRenderer.render(
+            source, timestamps: false, emptyMessage: "", directory: URL(fileURLWithPath: "/tmp"),
+            interactiveTasks: false)
+        #expect(rendered.string == "Read 00:12 token and token𝛑 here.\n")
+        let code = (rendered.string as NSString).range(of: "token𝛑")
+        #expect(rendered.attribute(.markdownInlineCode, at: code.location, effectiveRange: nil) as? Bool == true)
+        #expect(rendered.attribute(.backgroundColor, at: code.location, effectiveRange: nil) == nil)
+        #expect(rendered.attribute(.kern, at: code.location + 1, effectiveRange: nil) == nil)
+        #expect((rendered.attribute(.kern, at: code.location - 1, effectiveRange: nil) as? NSNumber)?.doubleValue == 3)
+        #expect(
+            (rendered.attribute(.kern, at: NSMaxRange(code) - 1, effectiveRange: nil) as? NSNumber)?.doubleValue == 3)
+        #expect(MarkdownReadingSelectionCopy.markdown(from: rendered, selection: code) == "`token𝛑`")
+        let citation = (rendered.string as NSString).range(of: "00:12")
+        #expect(MarkdownReadingSelectionCopy.markdown(from: rendered, selection: citation) == "[00:12]")
+        #expect(
+            MarkdownReadingSelectionCopy.markdown(
+                from: rendered, selection: NSRange(location: 0, length: rendered.length)) == source)
+    }
+
     @Test func codeButtonCursorSurvivesParentTrackingAndRestoresTextCursor() throws {
         let previousCursor = NSCursor.current
         defer { previousCursor.set() }
