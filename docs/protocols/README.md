@@ -29,6 +29,8 @@ The app contracts are declared in [`ServiceProviders.swift`](../../apps/client-m
 
 These initial Swift interfaces cover submission, result retrieval, and the operations listed in their declarations. The richer version and provenance requirements in these documents guide subsequent implementation; they are not a claim that every field is already persisted.
 
+Swift provider results use `ProviderResult<Value>`, conforming to `ProviderDataResult`. The required `dataFlow` object describes the local or remote destination, target name and domain, specific files or input types, purpose, measured request and response body bytes, and start/end times with duration. Unknown live-stream sizes remain absent. Successful meeting operations append metadata-only receipts to the meeting's `data-events.jsonl`; failed operations and task status polls do not. Upload receipts are independent of a subsequent processing result. Metadata discovery returns the same receipt envelope without adding events to an unrelated meeting. The [implementation worklog](../worklogs/2026-09-29-meeting-data-events.md) documents coverage and validation limits.
+
 ## Provider configuration
 
 A provider has a stable identifier, kind, display name, endpoint, authentication settings, and supported capabilities. Display names are editable and must not identify stored credentials or results. Store secrets in Keychain, separately from ordinary settings. Never include secrets or signed audio URLs in logs.

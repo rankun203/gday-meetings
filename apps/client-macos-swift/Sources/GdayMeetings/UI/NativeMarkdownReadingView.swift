@@ -77,6 +77,13 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
     private var tracking: NSTrackingArea?
     private var scrollObserver: NSObjectProtocol?
     private var observedOrigin: NSPoint?
+    struct CodeRegion {
+        let range: NSRange
+        let body: String
+        let frame: NSRect
+    }
+    private var codeRanges: [(range: NSRange, body: String)] = []
+    private var codeButtons: [Int: NSButton] = [:]
     struct TaskRegion {
         let line: Int
         let checked: Bool
@@ -90,6 +97,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
     private var taskRanges: [(line: Int, checked: Bool, range: NSRange)] = []
     func refreshTaskRanges() {
         taskRanges.removeAll(keepingCapacity: true)
+        codeRanges.removeAll(keepingCapacity: true)
         guard let storage = textStorage else { return }
         storage.enumerateAttribute(.markdownTaskLine, in: NSRange(location: 0, length: storage.length)) {
             value, range, _ in
@@ -101,6 +109,15 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                     range
                 ))
         }
+        storage.enumerateAttribute(.markdownCopyBlock, in: NSRange(location: 0, length: storage.length)) {
+            value, range, _ in
+            guard let block = value as? MarkdownCopyBlock, case .code = block.kind,
+                let body = storage.attribute(.markdownCodeBody, at: range.location, effectiveRange: nil) as? String
+            else { return }
+            self.codeRanges.append((range, body))
+        }
+        for button in codeButtons.values { button.removeFromSuperview() }
+        codeButtons.removeAll()
     }
     /// A checkbox changes decoration and copy metadata, never the displayed characters or paragraph layout.
     @discardableResult func applyTaskToggle(_ markdown: String) -> Bool {
@@ -196,12 +213,96 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         NSPasteboard.general.setString(markdown, forType: .string)
     }
     override func draw(_ dirtyRect: NSRect) {
+        let code = codeRegions()
+        for region in code where region.frame.intersects(dirtyRect) {
+            NSColor.labelColor.withAlphaComponent(0.055).setFill()
+            NSBezierPath(roundedRect: region.frame, xRadius: 8, yRadius: 8).fill()
+        }
+        updateCodeButtons(code)
         let regions = taskRegions()
         if let hovered = regions.first(where: { $0.line == hoverLine }) {
             NSColor.quaternaryLabelColor.withAlphaComponent(0.10).setFill()
             NSBezierPath(roundedRect: hovered.frame, xRadius: 4, yRadius: 4).fill()
         }
         super.draw(dirtyRect)
+    }
+
+    /// Geometry comes from the same native text layout used for selection.
+    /// No attachments or separate text views interrupt cross-block selection.
+    func codeRegions() -> [CodeRegion] {
+        guard let window, !codeRanges.isEmpty else { return [] }
+        func rect(_ index: Int) -> NSRect {
+            let screen = firstRect(forCharacterRange: NSRange(location: index, length: 1), actualRange: nil)
+            return convert(window.convertFromScreen(screen), from: nil)
+        }
+        var low = 0
+        var high = codeRanges.count
+        while low < high {
+            let middle = (low + high) / 2
+            if rect(NSMaxRange(codeRanges[middle].range) - 1).maxY + 12 < visibleRect.minY {
+                low = middle + 1
+            }
+            else {
+                high = middle
+            }
+        }
+        var result: [CodeRegion] = []
+        for block in codeRanges.dropFirst(low) {
+            let first = rect(block.range.location)
+            if first.minY - 8 > visibleRect.maxY { break }
+            let last = rect(NSMaxRange(block.range) - 1)
+            let frame = NSRect(
+                x: textContainerOrigin.x, y: first.minY - 8,
+                width: max(0, bounds.width - textContainerOrigin.x * 2),
+                height: max(32, last.maxY - first.minY + 20))
+            if frame.intersects(visibleRect) {
+                result.append(CodeRegion(range: block.range, body: block.body, frame: frame))
+            }
+        }
+        return result
+    }
+
+    private func updateCodeButtons(_ regions: [CodeRegion]) {
+        let visible = Set(regions.map { $0.range.location })
+        for key in Array(codeButtons.keys) where !visible.contains(key) {
+            codeButtons.removeValue(forKey: key)?.removeFromSuperview()
+        }
+        for region in regions {
+            let key = region.range.location
+            let button: NSButton
+            if let existing = codeButtons[key] {
+                button = existing
+            }
+            else {
+                button = MarkdownActionButton(title: "Copy Code", target: self, action: #selector(copyCode(_:)))
+                button.bezelStyle = .rounded
+                button.controlSize = .small
+                button.font = .systemFont(ofSize: 11)
+                button.toolTip = "Copy code without Markdown fences"
+                button.setAccessibilityLabel("Copy Code")
+                button.setAccessibilityElement(true)
+                button.setAccessibilityRole(.button)
+                button.refusesFirstResponder = false
+                button.tag = key
+                addSubview(button)
+                codeButtons[key] = button
+            }
+            button.frame = NSRect(x: region.frame.maxX - 92, y: region.frame.minY + 4, width: 84, height: 24)
+        }
+    }
+
+    @objc private func copyCode(_ sender: NSButton) {
+        guard let body = codeRanges.first(where: { $0.range.location == sender.tag })?.body else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(body, forType: .string)
+    }
+    override func accessibilityChildren() -> [Any]? {
+        var children = super.accessibilityChildren() ?? []
+        for button in codeButtons.values.sorted(by: { $0.tag < $1.tag })
+        where !button.isHidden && button.frame.intersects(visibleRect) {
+            if !children.contains(where: { ($0 as? NSView) === button }) { children.append(button) }
+        }
+        return children
     }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
@@ -226,7 +327,10 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let clip = self.enclosingScrollView?.contentView else { return }
-                    if self.observedOrigin != clip.bounds.origin { self.setHovered(nil) }
+                    if self.observedOrigin != clip.bounds.origin {
+                        self.setHovered(nil)
+                        for button in self.codeButtons.values { self.window?.invalidateCursorRects(for: button) }
+                    }
                     self.observedOrigin = clip.bounds.origin
                 }
             }
@@ -237,21 +341,44 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
         hoverLine = line
         needsDisplay = true
     }
-    func updateHover(at point: NSPoint) {
+    @discardableResult func updateHover(at point: NSPoint) -> Bool {
+        // The text view's tracking area covers its button children. Give those
+        // actions priority so NSTextView never replaces their hand with an I-beam.
+        if let button = codeButtons.values.first(where: {
+            !$0.isHidden && $0.frame.contains(point) && visibleRect.contains(point)
+        }) {
+            setHovered(nil)
+            (button.isEnabled ? NSCursor.pointingHand : NSCursor.arrow).set()
+            return true
+        }
         let row = taskRegions().first { $0.frame.contains(point) }
         setHovered(row?.line)
-        if row != nil { NSCursor.pointingHand.set() }
+        if row != nil {
+            NSCursor.pointingHand.set()
+            return true
+        }
+        return false
     }
     override func mouseEntered(with event: NSEvent) {
-        updateHover(at: convert(event.locationInWindow, from: nil))
+        if !updateHover(at: convert(event.locationInWindow, from: nil)) { updateTextCursor(with: event) }
     }
     override func mouseMoved(with event: NSEvent) {
-        updateHover(at: convert(event.locationInWindow, from: nil))
-        if hoverLine == nil { super.mouseMoved(with: event) }
+        guard !updateHover(at: convert(event.locationInWindow, from: nil)) else { return }
+        super.mouseMoved(with: event)
+        updateTextCursor(with: event)
     }
     override func cursorUpdate(with event: NSEvent) {
-        updateHover(at: convert(event.locationInWindow, from: nil))
-        if hoverLine == nil { super.cursorUpdate(with: event) }
+        guard !updateHover(at: convert(event.locationInWindow, from: nil)) else { return }
+        super.cursorUpdate(with: event)
+        updateTextCursor(with: event)
+    }
+    private func updateTextCursor(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        let linked =
+            index < (textStorage?.length ?? 0)
+            && textStorage?.attribute(.link, at: index, effectiveRange: nil) != nil
+        (linked ? NSCursor.pointingHand : NSCursor.iBeam).set()
     }
     override func mouseExited(with event: NSEvent) {
         setHovered(nil)
@@ -462,6 +589,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             }
             let blockSource = blockLines.joined(separator: "\n")
             var copyKind = MarkdownCopyBlock.Kind.text(prefix: "")
+            var codeBody: String?
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineHeightMultiple = 1.35
             paragraph.paragraphSpacing = 10
@@ -517,6 +645,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                     range: NSRange(location: 0, length: value.length))
                 paragraph.headIndent = 18
             case .code(let text):
+                codeBody = text
                 let firstLine = blockLines.first ?? "```"
                 let language = String(firstLine.drop(while: { $0 == "`" || $0 == "~" || $0.isWhitespace }))
                 copyKind = .code(language: language)
@@ -524,8 +653,15 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                     string: text,
                     attributes: [
                         .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
-                        .foregroundColor: NSColor.labelColor, .backgroundColor: NSColor.quaternaryLabelColor,
+                        .foregroundColor: NSColor.labelColor,
                     ])
+                paragraph.lineHeightMultiple = 1.2
+                paragraph.paragraphSpacing = 0
+                paragraph.firstLineHeadIndent = 12
+                paragraph.headIndent = 12
+                // The copy action floats beside the code. Reserve its width
+                // while wrapping so long lines cannot run behind the button.
+                paragraph.tailIndent = -104
             case .divider:
                 copyKind = .atomic
                 value = NSMutableAttributedString(
@@ -620,6 +756,22 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                 .markdownCopyBlock, value: MarkdownCopyBlock(source: blockSource, kind: copyKind),
                 range: NSRange(location: 0, length: value.length))
             value.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: value.length))
+            if let codeBody {
+                value.addAttribute(
+                    .markdownCodeBody, value: codeBody, range: NSRange(location: 0, length: value.length))
+                let string = value.string as NSString
+                let first = string.paragraphRange(for: NSRange(location: 0, length: 0))
+                let last = string.paragraphRange(for: NSRange(location: max(0, value.length - 1), length: 0))
+                let top = paragraph.mutableCopy() as! NSMutableParagraphStyle
+                top.paragraphSpacingBefore = 12
+                if first == last { top.paragraphSpacing = 22 }
+                value.addAttribute(.paragraphStyle, value: top, range: first)
+                if first != last {
+                    let bottom = paragraph.mutableCopy() as! NSMutableParagraphStyle
+                    bottom.paragraphSpacing = 22
+                    value.addAttribute(.paragraphStyle, value: bottom, range: last)
+                }
+            }
             result.append(value)
         }
         if result.length == 0 {
@@ -637,4 +789,5 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
 extension NSAttributedString.Key {
     static let markdownTaskLine = NSAttributedString.Key("GdayMarkdownTaskLine")
     static let markdownTaskChecked = NSAttributedString.Key("GdayMarkdownTaskChecked")
+    static let markdownCodeBody = NSAttributedString.Key("GdayMarkdownCodeBody")
 }

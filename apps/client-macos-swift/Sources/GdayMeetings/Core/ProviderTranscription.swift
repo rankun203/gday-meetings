@@ -85,7 +85,9 @@ extension MeetingStore {
                         "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…")
                     let prepared = try await prepareServerAudio(file)
                     defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
-                    let url = try await server.upload(file: prepared.url)
+                    let uploadResult = try await server.upload(file: prepared.url)
+                    recordDataFlow(uploadResult.dataFlow.referencing(file: file, prepared: prepared.url), meetingID: id)
+                    let url = uploadResult.value
                     let isMic = file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
                     attempt.inputs.append(
                         ServerTrackInput(
@@ -93,10 +95,12 @@ extension MeetingStore {
                             sourceType: isMic ? "mic" : "system", channels: prepared.channels))
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                 }
-                attempt.taskID = try await server.submit(
+                let submission = try await server.submit(
                     externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs,
                     language: attempt.providerLanguage ?? attempt.language,
                     diarize: attempt.diarize, idempotencyKey: attempt.idempotencyKey)
+                recordDataFlow(submission.dataFlow.referencingAudio(files), meetingID: id)
+                attempt.taskID = submission.value
                 try saveTranscriptionAttempt(attempt, meetingID: id)
             }
             guard let taskID = attempt.taskID else { throw ServiceError("The provider returned no job ID.") }
@@ -104,7 +108,7 @@ extension MeetingStore {
             while true {
                 try Task.checkCancellation()
                 setJobProgress(.transcription, .meeting(id), "Waiting for \(provider.name)…")
-                let status: ServerTaskResult
+                let status: ProviderResult<ServerTaskResult>
                 do { status = try await server.task(id: taskID) }
                 catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
                     attempt.remoteJobExpired = true
@@ -120,13 +124,14 @@ extension MeetingStore {
                     continue
                 }
                 pollFailures = 0
-                switch status {
+                switch status.value {
                 case .pending: try await Task.sleep(for: transcriptionPollDelay)
                 case .failed(let message):
                     attempt.failure = message
                     try saveTranscriptionAttempt(attempt, meetingID: id)
                     throw ServiceError(message + " Discard the pending request before starting another transcription.")
                 case .complete(let segments):
+                    recordDataFlow(status.dataFlow, meetingID: id, action: .received)
                     try Task.checkCancellation()
                     let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
                     let result = recognized.segments
@@ -159,7 +164,7 @@ extension MeetingStore {
             let filedrop = FiledropProvider(provider: upload)
             _ = try await ProviderConnectionChecker.check(provider)
             _ = try await filedrop.checkConnection()
-            let info = try await filedrop.info()
+            let info = try await filedrop.info().value
             guard let expiry = attempt.uploadsExpireAt, expiry > Date() else {
                 attempt.inputs = []
                 attempt.uploadsExpireAt = nil
@@ -207,7 +212,9 @@ extension MeetingStore {
                 .transcription, .meeting(id), "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…")
             let prepared = try await prepareFiledropAudio(file, allowedExtensions: info.allowedExtensions)
             defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
-            let receipt = try await filedrop.upload(file: prepared.url)
+            let uploadResult = try await filedrop.upload(file: prepared.url)
+            recordDataFlow(uploadResult.dataFlow.referencing(file: file, prepared: prepared.url), meetingID: id)
+            let receipt = uploadResult.value
             let isMic = file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
             attempt.inputs.append(
                 ServerTrackInput(
@@ -230,8 +237,10 @@ extension MeetingStore {
             tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
         attempt.submissionUncertain = true
         try saveTranscriptionAttempt(attempt, meetingID: id)
-        attempt.taskID = try await runpod.submit(
+        let submission = try await runpod.submit(
             tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
+        recordDataFlow(submission.dataFlow.referencingAudio(files), meetingID: id)
+        attempt.taskID = submission.value
         attempt.submissionUncertain = false
         try saveTranscriptionAttempt(attempt, meetingID: id)
         try await pollRunPod(id: id, runpod: runpod, attempt: &attempt)
@@ -246,7 +255,7 @@ extension MeetingStore {
         while true {
             try Task.checkCancellation()
             setJobProgress(.transcription, .meeting(id), "Waiting for \(runpod.provider.name)…")
-            let status: ProviderTranscriptionStatus
+            let status: ProviderResult<ProviderTranscriptionStatus>
             do { status = try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) }
             catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
                 attempt.remoteJobExpired = true
@@ -263,13 +272,14 @@ extension MeetingStore {
                 continue
             }
             pollFailures = 0
-            switch status {
+            switch status.value {
             case .pending: try await Task.sleep(for: transcriptionPollDelay)
             case .failed(let message):
                 attempt.failure = message
                 try saveTranscriptionAttempt(attempt, meetingID: id)
                 throw ServiceError(message + " Discard the pending request before starting another transcription.")
             case .complete(let segments):
+                recordDataFlow(status.dataFlow, meetingID: id, action: .received)
                 try Task.checkCancellation()
                 let expected = Set(attempt.inputs.map(\.trackName))
                 guard segments.allSatisfy({ expected.contains($0.track) }) else {

@@ -10,6 +10,28 @@ enum UIPreview {
         ProcessInfo.processInfo.arguments.contains("--ui-preview")
         || Bundle.main.object(forInfoDictionaryKey: "GdayUIPreview") as? Bool == true
 
+    @MainActor static func startSyntheticRecording(_ store: MeetingStore) {
+        guard enabled, store.recordingID == nil else { return }
+        do {
+            var meeting = Meeting(title: "Synthetic recording")
+            let folder = store.directory(for: meeting.id)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            meeting.audioFiles = ["microphone.wav", "system.wav"]
+            for (index, name) in meeting.audioFiles.enumerated() {
+                try writeFixture(to: folder.appendingPathComponent(name), source: index)
+            }
+            try store.insertImportedMeeting(meeting)
+            store.recordingID = meeting.id
+            store.recordingStartedAt = Date()
+            store.recordingMeter.deliver(
+                RecordingLevels(
+                    microphone: RecordingSourceLevel(enabled: true, hasSamples: true),
+                    system: RecordingSourceLevel(enabled: true, hasSamples: true)))
+            store.liveTranscript.seedPreview(meetingID: meeting.id, directory: folder)
+        }
+        catch { store.errorMessage = "Couldn’t create the synthetic recording. \(error.localizedDescription)" }
+    }
+
     @MainActor static func makeStore() -> MeetingStore {
         guard enabled else { return MeetingStore() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Gday-UI-Preview-\(UUID())")
@@ -26,6 +48,7 @@ enum UIPreview {
                 }
                 try store.insertImportedMeeting(meeting)
                 try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
+                try writeDataEventFixtures(directory: folder)
             }
             let person = store.addPerson(name: "Alex Morgan")
             let matched = store.addPerson(name: "Sam Chen")
@@ -128,11 +151,17 @@ enum UIPreview {
                     }
                     store.recordingID = conversation.id
                     store.recordingStartedAt = Date()
-                    store.recordingMeter.deliver(
-                        RecordingLevels(
-                            microphone: RecordingSourceLevel(enabled: true, hasSamples: true),
-                            system: RecordingSourceLevel(enabled: true, hasSamples: true),
-                            microphoneStatus: RecordingMicrophoneStatus(voiceProcessing: true, canSwitch: true)))
+                    let previewTime = ProcessInfo.processInfo.systemUptime
+                    for tick in 0...50 {
+                        store.recordingMeter.deliver(
+                            RecordingLevels(
+                                microphone: RecordingSourceLevel(
+                                    enabled: true, hasSamples: true, rmsDB: -32 + Double(tick % 8)),
+                                system: RecordingSourceLevel(
+                                    enabled: true, hasSamples: true, rmsDB: -24 + Double(tick % 6)),
+                                microphoneStatus: RecordingMicrophoneStatus(voiceProcessing: true, canSwitch: true)),
+                            at: previewTime - 10 + Double(tick) / 5)
+                    }
                     store.liveTranscript.seedPreview(
                         meetingID: conversation.id, directory: store.directory(for: conversation.id))
                 }
@@ -388,6 +417,7 @@ enum UIPreview {
 
 struct PreviewContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
+    @EnvironmentObject private var store: MeetingStore
     @ViewState private var appearance = 0
     @ViewState private var previewVoiceProcessing = false
     private static func recordingLevel(at time: Double, offset: Double, reconnects: Bool = false)
@@ -421,6 +451,10 @@ struct PreviewContainer<Content: View>: View {
                 HStack {
                     Label("UI Preview · Synthetic audio · Silent playback", systemImage: "eye")
                     Spacer()
+                    if ProcessInfo.processInfo.arguments.contains("--synthetic-recording-start") {
+                        Button("Start Synthetic Recording") { UIPreview.startSyntheticRecording(store) }
+                            .disabled(store.recordingID != nil)
+                    }
                     Picker("Appearance", selection: $appearance) {
                         Text("System").tag(0)
                         Text("Light").tag(1)
@@ -483,5 +517,25 @@ struct PreviewContainer<Content: View>: View {
                 ? NSAppearance(named: .aqua)
                 : selection == 2 ? NSAppearance(named: .darkAqua) : nil
         }
+    }
+}
+
+extension UIPreview {
+    private static func writeDataEventFixtures(directory: URL) throws {
+        let now = Date()
+        try DataEventJournal.append(
+            MeetingDataEvent(
+                action: .sent,
+                dataFlow: DataFlow(
+                    location: .local, targetName: "This Mac", startedAt: now.addingTimeInterval(-35),
+                    endedAt: now.addingTimeInterval(-5), bodies: ["System Audio"],
+                    purpose: "Live transcription (synthetic)")), directory: directory)
+        try DataEventJournal.append(
+            MeetingDataEvent(
+                action: .sent,
+                dataFlow: DataFlow(
+                    location: .remote, targetName: "Example Provider", domain: "processing.example.invalid",
+                    requestBytes: 12288, responseBytes: 4096, startedAt: now.addingTimeInterval(-4), endedAt: now,
+                    bodies: ["notes.md", "transcript.json"], purpose: "Summary (synthetic)")), directory: directory)
     }
 }

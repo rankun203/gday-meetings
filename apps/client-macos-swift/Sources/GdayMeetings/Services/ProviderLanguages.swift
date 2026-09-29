@@ -41,7 +41,7 @@ struct ProviderLanguageIdentity: Hashable {
 
     /// Discovers a list from providers without a built-in one. Only the Gday Meetings
     /// website supports discovery; its request is free.
-    static func catalog(for provider: ServiceProvider) async throws -> ProviderLanguageCatalog {
+    static func catalog(for provider: ServiceProvider) async throws -> ProviderResult<ProviderLanguageCatalog> {
         guard provider.supports(.transcription) else {
             throw ServiceError("Enable Transcription for this provider to load its languages.")
         }
@@ -54,14 +54,19 @@ struct ProviderLanguageIdentity: Hashable {
             else {
                 throw ServiceError("Sign in to this Gday Meetings website to load its languages.")
             }
-            let response = try await ServiceHTTP.json(
-                server.authorizedRequest("api/platform/capabilities"),
-                trace: .init(provider: provider.name, data: "language list request"))
-            guard response["protocolVersion"] as? Int == 1 else {
-                throw ServiceError(
-                    "This website does not support language discovery. Update the Gday Meetings website.")
+            return try await ProviderDataOperation.perform(
+                target: provider.name, endpoint: provider.endpoint,
+                bodies: ["language discovery"], purpose: "Load languages"
+            ) {
+                let response = try await ServiceHTTP.json(
+                    server.authorizedRequest("api/platform/capabilities"),
+                    trace: .init(provider: provider.name, data: "language list request"))
+                guard response["protocolVersion"] as? Int == 1 else {
+                    throw ServiceError(
+                        "This website does not support language discovery. Update the Gday Meetings website.")
+                }
+                return try parseLanguages(response["transcriptionLanguages"], source: provider.name)
             }
-            return try parseLanguages(response["transcriptionLanguages"], source: provider.name)
         case .runpod:
             throw ServiceError("RunPod languages are built in and are not loaded.")
         case .openAICompatible, .filedrop:

@@ -77,17 +77,18 @@ extension ServiceHTTP {
     /// Log one request for the entire stream; do not log meeting content or chunks.
     static func consumeStream<T>(
         _ request: URLRequest, trace: NetworkTrace,
-        consume: (URLSession.AsyncBytes, URLResponse) async throws -> T
+        consume: (URLSession.AsyncBytes, URLResponse) async throws -> (value: T, receivedBytes: Int)
     ) async throws -> T {
         do {
             let (bytes, response) = try await session.bytes(for: request)
             // Breaking on [DONE] or throwing must stop a connection left open by a provider.
             defer { bytes.task.cancel() }
             let result = try await consume(bytes, response)
+            ProviderDataOperation.metrics?.record(sent: request.httpBody?.count ?? 0, received: result.receivedBytes)
             NetworkLog.record(
                 trace, request: request, bytesSent: request.httpBody?.count ?? 0,
                 outcome: NetworkLog.outcome(response), failed: false)
-            return result
+            return result.value
         }
         catch {
             NetworkLog.record(
@@ -144,13 +145,15 @@ extension LLMService {
                 else { throw ServiceError("The AI provider returned no message.") }
                 try Task.checkCancellation()
                 await onPartial(text)
-                return text
+                return (text, data.count)
             }
             var decoder = CompletionEventDecoder()
+            var receivedBytes = 0
             var lastUpdate = ContinuousClock.now
             var hasPublished = false
             for try await byte in bytes {
                 try Task.checkCancellation()
+                receivedBytes += 1
                 if try decoder.receive(byte) {
                     let now = ContinuousClock.now
                     // Re-render at most ten times per second, except the first chunk.
@@ -165,7 +168,7 @@ extension LLMService {
             try Task.checkCancellation()
             let result = try decoder.result()
             await onPartial(result)
-            return result
+            return (result, receivedBytes)
         }
     }
 }

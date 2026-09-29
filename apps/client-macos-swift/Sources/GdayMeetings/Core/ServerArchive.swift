@@ -148,6 +148,7 @@ extension MeetingStore {
                         // Retain converted bytes so retries use the identical hash and server snapshot.
                         if !FileManager.default.fileExists(atPath: source.path) {
                             try FileManager.default.copyItem(at: prepared.url, to: source)
+                            DataEventJournal.recordCreatedFile(source, directory: folder)
                         }
                         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.path)
                     }
@@ -198,7 +199,9 @@ extension MeetingStore {
                 }
                 setJobProgress(
                     .archive, .meeting(id), "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…")
-                checkpoint.audio[index].url = try await server.upload(file: source)
+                let uploadResult = try await server.upload(file: source)
+                recordDataFlow(uploadResult.dataFlow, meetingID: id)
+                checkpoint.audio[index].url = uploadResult.value
                 try Self.saveArchive(checkpoint, to: checkpointURL)
             }
             guard var body = try JSONSerialization.jsonObject(with: checkpoint.snapshot) as? [String: Any],
@@ -210,9 +213,11 @@ extension MeetingStore {
                     as [String: Any]
             }
             setJobProgress(.archive, .meeting(id), "Saving the archive to the server…")
-            _ = try await server.importArchive(body)
+            let imported = try await server.importArchive(body)
+            recordDataFlow(imported.dataFlow, meetingID: id)
             setJobProgress(.archive, .meeting(id), "Verifying the archived meeting and audio…")
-            let verified = try await server.verifyArchive(externalID: checkpoint.externalID)
+            let verification = try await server.verifyArchive(externalID: checkpoint.externalID)
+            let verified = verification.value
             guard verified["importKey"] as? String == checkpoint.importKey,
                 verified["audioCount"] as? Int == checkpoint.audio.count,
                 verified["artifactCount"] as? Int == artifacts.count
@@ -220,6 +225,7 @@ extension MeetingStore {
                 throw ServiceError(
                     "The server archive could not be verified. Local files have been preserved; retry to verify.")
             }
+            recordDataFlow(verification.dataFlow, meetingID: id, action: .received)
             checkpoint.verifiedAt = Date()
             try Self.saveArchive(checkpoint, to: checkpointURL)
             if checkpoint.omittedNoteImages == true {
@@ -233,9 +239,11 @@ extension MeetingStore {
         }
     }
     private static func saveArchive(_ checkpoint: ArchiveCheckpoint, to url: URL) throws {
+        let previous = try? Data(contentsOf: url)
         let bytes = try JSONEncoder().encode(checkpoint)
         try bytes.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        DataEventJournal.recordSavedFile(url, previous: previous)
     }
     private nonisolated static func archiveHash(_ url: URL) async throws -> (hash: String, size: UInt64) {
         let handle = try FileHandle(forReadingFrom: url)

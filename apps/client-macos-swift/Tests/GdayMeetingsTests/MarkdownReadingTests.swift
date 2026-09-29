@@ -4,6 +4,109 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MarkdownReadingTests {
+    @Test func codeButtonCursorSurvivesParentTrackingAndRestoresTextCursor() throws {
+        let previousCursor = NSCursor.current
+        defer { previousCursor.set() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        let text = MarkdownReadingTextView(usingTextLayoutManager: true)
+        text.frame = window.contentView!.bounds
+        text.isEditable = false
+        text.isSelectable = true
+        text.textContainer?.widthTracksTextView = true
+        text.textContainerInset = NSSize(width: 18, height: 16)
+        window.contentView = text
+        text.textStorage!.setAttributedString(
+            MarkdownReadingRenderer.render(
+                "```\nexample\n```\n\nOrdinary text.", timestamps: false, emptyMessage: "",
+                directory: URL(fileURLWithPath: "/tmp"), interactiveTasks: false))
+        text.refreshTaskRanges()
+        text.textLayoutManager?.ensureLayout(for: text.textLayoutManager!.documentRange)
+        let image = try #require(text.bitmapImageRepForCachingDisplay(in: text.bounds))
+        text.cacheDisplay(in: text.bounds, to: image)
+        let button = try #require(text.subviews.compactMap { $0 as? MarkdownActionButton }.first)
+        func event(at point: NSPoint) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: .mouseMoved, location: text.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        }
+        let overButton = try event(at: NSPoint(x: button.frame.midX, y: button.frame.midY))
+        // Both overlapping tracking areas can receive events in either order.
+        button.mouseMoved(with: overButton)
+        text.mouseMoved(with: overButton)
+        #expect(NSCursor.current.isEqual(NSCursor.pointingHand))
+        text.cursorUpdate(with: overButton)
+        button.cursorUpdate(with: overButton)
+        #expect(NSCursor.current.isEqual(NSCursor.pointingHand))
+        button.isEnabled = false
+        text.mouseMoved(with: overButton)
+        #expect(NSCursor.current.isEqual(NSCursor.arrow))
+        button.cursorUpdate(with: overButton)
+        #expect(NSCursor.current.isEqual(NSCursor.arrow))
+        let bodyRange = (text.string as NSString).range(of: "Ordinary")
+        let screen = text.firstRect(forCharacterRange: bodyRange, actualRange: nil)
+        let body = text.convert(window.convertFromScreen(screen), from: nil)
+        text.mouseMoved(with: try event(at: NSPoint(x: body.midX, y: body.midY)))
+        #expect(NSCursor.current.isEqual(NSCursor.iBeam))
+    }
+
+    @Test func fencedCodeKeepsRawBodyAndSourceCopyWithPaddedParagraphs() throws {
+        let source = "```json\n{\n  \"example\": true\n}\n```"
+        let rendered = MarkdownReadingRenderer.render(
+            source, timestamps: false, emptyMessage: "", directory: URL(fileURLWithPath: "/tmp"),
+            interactiveTasks: false)
+        #expect(rendered.string == "{\n  \"example\": true\n}\n")
+        #expect(
+            rendered.attribute(.markdownCodeBody, at: 0, effectiveRange: nil) as? String == "{\n  \"example\": true\n}")
+        #expect(rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+        let first = try #require(rendered.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        let middle = try #require(rendered.attribute(.paragraphStyle, at: 3, effectiveRange: nil) as? NSParagraphStyle)
+        let last = try #require(
+            rendered.attribute(.paragraphStyle, at: rendered.length - 1, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(first.paragraphSpacingBefore == 12)
+        #expect(middle.paragraphSpacingBefore == 0)
+        #expect(middle.firstLineHeadIndent == 12 && middle.headIndent == 12 && middle.tailIndent == -104)
+        #expect(last.paragraphSpacing == 22)
+        #expect(
+            MarkdownReadingSelectionCopy.markdown(
+                from: rendered, selection: NSRange(location: 0, length: rendered.length)) == source)
+        let partial = (rendered.string as NSString).range(of: "true")
+        #expect(MarkdownReadingSelectionCopy.markdown(from: rendered, selection: partial) == "```json\ntrue\n```")
+    }
+
+    @Test func fencedCodeBackgroundSpansContainerWithoutAddingCopyLabelsToText() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400), styleMask: [.titled], backing: .buffered,
+            defer: false)
+        let text = MarkdownReadingTextView(usingTextLayoutManager: true)
+        text.frame = window.contentView!.bounds
+        text.textContainer?.widthTracksTextView = true
+        text.textContainerInset = NSSize(width: 18, height: 16)
+        window.contentView = text
+        let source = "```\nexample\n```\n\n```\nexample\n```"
+        text.textStorage!.setAttributedString(
+            MarkdownReadingRenderer.render(
+                source, timestamps: false, emptyMessage: "", directory: URL(fileURLWithPath: "/tmp"),
+                interactiveTasks: false))
+        text.refreshTaskRanges()
+        text.textLayoutManager?.ensureLayout(for: text.textLayoutManager!.documentRange)
+        let regions = text.codeRegions()
+        #expect(regions.count == 2)
+        let first = try #require(regions.first)
+        let last = try #require(regions.last)
+        #expect(first.body == "example" && last.body == "example")
+        #expect(first.frame.width == text.bounds.width - text.textContainerOrigin.x * 2)
+        #expect(first.frame.minY >= 0)
+        #expect(text.textContainerInset.height == 16)
+        let screen = text.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil)
+        let codeStart = text.convert(window.convertFromScreen(screen), from: nil)
+        #expect(codeStart.minY - first.frame.minY == 8)
+        #expect(last.frame.minY >= first.frame.maxY)
+        #expect(!text.string.contains("Copy Code"))
+    }
+
     @Test func listMarkersFollowBodyColorAcrossAppearances() throws {
         let rendered = MarkdownReadingRenderer.render(
             "- Bullet item\n\n1. Numbered item", timestamps: false, emptyMessage: "",

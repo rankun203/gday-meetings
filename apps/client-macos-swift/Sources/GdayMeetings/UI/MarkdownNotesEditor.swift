@@ -291,7 +291,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             return true
         }
         while gutterButtons.count < labels.count {
-            let button = NSButton(title: "", target: self, action: #selector(playGutter(_:)))
+            let button = MarkdownActionButton(title: "", target: self, action: #selector(playGutter(_:)))
             button.isBordered = false
             button.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
             button.contentTintColor = .secondaryLabelColor
@@ -362,20 +362,27 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             }
         }
         let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        if let checkbox = taskMarker(at: index) {
+            let checked = (string as NSString).substring(with: checkbox).lowercased() == "[x]"
+            insertText(checked ? "[ ]" : "[x]", replacementRange: checkbox)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+    private static let taskMarkerExpression = try? NSRegularExpression(pattern: #"^\s*[-+*] (\[[ xX]\]) "#)
+    private func taskMarker(at index: Int) -> NSRange? {
+        guard isEditable else { return nil }
         let lineIndex = document.lineIndex(at: index)
+        guard document.lines.indices.contains(lineIndex) else { return nil }
         let line = document.lines[lineIndex].text as NSString
-        if isEditable, let expression = try? NSRegularExpression(pattern: #"^\s*[-+*] (\[[ xX]\]) "#),
+        if let expression = Self.taskMarkerExpression,
             let match = expression.firstMatch(in: line as String, range: NSRange(location: 0, length: line.length))
         {
             let checkbox = NSRange(
                 location: document.range(of: lineIndex).location + match.range(at: 1).location, length: 3)
-            if NSLocationInRange(index, checkbox) {
-                let checked = (string as NSString).substring(with: checkbox).lowercased() == "[x]"
-                insertText(checked ? "[ ]" : "[x]", replacementRange: checkbox)
-                return
-            }
+            if NSLocationInRange(index, checkbox) { return checkbox }
         }
-        super.mouseDown(with: event)
+        return nil
     }
     override func cursorUpdate(with event: NSEvent) {
         if updateImageCursor(event) { return }
@@ -426,7 +433,8 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         for button in gutterButtons {
             button.highlight(time != nil && button.tag == document.timedLine(for: document.lineIndex(at: index)))
         }
-        if time != nil {
+        let overButton = gutterButtons.contains { !$0.isHidden && $0.isEnabled && $0.frame.contains(position) }
+        if time != nil || overButton || taskMarker(at: index) != nil {
             NSCursor.pointingHand.set()
         }
         else {

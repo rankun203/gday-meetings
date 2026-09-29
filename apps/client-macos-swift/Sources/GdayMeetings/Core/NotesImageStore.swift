@@ -119,6 +119,7 @@ enum NotesImageStore {
                 throw MeetingError.message("Couldn’t save the image. Check available storage.")
             }
             try FileManager.default.moveItem(at: temporary, to: target)
+            DataEventJournal.recordCreatedFile(target, directory: directory)
             return path
         }
     }

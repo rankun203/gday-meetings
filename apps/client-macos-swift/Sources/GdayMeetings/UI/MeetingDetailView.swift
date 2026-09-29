@@ -5,7 +5,6 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var playback: MeetingPlayback
     let meetingID: UUID
     @ViewState private var tab = 0
-    @ViewState private var chatDraft = ""
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
@@ -136,16 +135,7 @@ struct MeetingDetailView: View {
                 MeetingTranscriptView(meetingID: meetingID)
             }
         case 1:
-            VStack(alignment: .leading, spacing: 10) {
-                if store.recordingID == meetingID {
-                    HStack {
-                        Text("Meeting Notes").font(.headline)
-                        Spacer()
-                        Text("Saved as you type").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                MeetingNotesWorkspace(meetingID: meetingID)
-            }
+            MeetingNotesWorkspace(meetingID: meetingID)
         case 2:
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -153,6 +143,7 @@ struct MeetingDetailView: View {
                     Spacer()
                     Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles")
                     { Task { await store.summarize(id: meetingID) } }
+                    .modifier(MarkdownControlCursor())
                     .disabled(
                         store.isJobRunning(.summary, .meeting(meetingID))
                             || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
@@ -172,45 +163,10 @@ struct MeetingDetailView: View {
                     RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
 
             }
-        default: chat(meeting)
+        default: MeetingDataPrivacyView(meetingID: meetingID)
         }
     }
 
-    private func chat(_ meeting: Meeting) -> some View {
-        VStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        if meeting.chat.isEmpty {
-                            Text("Ask questions about this meeting. Your transcript and notes provide context.")
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(meeting.chat) { message in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(message.role == "user" ? "You" : "Gday").font(.headline)
-                                Text(message.content).textSelection(.enabled)
-                            }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
-                        }
-                    }.padding(6)
-                }.onChange(of: meeting.chat.count) { _, _ in
-                    if let id = meeting.chat.last?.id { proxy.scrollTo(id, anchor: .bottom) }
-                }
-            }
-            HStack(alignment: .bottom) {
-                TextField("Ask about this meeting", text: $chatDraft, axis: .vertical).lineLimit(1...5).onSubmit(
-                    sendChat)
-                Button("Send", systemImage: "arrow.up", action: sendChat).disabled(
-                    store.isJobRunning(.chat, .meeting(meetingID))
-                        || chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-    private func sendChat() {
-        let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        chatDraft = ""
-        Task { await store.sendChat(id: meetingID, message: text) }
-    }
 }
 
 private func formatTime(_ seconds: Double) -> String {

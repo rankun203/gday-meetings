@@ -61,13 +61,13 @@ actor AppleLiveTranscription {
         return locale
     }
 
-    func start(
+    @discardableResult func start(
         locale: Locale, sources: [LiveAudioSource], sink: LiveAudioSink,
         boundaries: [LiveAudioSource: Double] = [:],
         receive: @escaping @Sendable (LiveTranscriptPhrase, Bool) async -> Void,
         gap: @escaping @Sendable (LiveTranscriptGap) async -> Void,
         failure: @escaping @Sendable (String) async -> Void
-    ) async throws {
+    ) async throws -> ProviderResult<Void> {
         try Task.checkCancellation()
         guard !cancelled else { throw CancellationError() }
         try await AppleSpeechAssets.shared.retain(locale)
@@ -172,6 +172,11 @@ actor AppleLiveTranscription {
         try Task.checkCancellation()
         guard !cancelled else { throw CancellationError() }
         sink.replace(queues)
+        return ProviderResult(
+            value: (),
+            dataFlow: DataFlow(
+                location: .local, targetName: "This Mac", startedAt: Date(),
+                bodies: sources.map(\.title), purpose: "Live transcription"))
     }
 
     func finish() async -> Bool {

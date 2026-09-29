@@ -45,7 +45,7 @@ extension MeetingStore {
             return entry.value
         }
         if let task = providerLanguageTasks[identity] {
-            let catalog = try await task.value
+            let catalog = try await task.value.value
             guard languageIdentity(for: provider.id) == identity else {
                 throw ServiceError("The provider settings changed. Load its languages again.")
             }
@@ -58,7 +58,7 @@ extension MeetingStore {
         providerLanguageTasks[identity] = task
         defer { providerLanguageTasks.removeValue(forKey: identity) }
         do {
-            let catalog = try await task.value
+            let catalog = try await task.value.value
             guard languageIdentity(for: provider.id) == identity else {
                 providerLanguageStates.removeValue(forKey: identity)
                 throw ServiceError("The provider settings changed. Load its languages again.")

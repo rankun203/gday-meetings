@@ -5,6 +5,65 @@ import Testing
 @testable import GdayMeetings
 
 struct TimedAudioWriterTests {
+    @Test func mutingSuppressesSavedAndLiveSamplesWithoutCollapsingTime() throws {
+        let url = temporaryWAV()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        let changedDevice = try #require(AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 2))
+        var liveStarts: [Double] = []
+        var liveValues: [Float] = []
+        let writer = try TimedAudioWriter(url: url, format: format, epoch: 20) { buffer, start in
+            liveStarts.append(start)
+            liveValues.append(buffer.floatChannelData![0][0])
+        }
+        try writer.append(try constant(format, frames: 800, values: [0.25]), hostSeconds: 20)
+        writer.setMuted(true)
+        // A rebuilt source can change formats while muted; no samples from it
+        // may reach the file or the live consumer, including on resumption.
+        try writer.append(try constant(changedDevice, frames: 3200, values: [0.9, 0.9]), hostSeconds: 20.1)
+        #expect(writer.isMuted)
+        writer.setMuted(false)
+        try writer.append(try constant(format, frames: 800, values: [0.5]), hostSeconds: 20.3)
+        try writer.finish()
+        let samples = try read(url)[0]
+        #expect(samples.count == 3200)
+        #expect(samples[800..<2400].allSatisfy { abs($0) < 0.0001 })
+        #expect(abs(samples[100] - 0.25) < 0.0001)
+        #expect(abs(samples[2500] - 0.5) < 0.0001)
+        #expect(liveStarts == [0, 0.1, 0.3])
+        #expect(liveValues == [0.25, 0, 0.5])
+        #expect(writer.capturedFrames == 3200)
+    }
+
+    @Test func mutedTrackRemainsIndependentAndCanFinishEntirelySilent() throws {
+        let mutedURL = temporaryWAV()
+        let otherURL = temporaryWAV()
+        defer {
+            try? FileManager.default.removeItem(at: mutedURL)
+            try? FileManager.default.removeItem(at: otherURL)
+        }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        var liveSamples: [Float] = []
+        let muted = try TimedAudioWriter(url: mutedURL, format: format, epoch: 0) { buffer, _ in
+            liveSamples += Array(
+                UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+        }
+        let other = try TimedAudioWriter(url: otherURL, format: format, epoch: 0)
+        muted.setMuted(true)
+        let buffer = try constant(format, frames: 800, values: [0.75])
+        try muted.append(buffer, hostSeconds: 0)
+        try other.append(buffer, hostSeconds: 0)
+        try muted.finish()
+        try other.finish()
+        #expect(liveSamples.count == 800)
+        #expect(liveSamples.allSatisfy { $0 == 0 })
+        #expect(muted.capturedFrames == 800)
+        #expect(try read(mutedURL)[0].allSatisfy { $0 == 0 })
+        #expect(try read(otherURL)[0].allSatisfy { abs($0 - 0.75) < 0.0001 })
+        // Muting never alters the capture buffer shared with other consumers.
+        #expect(buffer.floatChannelData![0][0] == 0.75)
+    }
+
     @Test func hostTimelinePadsGapsAndTrimsOverlaps() throws {
         let url = temporaryWAV()
         defer { try? FileManager.default.removeItem(at: url) }

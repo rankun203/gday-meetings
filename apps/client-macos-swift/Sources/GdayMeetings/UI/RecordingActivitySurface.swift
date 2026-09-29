@@ -202,7 +202,8 @@ final class RecordingLevelView: NSView {
         self.source = source
         self.saving = saving
         self.tint = tint
-        let receiving = !saving && source.enabled && source.hasSamples && !source.stale && !source.reconnecting
+        let receiving =
+            !saving && source.enabled && !source.muted && source.hasSamples && !source.stale && !source.reconnecting
         let status = saving ? (source.enabled ? "Finalizing" : "Not recorded") : source.statusText
         setAccessibilityLabel(title)
         setAccessibilityValue(receiving ? source.rmsDB : -120)

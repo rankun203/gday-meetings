@@ -29,59 +29,81 @@ extension GdayServerService {
             )
         }
     }
-    func upload(file: URL) async throws -> URL {
-        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size > 0, size <= 500_000_000 else {
-            throw ServiceError(
-                "Audio must be nonempty and no larger than 500 MB. Use M4A, Opus, or MP3 for long recordings.")
+    func upload(file: URL) async throws -> ProviderResult<URL> {
+        return try await ProviderDataOperation.perform(
+            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: [file.lastPathComponent],
+            purpose: "Audio upload"
+        ) {
+
+            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size > 0, size <= 500_000_000 else {
+                throw ServiceError(
+                    "Audio must be nonempty and no larger than 500 MB. Use M4A, Opus, or MP3 for long recordings.")
+            }
+            var r = try await authorizedRequest("upload")
+            var components = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "filename", value: file.lastPathComponent)]
+            r.url = components.url
+            r.httpMethod = "POST"
+            r.timeoutInterval = 900
+            r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await ServiceHTTP.upload(
+                for: r, fromFile: file, trace: Self.trace("recorded audio"))
+            let json = try ServiceHTTP.decode(data, response)
+            guard let value = json["url"] as? String, let url = URL(string: value, relativeTo: r.url)?.absoluteURL,
+                ServiceHTTP.sameOrigin(url, r.url!)
+            else { throw ServiceError("The uploaded audio URL is invalid or belongs to another server.") }
+            return url
+
         }
-        var r = try await authorizedRequest("upload")
-        var components = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "filename", value: file.lastPathComponent)]
-        r.url = components.url
-        r.httpMethod = "POST"
-        r.timeoutInterval = 900
-        r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await ServiceHTTP.upload(
-            for: r, fromFile: file, trace: Self.trace("recorded audio"))
-        let json = try ServiceHTTP.decode(data, response)
-        guard let value = json["url"] as? String, let url = URL(string: value, relativeTo: r.url)?.absoluteURL,
-            ServiceHTTP.sameOrigin(url, r.url!)
-        else { throw ServiceError("The uploaded audio URL is invalid or belongs to another server.") }
-        return url
     }
     func submit(
         externalID: String, title: String, inputs: [ServerTrackInput], language: String, diarize: Bool,
         idempotencyKey: String
-    ) async throws -> String {
-        try TranscriptionLanguage.validate(language)
-        guard !idempotencyKey.isEmpty else {
-            throw ServiceError("A durable transcription attempt requires an idempotency key.")
+    ) async throws -> ProviderResult<String> {
+        return try await ProviderDataOperation.perform(
+            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "",
+            bodies: inputs.map { $0.trackName + " audio link" } + ["metadata.json (title)", "content.json (language)"],
+            purpose: "Transcription submission"
+        ) {
+
+            try TranscriptionLanguage.validate(language)
+            guard !idempotencyKey.isEmpty else {
+                throw ServiceError("A durable transcription attempt requires an idempotency key.")
+            }
+            var r = try await authorizedRequest("api/platform/tasks")
+            r.httpMethod = "POST"
+            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            r.httpBody = try JSONSerialization.data(withJSONObject: [
+                "externalId": externalID, "title": title,
+                "inputs": inputs.map {
+                    [
+                        "url": $0.url.absoluteString, "trackName": $0.trackName, "sourceType": $0.sourceType,
+                        "channels": $0.channels,
+                    ] as [String: Any]
+                }, "executionOptions": ["language": language, "diarize": diarize], "idempotencyKey": idempotencyKey,
+            ])
+            let result = try await ServiceHTTP.json(
+                r, trace: Self.trace("transcription job (\(inputs.count) audio links, title, language)"))
+            guard let id = result["id"] as? String else {
+                throw ServiceError(
+                    "The server returned no task ID. Retry using the saved attempt to recover the same task.")
+            }
+            return id
+
         }
-        var r = try await authorizedRequest("api/platform/tasks")
-        r.httpMethod = "POST"
-        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try JSONSerialization.data(withJSONObject: [
-            "externalId": externalID, "title": title,
-            "inputs": inputs.map {
-                [
-                    "url": $0.url.absoluteString, "trackName": $0.trackName, "sourceType": $0.sourceType,
-                    "channels": $0.channels,
-                ] as [String: Any]
-            }, "executionOptions": ["language": language, "diarize": diarize], "idempotencyKey": idempotencyKey,
-        ])
-        let result = try await ServiceHTTP.json(
-            r, trace: Self.trace("transcription job (\(inputs.count) audio links, title, language)"))
-        guard let id = result["id"] as? String else {
-            throw ServiceError(
-                "The server returned no task ID. Retry using the saved attempt to recover the same task.")
-        }
-        return id
     }
-    func task(id: String) async throws -> ServerTaskResult {
-        var r = try await authorizedRequest("api/platform/tasks")
-        r.url = r.url!.appendingPathComponent(id)
-        return try Self.parseTask(await ServiceHTTP.json(r, trace: Self.trace("job status request")))
+    func task(id: String) async throws -> ProviderResult<ServerTaskResult> {
+        return try await ProviderDataOperation.perform(
+            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: ["transcript"],
+            purpose: "Transcription result"
+        ) {
+
+            var r = try await authorizedRequest("api/platform/tasks")
+            r.url = r.url!.appendingPathComponent(id)
+            return try Self.parseTask(await ServiceHTTP.json(r, trace: Self.trace("job status request")))
+
+        }
     }
     static func parseTask(_ result: [String: Any]) throws -> ServerTaskResult {
         guard let outputs = result["outputs"] as? [[String: Any]] else {
@@ -120,28 +142,52 @@ extension GdayServerService {
         }
         return capabilities["meetingImageArtifacts"] as? Bool == true
     }
-    func importArchive(_ body: [String: Any]) async throws -> [String: Any] {
-        try await ensureArchiveAvailable()
-        var r = try await authorizedRequest("api/platform/meetings/import")
-        r.httpMethod = "POST"
-        r.timeoutInterval = 900
-        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try ArchiveNoteImages.requestData(body)
-        let (data, response) = try await ServiceHTTP.data(
-            for: r, trace: Self.trace("meeting archive (text and \((body["audio"] as? [Any])?.count ?? 0) audio links)")
-        )
-        if (response as? HTTPURLResponse)?.statusCode == 409 {
-            throw ServiceError(
-                "The server already has this meeting with a different snapshot or transcription. Archives are immutable and cannot overwrite an existing meeting. Your local files are unchanged."
+    func importArchive(_ body: [String: Any]) async throws -> ProviderResult<[String: Any]> {
+        return try await ProviderDataOperation.perform(
+            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: Self.archiveDataBodies(body),
+            purpose: "Meeting archive"
+        ) {
+
+            try await ensureArchiveAvailable()
+            var r = try await authorizedRequest("api/platform/meetings/import")
+            r.httpMethod = "POST"
+            r.timeoutInterval = 900
+            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            r.httpBody = try ArchiveNoteImages.requestData(body)
+            let (data, response) = try await ServiceHTTP.data(
+                for: r,
+                trace: Self.trace("meeting archive (text and \((body["audio"] as? [Any])?.count ?? 0) audio links)")
             )
+            if (response as? HTTPURLResponse)?.statusCode == 409 {
+                throw ServiceError(
+                    "The server already has this meeting with a different snapshot or transcription. Archives are immutable and cannot overwrite an existing meeting. Your local files are unchanged."
+                )
+            }
+            return try ServiceHTTP.decode(data, response)
+
         }
-        return try ServiceHTTP.decode(data, response)
     }
-    func verifyArchive(externalID: String) async throws -> [String: Any] {
-        var r = try await authorizedRequest("api/platform/meetings/import")
-        r.url = r.url!.appendingPathComponent(externalID)
-        r.timeoutInterval = 900
-        return try await ServiceHTTP.json(r, trace: Self.trace("archive verification"))
+    nonisolated static func archiveDataBodies(_ body: [String: Any]) -> [String] {
+        let artifacts = (body["artifacts"] as? [String: Any] ?? [:]).keys.sorted().map {
+            $0 + " (archived snapshot in server-archive.json)"
+        }
+        let audio = (body["audio"] as? [[String: Any]] ?? []).compactMap { $0["filename"] as? String }.map {
+            $0 + " (audio download link)"
+        }
+        return ["server-archive.json (meeting metadata, people and tags)"] + artifacts + audio
+    }
+    func verifyArchive(externalID: String) async throws -> ProviderResult<[String: Any]> {
+        return try await ProviderDataOperation.perform(
+            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: ["archive verification"],
+            purpose: "Verify meeting archive"
+        ) {
+
+            var r = try await authorizedRequest("api/platform/meetings/import")
+            r.url = r.url!.appendingPathComponent(externalID)
+            r.timeoutInterval = 900
+            return try await ServiceHTTP.json(r, trace: Self.trace("archive verification"))
+
+        }
     }
     /// Server calls are not tied to one provider record; the website is the only one.
     nonisolated static func trace(_ data: String) -> NetworkTrace {

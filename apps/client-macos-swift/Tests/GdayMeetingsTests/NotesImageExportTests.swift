@@ -50,6 +50,30 @@ import Testing
         #expect(try Data(contentsOf: bundle.appendingPathComponent("info.json")) == invalidMetadata)
     }
 
+    @Test func exportHistoryRecordsPublishedFilesAndExcludesFailedStages() throws {
+        let (root, meeting) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outputFolder = root.appendingPathComponent("exports")
+        try FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
+        let output = outputFolder.appendingPathComponent("meeting.md")
+        try MeetingExport.write(meeting, directory: root, to: output)
+        let published = try DataEventJournal.read(directory: root)
+        let event = try #require(published.last)
+        #expect(event.action == .created)
+        #expect(event.dataFlow.purpose == "Markdown export")
+        #expect(
+            Set(event.dataFlow.bodies) == ["meeting.md", "meeting-assets/original.png", "meeting-assets/display.png"])
+        #expect(event.dataFlow.responseBytes == (try Data(contentsOf: output).count) + png.count * 2)
+        #expect(
+            !FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent(DataEventJournal.filename).path)
+        )
+        let blocked = outputFolder.appendingPathComponent("blocked.md")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        #expect(throws: (any Error).self) { try MeetingExport.write(meeting, directory: root, to: blocked) }
+        #expect(try DataEventJournal.read(directory: root) == published)
+        #expect(!FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent("blocked-assets").path))
+    }
+
     @Test func jsonSidecarRoundTripsThroughMeetingImportAndAvoidsExistingAssets() throws {
         let (root, meeting) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

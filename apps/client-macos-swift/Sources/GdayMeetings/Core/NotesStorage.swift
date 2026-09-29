@@ -43,6 +43,7 @@ final class NotesStorage {
     func write(_ id: UUID, text: String) throws {
         let file = url(id)
         if saved[id] == text, pending[id] == nil { return }
+        let previousBytes = try? Data(contentsOf: file)
         try FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
@@ -59,12 +60,15 @@ final class NotesStorage {
                 }
                 try Data(external.utf8).write(to: backup, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+                DataEventJournal.recordCreatedFile(backup, directory: file.deletingLastPathComponent())
             }
         }
         try NotesImageStore.ensurePreviews(in: text, directory: file.deletingLastPathComponent())
         try Data(text.utf8).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         saved[id] = text
+        do { try DataEventJournal.fileChanged(file, previous: previousBytes) }
+        catch { onError?(error) }
         try NotesImageStore.cleanupManagedPreviews(in: text, directory: file.deletingLastPathComponent())
     }
     func discard(_ id: UUID) {

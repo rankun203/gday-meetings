@@ -153,6 +153,7 @@ enum ServiceHTTP {
     ) async throws -> (Data, URLResponse) {
         do {
             let result = try await send()
+            ProviderDataOperation.metrics?.record(sent: bytesSent, received: result.0.count)
             let status = (result.1 as? HTTPURLResponse)?.statusCode ?? 0
             NetworkLog.record(
                 trace, request: request, bytesSent: bytesSent, outcome: NetworkLog.outcome(result.1),

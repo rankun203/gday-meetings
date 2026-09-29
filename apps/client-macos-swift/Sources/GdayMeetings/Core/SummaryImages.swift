@@ -77,9 +77,9 @@ enum SummaryImages {
         var models = providerModelCache.entry(providerID: provider.id, fingerprint: fingerprint)?.value ?? []
         if SummaryImageSupport.resolve(provider, models: models) == nil {
             if let fetched = try? await ProviderModelList.fetch(provider) {
-                models = fetched
+                models = fetched.value
                 providerModelCache.store(
-                    .init(providerID: provider.id, fingerprint: fingerprint, value: fetched, fetchedAt: Date()),
+                    .init(providerID: provider.id, fingerprint: fingerprint, value: fetched.value, fetchedAt: Date()),
                     keeping: Set(settings.serviceProviders.map(\.id)))
             }
         }

@@ -62,6 +62,7 @@ enum PrivateTranscriptFile {
             attributes: [.posixPermissions: 0o700])
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let target = directory.appendingPathComponent(name)
+        let previous = try? Data(contentsOf: target)
         let temporary = directory.appendingPathComponent(".transcript-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temporary) }
         guard
@@ -77,6 +78,7 @@ enum PrivateTranscriptFile {
         else {
             try FileManager.default.moveItem(at: temporary, to: target)
         }
+        DataEventJournal.recordSavedFile(target, previous: previous, directory: directory)
     }
 }
 

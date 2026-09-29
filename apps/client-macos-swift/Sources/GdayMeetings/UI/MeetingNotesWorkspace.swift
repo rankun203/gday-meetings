@@ -7,8 +7,14 @@ struct MeetingNotesWorkspace: View {
     @ViewState private var reading = false
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
+            HStack(spacing: 10) {
+                if store.recordingID == meetingID {
+                    Text("Meeting Notes").font(.headline)
+                }
                 Spacer()
+                if store.recordingID == meetingID {
+                    Text("Saved as you type").font(.caption).foregroundStyle(.secondary)
+                }
                 Picker(
                     "Notes View",
                     selection: Binding(
@@ -24,6 +30,7 @@ struct MeetingNotesWorkspace: View {
                 .labelsHidden()
                 .frame(width: 76)
                 .accessibilityLabel("Notes View")
+                .modifier(MarkdownControlCursor())
             }
             ZStack {
                 MeetingNotesEditor(meetingID: meetingID, showsPanelBorder: false, editingEnabled: !reading)

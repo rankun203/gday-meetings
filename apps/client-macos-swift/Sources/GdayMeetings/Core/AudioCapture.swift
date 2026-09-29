@@ -1188,12 +1188,20 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         if resumed { publishHealth() }
     }
 
+    func setMuted(_ muted: Bool, microphone: Bool) {
+        (microphone ? microphoneWriter : systemWriter)?.setMuted(muted)
+    }
+
     private func levelSnapshot() -> RecordingLevels {
         let now = ProcessInfo.processInfo.systemUptime
+        let microphoneMuted = microphoneWriter?.isMuted ?? false
+        let systemMuted = systemWriter?.isMuted ?? false
         let microphoneState = microphoneRecovery?.state
         let systemState = systemRecovery?.state
         return locked {
             var snapshot = levels
+            snapshot.microphone.muted = microphoneMuted
+            snapshot.system.muted = systemMuted
             if now - microphoneDelivery.last > 1 { snapshot.microphone.stale = true }
             if now - systemDelivery.last > 1 { snapshot.system.stale = true }
             snapshot.microphone.reconnecting =
@@ -1440,6 +1448,7 @@ struct RecordingMicrophoneStatus: Equatable {
 }
 struct RecordingSourceLevel: Equatable {
     var enabled = false
+    var muted = false
     var hasSamples = false
     var stale = false
     /// The source's device is being replaced; earlier levels no longer apply.
@@ -1448,9 +1457,12 @@ struct RecordingSourceLevel: Equatable {
     var switchingTo: String?
     var rmsDB: Double = -120
     var peakDB: Double = -120
-    var level: Double { enabled && hasSamples && !stale && !reconnecting ? min(1, max(0, (rmsDB + 60) / 60)) : 0 }
+    var level: Double {
+        enabled && !muted && hasSamples && !stale && !reconnecting ? min(1, max(0, (rmsDB + 60) / 60)) : 0
+    }
     var statusText: String {
         if !enabled { return "Not recording" }
+        if muted { return "Muted" }
         if reconnecting { return switchingTo.map { "Switching to \($0)…" } ?? "Reconnecting…" }
         if !hasSamples { return "Waiting for audio" }
         if stale { return "No recent audio" }

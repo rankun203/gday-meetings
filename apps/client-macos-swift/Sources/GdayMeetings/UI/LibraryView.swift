@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum LibraryDestination: Hashable { case meetings, people, tags, tasks }
+private enum LibraryDestination: Hashable { case meetings, people, tags, tasks, agents }
 
 struct LibraryView: View {
     /// Splits after the first sentence; a single-sentence message has no body.
@@ -123,6 +123,8 @@ struct LibraryView: View {
                             Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                             Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
                             Label("Tasks", systemImage: "list.bullet.rectangle").tag(LibraryDestination.tasks)
+                            Label("Agents", systemImage: "bubble.left.and.text.bubble.right").tag(
+                                LibraryDestination.agents)
                         }
                         .opacity(sidebarRowsVisible ? 1 : 0)
                         .animation(nil, value: sidebarRowsVisible)
@@ -141,6 +143,10 @@ struct LibraryView: View {
                 .clipped()
                 if destination == .tasks {
                     TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                else if destination == .agents {
+                    AgentsView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 else {
@@ -374,6 +380,7 @@ struct LibraryView: View {
         case .people: "People"
         case .tags: "Tags"
         case .tasks: "Tasks"
+        case .agents: "Agents"
         default: "Meetings"
         }
     }

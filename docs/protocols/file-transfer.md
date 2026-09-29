@@ -33,7 +33,7 @@ Validate that returned URLs use the expected destination and transport before pa
 
 ## Swift interface
 
-`FileTransferProvider.upload(file:)` returns `FiledropUpload`, containing the download URL and expiry time. The `fileTransfer` capability identifies providers that can supply this transport. `uploadProviderID` links a RunPod provider to its selected transfer provider.
+`FileTransferProvider.upload(file:)` returns `ProviderResult<FiledropUpload>`. Its value contains the download URL and expiry time, and its required `dataFlow` receipt records the destination, filename, transfer sizes, and timing without retaining the signed URL. The `fileTransfer` capability identifies providers that can supply this transport. `uploadProviderID` links a RunPod provider to its selected transfer provider.
 
 ## Filedrop adapter
 

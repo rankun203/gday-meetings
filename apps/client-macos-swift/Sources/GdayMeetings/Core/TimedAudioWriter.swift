@@ -103,6 +103,23 @@ final class TimedAudioWriter {
     private let voiceProcessed: Bool
     private var failure: Error?
     private var finished = false
+    private var muted = false
+
+    var isMuted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return muted
+    }
+
+    /// Shares the append lock: once this returns no later append can send muted
+    /// samples to either the file or the aligned live-transcription consumer.
+    func setMuted(_ value: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        muted = value
+        // Never carry pre-mute resampler history into the next audible buffer.
+        converterNeedsReset = true
+    }
     private let alignedAudio: ((AVAudioPCMBuffer, Double) -> Void)?
     /// Silence runs in track frames; contiguous padding extends the last run.
     private var gapRuns: [(start: Int64, frames: Int64)] = []
@@ -190,6 +207,17 @@ final class TimedAudioWriter {
         guard let file else { return }
         do {
             let target = try Self.targetFrame(hostSeconds: hostSeconds, epoch: epoch, sampleRate: format.sampleRate)
+            if muted {
+                let end = try Self.targetFrame(
+                    hostSeconds: hostSeconds + Double(buffer.frameLength) / buffer.format.sampleRate,
+                    epoch: epoch, sampleRate: format.sampleRate)
+                let before = framesWritten
+                try padLocked(file, through: end, forwardSilence: true)
+                // A deliberately muted source is healthy even if the entire
+                // recording is silent. Keep no-audio detection about delivery.
+                sourceFrames += max(0, framesWritten - max(before, target))
+                return
+            }
             // Pad first so a converter reset after an outage applies to this buffer.
             try padLocked(file, through: target)
             let samples = buffer.format == format ? buffer : try convertLocked(buffer)
@@ -284,9 +312,9 @@ final class TimedAudioWriter {
 
     /// Writes silence in fixed chunks from the preallocated buffer, so memory does not grow with
     /// outage length. Must be called with `lock` held.
-    private func padLocked(_ file: ExtAudioFileRef, through target: Int64) throws {
+    private func padLocked(_ file: ExtAudioFileRef, through target: Int64, forwardSilence: Bool = false) throws {
         var gap = target - framesWritten
-        guard gap > tolerance else { return }
+        guard gap > (forwardSilence ? 0 : tolerance) else { return }
         if let last = gapRuns.last, last.start + last.frames == framesWritten {
             // Nothing was written since the previous padding: one outage, one gap.
             gapRuns[gapRuns.count - 1].frames += gap
@@ -300,7 +328,13 @@ final class TimedAudioWriter {
             // Beyond one second in a single call, yield so the background writer drains the ring;
             // periodic padSilence calls keep normal outages below this threshold.
             if burst >= Int64(format.sampleRate) { usleep(1000) }
+            silence.frameLength = count
             try Self.check(ExtAudioFileWriteAsync(file, count, silence.audioBufferList))
+            if forwardSilence {
+                // Intentional mute is silence, not missing coverage. Keep live
+                // recognition timestamps advancing without sending captured PCM.
+                alignedAudio?(silence, Double(framesWritten) / format.sampleRate)
+            }
             framesWritten += Int64(count)
             burst += Int64(count)
             gap -= Int64(count)

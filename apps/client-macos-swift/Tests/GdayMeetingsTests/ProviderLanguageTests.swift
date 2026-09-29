@@ -3,6 +3,15 @@ import Testing
 
 @testable import GdayMeetings
 
+func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> ProviderResult<ProviderLanguageCatalog> {
+    let now = Date()
+    return ProviderResult(
+        value: ProviderLanguageCatalog(languages: languages, source: source),
+        dataFlow: DataFlow(
+            location: .remote, targetName: source, domain: "example.test", requestBytes: 0, responseBytes: 32,
+            startedAt: now, endedAt: now, bodies: ["language discovery"], purpose: "Load languages"))
+}
+
 @MainActor struct ProviderLanguageTests {
     private func makeStore() -> MeetingStore {
         MeetingStore(dataDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
@@ -25,7 +34,7 @@ import Testing
         store.providerLanguageLoader = { selected in
             calls += 1
             let code = selected.id == first.id ? "ja" : "zh"
-            return ProviderLanguageCatalog(languages: [.init(code: code, name: code)], source: selected.name)
+            return syntheticLanguageResult(languages: [.init(code: code, name: code)], source: selected.name)
         }
         await store.refreshProviderLanguages(providerID: first.id)
         await store.refreshProviderLanguages(providerID: second.id)
@@ -65,16 +74,21 @@ import Testing
         let selected = provider("Website")
         let first = MeetingStore(dataDirectory: directory)
         first.settings.serviceProviders = [selected]
+        let meetingID = first.createMeeting(title: "Synthetic meeting")
+        let eventsBefore = try DataEventJournal.read(directory: first.directory(for: meetingID))
         var jobs = 0
         first.providerLanguageLoader = { _ in
             jobs += 1
-            return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
+            return syntheticLanguageResult(languages: [.init(code: "en", name: "English")], source: "Worker")
         }
         // Without a saved list, reading provider support must not send a request.
         #expect(first.languageState(for: selected.id) == .idle)
         #expect(jobs == 0)
         await first.refreshProviderLanguages(providerID: selected.id)
         #expect(jobs == 1)
+        // Discovery sends no meeting content, so its receipt must not enter a
+        // meeting's data-flow history or be mistaken for a meeting transfer.
+        #expect(try DataEventJournal.read(directory: first.directory(for: meetingID)) == eventsBefore)
 
         // A later launch reads the saved list; validation sends no request.
         let second = MeetingStore(dataDirectory: directory)
@@ -154,7 +168,7 @@ import Testing
         var calls = 0
         store.providerLanguageLoader = { _ in
             calls += 1
-            return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
+            return syntheticLanguageResult(languages: [.init(code: "en", name: "English")], source: "Worker")
         }
         try await store.validateTranscriptionLanguage("en", for: selected)
         try await store.validateTranscriptionLanguage("en", for: selected)
@@ -166,7 +180,7 @@ import Testing
         let selected = provider("Japanese")
         store.settings.serviceProviders = [selected]
         store.providerLanguageLoader = { _ in
-            ProviderLanguageCatalog(languages: [.init(code: "ja", name: "Japanese")], source: "Worker")
+            syntheticLanguageResult(languages: [.init(code: "ja", name: "Japanese")], source: "Worker")
         }
         let id = store.createMeeting(title: "English meeting", language: "en")
         do {
@@ -237,7 +251,7 @@ import Testing
         let store = makeStore()
         var selected = provider("Changing")
         store.settings.serviceProviders = [selected]
-        var continuation: CheckedContinuation<ProviderLanguageCatalog, Error>?
+        var continuation: CheckedContinuation<ProviderResult<ProviderLanguageCatalog>, Error>?
         store.providerLanguageLoader = { _ in
             try await withCheckedThrowingContinuation { continuation = $0 }
         }
@@ -250,7 +264,7 @@ import Testing
         selected.endpoint += "/changed"
         store.settings.serviceProviders[0] = selected
         pending.resume(
-            returning: ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Old"))
+            returning: syntheticLanguageResult(languages: [.init(code: "en", name: "English")], source: "Old"))
         for task in [first, second] {
             do {
                 try await task.value

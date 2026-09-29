@@ -24,10 +24,15 @@ enum ProviderModelList {
         return ProviderEndpoint.authorized(url, key: provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    static func fetch(_ provider: ServiceProvider) async throws -> [ProviderModel] {
-        let response = try await ServiceHTTP.json(
-            request(provider), trace: .init(provider: provider.name, data: "model list"))
-        return try parse(response)
+    static func fetch(_ provider: ServiceProvider) async throws -> ProviderResult<[ProviderModel]> {
+        try await ProviderDataOperation.perform(
+            target: provider.name, endpoint: provider.endpoint,
+            bodies: ["model discovery"], purpose: "Load models"
+        ) {
+            let response = try await ServiceHTTP.json(
+                request(provider), trace: .init(provider: provider.name, data: "model list"))
+            return try parse(response)
+        }
     }
 
     /// Skips malformed entries instead of rejecting the list: compatible servers vary,

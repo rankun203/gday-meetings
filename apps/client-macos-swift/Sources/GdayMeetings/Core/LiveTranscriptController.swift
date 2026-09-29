@@ -19,6 +19,7 @@ final class LiveTranscriptController: ObservableObject {
     private var pendingFinalizations: [UUID: Task<Bool, Never>] = [:]
     private var finalizationFailed = false
     private var ready = false
+    private var dataEvents: [UUID: MeetingDataEvent] = [:]
     private var cancelProvider: (() async -> Void)?
 
     func begin(
@@ -105,7 +106,7 @@ final class LiveTranscriptController: ObservableObject {
                 }
                 guard generation == token, !Task.isCancelled else { return }
                 self.draft?.locale = locale.identifier
-                try await provider.start(
+                let result = try await provider.start(
                     locale: locale, sources: sources, sink: sink, boundaries: boundaries,
                     receive: { [weak self] phrase, final in await self?.receive(phrase, final: final, token: token) },
                     gap: { [weak self] gap in await self?.recordGap(gap, token: token) },
@@ -116,6 +117,12 @@ final class LiveTranscriptController: ObservableObject {
                 }
                 ready = true
                 status = "Listening · This Mac"
+                let event = MeetingDataEvent(action: .sent, dataFlow: result.dataFlow)
+                dataEvents[token] = event
+                if let directory {
+                    do { try DataEventJournal.append(event, directory: directory) }
+                    catch { status = "Listening · Couldn’t save the live transcription data event." }
+                }
             }
             catch {
                 await provider.cancel()
@@ -136,6 +143,7 @@ final class LiveTranscriptController: ObservableObject {
             if !finished, let cancel { Task { await cancel() } }
             acceptedGenerations.remove(token)
             if !finished { finalizationFailed = true }
+            closeDataEvent(token)
             pendingFinalizations.removeValue(forKey: token)
             return finished
         }
@@ -166,6 +174,7 @@ final class LiveTranscriptController: ObservableObject {
             status = "Live draft saved. The last phrase may be incomplete."
         }
         acceptedGenerations = []
+        closeDataEvent(generation)
         generation = UUID()
         partials = []
         checkpoint()
@@ -212,6 +221,12 @@ final class LiveTranscriptController: ObservableObject {
         guard let draft, let directory else { return }
         do { try draft.save(at: directory) }
         catch { status = "Couldn’t save the live draft. Recording continues. Check available storage." }
+    }
+    private func closeDataEvent(_ token: UUID) {
+        guard var event = dataEvents.removeValue(forKey: token), let directory else { return }
+        event.dataFlow.endedAt = Date()
+        do { try DataEventJournal.append(event, directory: directory) }
+        catch { status = "Couldn’t save the live transcription data event." }
     }
 }
 

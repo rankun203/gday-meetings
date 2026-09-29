@@ -33,8 +33,8 @@ final class MeetingStore: ObservableObject {
     lazy var providerModelCache = ProviderMetadataCache<[ProviderModel]>(
         directory: dataDirectory, fileName: "models.json",
         canWrite: { [unowned self] in self.canSave })
-    var providerLanguageTasks: [ProviderLanguageIdentity: Task<ProviderLanguageCatalog, Error>] = [:]
-    var providerLanguageLoader: @MainActor (ServiceProvider) async throws -> ProviderLanguageCatalog = {
+    var providerLanguageTasks: [ProviderLanguageIdentity: Task<ProviderResult<ProviderLanguageCatalog>, Error>] = [:]
+    var providerLanguageLoader: @MainActor (ServiceProvider) async throws -> ProviderResult<ProviderLanguageCatalog> = {
         try await ProviderLanguageService.catalog(for: $0)
     }
     @Published var recordingID: UUID?
@@ -56,6 +56,7 @@ final class MeetingStore: ObservableObject {
     var pendingAutomaticSummaries = Set<UUID>()
     var scheduledAutomaticSummaries = Set<UUID>()
     @Published var errorMessage: String?
+    private var dataEventWarnings: AnyCancellable?
     @Published var recordingPermissionNeeded: RecordingPermission?
     /// Capture diagnostics text. Not shown in the interface, so it is not published:
     /// a change must not re-render every view observing the store.
@@ -118,6 +119,14 @@ final class MeetingStore: ObservableObject {
             ?? preference.map { URL(fileURLWithPath: $0.path, isDirectory: true) } ?? LibraryLocation.directory()
         self.indexDirectory =
             preference == nil ? self.dataDirectory : LibraryFolderChoice.indexDirectory(for: self.dataDirectory)
+        dataEventWarnings = NotificationCenter.default.publisher(for: DataEventJournal.writeFailure)
+            .receive(on: DispatchQueue.main).sink { [weak self] notification in
+                guard let self, let folder = notification.object as? URL,
+                    folder.path.hasPrefix(self.dataDirectory.path + "/")
+                else { return }
+                self.errorMessage =
+                    "The file was saved, but its data event couldn’t be saved. Check the meeting folder’s permissions and available storage."
+            }
         do {
             if preferenceData != nil && preference == nil {
                 throw MeetingError.message(
@@ -195,6 +204,8 @@ final class MeetingStore: ObservableObject {
                 // A task-history error must not make the meeting library read-only.
                 errorMessage = "Couldn’t load saved tasks. \(error.localizedDescription)"
             }
+            do { try AgentGuides.ensure(directory: self.dataDirectory) }
+            catch { errorMessage = "Couldn’t prepare the library’s AGENTS.md. \(error.localizedDescription)" }
         }
         catch {
             canSave = false
@@ -277,6 +288,10 @@ final class MeetingStore: ObservableObject {
             let changed = meetings.filter { meeting in
                 lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting
             }
+            let dataEventBaselines = Dictionary(
+                uniqueKeysWithValues: changed.map { meeting in
+                    (meeting.id, DataEventJournal.documentSnapshot(directory: directory(for: meeting.id)))
+                })
             try notesStorage.flushAll()
             for meeting in changed where notesStorage.saved[meeting.id] != meeting.notes {
                 try notesStorage.write(meeting.id, text: meeting.notes)
@@ -339,6 +354,22 @@ final class MeetingStore: ObservableObject {
                     to: dataDirectory.appendingPathComponent("context-chats.json"), options: .atomic)
             }
             try transaction.commit()
+            for meeting in changed {
+                do {
+                    let folder = directory(for: meeting.id)
+                    try DataEventJournal.recordDocuments(
+                        directory: folder, previous: dataEventBaselines[meeting.id] ?? [:])
+                    let previousAudio = lastSavedLibrary.meetings.first { $0.id == meeting.id }?.audioFiles ?? []
+                    for name in meeting.audioFiles where !previousAudio.contains(name) {
+                        try DataEventJournal.fileSaved(
+                            folder.appendingPathComponent(name), action: .created, directory: folder)
+                    }
+                }
+                catch {
+                    errorMessage =
+                        "Files were saved, but their data events couldn’t be saved. \(error.localizedDescription)"
+                }
+            }
             do {
                 if !libraryDataStatus.isBuilding {
                     for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting)) }
@@ -694,8 +725,13 @@ final class MeetingStore: ObservableObject {
             capture.onLevels = { [weak self] levels, delivered in
                 Task { @MainActor in
                     defer { delivered() }
-                    if self?.recordingID == meeting.id && self?.isFinalizingRecording == false {
-                        self?.recordingMeter.deliver(levels)
+                    if let self, self.recordingID == meeting.id && !self.isFinalizingRecording {
+                        // A meter snapshot queued before a click must not undo
+                        // the source state already applied to the writer.
+                        var current = levels
+                        current.microphone.muted = self.recordingMeter.levels.microphone.muted
+                        current.system.muted = self.recordingMeter.levels.system.muted
+                        self.recordingMeter.deliver(current)
                     }
                 }
             }
@@ -724,6 +760,7 @@ final class MeetingStore: ObservableObject {
                 try? await capture.stop()
                 throw MeetingError.message(errorMessage ?? "Could not save recording metadata.")
             }
+            latestCreatedMeetingID = meeting.id
             recorder = capture
             recordingID = meeting.id
             recordingStartedAt = Date()
@@ -753,6 +790,20 @@ final class MeetingStore: ObservableObject {
     }
     /// The live Voice Processing switch; explicit for the rest of the recording.
     func setRecordingVoiceProcessing(_ enabled: Bool) { recorder?.setVoiceProcessing(enabled) }
+    func toggleRecordingMute(microphone: Bool) {
+        guard recordingID != nil, !isFinalizingRecording, recorder != nil || UIPreview.enabled else { return }
+        var levels = recordingMeter.levels
+        let source = microphone ? levels.microphone : levels.system
+        guard source.enabled else { return }
+        recorder?.setMuted(!source.muted, microphone: microphone)
+        if microphone {
+            levels.microphone.muted.toggle()
+        }
+        else {
+            levels.system.muted.toggle()
+        }
+        recordingMeter.deliver(levels)
+    }
     func stopRecording(transcribeAfter: Bool = true) async {
         _ = flushNotes()
         guard let id = recordingID else { return }
@@ -770,6 +821,19 @@ final class MeetingStore: ObservableObject {
                 ? error.localizedDescription
                 : "Couldn’t finish the recording. Audio captured before the problem is kept in this meeting. \(error.localizedDescription)"
             stopFailed = true
+        }
+        if !stopFailed, let meeting = meeting(id: id) {
+            for name in meeting.audioFiles {
+                do {
+                    let folder = directory(for: id)
+                    try DataEventJournal.fileSaved(
+                        folder.appendingPathComponent(name), action: .modified, directory: folder)
+                }
+                catch {
+                    errorMessage =
+                        "Audio was saved, but its data event couldn’t be saved. \(error.localizedDescription)"
+                }
+            }
         }
         await liveTranscript.finish()
         let profile = recorder?.profile

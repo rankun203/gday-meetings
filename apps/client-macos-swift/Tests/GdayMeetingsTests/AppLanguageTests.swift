@@ -66,7 +66,7 @@ struct AppLanguageTests {
         var requests = 0
         store.providerLanguageLoader = { _ in
             requests += 1
-            return .init(languages: [.init(code: "en-us", name: "English")], source: "Website")
+            return syntheticLanguageResult(languages: [.init(code: "en-us", name: "English")], source: "Website")
         }
         #expect(try await store.resolvedTranscriptionLanguage("en", for: provider) == "en-us")
         #expect(

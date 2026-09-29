@@ -8,6 +8,25 @@ import Testing
 
 struct RecordingMeterTests {
     @MainActor
+    @Test func mutePublishesSemanticStatusAndSuppressesLevel() {
+        let meter = RecordingMeterState()
+        var levels = RecordingLevels(
+            microphone: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -20),
+            system: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30))
+        meter.deliver(levels, at: 0)
+        levels.microphone.muted = true
+        meter.deliver(levels, at: 0.2)
+        #expect(meter.status.levels.microphone.muted)
+        #expect(meter.levels.microphone.level == 0)
+        #expect(meter.levels.microphone.statusText == "Muted")
+        #expect(meter.levels.system.level > 0)
+        levels.microphone.muted = false
+        meter.deliver(levels, at: 0.4)
+        #expect(!meter.status.levels.microphone.muted)
+        #expect(meter.levels.microphone.level > 0)
+    }
+
+    @MainActor
     @Test func meterTicksDoNotPublishLibraryChanges() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

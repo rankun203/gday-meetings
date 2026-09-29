@@ -46,6 +46,8 @@ enum MeetingExport {
     }
 
     static func write(_ meeting: Meeting, directory: URL, to url: URL) throws {
+        let started = Date()
+        let replacing = FileManager.default.fileExists(atPath: url.path)
         try NotesImageStore.ensurePreviews(in: meeting.notes, directory: directory)
         let files = try NotesAssets.referencedFiles(in: meeting.notes + "\n" + meeting.summary, directory: directory)
         let manager = FileManager.default
@@ -94,6 +96,11 @@ enum MeetingExport {
             else {
                 try manager.moveItem(at: stage, to: url)
             }
+            recordExport(
+                url, format: format,
+                files: [url.appendingPathComponent("text.markdown"), infoURL]
+                    + files.keys.sorted().map { url.appendingPathComponent($0) },
+                replacing: replacing, started: started, directory: directory)
             return
         }
         var paths: [String: String] = [:]
@@ -133,6 +140,28 @@ enum MeetingExport {
             if let sidecar { try? manager.removeItem(at: sidecar) }
             throw error
         }
+        recordExport(
+            url, format: format,
+            files: [url] + paths.values.sorted().map { parent.appendingPathComponent($0) },
+            replacing: replacing, started: started, directory: directory)
+    }
+
+    /// Record only the published output, after its staging and rollback boundaries.
+    private static func recordExport(
+        _ output: URL, format: MeetingExportFormat, files: [URL], replacing: Bool, started: Date, directory: URL
+    ) {
+        do {
+            let sizes = try files.map { try $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+            let parent = output.deletingLastPathComponent().path + "/"
+            let bodies = files.map { String($0.path.dropFirst(parent.count)) }
+            let flow = DataFlow(
+                location: .local, targetName: "This Mac",
+                responseBytes: sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(0, +) : nil,
+                startedAt: started, endedAt: Date(), bodies: bodies, purpose: "\(format.title) export")
+            try DataEventJournal.append(
+                MeetingDataEvent(action: replacing ? .modified : .created, dataFlow: flow), directory: directory)
+        }
+        catch { NotificationCenter.default.post(name: DataEventJournal.writeFailure, object: directory) }
     }
 
     private static func copy(_ files: [String: URL], to directory: URL) throws {

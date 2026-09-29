@@ -23,6 +23,7 @@ Read the relevant documents before changing the app:
 - [Audio dependencies](ThirdParty/README.md): pinned offline source builds, licenses, and dependency upgrades.
 - [Large-library storage design](../../docs/design/2026-09-27-large-library-storage.md): file authority, disposable indexing, folder discovery, and scale validation.
 - [Meeting list scrolling](../../docs/worklogs/2026-09-27-meeting-scroll-prefetch.md): viewport anchoring, anticipatory paging, and full-app validation.
+- [New recording list reveal](../../docs/worklogs/2026-09-29-recording-list-reveal.md): recording creation events, viewport anchoring, and synthetic insertion validation.
 - [File library implementation](../../docs/worklogs/2026-09-27-file-library-index.md): indexed paging, document transactions, and retained scalability limits.
 - [Expandable sections](../../docs/worklogs/2026-09-28-disclosure-rows.md): shared full-row disclosure interaction and validation.
 - [Transcript playback highlight](../../docs/worklogs/2026-09-28-transcript-playback-highlight.md): playback clock, seeking, hover, and speaker badge feedback.
@@ -47,7 +48,11 @@ Read the relevant documents before changing the app:
 - [Tag exclusion](../../docs/worklogs/2026-09-28-tag-exclusion.md): excluded meeting and person lists, person tags, and recovery controls.
 - [Summary task isolation](../../docs/worklogs/2026-09-28-summary-task-isolation.md): independent summary lifetime, incomplete responses, and paused playback route changes.
 - [Summary images](../../docs/worklogs/2026-09-28-summary-images.md): image capability settings, attachments, source links, and retention.
+- [Meeting data events](../../docs/worklogs/2026-09-29-meeting-data-events.md): provider receipts, per-meeting history, persistence, and validation.
+- [Agents page](../../docs/worklogs/2026-09-29-agents-page.md): saved library instructions, launch commands, and fenced-code presentation.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
+- [Recording source mute](../../docs/worklogs/2026-09-29-recording-source-mute.md): independent source controls, saved and live silence, and validation.
+- [Notes controls layout](../../docs/worklogs/2026-09-29-notes-controls-layout.md): recording header alignment, fixed source icon slots, and floating Markdown copy controls.
 
 Keep this index complete: whenever app documentation is added, moved, or renamed, update its link here in the same change. Every document under `docs/` must have a direct link from this file.
 

@@ -6,6 +6,49 @@ import Testing
 
 @MainActor @Suite(.serialized)
 struct MeetingPrefetchTests {
+    @Test func newRecordingRevealOverridesThePreviousViewportAnchor() throws {
+        _ = NSApplication.shared
+        let values = (0..<30).map { number in
+            MeetingListEntry(
+                Meeting(title: "Meeting \(number)", createdAt: Date(timeIntervalSince1970: Double(30 - number))))
+        }
+        var list = makeList(values)
+        let coordinator = list.makeCoordinator()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 450))
+        let table = MeetingNativeTable(frame: scroll.bounds)
+        table.style = .inset
+        table.headerView = nil
+        table.addTableColumn(NSTableColumn(identifier: .init("meeting")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.scroll = scroll
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        coordinator.update(list)
+        table.layoutSubtreeIfNeeded()
+        let originalOffset = scroll.contentView.bounds.minY
+        let recording = MeetingListEntry(Meeting(title: "Synthetic recording"))
+        list = makeList([recording] + values, selection: recording.id)
+        list.recordingID = recording.id
+        coordinator.update(list)
+        // Selection alone retains the old first row and leaves the recording above it.
+        #expect(scroll.contentView.bounds.minY > originalOffset + 40)
+        list.revealID = recording.id
+        coordinator.update(list)
+        #expect(table.selectedRow == 0)
+        #expect(scroll.contentView.bounds.minY <= table.rect(ofRow: 0).minY)
+        #expect(scroll.contentView.bounds.maxY >= table.rect(ofRow: 0).maxY)
+        let revealedOffset = scroll.contentView.bounds.minY
+        list.entries[0].title = "Updated synthetic recording"
+        list.isFinalizing = true
+        coordinator.update(list)
+        #expect(abs(scroll.contentView.bounds.minY - revealedOffset) < 0.5)
+    }
+
     @Test func nativeWindowRotationPreservesVisibleMeetingAndPixelOffset() throws {
         _ = NSApplication.shared
         let values = (0..<1200).map { number in
@@ -110,9 +153,9 @@ struct MeetingPrefetchTests {
             scroll.contentView.bounds.minY - table.rect(ofRow: row).minY
         )
     }
-    private func makeList(_ rows: [MeetingListEntry]) -> NativeMeetingList {
+    private func makeList(_ rows: [MeetingListEntry], selection: UUID? = nil) -> NativeMeetingList {
         NativeMeetingList(
-            entries: rows, selection: .constant(nil), recordingID: nil, isFinalizing: false,
+            entries: rows, selection: .constant(selection), recordingID: nil, isFinalizing: false,
             playingID: nil, isPlaying: false, canPlay: true, archiveStatuses: [:], viewportChanged: { _ in },
             play: { _ in }, reveal: { _ in }, export: { _ in }, delete: { _ in })
     }

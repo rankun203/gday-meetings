@@ -92,6 +92,12 @@ import Testing
         let request = try #require(server.requests.first)
         let json = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
         #expect(json["stream"] as? Bool == true)
+        let transfers = try DataEventJournal.read(directory: store.directory(for: id)).filter { $0.action == .sent }
+        #expect(transfers.count == 1)
+        let receipt = try #require(transfers.first?.dataFlow)
+        #expect(receipt.requestBytes == request.body.count)
+        #expect(receipt.responseBytes == (Self.first + Self.second + Self.end).utf8.count)
+        #expect(receipt.bodies.contains("notes.md"))
     }
 
     @Test(arguments: [false, true]) func cancellationAndTruncationKeepSavedSummary(cancel: Bool) async throws {
@@ -114,6 +120,7 @@ import Testing
         #expect(store.summaryDrafts[id] == nil)
         #expect(store.meetings[0].summary == "Saved summary")
         #expect(store.meetings[0].todos.isEmpty)
+        #expect(try DataEventJournal.read(directory: store.directory(for: id)).allSatisfy { $0.action != .sent })
     }
 
     @Test func streamCannotOverwriteSummaryChangedDuringRequest() async throws {
@@ -137,6 +144,8 @@ import Testing
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
         #expect(store.meetings[0].summary == "Changed elsewhere")
         #expect(store.summaryDrafts[id] == nil)
+        // The provider completed successfully even though newer local text prevented adoption.
+        #expect(try DataEventJournal.read(directory: store.directory(for: id)).filter { $0.action == .sent }.count == 1)
     }
 
     @Test func todoExtractionDefaultsOnAndPersistsOff() throws {

@@ -31,7 +31,7 @@ Empty responses, missing completion content, and malformed result objects are fa
 
 ## Swift interface
 
-`SummarizationProvider.summarize(transcript:instructions:)` returns text. The language-model adapter also accepts message arrays for the app's summaries and chat. The initial interface does not carry a persisted transcript version; the caller owns meeting selection and protection of edits. The app rejects a generated result if the summary, transcript, or notes changed during processing. The earlier saved summary is preserved. That rejected result is not retained; inputs do not yet have a persisted revision link.
+`SummarizationProvider.summarize(transcript:instructions:)` returns `ProviderResult<String>`, containing text and a required data-flow receipt. The language-model adapter also accepts message arrays for the app's summaries and chat. The interface does not carry a persisted transcript version; the caller owns meeting selection and protection of edits. The app rejects a generated result if the summary, transcript, or notes changed during processing. The earlier saved summary is preserved. That rejected text is not retained; its successful transfer receipt remains in the meeting's data history. Inputs do not yet have a persisted revision link.
 
 ## OpenAI-compatible adapter
 

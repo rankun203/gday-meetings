@@ -28,8 +28,10 @@ extension NotesImageStore {
     }
     private static func savePreviewIndex(_ index: PreviewIndex, directory: URL) throws {
         let file = try previewIndexURL(directory)
+        let previous = try? Data(contentsOf: file)
         try JSONEncoder().encode(index).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        DataEventJournal.recordSavedFile(file, previous: previous, directory: directory)
     }
     private static func originalVersion(_ path: String, directory: URL) throws -> String {
         let file = try NotesAssets.safeURL(relativePath: path, directory: directory)
@@ -65,9 +67,12 @@ extension NotesImageStore {
                 throw MeetingError.message("The image preview index contains an invalid path.")
             }
             let target = try NotesAssets.safeURL(relativePath: existing, directory: directory)
-            if (try? Data(contentsOf: target, options: .mappedIfSafe)) != bytes {
+            let previous = try? Data(contentsOf: target, options: .mappedIfSafe)
+            if previous != bytes {
                 try bytes.write(to: target, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                DataEventJournal.recordFile(
+                    target, action: previous == nil ? .created : .modified, directory: directory)
             }
         }
         else {

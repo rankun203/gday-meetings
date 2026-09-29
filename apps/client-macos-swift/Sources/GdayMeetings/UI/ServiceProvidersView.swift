@@ -396,10 +396,10 @@ private struct ServiceProviderPanel: View {
         do {
             let fetched = try await ProviderModelList.fetch(target)
             guard !Task.isCancelled else { return }
-            models = fetched
+            models = fetched.value
             modelListState = .loaded
             store.providerModelCache.store(
-                .init(providerID: target.id, fingerprint: fingerprint, value: fetched, fetchedAt: Date()),
+                .init(providerID: target.id, fingerprint: fingerprint, value: fetched.value, fetchedAt: Date()),
                 keeping: Set(store.settings.serviceProviders.map(\.id)))
         }
         catch {
@@ -534,7 +534,7 @@ private struct ServiceProviderPanel: View {
         isChecking = true
         checkTask = Task {
             do {
-                let detail = try await ProviderConnectionChecker.check(provider, server: server)
+                let detail = try await ProviderConnectionChecker.check(provider, server: server).value
                 guard !Task.isCancelled, checkID == token else { return }
                 status = detail
                 statusIcon = "checkmark.circle.fill"
@@ -565,7 +565,7 @@ private struct ServiceProviderPanel: View {
             return
         }
         do {
-            let detail = try await ProviderConnectionChecker.check(upload, server: server)
+            let detail = try await ProviderConnectionChecker.check(upload, server: server).value
             guard !Task.isCancelled, checkID == token else { return }
             uploadStatus = detail
             uploadStatusIcon = "checkmark.circle.fill"
