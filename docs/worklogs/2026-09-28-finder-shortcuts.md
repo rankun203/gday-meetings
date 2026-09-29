@@ -26,3 +26,9 @@ The release Preview build passed. The meeting context menu showed Reveal in Find
 # Technical debt
 
 None.
+
+## September 29: meeting-row shortcut
+
+The isolated preview confirmed the list uses native rows with unchanged selection styling. Command-hover now shows a pointing hand over a meeting row, including when Command changes while the pointer stays still. Command-click invokes the existing Finder reveal action for that row without changing selection or starting playback. Empty list space keeps the arrow cursor. Repeated clicks do not invoke double-click playback. The native event monitor is removed when the table leaves its window.
+
+Validation: the new native-event regression passed in both full runs. Those runs each encountered a different existing timing-sensitive failure (library indexing, then transcript hover); all 26 tests in the three affected suites passed together on the focused rerun. Preview build and lint passed, with the existing Command Line Tools missing linker-path warnings. The rebuilt preview confirmed ordinary selection and unchanged row geometry. Command-click and cursor transitions were tested through native events; automation cannot hold a modifier during a mouse click or hover. No additional technical debt.

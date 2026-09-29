@@ -6,6 +6,47 @@ import Testing
 
 @MainActor @Suite(.serialized)
 struct MeetingPrefetchTests {
+    @Test func commandClickRevealsPointedRowWithoutChangingSelection() throws {
+        _ = NSApplication.shared
+        let values = [MeetingListEntry(Meeting(title: "First")), MeetingListEntry(Meeting(title: "Second"))]
+        let list = makeList(values, selection: values[0].id)
+        let coordinator = list.makeCoordinator()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 450))
+        let table = MeetingNativeTable(frame: scroll.bounds)
+        table.headerView = nil
+        table.addTableColumn(NSTableColumn(identifier: .init("meeting")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.scroll = scroll
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        coordinator.update(list)
+        table.layoutSubtreeIfNeeded()
+        var revealed: [Int] = []
+        table.revealRow = { revealed.append($0) }
+        let point = NSPoint(x: 100, y: table.rect(ofRow: 1).midY)
+        table.updatePointer(at: point, modifiers: .command)
+        #expect(NSCursor.current == .pointingHand)
+        table.updatePointer(at: point, modifiers: [])
+        #expect(NSCursor.current == .arrow)
+        table.updatePointer(at: NSPoint(x: 100, y: 400), modifiers: .command)
+        #expect(NSCursor.current == .arrow)
+        for count in [1, 2] {
+            let event = try #require(
+                NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: table.convert(point, to: nil), modifierFlags: .command,
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: count,
+                    clickCount: count, pressure: 1))
+            table.mouseDown(with: event)
+        }
+        #expect(revealed == [1])
+        #expect(table.selectedRow == 0)
+    }
+
     @Test func newRecordingRevealOverridesThePreviousViewportAnchor() throws {
         _ = NSApplication.shared
         let values = (0..<30).map { number in

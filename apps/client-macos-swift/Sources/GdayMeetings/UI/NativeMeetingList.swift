@@ -47,6 +47,10 @@ struct NativeMeetingList: NSViewRepresentable {
             coordinator.requestDeletion(row: coordinator.table?.selectedRow ?? -1)
         }
         table.menuForRow = { [weak coordinator = context.coordinator] in coordinator?.menu(row: $0) }
+        table.revealRow = { [weak coordinator = context.coordinator] row in
+            guard let coordinator, coordinator.rows.indices.contains(row) else { return }
+            coordinator.parent.reveal(coordinator.rows[row].id)
+        }
         scroll.documentView = table
         context.coordinator.table = table
         context.coordinator.scroll = scroll
@@ -243,6 +247,57 @@ struct NativeMeetingList: NSViewRepresentable {
 final class MeetingNativeTable: NSTableView {
     var menuForRow: ((Int) -> NSMenu?)?
     var deleteSelected: (() -> Void)?
+    var revealRow: ((Int) -> Void)?
+    private var cursorTracking: NSTrackingArea?
+    private var modifierMonitor: Any?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
+        modifierMonitor = nil
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow != nil {
+            modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard let self, let window = self.window, window.isKeyWindow else { return event }
+                let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                if self.visibleRect.contains(point) {
+                    self.updatePointer(at: point, modifiers: event.modifierFlags)
+                }
+                return event
+            }
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorTracking { removeTrackingArea(cursorTracking) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        cursorTracking = area
+        addTrackingArea(area)
+    }
+
+    func updatePointer(at point: NSPoint, modifiers: NSEvent.ModifierFlags) {
+        let canReveal = visibleRect.contains(point) && row(at: point) >= 0 && modifiers.contains(.command)
+        (canReveal ? NSCursor.pointingHand : NSCursor.arrow).set()
+    }
+
+    override func mouseEntered(with event: NSEvent) { cursorUpdate(with: event) }
+    override func mouseMoved(with event: NSEvent) { cursorUpdate(with: event) }
+    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
+    override func cursorUpdate(with event: NSEvent) {
+        updatePointer(at: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let clickedRow = row(at: convert(event.locationInWindow, from: nil))
+        if event.modifierFlags.contains(.command), clickedRow >= 0 {
+            if event.clickCount == 1 { revealRow?(clickedRow) }
+            return
+        }
+        super.mouseDown(with: event)
+    }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 51 || event.keyCode == 117,
             event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
