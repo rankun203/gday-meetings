@@ -49,3 +49,7 @@ The existing capsule navigation remains intact with a fifth tab. Details stay co
 Source mute behavior and recording-list anchoring are separate changes with their own worklogs. These events describe data movement, not provider retention policies or proof of remote deletion.
 
 Final review corrected summary and transcription receipts to reference `content.json` for language and expanded archive receipts to list snapshot artifacts and audio filenames without signed URLs. Both cases have regression coverage; the final suite passed all 467 tests in 89 suites.
+
+## Empty-state layout
+
+An isolated preview with its synthetic journals temporarily moved aside reproduced the left-shifted empty state. The unavailable-content view retained its intrinsic width inside a leading-aligned stack. It now fills and centers in the space below the header. The title and Reveal Meeting Folder action retain one full-width horizontal row; the action keeps its intrinsic size to avoid wrapping. The outer pane fills available width and height. No added technical debt. Validation: the rebuilt isolated preview confirms the empty-state center aligns with the content-pane center, and the title and folder action remain on one row. Build, formatting, lint, and whitespace checks passed. Existing Command Line Tools linker-path warnings remain. Synthetic journals were restored after verification. No new tests were added for this layout-only change; persistence and event processing are unchanged.

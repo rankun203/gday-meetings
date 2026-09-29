@@ -10,13 +10,15 @@ struct MeetingDataPrivacyView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(alignment: .center) {
                 Text("Data Privacy").font(.headline)
                 Spacer()
                 Button("Reveal Meeting Folder", systemImage: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: meetingID)])
                 }
+                .fixedSize()
             }
+            .frame(maxWidth: .infinity)
             Text("Successful file changes and data transfers for this meeting.")
                 .font(.callout).foregroundStyle(.secondary)
             if let message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
@@ -30,7 +32,9 @@ struct MeetingDataPrivacyView: View {
                 ContentUnavailableView(
                     "No Data Events", systemImage: "arrow.left.arrow.right",
                     description: Text(
-                        "New file changes and successful transfers appear here. Earlier activity isn’t reconstructed."))
+                        "New file changes and successful transfers appear here. Earlier activity isn’t reconstructed.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
             else {
                 ScrollView {
@@ -43,6 +47,7 @@ struct MeetingDataPrivacyView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: meetingID) { await watchHistory() }
     }
 
