@@ -34,7 +34,7 @@ These paths are relative to this client directory. Quit the bundle being rebuilt
 
 ## Build and install
 
-Requires macOS 14.2 or later and Apple's Command Line Tools with Swift 5.9 or later. Install current Command Line Tools for your macOS version; tests use Swift Testing and require Swift 6 or later.
+The app runs on macOS 14.2 or later. Building from source requires Apple's Command Line Tools or Xcode with Swift 6.2 and macOS SDK 26 or later. The build Mac must support those developer tools. Install current Command Line Tools for your macOS version; tests use Swift Testing.
 
 ```sh
 xcode-select --install
@@ -56,6 +56,23 @@ make test-macos      # Run persistence, import and service contract tests
 The first build compiles the pinned audio libraries from source archives included in the repository; later builds reuse them. This step needs no internet or separate package manager. See [audio dependency versions, licenses, and upgrades](ThirdParty/README.md).
 
 Builds target the current Mac's architecture. Quit the development or staged app before rebuilding its bundle. The original Rust client retains `make install`, `make start`, and `make test-client`.
+
+### Release build checks
+
+GitHub Actions builds and ad-hoc signs the release app on every push and pull
+request, with parallel Apple Silicon jobs for macOS 15, macOS 26, and macOS 27.
+The macOS 27 job uses GitHub's `xcode-27` preview runner. Apple moved from
+macOS 15 to 26; there is no macOS 25 runner. Each job records the OS, architecture,
+developer directory, Swift compiler, and SDK versions before building from a
+fresh checkout. A failed job does not cancel the other builds.
+
+The workflow is `.github/workflows/macos-build.yml`; its build steps are in
+`.github/actions/build-macos/action.yml`. These checks validate compilation,
+packaging, and signing, not recording permissions or audio hardware. They use
+Xcode 26.0.1 on macOS 15 and the runner's default Xcode on macOS 26 and 27.
+They do not cover every supported compiler version or Intel Macs.
+Run `make build-macos` locally before finishing Swift changes;
+use an isolated checkout if a development bundle is running.
 
 ### Swift formatting
 

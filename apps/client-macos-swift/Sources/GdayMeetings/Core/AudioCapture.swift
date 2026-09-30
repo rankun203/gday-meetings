@@ -385,7 +385,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     private func makeMicrophoneSession(
         generation: Int, writer: (AVAudioFormat, Bool) throws -> TimedAudioWriter
     ) throws -> MicrophoneSession {
-        let policy = locked { policy }
+        let policy = locked { self.policy }
         let processed = policy.enabled()
         CaptureLog.capture.notice(
             "Microphone build \(generation): voice processing \(processed ? "on" : "off", privacy: .public) (policy \(policy.rawValue, privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public))"
@@ -856,7 +856,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             let speaker = RecordingAudioRoute.defaultVoiceProcessing()
             outputRoute = OutputSpeakerRoute(speaker: speaker)
             observeOutputRoute(device)
-            let (processed, policy) = locked { (microphoneVoiceProcessing, policy) }
+            let (processed, policy) = locked { (microphoneVoiceProcessing, self.policy) }
             if OutputSpeakerRoute.rebuildsMicrophone(policy: policy, voiceProcessing: processed, speaker: speaker) {
                 microphoneRecovery?.routeChanged()
             }
@@ -881,7 +881,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         guard var route = outputRoute else { return }
         // New streams need their own terminal-type listeners.
         if streamsChanged { observeOutputRoute(knownOutput) }
-        let (processed, policy) = locked { (microphoneVoiceProcessing, policy) }
+        let (processed, policy) = locked { (microphoneVoiceProcessing, self.policy) }
         let change = route.refresh(policy: policy, voiceProcessing: processed)
         outputRoute = route
         guard case .changed(let rebuild) = change else {

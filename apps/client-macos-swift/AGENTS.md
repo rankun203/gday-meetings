@@ -58,6 +58,9 @@ Keep this index complete: whenever app documentation is added, moved, or renamed
 
 ## Swift formatting
 
+Release build coverage and toolchain limits are recorded in
+[macOS release CI](../../docs/worklogs/2026-09-30-macos-release-ci.md).
+
 - Run `make format-macos` after Swift edits and `make lint-macos` before committing. Follow the checked-in `.swift-format`; do not hand-format against it. Keep broad formatting changes separate from behavioral changes. See README.md for toolchain and scope details.
 
 ## UI design default

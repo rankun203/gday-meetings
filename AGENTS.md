@@ -27,6 +27,7 @@ scope: repository-workflow
 - Do not create feature branches or pull requests unless the user explicitly asks for one.
 - Use Conventional Commits format for commit messages (for example, `feat: add export support` or `fix(audio): handle device loss`).
 - Before committing, inspect the complete diff and run the relevant checks.
+- For Swift macOS changes, validate a release build before finishing. Use `make build-macos` in an isolated checkout if a development bundle is running. Formatting, tests, and debug builds do not replace release validation. Check the macOS CI matrix after pushing and report any failed or unavailable runner.
 - For standalone or temporary Python scripts, use `uv run --no-project` and add required third-party packages with `--with` (for example, `uv run --no-project --with httpx script.py`). Use the repository's normal project environment for project-owned Python code.
 
 ## Current APIs and deprecations (all apps)

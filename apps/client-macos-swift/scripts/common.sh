@@ -17,13 +17,13 @@ check_tools() {
     /usr/bin/xcrun --sdk macosx --show-sdk-path >/dev/null
     local swift_major swift_minor sdk_major sdk_minor sdk_patch
     read -r swift_major swift_minor <<< "$(/usr/bin/xcrun swift --version 2>&1 | /usr/bin/sed -nE 's/.*Swift version ([0-9]+)\.([0-9]+).*/\1 \2/p' | /usr/bin/head -1)"
-    if [[ -z "$swift_major" ]] || (( swift_major < 5 || (swift_major == 5 && swift_minor < 9) )); then
-        echo 'Update Apple Command Line Tools (or Xcode) to a version containing Swift 5.9 or later.' >&2
+    if [[ -z "$swift_major" ]] || (( swift_major < 6 || (swift_major == 6 && swift_minor < 2) )); then
+        echo 'Building Gday Meetings requires Swift 6.2 or later. Update Apple Command Line Tools or Xcode to version 26 or later and select the updated developer tools.' >&2
         exit 1
     fi
     IFS=. read -r sdk_major sdk_minor sdk_patch <<< "$(/usr/bin/xcrun --sdk macosx --show-sdk-version)"
-    if (( sdk_major < 14 || (sdk_major == 14 && ${sdk_minor:-0} < 2) )); then
-        echo 'Update Apple Command Line Tools (or Xcode) to a version containing macOS SDK 14.2 or later.' >&2
+    if (( sdk_major < 26 )); then
+        echo 'Building Gday Meetings requires macOS SDK 26 or later. Update Apple Command Line Tools or Xcode to version 26 or later and select the updated developer tools.' >&2
         exit 1
     fi
     local os_major os_minor

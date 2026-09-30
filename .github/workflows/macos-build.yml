@@ -1,0 +1,34 @@
+name: Build macOS release
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Release build on ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: ${{ matrix.developer_dir || '/Applications/Xcode.app/Contents/Developer' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 15 (Xcode 26.0.1)
+            runner: macos-15
+            # The app uses macOS 26 SDK APIs behind runtime availability checks.
+            developer_dir: /Applications/Xcode_26.0.1.app/Contents/Developer
+          - name: macOS 26
+            runner: macos-26
+          - name: macOS 27 (runner preview)
+            runner: xcode-27
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-macos
