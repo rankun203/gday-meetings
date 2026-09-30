@@ -1,7 +1,7 @@
 ---
 title: macOS release builds across toolchains
 date: 2026-09-30
-status: in-progress
+status: validated
 scope: macos-build
 ---
 
@@ -77,5 +77,18 @@ existing toolchain/vendor diagnostics, not new app deprecations. Follow-up:
 update or repair Command Line Tools for the missing paths and refresh bundled
 upstream configure scripts when dependency releases remove the obsolete probe.
 
-Hosted matrix validation is pending the push. The original failing compiler
-remains unidentified, so its exact installation cannot yet be reproduced.
+All three hosted jobs passed in
+[run 36722448736](https://github.com/rankun203/meeting-notes/actions/runs/36722448736)
+for commit `86c9fd0`. Each built and signed the full release app:
+
+| Host | Xcode | Swift | macOS SDK | Result |
+| --- | --- | --- | --- | --- |
+| macOS 15.7.9 | 26.0.1 | 6.2 | 26.0 | Passed |
+| macOS 26.6.2 | 26.6 | 6.3.3 | 26.5 | Passed |
+| macOS 27.0 | 27.0 | 6.4 | 27.0 | Passed |
+
+Hosted logs contain only the existing obsolete-flag configure-probe warnings
+described above; the local Command Line Tools search-path warnings were absent.
+The original failing compiler remains unidentified, so its exact installation
+cannot yet be reproduced. The hosted results establish successful release
+compilation across the three listed compiler and OS combinations.
