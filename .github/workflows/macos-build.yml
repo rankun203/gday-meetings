@@ -2,7 +2,11 @@ name: Build macOS release
 
 on:
   push:
+    paths:
+      - 'apps/client-macos-swift/**'
   pull_request:
+    paths:
+      - 'apps/client-macos-swift/**'
   workflow_dispatch:
 
 permissions:

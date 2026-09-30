@@ -59,8 +59,9 @@ Builds target the current Mac's architecture. Quit the development or staged app
 
 ### Release build checks
 
-GitHub Actions builds and ad-hoc signs the release app on every push and pull
-request, with parallel Apple Silicon jobs for macOS 15, macOS 26, and macOS 27.
+GitHub Actions builds and ad-hoc signs the release app when a push or pull
+request changes files under `apps/client-macos-swift/`, with parallel Apple
+Silicon jobs for macOS 15, macOS 26, and macOS 27. Manual runs remain available.
 The macOS 27 job uses GitHub's `xcode-27` preview runner. Apple moved from
 macOS 15 to 26; there is no macOS 25 runner. Each job records the OS, architecture,
 developer directory, Swift compiler, and SDK versions before building from a

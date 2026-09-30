@@ -19,8 +19,9 @@ macOS CI workflow.
 ## Implemented solution
 
 - Qualify all three property reads as `self.policy` in `AudioCapture.swift`.
-- Build and ad-hoc sign the release app on every push, pull request, and manual
-  workflow run. Independent Apple Silicon jobs use `macos-15`, `macos-26`, and
+- Build and ad-hoc sign the release app on pushes and pull requests that change
+  `apps/client-macos-swift/**`, and on manual workflow runs.
+  Independent Apple Silicon jobs use `macos-15`, `macos-26`, and
   `xcode-27`, with `fail-fast: false` and no build cache restoration.
 - Put reusable build steps in `.github/actions/build-macos/action.yml` and the
   workflow in `.github/workflows/macos-build.yml`. Record OS, architecture,
@@ -92,3 +93,11 @@ described above; the local Command Line Tools search-path warnings were absent.
 The original failing compiler remains unidentified, so its exact installation
 cannot yet be reproduced. The hosted results establish successful release
 compilation across the three listed compiler and OS combinations.
+
+The workflow now filters push and pull-request events to changes under the
+Swift app folder, as requested. Changes only to other apps, root documentation,
+or CI configuration do not start builds; CI configuration can be checked with
+a manual run. This deliberately narrow trigger adds no implementation debt.
+Actionlint and diff whitespace checks passed after the trigger change, with
+the same documented preview-label exception. No app code changed, so another
+local release build was not needed.
