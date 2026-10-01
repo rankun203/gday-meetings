@@ -15,8 +15,15 @@ struct LiveTranscriptDraft: Codable, Equatable {
     var speakerTimeline: LiveSpeakerTimeline?
     var speakerLabelsComplete: Bool?
 
+    private var finalizedParagraphs: [LiveTranscriptPhrase] {
+        LiveTranscriptParagraphs.groups(
+            finalized: resolvedRows().finalized.sorted(by: LiveTranscriptPhrase.ordered), partials: [],
+            overrides: overrides ?? []
+        ).map(\.phrase)
+    }
+
     var segments: [TranscriptSegment] {
-        resolvedRows().finalized.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map {
+        finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map {
             TranscriptSegment(
                 id: $0.id, start: $0.start, end: $0.end, speaker: $0.speakerLabel, text: $0.text,
                 speakerID: $0.speakerIdentity ?? $0.id)
@@ -25,7 +32,7 @@ struct LiveTranscriptDraft: Codable, Equatable {
 
     var speakers: [MeetingSpeaker] {
         var seen = Set<UUID>()
-        return resolvedRows().finalized.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .compactMap {
                 // A source badge is not a voice identity. Each editable row has its own
                 // assignment, even when several rows have the same source badge.
@@ -161,8 +168,21 @@ struct LiveTranscriptDraft: Codable, Equatable {
                     $0.fragment(start: max(row.start, $0.start), end: min(row.end, $0.end))
                 }
                 if !fragments.isEmpty {
-                    row.text = fragments.map(\.text).joined(separator: " ")
+                    // Preserve punctuation and spacing inside each raw ASR phrase.
+                    // Speaker fragments may divide text where no space existed.
+                    let originals = (phrases + partials).filter { $0.overlaps(change.anchor) }
+                        .sorted(by: LiveTranscriptPhrase.ordered)
+                    let originalSlices = originals.compactMap { phrase in
+                        phrase.fragment(start: max(row.start, phrase.start), end: min(row.end, phrase.end))
+                    }
+                    let textSlices =
+                        !originals.isEmpty && originalSlices.count == originals.count
+                        ? originalSlices : fragments
+                    row.text = LiveTranscriptParagraphs.joinedText(textSlices.map(\.text))
                     row.words = fragments.flatMap(\.words)
+                    // Silence between recognized phrases is not unfinished text.
+                    // This replacement contains only the matching raw words.
+                    row.recognizedFinal = matching.allSatisfy(\.1)
                 }
             }
             else if !matching.isEmpty
@@ -173,7 +193,7 @@ struct LiveTranscriptDraft: Codable, Equatable {
                 // An assignment changes identity, not recognized wording. When
                 // complete raw phrases fit the anchor, no word splitting is needed.
                 let latest = matching.map(\.0).sorted(by: LiveTranscriptPhrase.ordered)
-                row.text = latest.map(\.text).joined(separator: " ")
+                row.text = LiveTranscriptParagraphs.joinedText(latest.map(\.text))
                 row.words = latest.flatMap(\.words)
                 row.recognizedFinal = matching.allSatisfy(\.1)
             }

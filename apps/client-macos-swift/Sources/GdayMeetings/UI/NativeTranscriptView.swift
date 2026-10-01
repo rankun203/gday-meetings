@@ -11,6 +11,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var personID: UUID? = nil
     var speakerColorIndex: Int? = nil
     var isProvisional = false
+    var provisionalTextRanges: [NSRange]? = nil
     var recentWordRanges: [NSRange] = []
     var accessibilityHelp: String? = nil
 }
@@ -854,12 +855,20 @@ enum TranscriptSpeakerPalette {
         badge.unresolved = row.personID == nil
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
         if !body.isEditable {
-            var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
-            if row.isProvisional {
-                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                attributes[.underlineColor] = NSColor.tertiaryLabelColor
-            }
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
             let text = NSMutableAttributedString(string: row.text, attributes: attributes)
+            if row.isProvisional {
+                for range in row.provisionalTextRanges ?? [NSRange(location: 0, length: text.length)]
+                where range.location >= 0 && range.length > 0
+                    && range.location <= text.length && range.length <= text.length - range.location
+                {
+                    text.addAttributes(
+                        [
+                            .underlineStyle: NSUnderlineStyle.single.rawValue,
+                            .underlineColor: NSColor.tertiaryLabelColor,
+                        ], range: range)
+                }
+            }
             if row.isProvisional {
                 for (index, range) in row.recentWordRanges.enumerated()
                 where range.location >= 0 && range.length > 0

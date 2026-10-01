@@ -424,7 +424,10 @@ extension LiveSpeakerTimelineTests {
         timeline.intervals.removeLast()
         var longerText = phrase
         longerText.text = "检查草稿然后保存记录。"
-        longerText.words[1].text = "然后"
+        longerText.words = [
+            phrase.words[0], .init(text: "然", start: 2, end: 2.48),
+            .init(text: "后", start: 2.48, end: 2.96), phrase.words[2],
+        ]
         #expect(timeline.attributing(longerText).count == 3)
         var leading = phrase
         leading.start = 2
@@ -505,5 +508,37 @@ extension LiveSpeakerTimelineTests {
         timeline.intervals = [.init(speakerID: speaker.id, start: 0, end: 1)]
         #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_01")
         #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
+    }
+}
+
+extension LiveSpeakerTimelineTests {
+    @Test func interiorEnglishWordUsesSameEvidenceAsChineseCharacter() {
+        let speaker = identity(.system, UUID(), 1)
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [speaker]
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0, end: 2),
+            .init(speakerID: speaker.id, start: 2.32, end: 5),
+        ]
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .system, start: 0, end: 5,
+            text: "Review the draft and save the changes.",
+            words: [
+                .init(text: "Review the draft", start: 0, end: 2),
+                .init(text: "and", start: 2, end: 2.48),
+                .init(text: "save the changes.", start: 2.48, end: 5),
+            ])
+        let rows = timeline.attributing(phrase)
+        #expect(rows.count == 1 && rows[0].text == phrase.text && rows[0].id == phrase.id)
+        let other = identity(.system, speaker.generation, 0)
+        timeline.speakers.append(other)
+        timeline.intervals.append(.init(speakerID: other.id, start: 2.1, end: 2.12))
+        #expect(timeline.attributing(phrase).count == 3)
+        #expect(timeline.attributing(phrase)[1].speakerIdentity == nil)
+        timeline.intervals[timeline.intervals.count - 1] = .init(speakerID: other.id, start: 2, end: 2.48)
+        #expect(timeline.attributing(phrase).count == 3)
+        var untimed = phrase
+        untimed.words = []
+        #expect(timeline.attributing(untimed).map(\.text) == [phrase.text])
     }
 }

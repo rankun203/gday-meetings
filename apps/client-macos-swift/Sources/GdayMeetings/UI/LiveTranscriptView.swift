@@ -111,10 +111,12 @@ struct LiveTranscriptView: View {
         let presented = controller.presentedRows
         let finalized = presented.finalized
         let partials = presented.partials
-        displayedPhrases = Dictionary(uniqueKeysWithValues: (finalized + partials).map { ($0.id, $0) })
         hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
-        let updated = LiveTranscriptDisplay.rows(
-            finalized: finalized, partials: partials, people: store.people, recognitionEnabled: controller.enabled)
+        let snapshot = LiveTranscriptDisplay.snapshot(
+            finalized: finalized, partials: partials, people: store.people, recognitionEnabled: controller.enabled,
+            overrides: controller.draft?.overrides ?? [])
+        displayedPhrases = snapshot.phrases
+        let updated = snapshot.rows
         if updated != displayRows {
             displayRows = updated
             displayGeneration += 1
@@ -125,32 +127,46 @@ struct LiveTranscriptView: View {
 enum LiveTranscriptDisplay {
     static func rows(
         finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase], people: [Person],
-        recognitionEnabled: Bool = true
-    )
-        -> [TranscriptDisplayRow]
-    {
+        recognitionEnabled: Bool = true, overrides: [LiveTranscriptOverride] = []
+    ) -> [TranscriptDisplayRow] {
+        snapshot(
+            finalized: finalized, partials: partials, people: people,
+            recognitionEnabled: recognitionEnabled, overrides: overrides
+        ).rows
+    }
+
+    static func snapshot(
+        finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase], people: [Person],
+        recognitionEnabled: Bool = true, overrides: [LiveTranscriptOverride] = []
+    ) -> (rows: [TranscriptDisplayRow], phrases: [UUID: LiveTranscriptPhrase]) {
         let activePhraseID = recognitionEnabled ? LiveTranscriptPresentation.activePhraseID(partials) : nil
         let names = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0.name) })
-        let rows = LiveTranscriptPresentation.rows(finalized: finalized, partials: partials)
-        func personID(_ phrase: LiveTranscriptPhrase) -> UUID? {
-            phrase.personID.flatMap { names[$0] == nil ? nil : $0 }
-        }
-        func key(_ phrase: LiveTranscriptPhrase) -> String {
-            TranscriptSpeakerPalette.displayKey(
-                personID: personID(phrase), track: phrase.source.rawValue, label: phrase.speakerLabel)
-        }
-        return rows.map { row in
-            let phrase = row.phrase
+        let groups = LiveTranscriptParagraphs.groups(finalized: finalized, partials: partials, overrides: overrides)
+        let rows = groups.map { group in
+            let phrase = group.phrase
+            let personID = phrase.personID.flatMap { names[$0] == nil ? nil : $0 }
+            let provisionalRanges = group.parts.filter { $0.provisional && !$0.phrase.isUserEdited }.map(\.textRange)
+            let recentRanges = group.parts.filter {
+                $0.provisional && !$0.phrase.isUserEdited && $0.phrase.id == activePhraseID
+            }
+            .flatMap { part in
+                LiveTranscriptPresentation.recentWordRanges(in: part.phrase).map {
+                    let range = NSRange($0, in: part.phrase.text)
+                    return NSRange(location: part.textRange.location + range.location, length: range.length)
+                }
+            }
+            let key = TranscriptSpeakerPalette.displayKey(
+                personID: personID, track: phrase.source.rawValue, label: phrase.speakerLabel)
             return TranscriptDisplayRow(
                 id: phrase.id, start: phrase.start,
-                speaker: phrase.personID.flatMap { names[$0] } ?? phrase.speakerLabel,
+                speaker: personID.flatMap { names[$0] } ?? phrase.speakerLabel,
                 speakerID: phrase.id, text: phrase.text,
-                personID: personID(phrase), speakerColorIndex: TranscriptSpeakerPalette.index(for: key(phrase)),
-                isProvisional: row.provisional && !phrase.isUserEdited,
-                recentWordRanges: row.provisional && !phrase.isUserEdited && phrase.id == activePhraseID
-                    ? LiveTranscriptPresentation.recentWordRanges(in: phrase).map { NSRange($0, in: phrase.text) } : [],
+                personID: personID, speakerColorIndex: TranscriptSpeakerPalette.index(for: key),
+                isProvisional: !provisionalRanges.isEmpty, provisionalTextRanges: provisionalRanges,
+                recentWordRanges: recentRanges,
                 accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil)
         }
+        return (rows, Dictionary(uniqueKeysWithValues: groups.map { ($0.phrase.id, $0.phrase) }))
     }
 }
 

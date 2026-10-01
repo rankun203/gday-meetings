@@ -29,7 +29,7 @@ import Testing
 
     @Test func liveColorsSurviveUnrelatedSpeakerChangesAndRowReplacement() {
         let session = UUID()
-        let first = LiveTranscriptPhrase(session: session, source: .microphone, start: 0, end: 1, text: "First")
+        let first = LiveTranscriptPhrase(session: session, source: .microphone, start: 0, end: 1, text: "First.")
         let replacement = LiveTranscriptPhrase(session: session, source: .microphone, start: 1, end: 2, text: "Second")
         let other = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "Other")
         let original = LiveTranscriptDisplay.rows(finalized: [first], partials: [], people: [])[0]

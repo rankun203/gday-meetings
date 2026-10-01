@@ -189,20 +189,18 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                 let midpoint = ($0.start + $0.end) / 2
                 return midpoint >= run.0 && midpoint < run.1
             }
-            let singleton =
-                words.count == 1
-                && words[0].text.trimmingCharacters(in: .whitespacesAndNewlines).count == 1
-            // ASR may include a preceding pause in one character's duration.
+            let singleWord = words.count == 1
+            // ASR word timing may include a pause with no speaker activity.
             // Only matching stable neighbors permit this longer interior bridge.
-            let interiorSingleton =
-                singleton && run.1 - run.0 <= 1
+            let interiorWord =
+                singleWord && run.1 - run.0 <= 1
                 && before?.2 != nil && before?.2?.id == after?.2?.id
                 && before.map({ $0.1 - $0.0 >= 0.6 }) == true && after.map({ $0.1 - $0.0 >= 0.6 }) == true
             let corroboratedLeadingWord =
                 index == 0 && precedingEvidence != nil && words.count == 1
                 && run.1 - run.0 <= 1.5 && before?.2?.id == after?.2?.id && before?.2 != nil
                 && before.map({ $0.1 - $0.0 >= 0.6 }) == true && after.map({ $0.1 - $0.0 >= 0.6 }) == true
-            guard run.1 - run.0 <= 0.35 || interiorSingleton || corroboratedLeadingWord else { continue }
+            guard run.1 - run.0 <= 0.35 || interiorWord || corroboratedLeadingWord else { continue }
             let evidenceStart = min(run.0, before?.1 ?? run.0)
             guard
                 !gaps.contains(where: {
