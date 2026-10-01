@@ -30,7 +30,7 @@ class ReferenceTests(unittest.TestCase):
             reference.write_text(json.dumps({'intervals': [interval(0, 1, 'a')],
                                             'audioDurationSeconds': 1}))
             base = dict(start_seconds=0, end_seconds=1, speaker='x', update_id=0,
-                        window_end_seconds=0, window_start_seconds=0, provisional=False)
+                        window_end_seconds=1, window_start_seconds=0, provisional=False)
             segments.write_text(json.dumps(base) + '\n')
             originals = (reference.read_bytes(), segments.read_bytes())
             for source in (reference, segments):
@@ -58,7 +58,7 @@ class ReferenceTests(unittest.TestCase):
             self.assertEqual(json.loads(saved)['comparisons'][0]['disagreement_fraction'], 0)
             self.assertNotEqual(self.run_cli(reference, segments, output).returncode, 0)
             self.assertEqual(output.read_bytes(), saved)
-            for index, fields in enumerate(({'update_id': 1}, {'window_end_seconds': 1},
+            for index, fields in enumerate(({'update_id': 1}, {'window_end_seconds': 1, 'provisional': True},
                                             {'update_index': 0})):
                 segments.write_text(json.dumps(base | fields) + '\n')
                 output = root / f'replay-{index}.json'
@@ -72,6 +72,19 @@ class ReferenceTests(unittest.TestCase):
                                                 speaker='slot-0', provisional=True)) + '\n')
             result = self.run_cli(reference, segments, root / 'nemotron.json')
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_reviewed_silence_counts_false_alarm(self):
+        result = compare([interval(1, 2, 'a')], [interval(0, 3, 'x')], 4,
+                         coverage=[dict(start=0, end=3)])
+        self.assertEqual(result['extra_speaker_seconds'], 2)
+        self.assertEqual(result['scored_wall_seconds'], 3)
+        self.assertEqual(result['hypothesis_speaker_seconds_in_unknown_gaps'], 0)
+        result = compare([], [interval(0, 4, 'x')], 4, coverage=[dict(start=1, end=2)])
+        self.assertEqual(result['extra_speaker_seconds'], 1)
+        self.assertEqual(result['hypothesis_speaker_seconds_in_unknown_gaps'], 3)
+        self.assertIsNone(result['disagreement_fraction'])
+        with self.assertRaises(ValueError):
+            compare([], [], 4, coverage=[dict(start=0, end=5)])
 
     def test_permutation(self):
         ref = [interval(0, 3, 'a'), interval(3, 5, 'b')]
@@ -193,7 +206,9 @@ class ReferenceTests(unittest.TestCase):
                     items.append(interval(start, end, rng.choice(labels)))
                 streams.append(items)
             reference, hypothesis = streams
-            for collar, exclude in itertools.product((0, .25), (False, True)):
+            for collar, exclude, coverage in itertools.product(
+                    (0, .25), (False, True),
+                    (None, [], [dict(start=.5, end=2), dict(start=1, end=3.5)])):
                 pieces, unknown, excluded = [], 0, 0
                 for tick in range(16):
                     midpoint = (tick + .5) / 4
@@ -201,7 +216,9 @@ class ReferenceTests(unittest.TestCase):
                                if i['start'] <= midpoint < i['end']} for items in streams)
                     in_collar = any(abs(midpoint - i[boundary]) < collar
                                     for i in reference for boundary in ('start', 'end'))
-                    if not rs:
+                    reviewed = (bool(rs) if coverage is None else any(
+                        region['start'] <= midpoint < region['end'] for region in coverage))
+                    if not reviewed:
                         unknown += .25 * len(hs)
                     elif in_collar or (exclude and len(rs) > 1):
                         excluded += .25
@@ -215,7 +232,7 @@ class ReferenceTests(unittest.TestCase):
                 missed = sum(.25 * max(0, len(rs) - len(hs)) for rs, hs in pieces)
                 extra = sum(.25 * max(0, len(hs) - len(rs)) for rs, hs in pieces)
                 confused = sum(.25 * min(len(rs), len(hs)) for rs, hs in pieces) - correct
-                result = compare(reference, hypothesis, 4, collar, exclude)
+                result = compare(reference, hypothesis, 4, collar, exclude, coverage)
                 for key, expected in (
                         ('scored_wall_seconds', .25 * len(pieces)),
                         ('reference_speaker_seconds', denominator),

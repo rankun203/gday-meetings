@@ -60,3 +60,15 @@ This retains reference-quality debt: manually verify the selected speech boundar
 The final runner regression repeat passed all ten tests in 9.31 seconds with process inspection enabled. A sandboxed attempt could not launch `ps` for four cleanup checks; the permitted repeat verified those cases. Reviewed reference scoring reproduced the recorded sample values exactly.
 
 Current FFmpeg native Opus and libopus decoding agreed on sample counts for both mismatched references; packet timestamps were contiguous. The historical duration discrepancy remains unresolved. Their reference scores are withheld rather than correcting timestamps without source evidence.
+
+# Independent evaluation
+
+Added a root `tmp/` ignore rule for private meeting analysis at the user's request. Output checks allow that directory only when Git confirms it is ignored and untracked. Meeting-specific artifacts remain private; generic tools and aggregate measurements are tracked.
+
+Extended interval scoring with explicit reviewed regions so verified silence counts toward false alarms. Added an independent-review scorer that rejects unreviewed or disagreement-selected data. The evaluation protocol distinguishes server agreement from independently reviewed accuracy, named-person recognition from voice grouping, and final labels from labels available live. Synthetic tests include a local model correctly improving on a mistaken server baseline.
+
+Independent listening remains required before claiming improvement over the server. This is evaluation-data debt: prepare blinded clips, annotate speech and silence, adjudicate uncertainty, and score all systems against the same frozen reference. Source-track timing discrepancies must remain explicit rather than fitting time corrections to maximize agreement.
+
+Validation: 45 synthetic tests pass across reference scoring, reviewed-audio scoring and privacy paths, blinded clip generation/export, and runner lifecycle behavior. The interval sweep was checked against 1,200 independently integrated cases. Current full-file Community-1 exports include a positive window end with `provisional: false`; parsers now accept that offline schema while rejecting provisional rolling-window exports. Tests cover this distinction. No Swift app code or model settings changed in this follow-up.
+
+All eight new single-track runs completed, covering 173.59 minutes per model. Community-1 took 52.66 seconds total; Nemotron took 790.83 seconds. On the two timing-compatible references, pooled annotated-speech disagreement was 17.48% and 28.24% respectively with no collar. Two remaining reference comparisons are withheld for timeline discrepancies. Forty independent and twelve diagnostic 20-second clips were generated with blank annotation templates, input/clip hashes, and separate private keys. Their review, source mappings, and detailed results remain under ignored `tmp/`; Git lists no tracked files there. No independent accuracy claim is made until listening and adjudication are complete.

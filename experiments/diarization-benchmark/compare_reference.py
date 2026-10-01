@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from private_paths import private_output
 
 
 def assignment(weights):
@@ -50,7 +51,7 @@ def assignment(weights):
             if p[j] <= rows and j <= cols}
 
 
-def compare(reference, hypothesis, duration, collar=0.0, exclude_overlap=False):
+def compare(reference, hypothesis, duration, collar=0.0, exclude_overlap=False, coverage=None):
     """Integrate half-open intervals; unknown reference gaps are not silence.
 
     Collars exclude a half-width on each side of every original reference
@@ -81,7 +82,14 @@ def compare(reference, hypothesis, duration, collar=0.0, exclude_overlap=False):
                 for boundary in (start, end):
                     events[max(0, boundary - collar)].append((2, 'collar', 1))
                     events[min(duration, boundary + collar)].append((2, 'collar', -1))
-    states = [Counter(), Counter(), Counter()]
+    if coverage is not None:
+        for region in coverage:
+            start, end = region['start'], region['end']
+            if not all(math.isfinite(x) for x in (start, end)) or not 0 <= start < end <= duration:
+                raise ValueError('reviewed coverage outside audio or invalid')
+            events[start].append((3, 'reviewed', 1))
+            events[end].append((3, 'reviewed', -1))
+    states = [Counter(), Counter(), Counter(), Counter()]
     pieces, unknown_hypothesis, excluded = [], 0.0, 0.0
     times = sorted(events)
     for pos, start in enumerate(times[:-1]):
@@ -89,7 +97,7 @@ def compare(reference, hypothesis, duration, collar=0.0, exclude_overlap=False):
             states[kind][speaker] += change
         width = times[pos + 1] - start
         refs, hyps = ({k for k, count in s.items() if count > 0} for s in states[:2])
-        if not refs:
+        if (coverage is None and not refs) or (coverage is not None and states[3]['reviewed'] <= 0):
             unknown_hypothesis += width * len(hyps)
         elif states[2]['collar'] > 0 or (exclude_overlap and len(refs) > 1):
             excluded += width
@@ -118,7 +126,7 @@ def compare(reference, hypothesis, duration, collar=0.0, exclude_overlap=False):
         if miss + false + wrong:
             disagreements.append({'start': start, 'end': end, 'speaker_seconds': width * (miss + false + wrong)})
     return dict(reference_status='unverified_annotations_not_ground_truth',
-                mask='union_of_reference_speech_intervals', collar_half_width_seconds=collar,
+                mask='explicit_reviewed_regions' if coverage is not None else 'union_of_reference_speech_intervals', collar_half_width_seconds=collar,
                 exclude_reference_overlap=exclude_overlap, scored_wall_seconds=scored,
                 reference_speaker_seconds=denominator, excluded_reference_wall_seconds=excluded,
                 missed_speaker_seconds=missed, extra_speaker_seconds=extra,
@@ -134,10 +142,7 @@ def main():
     parser.add_argument('--segments', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    output = args.output.resolve()
-    worktree = Path(__file__).resolve().parents[2]
-    if output == worktree or worktree in output.parents:
-        parser.error('Private outputs must be outside the worktree')
+    output = private_output(args.output)
     for source in (args.reference, args.segments):
         if output == source.resolve() or (output.exists() and output.samefile(source)):
             parser.error('Output must not overwrite the reference or segments input')
@@ -145,7 +150,7 @@ def main():
     hyp = []
     for line in args.segments.read_text().splitlines():
         row = json.loads(line)
-        if row.get('window_end_seconds', 0) > 0 or row.get('update_id', 0) > 0 or 'update_index' in row:
+        if (row.get('window_end_seconds', 0) > 0 and row.get('provisional') is not False) or row.get('update_id', 0) > 0 or 'update_index' in row:
             raise ValueError('Window replay requires separate per-update scoring; use full-file outputs')
         hyp.append(dict(start=row['start_seconds'], end=row['end_seconds'], speaker=row['speaker']))
     result = {'schema_version': 1, 'reference_sha256': hashlib.sha256(args.reference.read_bytes()).hexdigest(),

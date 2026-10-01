@@ -92,6 +92,23 @@ The first exploratory comparison uses sample A, whose saved extraction and curre
 
 Lower means closer agreement with these saved annotations. The denominator is reference speaker-seconds after exclusions, not total recording time. A maximum-duration one-to-one assignment removes arbitrary label-name differences. Six existing track-scoped labels remain distinct; person assignments were not used to merge labels. Unannotated gaps are excluded rather than assumed silent. The uncollared overlap-inclusive region covers 2,752.01 seconds of audio and 2,815.90 reference speaker-seconds. Most disagreement is speech coverage: Community-1 has 399.79 missed and 109.29 confused speaker-seconds; Nemotron has 479.94 missed, 59.22 extra, and 111.71 confused speaker-seconds. Transcript segments may include pauses, so these are not confirmed model errors.
 
-Community-1 is closer on this sample, but this single provisional reference cannot establish an accuracy ranking. Private reports identify disagreement intervals for listening; no listening adjudication has been completed. Other selected references need timing or overlap review before their scores can support a comparison. Known-good meeting selection remains pending user guidance.
+Community-1 is closer on this sample, but this single provisional reference cannot establish an accuracy ranking. Private reports identify disagreement intervals for listening; no listening adjudication has been completed. Other selected references need timing or overlap review before their scores can support a comparison. The user-selected follow-up below supplies a new reference set for further review.
 
 Read-only decoding checks found that both current FFmpeg Opus decoders reproduce the prepared duration for the two mismatched samples, and packet timestamps have no gaps. This rules out a simple current decoder-choice or packet-gap explanation; it does not recover the historical worker input timeline. No offset or time stretching was fitted to improve agreement.
+
+## User-selected single-track follow-up
+
+Both models completed four additional full-track runs each, totaling 173.59 minutes of identical input per model. Three inputs used system audio and one used a room microphone; tracks were not mixed. Exact source mappings, per-meeting measurements, and predictions remain in ignored `tmp/`.
+
+Community-1 used 52.66 seconds total end-to-end wall time; Nemotron `.low` used 790.83 seconds. Process peak RSS ranged from 530.91–690.77 MB and 84.07–96.45 MB respectively. These use the final executable hashes above, warmed model caches, and serial runs on the same Mac. They are observations, not isolated hardware benchmarks.
+
+Two saved references passed the decoded-duration screening check. With one optimal label mapping per recording, pooled disagreement was:
+
+| Scoring policy | Community-1 | Nemotron `.low` |
+| --- | ---: | ---: |
+| Annotated speech, no boundary exclusion | 17.48% | 28.24% |
+| Annotated speech, ±250 ms boundary exclusion | 17.22% | 27.73% |
+
+The denominator sums reference speaker-seconds across the two recordings after fitting mappings separately. These references contain no cross-label overlap, so including or excluding reference overlap produces the same values; this does not prove the audio has no overlapping speech. The other two reference scores remain withheld due to historical/current decoded-duration differences. Person-linked labels merge only when existing segment assignments, embedding assignments, and local profiles consistently identify the same person.
+
+The scores establish agreement with saved annotations, not superiority over the server. Forty independently sampled 20-second clips and twelve separately selected diagnostic clips are ready for blind annotation. All templates remain unreviewed. The [evaluation procedure](EVALUATION.md) and scoring tools allow the server itself to make errors against independently reviewed speech, silence, and speaker labels. No human-reviewed accuracy or live-label quality claim is available yet.

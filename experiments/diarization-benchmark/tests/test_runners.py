@@ -60,6 +60,23 @@ print(json.dumps({'phase':'file','audio_seconds':seconds}))
         return runner.parser().parse_args(['--manifest', str(self.manifest), '--output-directory',
             str(self.output), '--sample','A','--model','nemotron','--mode','offline',*extra])
 
+    def test_manifest_reference_path_selects_paced_excerpt(self):
+        manifest = json.loads(self.manifest.read_text())
+        manifest['samples'][0]['durationSeconds'] = 30
+        reference = self.base / 'explicit-reference.json'
+        reference.write_text(json.dumps({
+            'preparedAudioSHA256': manifest['samples'][0]['sha256'],
+            'intervals': [dict(start=10, end=15, speaker='a'),
+                          dict(start=15, end=20, speaker='b')]}))
+        manifest['samples'][0]['referencePath'] = str(reference)
+        self.manifest.write_text(json.dumps(manifest))
+        args = self.args(['--mode', 'replay', '--paced', '--max-seconds', '10'])
+        plan = runner.prepare(args)
+        self.assertEqual(plan['config']['offset_seconds'], 10)
+        reference.write_text(json.dumps({'preparedAudioSHA256': 'wrong', 'intervals': []}))
+        with self.assertRaises(ValueError):
+            runner.prepare(self.args(['--mode', 'replay', '--paced', '--max-seconds', '10']))
+
     def test_numeric_validation(self):
         for flag in ['--max-seconds','--offset-seconds','--wall-limit-seconds']:
             for value in ['nan','inf','-inf','garbage','-1','1e300']:

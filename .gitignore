@@ -36,3 +36,6 @@ node_modules/
 *.egg-info/
 !**/.env.example
 .pnpm-store/
+
+# Private local analysis and meeting data
+/tmp/

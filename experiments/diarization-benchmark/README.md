@@ -85,7 +85,7 @@ Use prepared 16 kHz mono audio. `--paced` applies only to replay. Without a maxi
 - Nemotron uses its native stateful 20 ms chunk interface for both saved-file processing and replay. Saved-file mode runs it as fast as possible; it still uses `.low`, not the separately exported `.offline` preset. Audio buffers and outputs are discarded after measurement.
 - Community-1 offline mode clusters the whole file. Replay recomputes a trailing thirty-second offline window every ten seconds, using only audio available by that update. Speaker IDs may change between windows. This is windowed recomputation, not native streaming or persistent speaker tracking.
 
-The private runner reads an externally prepared manifest, verifies the selected input hash, and requires an output directory outside the worktree. Each run has an immutable attempt directory. Its receipt records the executable, input and model hashes, runner version, options, and output hashes; only an exact verified match is reused:
+The private runner reads an externally prepared manifest, verifies the selected input hash, and requires an output directory outside the worktree or under its ignored `tmp/` directory. Each run has an immutable attempt directory. Its receipt records the executable, input and model hashes, runner version, options, and output hashes; only an exact verified match is reused:
 
 ```sh
 UV_CACHE_DIR="$PWD/.cache/uv" uv run --no-project run_private.py \
@@ -93,7 +93,7 @@ UV_CACHE_DIR="$PWD/.cache/uv" uv run --no-project run_private.py \
   --sample C --model nemotron --mode offline --wall-limit-seconds 900
 ```
 
-Run the same sample with `--model community1`, then replay with each model. Use `--mode replay --paced --max-seconds 60` for a bounded paced check. If companion `reference-intervals/sample-X.json` metadata is present and no offset is supplied, the runner selects a ten-second-grid excerpt by existing-label diversity (at least two annotated seconds per label), then annotated coverage. This is a reproducible selection rule, not proof that the annotations or excerpt are representative. The selected offset is recorded, and both models receive the same excerpt. Both replay adapters advance availability in 20 ms steps. `run_suite.py` accepts the same manifest and output-directory arguments and runs both models serially across samples C, A, B and D in saved-file mode, Community-1 across all four in accelerated windowed replay, and both models on sixty-second paced excerpts from C and D; it resumes completed runs with interval exports. Nemotron saved-file mode already is full chronological accelerated native replay, so the suite does not repeat identical inference under another mode label. Never put private paths, source metadata, audio, transcripts or raw results in tracked files. Existing speaker labels are not ground truth.
+Run the same sample with `--model community1`, then replay with each model. Use `--mode replay --paced --max-seconds 60` for a bounded paced check. If the manifest provides `referencePath` or companion `reference-intervals/sample-X.json` metadata is present and no offset is supplied, the runner selects a ten-second-grid excerpt by existing-label diversity (at least two annotated seconds per label), then annotated coverage. This is a reproducible selection rule, not proof that the annotations or excerpt are representative. The selected offset is recorded, and both models receive the same excerpt. Both replay adapters advance availability in 20 ms steps. `run_suite.py` accepts the same manifest and output-directory arguments and runs both models serially across samples C, A, B and D in saved-file mode, Community-1 across all four in accelerated windowed replay, and both models on sixty-second paced excerpts from C and D; it resumes completed runs with interval exports. Nemotron saved-file mode already is full chronological accelerated native replay, so the suite does not repeat identical inference under another mode label. Never put private paths, source metadata, audio, transcripts or raw results in tracked files. Existing speaker labels are not ground truth.
 
 ## Metrics and limits
 
@@ -131,3 +131,31 @@ uv run --no-project python -B tests/test_reference.py
 The scorer integrates exact interval boundaries and finds the maximum-duration one-to-one speaker mapping. It reports missed, extra, and confused speaker-seconds divided by reference speaker-seconds. Its four views combine zero or ±250 ms boundary exclusions with included or excluded reference overlap. Matching is recomputed for each view. Duplicate intervals for one speaker count once. Unannotated gaps are unknown and excluded; predicted speech there is reported separately without calling it a false alarm. Scores can exceed 100% when many extra speakers are predicted.
 
 This measures disagreement with saved annotations, not human-verified accuracy. Transcript segment boundaries may include pauses or omit speech. Inspect source duration, timeline alignment, provider provenance, and known recognition quality before comparing scores. The output includes artifact hashes and candidate disagreement intervals for private listening. Window replay exports are rejected: scoring those requires an explicit per-update identity and availability policy.
+
+## Review whether a model improves on the server
+
+See [the evaluation procedure](EVALUATION.md). Generate a private listening set from a prepared WAV, saved reference intervals, and both full-file model exports:
+
+```sh
+uv run --no-project python -B build_review.py \
+  --audio "$PRIVATE_AUDIO" --reference "$PRIVATE_REFERENCE" \
+  --model "$PRIVATE_FIRST_MODEL" --model "$PRIVATE_SECOND_MODEL" \
+  --output "$PRIVATE_REVIEW_DIRECTORY" --seed 20261001
+```
+
+Listen to the WAV files in `blind/` and complete `blind/annotations.json` without opening `private/key.json`. Keep anonymous speaker IDs consistent across clips from the same recording. Record checked speech and silence through `reviewedRegions`; leave uncertain regions out. Empty templates are not annotations. The private key contains source coordinates and model predictions and must remain separate from the reviewer.
+
+After review, export the independent sample and score all systems, including the saved server output:
+
+```sh
+uv run --no-project python -B build_review.py \
+  --export-reviewed "$PRIVATE_REVIEW_DIRECTORY" --output "$PRIVATE_REVIEW_EXPORT"
+uv run --no-project python -B score_review.py \
+  --gold "$PRIVATE_REVIEW_EXPORT/gold.json" \
+  --system server "$PRIVATE_REVIEW_EXPORT/system-00.json" \
+  --system first "$PRIVATE_REVIEW_EXPORT/system-01.json" \
+  --system second "$PRIVATE_REVIEW_EXPORT/system-02.json" \
+  --output "$PRIVATE_REVIEW_SCORE"
+```
+
+Outputs must be new files or directories. Private outputs may be outside the checkout or under its Git-ignored, untracked `tmp/` directory. The exporter refuses unreviewed independent clips and excludes disagreement-selected diagnostics. No automatic model can establish this independent reference by agreeing with itself.

@@ -12,6 +12,8 @@ import tempfile
 import time
 import uuid
 
+from private_paths import private_output
+
 ROOT = Path(__file__).resolve().parent
 MAX_SECONDS = 7 * 24 * 60 * 60
 
@@ -60,10 +62,7 @@ def prepare(args):
         args.max_seconds = seconds(args.max_seconds)
     if args.offset_seconds is not None:
         args.offset_seconds = seconds(args.offset_seconds, allow_zero=True)
-    output = args.output_directory.resolve()
-    worktree = ROOT.parent.parent.resolve()
-    if output == worktree or worktree in output.parents:
-        raise ValueError("Private outputs must be outside the worktree")
+    output = private_output(args.output_directory)
     manifest = json.loads(args.manifest.read_text())
     if not manifest.get("preparationComplete"):
         raise ValueError("Input preparation is incomplete")
@@ -72,7 +71,7 @@ def prepare(args):
     excerpt_policy = "explicit_offset" if args.offset_seconds is not None else "prefix"
     if args.offset_seconds is None:
         args.offset_seconds = 0.0
-        references = args.manifest.parent / "reference-intervals" / f"sample-{args.sample}.json"
+        references = Path(sample["referencePath"]) if sample.get("referencePath") else args.manifest.parent / "reference-intervals" / f"sample-{args.sample}.json"
         if args.paced and args.max_seconds is not None and references.exists():
             reference = json.loads(references.read_text())
             if reference["preparedAudioSHA256"] != sample["sha256"]:
