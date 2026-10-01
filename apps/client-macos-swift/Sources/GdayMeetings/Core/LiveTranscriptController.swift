@@ -28,6 +28,25 @@ final class LiveTranscriptController: ObservableObject {
     private var knownRecognitionSessions = Set<UUID>()
     private var diarizationProvider: ServiceProvider?
     private var speakerAnalysisReady = false
+    @Published private var transcriptionIssue: String?
+    @Published private var transcriptionFailures: [String] = []
+    @Published private var checkpointIssue: String?
+    @Published private var journalIssue: String?
+    @Published private var speakerAnalysisIssue: String?
+    @Published private var voiceMatchingIssue: String?
+    private var voiceMatchingError: Error?
+
+    var liveTranscriptIssues: [String] {
+        var issues = [transcriptionIssue, checkpointIssue, journalIssue].compactMap { $0 } + transcriptionFailures
+        if speakerLabelsEnabled || speakerRecognitionEnabled, let issue = speakerAnalysisIssue { issues.append(issue) }
+        if speakerRecognitionEnabled, let issue = voiceMatchingIssue { issues.append(issue) }
+        var seen = Set<String>()
+        return issues.filter { seen.insert($0).inserted }
+    }
+    var canOpenProviderSettings: Bool {
+        ((speakerLabelsEnabled || speakerRecognitionEnabled) && speakerAnalysisIssue != nil)
+            || (speakerRecognitionEnabled && voiceMatchingIssue != nil)
+    }
 
     var speakerStatusMessages: [String] {
         guard speakerLabelsEnabled || speakerRecognitionEnabled else { return [] }
@@ -108,6 +127,13 @@ final class LiveTranscriptController: ObservableObject {
         people: @escaping () -> [Person] = { [] },
         enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil
     ) {
+        transcriptionIssue = nil
+        transcriptionFailures = []
+        checkpointIssue = nil
+        journalIssue = nil
+        speakerAnalysisIssue = nil
+        voiceMatchingIssue = nil
+        voiceMatchingError = nil
         acceptedGenerations = []
         knownRecognitionSessions = []
         acceptedSpeakerGenerations = []
@@ -152,6 +178,7 @@ final class LiveTranscriptController: ObservableObject {
         guard value || speakerRecognitionEnabled else {
             waitingForSpeakerModel = false
             detachSpeakerSession()
+            speakerAnalysisIssue = nil
             speakerLabelStatus = "Live speaker labels are off."
             return
         }
@@ -163,12 +190,14 @@ final class LiveTranscriptController: ObservableObject {
             return
         }
         waitingForSpeakerModel = false
+        speakerAnalysisIssue = nil
         speakerGeneration = UUID()
         let token = speakerGeneration
         guard let provider = diarizationProvider, provider.supports(.liveDiarization),
             let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil, let sink
         else {
             speakerLabelStatus = "Choose a Nemotron provider in Settings to use live speaker labels."
+            speakerAnalysisIssue = speakerLabelStatus
             return
         }
         if UIPreview.enabled {
@@ -212,6 +241,7 @@ final class LiveTranscriptController: ObservableObject {
                 waitingForSpeakerModel = LocalModelManager.shared.state(for: model).phase != .ready
                 speakerLabelStatus =
                     "Live speaker labels are unavailable. \(error.localizedDescription) Recording continues."
+                speakerAnalysisIssue = speakerLabelStatus
             }
         }
     }
@@ -254,11 +284,21 @@ final class LiveTranscriptController: ObservableObject {
         guard token == speakerGeneration else { return }
         speakerAnalysisReady = false
         speakerLabelStatus = message
+        speakerAnalysisIssue = message
         refreshVoiceReadyStatus()
     }
 
     private func refreshVoiceReadyStatus() {
-        guard speakerRecognitionEnabled, voiceWorker != nil else { return }
+        guard speakerRecognitionEnabled else { return }
+        if let error = voiceMatchingError {
+            let message = LiveSpeakerModelDiagnostics.voiceFailure(
+                phase: LocalModelManager.shared.state(for: .voiceEmbedding).phase,
+                error: error, labelsAvailable: speakerAnalysisReady)
+            speakerRecognitionStatus = message
+            voiceMatchingIssue = message
+            return
+        }
+        guard voiceWorker != nil else { return }
         speakerRecognitionStatus =
             speakerAnalysisReady
             ? "Speaker recognition is ready. Waiting for clear speech."
@@ -266,6 +306,8 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func setSpeakerRecognitionEnabled(_ value: Bool) {
+        voiceMatchingIssue = nil
+        voiceMatchingError = nil
         waitingForVoiceModel = false
         closeDataEvent(voiceGeneration)
         voiceGeneration = UUID()
@@ -310,7 +352,12 @@ final class LiveTranscriptController: ObservableObject {
                 await worker.cancel()
                 guard token == voiceGeneration, !Task.isCancelled else { return }
                 waitingForVoiceModel = LocalModelManager.shared.state(for: .voiceEmbedding).phase != .ready
-                speakerRecognitionStatus = "Speaker recognition is unavailable. \(error.localizedDescription)"
+                voiceMatchingError = error
+                let message = LiveSpeakerModelDiagnostics.voiceFailure(
+                    phase: LocalModelManager.shared.state(for: .voiceEmbedding).phase,
+                    error: error, labelsAvailable: speakerAnalysisReady)
+                speakerRecognitionStatus = message
+                voiceMatchingIssue = message
             }
         }
     }
@@ -326,6 +373,7 @@ final class LiveTranscriptController: ObservableObject {
                 guard let embedding = try await worker.extract(sample), !Task.isCancelled,
                     voiceGeneration == voiceToken, acceptedSpeakerGenerations.contains(token)
                 else { return }
+                voiceMatchingIssue = nil
                 voiceEmbeddings[sample.speakerID] = embedding
                 draft?.speakerTimeline?.retainEmbedding(embedding, for: sample.speakerID)
                 checkpoint()
@@ -352,6 +400,7 @@ final class LiveTranscriptController: ObservableObject {
             catch {
                 guard voiceGeneration == voiceToken, !Task.isCancelled else { return }
                 speakerRecognitionStatus = "Couldn’t match this voice. Anonymous speaker labels are kept."
+                voiceMatchingIssue = speakerRecognitionStatus
             }
         }
     }
@@ -392,6 +441,8 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func setEnabled(_ value: Bool) {
+        transcriptionIssue = nil
+        transcriptionFailures = []
         // On restart, only the interval since recognition was detached is uncovered.
         // On first start the boundary is zero, including model preparation time.
         if enabled {
@@ -424,6 +475,7 @@ final class LiveTranscriptController: ObservableObject {
         checkpoint()
         guard #available(macOS 26.0, *) else {
             status = "Live transcript requires macOS 26 or later."
+            transcriptionIssue = status
             return
         }
         let provider = AppleLiveTranscription()
@@ -441,7 +493,7 @@ final class LiveTranscriptController: ObservableObject {
                     locale: locale, sources: sources, sink: sink, boundaries: boundaries,
                     receive: { [weak self] phrase, final in await self?.receive(phrase, final: final, token: token) },
                     gap: { [weak self] gap in await self?.recordGap(gap, token: token) },
-                    failure: { [weak self] message in await self?.setStatus(message, token: token) })
+                    failure: { [weak self] message in await self?.receiveTranscriptionFailure(message, token: token) })
                 guard generation == token else {
                     await provider.cancel()
                     return
@@ -451,14 +503,20 @@ final class LiveTranscriptController: ObservableObject {
                 let event = MeetingDataEvent(action: .sent, dataFlow: result.dataFlow)
                 dataEvents[token] = event
                 if let directory {
-                    do { try DataEventJournal.append(event, directory: directory) }
-                    catch { status = "Listening · Couldn’t save the live processing data event." }
+                    do {
+                        try DataEventJournal.append(event, directory: directory)
+                        journalIssue = nil
+                    }
+                    catch {
+                        journalIssue = "Couldn’t save the live processing data event."
+                    }
                 }
             }
             catch {
                 await provider.cancel()
                 guard generation == token, !Task.isCancelled else { return }
                 status = error.localizedDescription
+                transcriptionIssue = status
                 checkpoint()
             }
         }
@@ -547,6 +605,12 @@ final class LiveTranscriptController: ObservableObject {
         }
     }
 
+    func receiveTranscriptionFailure(_ message: String, token: UUID) {
+        guard acceptedGenerations.contains(token) else { return }
+        status = message
+        if !transcriptionFailures.contains(message) { transcriptionFailures.append(message) }
+    }
+
     private func setStatus(_ value: String, token: UUID) {
         guard token == generation else { return }
         status = value
@@ -572,8 +636,14 @@ final class LiveTranscriptController: ObservableObject {
     }
     private func checkpoint() {
         guard let draft, let directory else { return }
-        do { try draft.save(at: directory) }
-        catch { status = "Couldn’t save the live draft. Recording continues. Check available storage." }
+        do {
+            try draft.save(at: directory)
+            checkpointIssue = nil
+        }
+        catch {
+            status = "Couldn’t save the live draft. Recording continues. Check available storage."
+            checkpointIssue = status
+        }
     }
     private func openLocalDataEvent(
         _ token: UUID, targetID: UUID, targetName: String,
@@ -586,15 +656,25 @@ final class LiveTranscriptController: ObservableObject {
                 location: .local, targetID: targetID, targetName: targetName,
                 startedAt: Date(), bodies: bodies, purpose: purpose))
         dataEvents[token] = event
-        do { try DataEventJournal.append(event, directory: directory) }
-        catch { status = "Couldn’t save the live processing data event." }
+        do {
+            try DataEventJournal.append(event, directory: directory)
+            journalIssue = nil
+        }
+        catch {
+            journalIssue = "Couldn’t save the live processing data event."
+        }
     }
 
     private func closeDataEvent(_ token: UUID) {
         guard var event = dataEvents.removeValue(forKey: token), let directory else { return }
         event.dataFlow.endedAt = Date()
-        do { try DataEventJournal.append(event, directory: directory) }
-        catch { status = "Couldn’t save the live processing data event." }
+        do {
+            try DataEventJournal.append(event, directory: directory)
+            journalIssue = nil
+        }
+        catch {
+            journalIssue = "Couldn’t save the live processing data event."
+        }
     }
 }
 
@@ -621,5 +701,26 @@ private final class LiveFinishRace: @unchecked Sendable {
                 race.resolve(false)
             }
         }
+    }
+}
+
+enum LiveSpeakerModelDiagnostics {
+    static func voiceFailure(phase: LocalModelPhase, error: Error, labelsAvailable: Bool) -> String {
+        let continued = labelsAvailable ? " Anonymous speaker labels continue." : ""
+        guard let modelError = error as? LocalModelError, case .unavailable = modelError else {
+            return "Voice matching is unavailable. \(error.localizedDescription)" + continued
+        }
+        let action: String
+        switch phase {
+        case .downloading, .verifying, .preparing:
+            action = "Voice matching is waiting for the Voice Matching Model to finish setup."
+        case .failed:
+            action =
+                "The Voice Matching Model couldn’t be prepared. Open Nemotron in Settings → Service Providers and choose Retry or Verify under Voice Matching Model."
+        case .missing, .unverified, .cancelled, .ready:
+            action =
+                "Voice matching needs a separate model. Open Nemotron in Settings → Service Providers and download or verify Voice Matching Model."
+        }
+        return action + continued
     }
 }

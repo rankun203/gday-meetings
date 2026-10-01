@@ -19,6 +19,46 @@ private final class ModelDownloadObservations: @unchecked Sendable {
 }
 
 @MainActor struct LocalModelManagerTests {
+    @Test func legacyModelsCopyIntoDataFolderWithoutOverwritingExistingModels() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let legacy = fixture.appendingPathComponent("legacy")
+        let root = fixture.appendingPathComponent("library/LocalModels")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let data = Data("synthetic model".utf8)
+        try data.write(to: legacy.appendingPathComponent("model.bin"))
+        let files = LocalModelFiles(root: root)
+        try await files.importLegacyStorage(from: legacy)
+        #expect(try Data(contentsOf: root.appendingPathComponent("model.bin")) == data)
+        #expect(try Data(contentsOf: legacy.appendingPathComponent("model.bin")) == data)
+        let replacement = Data("new library model".utf8)
+        try replacement.write(to: root.appendingPathComponent("model.bin"))
+        try await files.importLegacyStorage(from: legacy)
+        #expect(try Data(contentsOf: root.appendingPathComponent("model.bin")) == replacement)
+        #expect(
+            !(try FileManager.default.contentsOfDirectory(atPath: fixture.appendingPathComponent("library").path))
+                .contains { $0.hasPrefix(".local-model-import-") })
+    }
+
+    @Test func unavailableDataFolderRejectsModelWritesAndExplicitRootDoesNotImport() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let unavailable = LocalModelManager(root: fixture, storageAvailable: false)
+        await #expect(throws: (any Error).self) { try await unavailable.openableDirectory(for: .voiceEmbedding) }
+        await unavailable.refresh()
+        #expect(unavailable.state(for: .voiceEmbedding).phase == .failed)
+        #expect(!FileManager.default.fileExists(atPath: fixture.path))
+        let isolated = LocalModelManager(root: fixture)
+        try await isolated.prepareStorage()
+        #expect(!FileManager.default.fileExists(atPath: fixture.path))
+        try isolated.suspendForLibraryChange()
+        await #expect(throws: LocalModelError.self) { try await isolated.openableDirectory(for: .voiceEmbedding) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.path))
+        isolated.resumeAfterLibraryChange()
+        let directory = try await isolated.openableDirectory(for: .voiceEmbedding)
+        #expect(directory.path.hasPrefix(fixture.path + "/"))
+    }
+
     @Test func throttledDownloadReportsPartialBytesAndCleansUpOnCancellation() async throws {
         let fixture = try HTTPFixture { _ in
             .init(bodyChunks: Array(repeating: Data(repeating: 7, count: 65_536), count: 128), chunkDelay: 0.025)

@@ -73,8 +73,12 @@ struct LocalSpeakerProviderView: View {
                 Text("Changes apply to the next recording or labeling job.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if draft.kind == .community1 && draft.enabledCapabilities.contains(.speakerRecognition) {
-                Section("Voice Model") { LocalModelDownloadView(modelID: .voiceEmbedding) }
+            if draft.kind == .nemotron || draft.enabledCapabilities.contains(.speakerRecognition) {
+                Section("Voice Matching Model") {
+                    LocalModelDownloadView(modelID: .voiceEmbedding)
+                    Text("Matches voices to People. Speaker labels work without this model.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section {
                 if let failure { Text(failure).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -190,12 +194,13 @@ struct LocalModelDownloadView: View {
         }
     }
     private func openFolder() {
-        let directory = models.modelDirectory(for: modelID)
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(directory)
+        Task {
+            do {
+                let directory = try await models.openableDirectory(for: modelID)
+                NSWorkspace.shared.open(directory)
+            }
+            catch { failure = "Couldn’t open the model folder. \(error.localizedDescription)" }
         }
-        catch { failure = "Couldn’t open the model folder. \(error.localizedDescription)" }
     }
 }
 

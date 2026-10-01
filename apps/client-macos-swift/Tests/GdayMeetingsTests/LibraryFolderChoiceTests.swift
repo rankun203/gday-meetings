@@ -21,7 +21,12 @@ struct LibraryFolderChoiceTests {
         try bytes.write(to: meeting.appendingPathComponent("audio.wav"))
         try Data("{}".utf8).write(to: meeting.appendingPathComponent("metadata.json"))
         try Data("index".utf8).write(to: source.appendingPathComponent("index.db"))
+        let models = source.appendingPathComponent("LocalModels/synthetic/revision")
+        try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+        try bytes.write(to: models.appendingPathComponent("model.bin"))
         try LibraryFolderChoice.copyLibrary(from: source, to: target) { _ in }
+        #expect(
+            try Data(contentsOf: target.appendingPathComponent("LocalModels/synthetic/revision/model.bin")) == bytes)
         #expect(try Data(contentsOf: target.appendingPathComponent("meetings/example/audio.wav")) == bytes)
         #expect(try Data(contentsOf: meeting.appendingPathComponent("audio.wav")) == bytes)
         #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent("index.db").path))

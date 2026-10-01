@@ -87,8 +87,16 @@ struct LiveTranscriptDraft: Codable, Equatable {
         let changes = overrides ?? []
         var finalized: [LiveTranscriptPhrase] = []
         var pending: [LiveTranscriptPhrase] = []
-        let resolvedFinal = phrases.flatMap { speakerTimeline?.attributing($0) ?? [$0] }
-        let resolvedPending = partials.flatMap { speakerTimeline?.attributing($0) ?? [$0] }
+        var preceding: [LiveAudioSource: LiveTranscriptPhrase] = [:]
+        func attribute(_ values: [LiveTranscriptPhrase]) -> [LiveTranscriptPhrase] {
+            values.sorted(by: LiveTranscriptPhrase.ordered).flatMap { phrase in
+                let rows = speakerTimeline?.attributing(phrase, preceding: preceding[phrase.source]) ?? [phrase]
+                preceding[phrase.source] = phrase
+                return rows
+            }
+        }
+        let resolvedFinal = attribute(phrases)
+        let resolvedPending = attribute(partials)
         let raw = resolvedFinal.map { ($0, true) } + resolvedPending.map { ($0, false) }
         for (phrase, final) in raw {
             let covered = changes.filter { $0.anchor.overlaps(phrase) }

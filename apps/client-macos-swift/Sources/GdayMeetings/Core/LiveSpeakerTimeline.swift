@@ -108,15 +108,15 @@ struct LiveSpeakerTimeline: Codable, Equatable {
 
     /// Keep overlap unresolved. A name requires one identity covering most of a
     /// timed word; missing timing never invents a new word boundary.
-    func attributing(_ phrase: LiveTranscriptPhrase) -> [LiveTranscriptPhrase] {
+    func attributing(_ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil) -> [LiveTranscriptPhrase] {
         let ids = Set(speakers.filter { $0.source == phrase.source }.map(\.id))
-        let relevant = intervals.filter { ids.contains($0.speakerID) && $0.start < phrase.end && $0.end > phrase.start }
-        guard !relevant.isEmpty else { return [phrase] }
-        func identity(_ start: Double, _ end: Double) -> LiveSpeakerIdentity? {
+        let sourceIntervals = intervals.filter { ids.contains($0.speakerID) }
+        let relevant = sourceIntervals.filter { $0.start < phrase.end && $0.end > phrase.start }
+        func identity(_ start: Double, _ end: Double, activity: [LiveSpeakerInterval]) -> LiveSpeakerIdentity? {
             let duration = end - start
             guard duration > 0 else { return nil }
             var coverage: [UUID: Double] = [:]
-            for interval in relevant {
+            for interval in activity {
                 coverage[interval.speakerID, default: 0] += max(0, min(end, interval.end) - max(start, interval.start))
             }
             let active = coverage.filter { $0.value > duration * 0.1 }
@@ -131,12 +131,41 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                 row.personID = identity.personID
                 row.voiceEmbedding = identity.voiceEmbedding
             }
+            else if !ids.isEmpty {
+                row.diarizationLabel = phrase.source == .microphone ? "mic_?" : "sys_?"
+                row.speakerIdentity = nil
+                row.personID = nil
+                row.voiceEmbedding = nil
+            }
             return row
         }
-        guard phrase.hasCompleteWordTiming else { return [apply(identity(phrase.start, phrase.end), to: phrase)] }
+        guard !relevant.isEmpty else { return [apply(nil, to: phrase)] }
+        guard phrase.hasCompleteWordTiming else {
+            return [apply(identity(phrase.start, phrase.end, activity: relevant), to: phrase)]
+        }
+        var precedingEvidence: (Double, Double, LiveSpeakerIdentity?)?
+        if let preceding, preceding.source == phrase.source, preceding.session == phrase.session,
+            preceding.hasCompleteWordTiming, preceding.end <= phrase.start,
+            phrase.start - preceding.end <= 0.5
+        {
+            let precedingActivity = sourceIntervals.filter {
+                $0.start < preceding.end && $0.end > preceding.start
+            }
+            // Use observed word attribution, not a previously inferred bridge.
+            for word in preceding.words.reversed() {
+                guard let speaker = identity(word.start, word.end, activity: precedingActivity) else { break }
+                if let current = precedingEvidence {
+                    guard current.2?.id == speaker.id else { break }
+                    precedingEvidence?.0 = word.start
+                }
+                else {
+                    precedingEvidence = (word.start, word.end, speaker)
+                }
+            }
+        }
         var groups: [(Double, Double, LiveSpeakerIdentity?)] = []
         for word in phrase.words {
-            let speaker = identity(word.start, word.end)
+            let speaker = identity(word.start, word.end, activity: relevant)
             if let last = groups.last, last.2?.id == speaker?.id {
                 groups[groups.count - 1].1 = word.end
             }
@@ -154,7 +183,7 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                     $0.source == phrase.source && $0.start < run.1 && $0.end > run.0
                 })
             else { continue }
-            let before = index > 0 ? originalGroups[index - 1] : nil
+            let before = index > 0 ? originalGroups[index - 1] : precedingEvidence
             let after = index + 1 < originalGroups.count ? originalGroups[index + 1] : nil
             let words = phrase.words.filter {
                 let midpoint = ($0.start + $0.end) / 2
@@ -169,7 +198,17 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                 singleton && run.1 - run.0 <= 1
                 && before?.2 != nil && before?.2?.id == after?.2?.id
                 && before.map({ $0.1 - $0.0 >= 0.6 }) == true && after.map({ $0.1 - $0.0 >= 0.6 }) == true
-            guard run.1 - run.0 <= 0.35 || interiorSingleton else { continue }
+            let corroboratedLeadingWord =
+                index == 0 && precedingEvidence != nil && words.count == 1
+                && run.1 - run.0 <= 1.5 && before?.2?.id == after?.2?.id && before?.2 != nil
+                && before.map({ $0.1 - $0.0 >= 0.6 }) == true && after.map({ $0.1 - $0.0 >= 0.6 }) == true
+            guard run.1 - run.0 <= 0.35 || interiorSingleton || corroboratedLeadingWord else { continue }
+            let evidenceStart = min(run.0, before?.1 ?? run.0)
+            guard
+                !gaps.contains(where: {
+                    $0.source == phrase.source && $0.start < run.1 && $0.end > evidenceStart
+                })
+            else { continue }
             let candidate: LiveSpeakerIdentity?
             if let before, let after {
                 candidate = before.2?.id == after.2?.id ? before.2 : nil
@@ -178,13 +217,15 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                 candidate = before?.2 ?? after?.2
             }
             guard let candidate,
-                before.map({ $0.2?.id == candidate.id && run.0 - $0.1 <= 0.15 }) ?? true,
+                before.map({
+                    $0.2?.id == candidate.id && run.0 - $0.1 <= (index == 0 && precedingEvidence != nil ? 0.5 : 0.15)
+                }) ?? true,
                 after.map({ $0.2?.id == candidate.id && $0.0 - run.1 <= 0.15 }) ?? true,
                 [before, after].compactMap({ $0 }).contains(where: {
                     $0.2?.id == candidate.id && $0.1 - $0.0 >= 0.6
                 }),
-                !relevant.contains(where: {
-                    $0.speakerID != candidate.id && $0.start < run.1 && $0.end > run.0
+                !sourceIntervals.contains(where: {
+                    $0.speakerID != candidate.id && $0.start < run.1 && $0.end > evidenceStart
                 })
             else { continue }
             groups[index].2 = candidate

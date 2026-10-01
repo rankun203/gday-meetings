@@ -39,6 +39,31 @@ import Testing
         #expect(expanded.first { $0.id == replacement.id }?.speakerID == replacement.id)
     }
 
+    @Test func savedAndLiveAnonymousColorsMatchWithoutMergingAssignmentTargets() {
+        let first = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "First passage")
+        let second = LiveTranscriptPhrase(session: UUID(), source: .system, start: 2, end: 3, text: "Second passage")
+        let rows = LiveTranscriptDisplay.rows(finalized: [first, second], partials: [], people: [])
+        var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "en")
+        draft.phrases = [first, second]
+        let savedSpeakers = draft.speakers
+        #expect(savedSpeakers.count == 2)
+        #expect(savedSpeakers[0].id != savedSpeakers[1].id)
+        let savedKey = TranscriptSpeakerPalette.displayKey(
+            personID: savedSpeakers[0].personID, track: savedSpeakers[0].track, label: savedSpeakers[0].label)
+        #expect(
+            savedKey
+                == TranscriptSpeakerPalette.displayKey(
+                    personID: savedSpeakers[1].personID, track: savedSpeakers[1].track, label: savedSpeakers[1].label))
+        #expect(rows[0].speakerColorIndex == TranscriptSpeakerPalette.index(for: savedKey))
+        #expect(rows[0].speakerColorIndex == rows[1].speakerColorIndex)
+        #expect(rows[0].speakerID != rows[1].speakerID)
+        #expect(savedKey == TranscriptSpeakerPalette.displayKey(personID: nil, track: "SYS", label: first.speakerLabel))
+        let person = UUID()
+        #expect(
+            TranscriptSpeakerPalette.displayKey(personID: person, track: "system", label: "First")
+                == TranscriptSpeakerPalette.displayKey(personID: person, track: "microphone", label: "Another"))
+    }
+
     @Test func provisionalUnderlineEndsWhenFinalized() {
         var row = TranscriptDisplayRow(
             id: UUID(), start: 0, speaker: "Speaker 1", speakerID: UUID(), text: "A changing phrase",
@@ -50,12 +75,39 @@ import Testing
                 == NSUnderlineStyle.single.rawValue)
         #expect(
             cell.body.attributedStringValue.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
-                == .systemRed)
+                == NSColor(Color.red))
         row.isProvisional = false
         cell.configure(row, showsSpeakers: true)
         #expect(cell.body.attributedStringValue.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
         #expect(cell.body.attributedStringValue.attribute(.foregroundColor, at: 2, effectiveRange: nil) == nil)
         #expect(cell.body.stringValue == row.text)
+    }
+
+    @Test func onlyNewestEnabledPartialHasOriginalTwoColorTrail() {
+        let earlier = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone, start: 0, end: 2, text: "Earlier source words")
+        let newest = LiveTranscriptPhrase(
+            session: UUID(), source: .system, start: 1, end: 3, text: "Newest source words")
+        let rows = LiveTranscriptDisplay.rows(finalized: [], partials: [earlier, newest], people: [])
+        #expect(rows.first { $0.id == earlier.id }?.recentWordRanges.isEmpty == true)
+        let active = rows.first { $0.id == newest.id }!
+        #expect(active.recentWordRanges.count == 2)
+        let cell = TranscriptNativeCell()
+        cell.configure(active, showsSpeakers: true)
+        let trailing =
+            cell.body.attributedStringValue.attribute(
+                .foregroundColor, at: active.recentWordRanges[0].location, effectiveRange: nil) as? NSColor
+        let latest =
+            cell.body.attributedStringValue.attribute(
+                .foregroundColor, at: active.recentWordRanges[1].location, effectiveRange: nil) as? NSColor
+        #expect(trailing == TranscriptLiveWordColor.trailing)
+        #expect(latest == NSColor(Color.red))
+        #expect(trailing != latest)
+        let disabled = LiveTranscriptDisplay.rows(
+            finalized: [], partials: [earlier, newest], people: [], recognitionEnabled: false)
+        #expect(disabled.allSatisfy { $0.recentWordRanges.isEmpty })
+        let final = LiveTranscriptDisplay.rows(finalized: [newest], partials: [], people: [])
+        #expect(final[0].recentWordRanges.isEmpty)
     }
 
     @Test func liveTimestampDoesNotAdvertisePlayback() {

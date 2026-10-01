@@ -81,7 +81,8 @@ final class MeetingStore: ObservableObject {
     private var writableBeforeFolderChange = true
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
-        !isChangingLibrary && recordingID == nil && !isStartingRecording && !isFinalizingRecording
+        !LocalModelManager.shared.isBusy && !isChangingLibrary && recordingID == nil && !isStartingRecording
+            && !isFinalizingRecording
             && !captureTransition && backgroundJobs.isEmpty && managedTaskOperations.isEmpty
             && !managedTasks.contains(where: { $0.state.isActive })
     }
@@ -228,6 +229,7 @@ final class MeetingStore: ObservableObject {
             guard !copyCurrent || libraryWritable else {
                 throw MeetingError.message("The current data folder is unavailable. Choose an existing library.")
             }
+            try LocalModelManager.shared.suspendForLibraryChange()
             try notesStorage.flushAll()
             writableBeforeFolderChange = canSave
             previousFolderPreference = folderPreferences.data
@@ -260,6 +262,7 @@ final class MeetingStore: ObservableObject {
             isCopyingLibrary = false
         }
         catch {
+            LocalModelManager.shared.resumeAfterLibraryChange()
             isCopyingLibrary = false
             canSave = writableBeforeFolderChange
             if libraryMonitor == nil && canSave { startLibraryMonitoring() }
@@ -275,6 +278,7 @@ final class MeetingStore: ObservableObject {
         guard pendingLibraryFolder != nil else { return }
         folderPreferences.data = previousFolderPreference
         pendingLibraryFolder = nil
+        LocalModelManager.shared.resumeAfterLibraryChange()
         canSave = writableBeforeFolderChange
         if canSave { startLibraryMonitoring() }
     }

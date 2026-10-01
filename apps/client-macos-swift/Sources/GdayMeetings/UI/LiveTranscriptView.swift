@@ -5,6 +5,8 @@ import SwiftUI
 struct LiveTranscriptView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject var controller: LiveTranscriptController
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var followsLive = true
     @ViewState private var displayRows: [TranscriptDisplayRow] = []
     @ViewState private var displayGeneration = 0
@@ -15,34 +17,21 @@ struct LiveTranscriptView: View {
         let phrases = displayedPhrases
         let displayedMeetingID = controller.draft?.meetingID
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Toggle("Live Transcript", isOn: Binding(get: { controller.enabled }, set: controller.setEnabled))
-                    .toggleStyle(.switch).controlSize(.small)
-                Spacer()
-                Button("Follow Live") { followsLive = true }
-                    .disabled(followsLive || displayRows.isEmpty)
-            }
-            Text(controller.status).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Toggle(
-                "Speaker Recognition",
-                isOn: Binding(
+            LiveTranscriptHeader(
+                enabled: Binding(get: { controller.enabled }, set: controller.setEnabled),
+                recognizesSpeakers: Binding(
                     get: { controller.speakerLabelsEnabled || controller.speakerRecognitionEnabled },
                     set: { enabled in
                         controller.setSpeakerLabelsEnabled(enabled)
                         controller.setSpeakerRecognitionEnabled(enabled)
-                    })
-            )
-            .toggleStyle(.switch).controlSize(.small)
-            ForEach(controller.speakerStatusMessages, id: \.self) { message in
-                Text(message).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if hasUnresolvedTiming {
-                Text("Some edited passages overlap recognition text because their word timing is unavailable.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                    }),
+                followsLive: followsLive, hasRows: !displayRows.isEmpty,
+                issues: headerIssues, showsProviderSettings: controller.canOpenProviderSettings,
+                follow: { followsLive = true },
+                openProviders: {
+                    settingsTab = "providers"
+                    openSettings()
+                })
             if displayRows.isEmpty {
                 ContentUnavailableView {
                     Label(
@@ -107,8 +96,15 @@ struct LiveTranscriptView: View {
         .onAppear { refreshRows() }
         .onChange(of: controller.draft) { _, _ in refreshRows() }
         .onChange(of: controller.partials) { _, _ in refreshRows() }
+        .onChange(of: controller.enabled) { _, _ in refreshRows() }
         .onChange(of: controller.speakerLabelsEnabled) { _, _ in refreshRows() }
         .onChange(of: store.people.map { PersonDisplayIdentity(id: $0.id, name: $0.name) }) { _, _ in refreshRows() }
+    }
+
+    private var headerIssues: [String] {
+        controller.liveTranscriptIssues
+            + (hasUnresolvedTiming
+                ? ["Some edited passages overlap recognition text because their word timing is unavailable."] : [])
     }
 
     private func refreshRows() {
@@ -117,7 +113,8 @@ struct LiveTranscriptView: View {
         let partials = presented.partials
         displayedPhrases = Dictionary(uniqueKeysWithValues: (finalized + partials).map { ($0.id, $0) })
         hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
-        let updated = LiveTranscriptDisplay.rows(finalized: finalized, partials: partials, people: store.people)
+        let updated = LiveTranscriptDisplay.rows(
+            finalized: finalized, partials: partials, people: store.people, recognitionEnabled: controller.enabled)
         if updated != displayRows {
             displayRows = updated
             displayGeneration += 1
@@ -126,17 +123,21 @@ struct LiveTranscriptView: View {
 }
 
 enum LiveTranscriptDisplay {
-    static func rows(finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase], people: [Person])
+    static func rows(
+        finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase], people: [Person],
+        recognitionEnabled: Bool = true
+    )
         -> [TranscriptDisplayRow]
     {
+        let activePhraseID = recognitionEnabled ? LiveTranscriptPresentation.activePhraseID(partials) : nil
         let names = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0.name) })
         let rows = LiveTranscriptPresentation.rows(finalized: finalized, partials: partials)
         func personID(_ phrase: LiveTranscriptPhrase) -> UUID? {
             phrase.personID.flatMap { names[$0] == nil ? nil : $0 }
         }
         func key(_ phrase: LiveTranscriptPhrase) -> String {
-            personID(phrase)?.uuidString ?? phrase.speakerIdentity?.uuidString
-                ?? "\(phrase.source.rawValue):\(phrase.session.uuidString)"
+            TranscriptSpeakerPalette.displayKey(
+                personID: personID(phrase), track: phrase.source.rawValue, label: phrase.speakerLabel)
         }
         return rows.map { row in
             let phrase = row.phrase
@@ -146,7 +147,7 @@ enum LiveTranscriptDisplay {
                 speakerID: phrase.id, text: phrase.text,
                 personID: personID(phrase), speakerColorIndex: TranscriptSpeakerPalette.index(for: key(phrase)),
                 isProvisional: row.provisional && !phrase.isUserEdited,
-                recentWordRanges: row.provisional && !phrase.isUserEdited
+                recentWordRanges: row.provisional && !phrase.isUserEdited && phrase.id == activePhraseID
                     ? LiveTranscriptPresentation.recentWordRanges(in: phrase).map { NSRange($0, in: phrase.text) } : [],
                 accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil)
         }
@@ -156,4 +157,72 @@ enum LiveTranscriptDisplay {
 private struct PersonDisplayIdentity: Equatable {
     let id: UUID
     let name: String
+}
+
+/// Compact controls stay separate from volatile transcript rows.
+struct LiveTranscriptHeader: View {
+    @Binding var enabled: Bool
+    @Binding var recognizesSpeakers: Bool
+    let followsLive: Bool
+    let hasRows: Bool
+    let issues: [String]
+    let showsProviderSettings: Bool
+    let follow: () -> Void
+    let openProviders: () -> Void
+    @ViewState private var showsIssues = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle("Live Transcript", isOn: $enabled)
+                .toggleStyle(.switch).controlSize(.small).fixedSize()
+            if enabled {
+                Toggle("Speaker Recognition", isOn: $recognizesSpeakers)
+                    .toggleStyle(.switch).controlSize(.small).fixedSize()
+            }
+            if !issues.isEmpty {
+                Button {
+                    showsIssues.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.orange)
+                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show transcript issues")
+                .accessibilityLabel("Transcript issues")
+                .popover(isPresented: $showsIssues) {
+                    LiveTranscriptIssueDetails(
+                        issues: issues, showsProviderSettings: showsProviderSettings,
+                        openProviders: {
+                            showsIssues = false
+                            openProviders()
+                        })
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Follow Live", action: follow)
+                .disabled(followsLive || !hasRows)
+                .fixedSize()
+        }
+    }
+}
+
+struct LiveTranscriptIssueDetails: View {
+    let issues: [String]
+    let showsProviderSettings: Bool
+    let openProviders: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Transcript Issues").font(.headline)
+            ForEach(issues, id: \.self) { issue in
+                Text(issue).fixedSize(horizontal: false, vertical: true)
+            }
+            if showsProviderSettings {
+                Button("Open Service Providers", action: openProviders)
+            }
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .leading)
+    }
 }

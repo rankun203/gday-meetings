@@ -725,6 +725,18 @@ struct NativeTranscriptView: NSViewRepresentable {
 /// Resolve semantic colors during drawing, rather than caching a CGColor before
 /// the reused cell has joined a window with its effective appearance.
 enum TranscriptSpeakerPalette {
+    static func displayKey(personID: UUID?, track: String, label: String) -> String {
+        if let personID { return personID.uuidString }
+        let source = track.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalized: String
+        switch source {
+        case "mic", "microphone": normalized = "microphone"
+        case "sys", "system", "system audio": normalized = "system"
+        default: normalized = source
+        }
+        return "\(normalized):\(label)"
+    }
+
     static func index(for key: String) -> Int {
         let hash = key.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
         return Int(hash % 8)
@@ -849,11 +861,14 @@ enum TranscriptSpeakerPalette {
             }
             let text = NSMutableAttributedString(string: row.text, attributes: attributes)
             if row.isProvisional {
-                for range in row.recentWordRanges
+                for (index, range) in row.recentWordRanges.enumerated()
                 where range.location >= 0 && range.length > 0
                     && range.location <= text.length && range.length <= text.length - range.location
                 {
-                    text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: range)
+                    text.addAttribute(
+                        .foregroundColor,
+                        value: index == row.recentWordRanges.count - 1
+                            ? NSColor(Color.red) : TranscriptLiveWordColor.trailing, range: range)
                 }
             }
             body.attributedStringValue = text
@@ -933,5 +948,13 @@ enum TranscriptSpeakerPalette {
     @objc private func accessibilityAssign() -> Bool {
         assignSpeaker?()
         return true
+    }
+}
+
+/// Preserve the original live trail's public SwiftUI color mix in native text.
+enum TranscriptLiveWordColor {
+    static var trailing: NSColor {
+        if #available(macOS 15, *) { return NSColor(Color.red.mix(with: .primary, by: 0.5)) }
+        return NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed
     }
 }

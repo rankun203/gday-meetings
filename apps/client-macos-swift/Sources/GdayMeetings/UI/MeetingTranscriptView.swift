@@ -192,6 +192,7 @@ struct MeetingTranscriptView: View {
         }
         let people = Dictionary(uniqueKeysWithValues: store.people.map { ($0.id, $0.name) })
         let speakers = usesCheckpoint ? draft?.speakers ?? [] : meeting.speakers
+        let speakerTracks = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.track) })
         let assignedPeople = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.personID) })
         let names = Dictionary(
             uniqueKeysWithValues: speakers.map { speaker in
@@ -205,7 +206,10 @@ struct MeetingTranscriptView: View {
             || (draft?.hasUsableText == true && Set(source.map(\.id)) == Set(draft?.segments.map(\.id) ?? []))
         func colorKey(_ segment: TranscriptSegment) -> String {
             let personID = segment.speakerID.flatMap { assignedPeople[$0] ?? nil }
-            return personID?.uuidString ?? segment.speakerID?.uuidString ?? segment.speaker
+            let label = segment.speakerID.flatMap { names[$0] } ?? SpeakerLabelPresentation.display(segment.speaker)
+            return TranscriptSpeakerPalette.displayKey(
+                personID: personID.flatMap { people[$0] == nil ? nil : $0 },
+                track: segment.speakerID.flatMap { speakerTracks[$0] } ?? "", label: label)
         }
         let colorIndices = TranscriptSpeakerPalette.indices(for: source.map(colorKey))
         displayRows = source.map { segment in

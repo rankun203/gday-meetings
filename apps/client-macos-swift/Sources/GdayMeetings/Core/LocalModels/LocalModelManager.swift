@@ -46,7 +46,48 @@ enum LocalModelError: LocalizedError {
 /// One coordinator owns installation, readiness and leases for every local feature.
 @MainActor
 final class LocalModelManager: ObservableObject {
-    static let shared = LocalModelManager()
+    static private(set) var shared = LocalModelManager(
+        root: LibraryLocation.directory().appendingPathComponent("LocalModels", isDirectory: true),
+        storageAvailable: false)
+
+    static func configureShared(dataDirectory: URL, available: Bool, migrateLegacy: Bool) {
+        shared = LocalModelManager(
+            root: dataDirectory.appendingPathComponent("LocalModels", isDirectory: true),
+            storageAvailable: available,
+            legacyRoot: migrateLegacy
+                ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("GdayMeetings/LocalModels", isDirectory: true) : nil)
+    }
+
+    var isBusy: Bool { storageOperations > 0 || !tasks.isEmpty || !leases.isEmpty }
+    private var storageOperations = 0
+    private var storageSuspended = false
+
+    func suspendForLibraryChange() throws {
+        guard !isBusy else { throw LocalModelError.busy }
+        storageSuspended = true
+    }
+
+    func resumeAfterLibraryChange() { storageSuspended = false }
+    private let storageAvailable: Bool
+    private let legacyRoot: URL?
+
+    func prepareStorage() async throws {
+        guard !storageSuspended else { throw LocalModelError.busy }
+        guard storageAvailable else {
+            throw MeetingError.message("The data folder is unavailable. Choose a folder in Settings → Data.")
+        }
+        storageOperations += 1
+        defer { storageOperations -= 1 }
+        try await worker.importLegacyStorage(from: legacyRoot)
+    }
+
+    func openableDirectory(for id: LocalModelID) async throws -> URL {
+        try await prepareStorage()
+        let directory = modelDirectory(for: id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
     @Published private(set) var states: [LocalModelID: LocalModelState] = [:]
     private let root: URL
     private let worker: LocalModelFiles
@@ -56,15 +97,16 @@ final class LocalModelManager: ObservableObject {
     private var leases: [UUID: LocalModelID] = [:]
 
     init(
-        root: URL? = nil,
+        root: URL,
+        storageAvailable: Bool = true,
+        legacyRoot: URL? = nil,
         descriptor: @escaping (LocalModelID) -> LocalModelDescriptor = LocalModelRegistry.descriptor,
         preparer: LocalModelFiles.Preparer? = nil
     ) {
         self.descriptor = descriptor
-        self.root =
-            root
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("GdayMeetings/LocalModels", isDirectory: true)
+        self.root = root
+        self.storageAvailable = storageAvailable
+        self.legacyRoot = legacyRoot
         worker = LocalModelFiles(root: self.root, preparer: preparer)
         for id in LocalModelID.allCases {
             states[id] = .init(totalBytes: descriptor(id).downloadBytes)
@@ -79,6 +121,16 @@ final class LocalModelManager: ObservableObject {
     }
 
     func refresh() async {
+        storageOperations += 1
+        defer { storageOperations -= 1 }
+        do { try await prepareStorage() }
+        catch {
+            for id in LocalModelID.allCases where tasks[id] == nil {
+                states[id]?.phase = .failed
+                states[id]?.message = error.localizedDescription
+            }
+            return
+        }
         for id in LocalModelID.allCases where tasks[id] == nil && state(for: id).inUse == 0 {
             // Ready means this process verified and prepared the exact pinned assets.
             // An externally copied folder is never a readiness receipt.
@@ -114,6 +166,7 @@ final class LocalModelManager: ObservableObject {
         tasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
+                try await prepareStorage()
                 if download {
                     try await worker.install(descriptor, directory: directory) { [weak self] count in
                         Task { @MainActor in
@@ -169,6 +222,9 @@ final class LocalModelManager: ObservableObject {
     func acquireInstalled(id: LocalModelID) async throws -> LocalModelLease { try await acquire(id) }
 
     func acquire(_ id: LocalModelID) async throws -> LocalModelLease {
+        storageOperations += 1
+        defer { storageOperations -= 1 }
+        try await prepareStorage()
         if state(for: id).phase != .ready {
             if tasks[id] == nil,
                 await worker.hasPreparationReceipt(descriptor(id), directory: modelDirectory(for: id))
@@ -214,6 +270,9 @@ final class LocalModelManager: ObservableObject {
     }
 
     func remove(_ id: LocalModelID) async throws {
+        storageOperations += 1
+        defer { storageOperations -= 1 }
+        try await prepareStorage()
         guard state(for: id).inUse == 0 else { throw LocalModelError.inUse }
         guard tasks[id] == nil else { throw LocalModelError.busy }
         // Mark unavailable before yielding so a concurrent acquire cannot race removal.
@@ -345,6 +404,23 @@ actor LocalModelFiles {
     init(root: URL, preparer: Preparer? = nil) {
         self.root = root
         self.preparer = preparer
+    }
+
+    /// Publish a complete copy only when this library has no model folder yet.
+    /// Existing library installations and the legacy source are never overwritten.
+    func importLegacyStorage(from legacy: URL?) throws {
+        guard let legacy, !FileManager.default.fileExists(atPath: root.path),
+            FileManager.default.fileExists(atPath: legacy.path)
+        else { return }
+        let manager = FileManager.default
+        try manager.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let staging = root.deletingLastPathComponent().appendingPathComponent(
+            ".local-model-import-" + UUID().uuidString)
+        defer { try? manager.removeItem(at: staging) }
+        try Task.checkCancellation()
+        try manager.copyItem(at: legacy, to: staging)
+        try Task.checkCancellation()
+        try manager.moveItem(at: staging, to: root)
     }
 
     private func safeURL(_ asset: LocalModelAsset, directory: URL) throws -> URL {

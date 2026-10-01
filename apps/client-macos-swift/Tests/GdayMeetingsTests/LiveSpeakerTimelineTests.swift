@@ -337,7 +337,8 @@ extension LiveSpeakerTimelineTests {
         let separateShortPhrase = LiveTranscriptPhrase(
             session: UUID(), source: .microphone,
             start: 2, end: 2.2, text: "好", words: [.init(text: "好", start: 2, end: 2.2)])
-        #expect(base.attributing(separateShortPhrase) == [separateShortPhrase])
+        #expect(base.attributing(separateShortPhrase).map(\.text) == [separateShortPhrase.text])
+        #expect(base.attributing(separateShortPhrase).first?.speakerLabel == "mic_?")
     }
 
     @Test func zeroDurationWordTimingDoesNotDropCharactersWhenAttributing() {
@@ -442,5 +443,67 @@ extension LiveSpeakerTimelineTests {
         reversed.words.swapAt(0, 1)
         #expect(!reversed.hasCompleteWordTiming)
         #expect(timeline.attributing(reversed).map(\.text) == [original.text])
+    }
+}
+
+extension LiveSpeakerTimelineTests {
+    @Test func leadingWordRequiresCorroboratedPreviousPhraseAndKeepsRawBoundaries() {
+        let session = UUID()
+        let generation = UUID()
+        let speaker = identity(.system, generation, 1)
+        let other = identity(.system, generation, 0)
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [speaker, other]
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0, end: 2),
+            .init(speakerID: speaker.id, start: 3.2, end: 5),
+        ]
+        let previous = LiveTranscriptPhrase(
+            session: session, source: .system, start: 0, end: 2,
+            text: "Review the draft.", words: [.init(text: "Review the draft.", start: 0, end: 2)])
+        let current = LiveTranscriptPhrase(
+            session: session, source: .system, start: 2, end: 5,
+            text: "Then save the changes.",
+            words: [
+                .init(text: "Then", start: 2, end: 3.2),
+                .init(text: "save the changes.", start: 3.2, end: 5),
+            ])
+        #expect(timeline.attributing(current).count == 2)
+        #expect(timeline.attributing(current).first?.speakerLabel == "sys_?")
+        let joined = timeline.attributing(current, preceding: previous)
+        #expect(joined.count == 1 && joined[0].text == current.text && joined[0].id == current.id)
+        #expect(joined[0].speakerIdentity == speaker.id)
+        var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "en")
+        draft.speakerTimeline = timeline
+        draft.accept(previous)
+        draft.accept(current)
+        #expect(draft.resolvedRows().finalized.map(\.text) == [previous.text, current.text])
+        #expect(draft.phrases.count == 2)
+        var anotherSession = previous
+        anotherSession.session = UUID()
+        #expect(timeline.attributing(current, preceding: anotherSession).count == 2)
+        timeline.gaps = [.init(source: .system, start: 2, end: 2.1, reason: "Synthetic gap")]
+        #expect(timeline.attributing(current, preceding: previous).count == 2)
+        timeline.gaps = []
+        timeline.intervals.append(.init(speakerID: other.id, start: 2.3, end: 2.5))
+        #expect(timeline.attributing(current, preceding: previous).count == 2)
+        timeline.intervals.removeLast()
+        timeline.intervals[0].speakerID = other.id
+        #expect(timeline.attributing(current, preceding: previous).count == 2)
+    }
+
+    @Test func unknownDiarizationIsDistinctFromFirstSlotAndPreAnalysisDefault() {
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone, start: 0, end: 1,
+            text: "Example", words: [.init(text: "Example", start: 0, end: 1)])
+        var timeline = LiveSpeakerTimeline()
+        #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_01")
+        let speaker = identity(.microphone, UUID(), 0)
+        timeline.speakers = [speaker]
+        #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_?")
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        timeline.intervals = [.init(speakerID: speaker.id, start: 0, end: 1)]
+        #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_01")
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
     }
 }

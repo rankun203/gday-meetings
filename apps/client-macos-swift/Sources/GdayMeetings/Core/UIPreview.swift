@@ -33,9 +33,17 @@ enum UIPreview {
     }
 
     @MainActor static func makeStore() -> MeetingStore {
-        guard enabled else { return MeetingStore() }
+        guard enabled else {
+            let store = MeetingStore()
+            LocalModelManager.configureShared(
+                dataDirectory: store.dataDirectory, available: store.libraryWritable,
+                migrateLegacy: ProcessInfo.processInfo.environment["GDAY_SWIFT_DATA_DIR"] == nil)
+            return store
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Gday-UI-Preview-\(UUID())")
         let store = MeetingStore(dataDirectory: directory)
+        LocalModelManager.configureShared(
+            dataDirectory: directory, available: store.libraryWritable, migrateLegacy: false)
         do {
             for title in ["Synthetic single track", "Synthetic conversation"] {
                 var meeting = Meeting(title: title)

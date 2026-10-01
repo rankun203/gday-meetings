@@ -217,3 +217,93 @@ extension LiveTranscriptEditingTests {
         await controller.finish()
     }
 }
+
+extension LiveTranscriptEditingTests {
+    @Test func missingVoiceModelDiagnosticDistinguishesWorkingSpeakerLabels() {
+        let message = LiveSpeakerModelDiagnostics.voiceFailure(
+            phase: .missing, error: LocalModelError.unavailable, labelsAvailable: true)
+        #expect(message.contains("Voice matching needs a separate model"))
+        #expect(message.contains("Nemotron in Settings → Service Providers"))
+        #expect(message.contains("Voice Matching Model"))
+        #expect(message.contains("Anonymous speaker labels continue"))
+        let unavailableLabels = LiveSpeakerModelDiagnostics.voiceFailure(
+            phase: .unverified, error: LocalModelError.unavailable, labelsAvailable: false)
+        #expect(!unavailableLabels.contains("labels continue"))
+        let preparation = LiveSpeakerModelDiagnostics.voiceFailure(
+            phase: .preparing, error: LocalModelError.unavailable, labelsAvailable: true)
+        #expect(preparation.contains("finish setup"))
+        let storage = LiveSpeakerModelDiagnostics.voiceFailure(
+            phase: .missing, error: MeetingError.message("Synthetic data folder is unavailable."),
+            labelsAvailable: false)
+        #expect(storage.contains("Synthetic data folder is unavailable"))
+        #expect(!storage.contains("download or verify"))
+    }
+
+    @Test @MainActor func compactLiveIssuesOmitOffStateAndExposeProviderProblem() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let controller = LiveTranscriptController()
+        controller.begin(
+            meetingID: UUID(), language: "en", directory: directory,
+            sources: [.microphone], sink: LiveAudioSink(), enabled: false)
+        #expect(controller.liveTranscriptIssues.isEmpty)
+        #expect(!controller.canOpenProviderSettings)
+        controller.setSpeakerLabelsEnabled(true)
+        controller.setSpeakerRecognitionEnabled(true)
+        #expect(controller.liveTranscriptIssues.count == 1)
+        #expect(controller.liveTranscriptIssues[0].contains("Nemotron"))
+        #expect(controller.canOpenProviderSettings)
+        controller.setSpeakerLabelsEnabled(false)
+        controller.setSpeakerRecognitionEnabled(false)
+        #expect(controller.liveTranscriptIssues.isEmpty)
+        #expect(!controller.canOpenProviderSettings)
+        await controller.finish()
+    }
+}
+
+extension LiveTranscriptEditingTests {
+    @Test @MainActor func issueLifecycleKeepsSourceFailuresAndClearsRecoveredStorageAndNewRecording() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("synthetic obstruction".utf8).write(to: directory)
+        let controller = LiveTranscriptController()
+        controller.begin(
+            meetingID: UUID(), language: "en", directory: directory,
+            sources: [.microphone, .system], sink: LiveAudioSink(), enabled: false)
+        let token = UUID()
+        let session = UUID()
+        controller.finalizeDetachedSession(
+            token: token,
+            work: {
+                controller.receiveTranscriptionFailure("Synthetic microphone recognition failed.", token: token)
+                controller.receive(
+                    .init(
+                        session: session, source: .system, start: 0, end: 1,
+                        text: "First phrase"), final: true, token: token)
+                #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
+                #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
+                do {
+                    try FileManager.default.removeItem(at: directory)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                }
+                catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+                controller.receive(
+                    .init(
+                        session: session, source: .system, start: 1, end: 2,
+                        text: "Second phrase"), final: true, token: token)
+                #expect(!controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
+                #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
+                controller.receiveTranscriptionFailure("Synthetic system recognition failed.", token: token)
+                #expect(controller.liveTranscriptIssues.count == 2)
+                return true
+            }, cancel: nil)
+        await controller.finish()
+        #expect(controller.liveTranscriptIssues.count == 2)
+        controller.begin(
+            meetingID: UUID(), language: "en", directory: directory,
+            sources: [.microphone], sink: LiveAudioSink(), enabled: false)
+        #expect(controller.liveTranscriptIssues.isEmpty)
+        await controller.finish()
+    }
+}
