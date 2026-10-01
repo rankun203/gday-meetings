@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-struct TranscriptDisplayRow: Identifiable {
+struct TranscriptDisplayRow: Identifiable, Equatable {
     let id: UUID
     let start: Double
     let speaker: String
@@ -97,7 +97,6 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var needsInitialPosition = true
         private var layoutWork: DispatchWorkItem?
         private var settledWidth: CGFloat?
-        private var settledGeneration: Int?
         private var followTimer: Timer?
         private var followStarted: TimeInterval = 0
         private var followStart: CGFloat = 0
@@ -109,7 +108,7 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var editedID: UUID?
         private weak var editedCell: TranscriptNativeCell?
         private let editSession = TranscriptEditSession()
-        private var deferredLiveUpdate = false
+        private var deferredLiveUpdate: NativeTranscriptView?
         private var liveFollowPaused = false
 
         init(_ parent: NativeTranscriptView) { self.parent = parent }
@@ -117,14 +116,18 @@ struct NativeTranscriptView: NSViewRepresentable {
             let sourceChanged =
                 parent.meetingID != value.meetingID
                 || parent.transcriptSourceID != value.transcriptSourceID || generation == nil
-            let changed = generation != value.generation || sourceChanged
+            let presentationChanged =
+                parent.showsSpeakers != value.showsSpeakers
+                || parent.editable != value.editable || parent.canPlay != value.canPlay
+            let changed = sourceChanged || presentationChanged || rows != value.rows
             let followChanged = parent.followsLive != value.followsLive
             if followChanged, value.followsLive == true { liveFollowPaused = false }
-            parent = value
             if !sourceChanged, value.followsLive != nil, editedID != nil || popover?.isShown == true {
-                deferredLiveUpdate = deferredLiveUpdate || changed
+                deferredLiveUpdate = value
                 return
             }
+            parent = value
+            deferredLiveUpdate = nil
             guard changed, let table else {
                 observePlayback()
                 refreshPlayback()
@@ -133,7 +136,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             }
             cancelFollow()
             if sourceChanged {
-                deferredLiveUpdate = false
+                deferredLiveUpdate = nil
                 liveFollowPaused = false
                 needsInitialPosition = true
                 userScrollUntil = 0
@@ -142,13 +145,37 @@ struct NativeTranscriptView: NSViewRepresentable {
             pendingClick?.cancel()
             let selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
             finishEdit()
+            // Unchanged cells survive a partial reload. Clear the previous
+            // highlight while its index still refers to the old row set.
+            updatePlayback(meetingID: nil, time: 0, follows: false)
+            let previousRows = rows
             rows = value.rows
             playbackOrder = rows.enumerated().filter { $0.element.start.isFinite }.map { ($0.element.start, $0.offset) }
                 .sorted { $0.start == $1.start ? $0.row < $1.row : $0.start < $1.start }
             generation = value.generation
             heights.removeMissingIDs(Set(rows.map(\.id)))
             activeRow = nil
-            withoutLayoutAnimation { table.reloadData() }
+            withoutLayoutAnimation {
+                let commonCount = min(previousRows.count, rows.count)
+                let samePrefix = previousRows.prefix(commonCount).map(\.id) == rows.prefix(commonCount).map(\.id)
+                if sourceChanged || presentationChanged || !samePrefix {
+                    table.reloadData()
+                }
+                else {
+                    if rows.count > previousRows.count {
+                        table.insertRows(at: IndexSet(previousRows.count..<rows.count), withAnimation: [])
+                    }
+                    else if rows.count < previousRows.count {
+                        table.removeRows(at: IndexSet(rows.count..<previousRows.count), withAnimation: [])
+                    }
+                    let changedRows = IndexSet((0..<commonCount).filter { previousRows[$0] != rows[$0] })
+                    if !changedRows.isEmpty {
+                        table.reloadData(
+                            forRowIndexes: changedRows, columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+                        table.noteHeightOfRows(withIndexesChanged: changedRows)
+                    }
+                }
+            }
             observePlayback()
             refreshPlayback()
             scheduleLayout()
@@ -207,7 +234,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             if follows { followActiveRow(force: false) }
         }
         func tearDown() {
-            deferredLiveUpdate = false
+            deferredLiveUpdate = nil
             finishEdit()
             pendingClick?.cancel()
             popover?.close()
@@ -347,13 +374,12 @@ struct NativeTranscriptView: NSViewRepresentable {
             let offset = visibleRow >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: visibleRow).minY : 0
             withoutLayoutAnimation {
                 let width = table.bounds.width.rounded(.down)
-                if settledWidth != width || settledGeneration != generation {
+                if settledWidth != width {
                     // noteHeightOfRows schedules per-row geometry transitions inside
                     // AppKit. A synchronous reload has no row movement animation.
                     table.reloadData()
                     table.layoutSubtreeIfNeeded()
                     settledWidth = width
-                    settledGeneration = generation
                 }
                 if parent.followsLive == true, !liveFollowPaused {
                     needsInitialPosition = false
@@ -492,11 +518,11 @@ struct NativeTranscriptView: NSViewRepresentable {
             scheduleLayout()
         }
         private func applyDeferredLiveUpdate() {
-            if deferredLiveUpdate {
-                deferredLiveUpdate = false
+            if deferredLiveUpdate != nil {
                 DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.update(self.parent)
+                    guard let self, let pending = self.deferredLiveUpdate else { return }
+                    self.deferredLiveUpdate = nil
+                    self.update(pending)
                 }
             }
         }
@@ -704,18 +730,10 @@ enum TranscriptSpeakerPalette {
         return Int(hash % 8)
     }
     static func indices(for keys: [String]) -> [String: Int] {
-        var result: [String: Int] = [:]
-        var used = Set<Int>()
-        for key in Set(keys).sorted() {
-            var value = index(for: key)
-            if used.count < 8 {
-                while used.contains(value) { value = (value + 1) % 8 }
-                used.insert(value)
-            }
-            result[key] = value
-        }
-        return result
+        // Color depends only on identity, never on which other speakers are present.
+        Dictionary(Set(keys).map { ($0, index(for: $0)) }, uniquingKeysWith: { first, _ in first })
     }
+
     static func foreground(for tint: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
             var resolved = NSColor.labelColor

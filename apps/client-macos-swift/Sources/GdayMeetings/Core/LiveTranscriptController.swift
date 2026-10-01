@@ -28,6 +28,14 @@ final class LiveTranscriptController: ObservableObject {
     private var knownRecognitionSessions = Set<UUID>()
     private var diarizationProvider: ServiceProvider?
     private var speakerAnalysisReady = false
+
+    var speakerStatusMessages: [String] {
+        guard speakerLabelsEnabled || speakerRecognitionEnabled else { return [] }
+        let messages =
+            speakerAnalysisReady
+            ? [speakerLabelStatus, speakerRecognitionStatus] : [speakerLabelStatus]
+        return messages.filter { !$0.isEmpty }
+    }
     private var speakerProvider: LocalLiveDiarization?
     private var speakerStartup: Task<Void, Never>?
     private var speakerGeneration = UUID()
@@ -46,21 +54,20 @@ final class LiveTranscriptController: ObservableObject {
     private var waitingForVoiceModel = false
     private var lastSpeakerCheckpoint = Date.distantPast
 
-    var presentedFinalized: [LiveTranscriptPhrase] {
+    var presentedRows: (finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) {
         let people = Set(peopleProvider().map(\.id))
-        return (draft?.resolvedRows(partials: partials).finalized ?? []).map {
-            $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people)
-        }
+        let resolved = draft?.resolvedRows(partials: partials) ?? (finalized: [], partials: partials)
+        return (
+            finalized: resolved.finalized.map { $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people) },
+            partials: resolved.partials.map { $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people) }
+        )
     }
-    var presentedPartials: [LiveTranscriptPhrase] {
-        let people = Set(peopleProvider().map(\.id))
-        return (draft?.resolvedRows(partials: partials).partials ?? partials).map {
-            $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people)
-        }
-    }
+    var presentedFinalized: [LiveTranscriptPhrase] { presentedRows.finalized }
+    var presentedPartials: [LiveTranscriptPhrase] { presentedRows.partials }
 
     func updateText(rowID: UUID, text: String) {
-        guard let phrase = (presentedFinalized + presentedPartials).first(where: { $0.id == rowID }) else { return }
+        let rows = presentedRows
+        guard let phrase = (rows.finalized + rows.partials).first(where: { $0.id == rowID }) else { return }
         updateText(phrase: phrase, text: text)
     }
 
@@ -73,7 +80,8 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func assignPerson(rowID: UUID, personID: UUID?) {
-        guard let phrase = (presentedFinalized + presentedPartials).first(where: { $0.id == rowID }) else { return }
+        let rows = presentedRows
+        guard let phrase = (rows.finalized + rows.partials).first(where: { $0.id == rowID }) else { return }
         assignPerson(phrase: phrase, personID: personID)
     }
 

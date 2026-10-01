@@ -24,22 +24,18 @@ struct LiveTranscriptView: View {
             }
             Text(controller.status).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Toggle(
-                    "Live Speaker Labels",
-                    isOn: Binding(
-                        get: { controller.speakerLabelsEnabled }, set: controller.setSpeakerLabelsEnabled))
-                Toggle(
-                    "Speaker Recognition",
-                    isOn: Binding(
-                        get: { controller.speakerRecognitionEnabled }, set: controller.setSpeakerRecognitionEnabled))
-            }.toggleStyle(.switch).controlSize(.small)
-            if controller.speakerLabelsEnabled, !controller.speakerLabelStatus.isEmpty {
-                Text(controller.speakerLabelStatus).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if controller.speakerRecognitionEnabled, !controller.speakerRecognitionStatus.isEmpty {
-                Text(controller.speakerRecognitionStatus).font(.caption).foregroundStyle(.secondary)
+            Toggle(
+                "Speaker Recognition",
+                isOn: Binding(
+                    get: { controller.speakerLabelsEnabled || controller.speakerRecognitionEnabled },
+                    set: { enabled in
+                        controller.setSpeakerLabelsEnabled(enabled)
+                        controller.setSpeakerRecognitionEnabled(enabled)
+                    })
+            )
+            .toggleStyle(.switch).controlSize(.small)
+            ForEach(controller.speakerStatusMessages, id: \.self) { message in
+                Text(message).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if hasUnresolvedTiming {
@@ -112,16 +108,20 @@ struct LiveTranscriptView: View {
         .onChange(of: controller.draft) { _, _ in refreshRows() }
         .onChange(of: controller.partials) { _, _ in refreshRows() }
         .onChange(of: controller.speakerLabelsEnabled) { _, _ in refreshRows() }
-        .onChange(of: store.people) { _, _ in refreshRows() }
+        .onChange(of: store.people.map { PersonDisplayIdentity(id: $0.id, name: $0.name) }) { _, _ in refreshRows() }
     }
 
     private func refreshRows() {
-        let finalized = controller.presentedFinalized.sorted(by: LiveTranscriptPhrase.ordered)
-        let partials = controller.presentedPartials
+        let presented = controller.presentedRows
+        let finalized = presented.finalized
+        let partials = presented.partials
         displayedPhrases = Dictionary(uniqueKeysWithValues: (finalized + partials).map { ($0.id, $0) })
         hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
-        displayRows = LiveTranscriptDisplay.rows(finalized: finalized, partials: partials, people: store.people)
-        displayGeneration += 1
+        let updated = LiveTranscriptDisplay.rows(finalized: finalized, partials: partials, people: store.people)
+        if updated != displayRows {
+            displayRows = updated
+            displayGeneration += 1
+        }
     }
 }
 
@@ -135,20 +135,25 @@ enum LiveTranscriptDisplay {
             phrase.personID.flatMap { names[$0] == nil ? nil : $0 }
         }
         func key(_ phrase: LiveTranscriptPhrase) -> String {
-            personID(phrase)?.uuidString ?? phrase.speakerIdentity?.uuidString ?? phrase.speakerLabel
+            personID(phrase)?.uuidString ?? phrase.speakerIdentity?.uuidString
+                ?? "\(phrase.source.rawValue):\(phrase.session.uuidString)"
         }
-        let colors = TranscriptSpeakerPalette.indices(for: rows.map { key($0.phrase) })
         return rows.map { row in
             let phrase = row.phrase
             return TranscriptDisplayRow(
                 id: phrase.id, start: phrase.start,
                 speaker: phrase.personID.flatMap { names[$0] } ?? phrase.speakerLabel,
                 speakerID: phrase.id, text: phrase.text,
-                personID: personID(phrase), speakerColorIndex: colors[key(phrase)],
+                personID: personID(phrase), speakerColorIndex: TranscriptSpeakerPalette.index(for: key(phrase)),
                 isProvisional: row.provisional && !phrase.isUserEdited,
                 recentWordRanges: row.provisional && !phrase.isUserEdited
                     ? LiveTranscriptPresentation.recentWordRanges(in: phrase).map { NSRange($0, in: phrase.text) } : [],
                 accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil)
         }
     }
+}
+
+private struct PersonDisplayIdentity: Equatable {
+    let id: UUID
+    let name: String
 }

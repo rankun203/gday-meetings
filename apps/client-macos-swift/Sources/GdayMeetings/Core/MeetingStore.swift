@@ -784,8 +784,8 @@ final class MeetingStore: ObservableObject {
                 diarizationProvider: settings.serviceProviders.first {
                     $0.id == settings.liveDiarizationProviderID && $0.supports(.liveDiarization)
                 },
-                speakerLabelsEnabled: settings.showLiveSpeakerLabels,
-                speakerRecognitionEnabled: settings.recognizeLiveSpeakers,
+                speakerLabelsEnabled: settings.liveSpeakerRecognitionEnabled,
+                speakerRecognitionEnabled: settings.liveSpeakerRecognitionEnabled,
                 people: { [weak self] in self?.people ?? [] },
                 enrollVoice: { [weak self] personID, speakerID, embedding in
                     self?.enrollLiveVoice(

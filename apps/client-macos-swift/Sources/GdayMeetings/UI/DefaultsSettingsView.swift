@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// Settings → Defaults: what new recordings start with, then one section per
-/// capability that chooses the provider used for new work. Add a capability by
-/// adding one `CapabilityDefaultSection` with its settings key path; stored keys
-/// stay in `AppSettings`.
+/// Defaults group live and saved work by transcription and speaker recognition.
 struct DefaultsSettingsView: View {
     @EnvironmentObject private var store: MeetingStore
+
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
 
     // Capture reads these when a recording starts; changing them mid-recording
     // would misdescribe the recording in progress.
@@ -46,8 +45,8 @@ struct DefaultsSettingsView: View {
                     "Turns on when audio plays through speakers or the microphone picks up system audio. Reduces echo and background noise in the microphone track, and may lower other apps’ volume."
                 ).font(.caption).foregroundStyle(.secondary)
             }
-            Section("Live Transcription") {
-                Picker("Provider", selection: setting(\.liveTranscriptionProviderID)) {
+            Section("Transcription") {
+                Picker("Live Provider", selection: setting(\.liveTranscriptionProviderID)) {
                     Text("None").tag(nil as UUID?)
                     if store.settings.thisMacCapabilities.contains(.liveTranscription) {
                         Text("This Mac").tag(Optional(ThisMacProvider.id))
@@ -61,38 +60,10 @@ struct DefaultsSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Show Live Transcript", isOn: setting(\.showLiveTranscript))
-                Text(
-                    "Transcribes audio on this Mac and shows text in Transcript while recording. Requires macOS 26 or later and a supported speech model."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                Toggle("Live Speaker Recognition", isOn: setting(\.recognizeLiveSpeakers))
-                    .help("Uses the selected Speaker Recognition provider during recording.")
-                Text("Live recognition also needs the selected Nemotron model, even when Live Speaker Labels is off.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            CapabilityDefaultSection(
-                capability: .liveDiarization, selection: setting(\.liveDiarizationProviderID),
-                caption:
-                    "Adds local speaker labels independently of live transcription. Download the model in Service Providers before use."
-            ) {
-                Toggle("Show Live Speaker Labels", isOn: setting(\.showLiveSpeakerLabels))
-            }
-            CapabilityDefaultSection(
-                capability: .speakerRecognition, selection: setting(\.speakerRecognitionProviderID),
-                caption: "Matches compatible voice samples to People. Unknown voices keep their speaker labels."
-            ) {}
-            CapabilityDefaultSection(
-                capability: .diarization, selection: setting(\.diarizationProviderID),
-                caption:
-                    "Labels saved audio locally without transcribing again. Server providers add labels during transcription."
-            ) {}
-            CapabilityDefaultSection(
-                capability: .transcription, selection: setting(\.transcriptionProviderID),
-                caption: "Transcription sends recording audio to the selected provider."
-            ) {
+                CapabilityProviderRows(
+                    title: "Recorded Audio Provider", capability: .transcription,
+                    selection: setting(\.transcriptionProviderID))
                 MeetingLanguagePicker(title: "Default Language", selection: setting(\.defaultLanguage))
-                Toggle("Speaker Recognition", isOn: setting(\.recognizeSpeakers))
-                    .help("Matches speaker voices after transcription using the selected Speaker Recognition provider.")
                 Toggle("Automatically Transcribe", isOn: setting(\.autoTranscribe))
                     .toggleStyle(.checkbox)
                 if store.settings.autoTranscribe {
@@ -103,6 +74,27 @@ struct DefaultsSettingsView: View {
                     .toggleStyle(.checkbox)
                     .padding(.leading, 20)
                 }
+                Text(
+                    "Live transcription runs on this Mac. Recorded audio is sent to its selected transcription provider."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                Button("Open Service Providers") { settingsTab = "providers" }
+            }
+            Section("Speaker Recognition") {
+                Toggle("During Recording", isOn: setting(\.liveSpeakerRecognitionEnabled))
+                CapabilityProviderRows(
+                    title: "Live Provider", capability: .liveDiarization,
+                    selection: setting(\.liveDiarizationProviderID))
+                Toggle("After Recording", isOn: setting(\.recognizeSpeakers))
+                CapabilityProviderRows(
+                    title: "Recorded Audio Provider", capability: .diarization,
+                    selection: setting(\.diarizationProviderID))
+                CapabilityProviderRows(
+                    title: "Voice Matching Provider", capability: .speakerRecognition,
+                    selection: setting(\.speakerRecognitionProviderID))
+                Text("Shows names when voices match people. Other voices keep anonymous speaker labels.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open Service Providers") { settingsTab = "providers" }
             }
             CapabilityDefaultSection(
                 capability: .summarization, selection: setting(\.summaryProviderID)
@@ -183,6 +175,43 @@ struct CapabilityDefaultSection<Extra: View>: View {
                 }
             }
             if let caption { Text(caption).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+/// Provider selection and readiness within a shared settings section.
+struct CapabilityProviderRows: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var localModels = LocalModelManager.shared
+    let title: String
+    let capability: ProviderCapability
+    @Binding var selection: UUID?
+
+    private var eligible: [ServiceProvider] {
+        store.settings.serviceProviders.filter {
+            (capability != .diarization || $0.kind == .community1)
+                && ProviderConfigurationEligibility.canSelect(
+                    $0, for: capability, providers: store.settings.serviceProviders)
+        }
+    }
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            Text("None").tag(nil as UUID?)
+            ForEach(eligible) { provider in
+                Text(provider.name).tag(Optional(provider.id))
+            }
+            if let selected = selection, !eligible.contains(where: { $0.id == selected }) {
+                Text("Provider Unavailable").tag(Optional(selected))
+            }
+        }
+        if let provider = eligible.first(where: { $0.id == selection }), provider.kind.isLocal,
+            let model = capability == .speakerRecognition
+                ? LocalModelID.voiceEmbedding : LocalModelID(rawValue: provider.model),
+            localModels.state(for: model).phase != .ready
+        {
+            Text("\(title): \(localModels.state(for: model).phase.settingsTitle)")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

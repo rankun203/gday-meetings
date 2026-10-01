@@ -91,6 +91,13 @@ struct AppSettings: Codable, Equatable {
     var showLiveSpeakerLabels = false
     var recognizeSpeakers = false
     var recognizeLiveSpeakers = false
+    var liveSpeakerRecognitionEnabled: Bool {
+        get { showLiveSpeakerLabels || recognizeLiveSpeakers }
+        set {
+            showLiveSpeakerLabels = newValue
+            recognizeLiveSpeakers = newValue
+        }
+    }
     var defaultLanguage = "en"
     var autoSummarize = false
     var autoExtractTodos = true

@@ -270,11 +270,12 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var hasCompleteWordTiming: Bool {
         guard !words.isEmpty,
             words.allSatisfy({
-                $0.start.isFinite && $0.end.isFinite && $0.end >= $0.start
+                $0.start.isFinite && $0.end.isFinite && $0.end > $0.start
                     && $0.start >= start && $0.end <= end
                     && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             })
         else { return false }
+        guard zip(words, words.dropFirst()).allSatisfy({ pair in pair.0.end <= pair.1.start }) else { return false }
         // Missing text runs cannot safely be discarded when splitting a phrase.
         let compact: (String) -> String = { $0.filter { !$0.isWhitespace } }
         return compact(words.map(\.text).joined()) == compact(text)

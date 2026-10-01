@@ -5,6 +5,24 @@ status: ready-for-user-testing
 scope: swift-transcript
 ---
 
+## Stable appearance follow-up
+
+The user's later screenshot and report identified changing speaker badge colors. Palette assignment previously resolved collisions against the complete current identity set, so adding a speaker could recolor existing badges. Saved and live rows now use a deterministic identity hash. Live source placeholders use their source and recognition session; detected speakers use their scoped identity, and named people use their person identity. Row IDs remain separate attribution targets.
+
+Visible row equality now gates live display generations. Native updates skip unchanged rows, reload only revised rows when IDs remain in place, and insert or remove trailing rows without rebuilding the table. Structural reordering and width changes retain full reloads. Layout no longer performs a second full reload for every content generation. Changes to voice samples alone do not invalidate the people-name display. Deferred editor and picker updates keep their original callbacks paired with the visible rows until the interaction ends.
+
+Regression coverage checks stable colors after identity insertion, removal, and row replacement, plus no-op and single-row native refreshes. The production native component compiled in isolation, and light and narrow dark captures were inspected under `tmp/live-transcript-unification/screenshots/stable-live-*.png`; wrapping, badge style, and provisional underline remain intact. Strict formatting and diff checks pass. Integrated regression and release checks are recorded by the final validation run.
+
+The eight-color palette can contain collisions between identities. This is an accepted display constraint: preserving an identity's color takes priority over changing existing colors to keep the current set distinct. Text and person labels remain the identity cues. No periodic refresh timer was added.
+
+Finalized and provisional rows now share one resolved presentation snapshot per refresh. This removes duplicate full-transcript attribution work while retaining checkpoint and speaker cursor updates. A missing live provider produces one setup message; voice-matching failures remain visible separately when anonymous labels are working.
+
+**Technical debt:** Checkpoints still encode the growing draft on the main actor every two seconds. This existing persistence path is separate from the fixed table reloads. A future long-recording profile should measure its cost before moving writes to a serialized, revision-aware worker with an explicit stop flush; independent background writes could otherwise overwrite newer checkpoints.
+
+The integrated suite passed 581 tests in 106 suites, including the temporary production-view capture. Final review caught a stale playback highlight on an untouched cell after another row's timestamp changed. Clearing the old highlight before partial row updates fixed it; all 63 focused transcript tests then passed, including a visible-cell regression. Synthetic captures cover light/dark layouts and unavailable-provider controls. These checks do not replace a continuing real recording, keyboard/VoiceOver review, or model-accuracy evaluation; the user's running application was not restarted.
+
+The final isolated `make build-macos` release passed in 126.79 seconds with successful bundle signing and property-list validation. The 277-file application snapshot matches the final source tree. Formatting, lint, and diff checks passed. Existing Command Line Tools library/framework search-path warnings remain; no deprecation warning was emitted. The preceding commit passed all three hosted macOS runners; the new commit's matrix is checked after pushing.
+
 # Shared live and saved transcript editing
 
 ## Problem

@@ -144,9 +144,66 @@ struct LiveSpeakerTimeline: Codable, Equatable {
                 groups.append((word.start, word.end, speaker))
             }
         }
-        if groups.count == 1 { return [apply(groups[0].2, to: phrase)] }
-        return groups.compactMap { start, end, speaker in
-            phrase.fragment(start: start, end: end).map { apply(speaker, to: $0) }
+        // Short unassigned boundary words may reflect an activity threshold gap.
+        // Never bridge overlap, a known different speaker, or an audio gap.
+        let originalGroups = groups
+        for index in groups.indices where originalGroups[index].2 == nil {
+            let run = originalGroups[index]
+            guard
+                !gaps.contains(where: {
+                    $0.source == phrase.source && $0.start < run.1 && $0.end > run.0
+                })
+            else { continue }
+            let before = index > 0 ? originalGroups[index - 1] : nil
+            let after = index + 1 < originalGroups.count ? originalGroups[index + 1] : nil
+            let words = phrase.words.filter {
+                let midpoint = ($0.start + $0.end) / 2
+                return midpoint >= run.0 && midpoint < run.1
+            }
+            let singleton =
+                words.count == 1
+                && words[0].text.trimmingCharacters(in: .whitespacesAndNewlines).count == 1
+            // ASR may include a preceding pause in one character's duration.
+            // Only matching stable neighbors permit this longer interior bridge.
+            let interiorSingleton =
+                singleton && run.1 - run.0 <= 1
+                && before?.2 != nil && before?.2?.id == after?.2?.id
+                && before.map({ $0.1 - $0.0 >= 0.6 }) == true && after.map({ $0.1 - $0.0 >= 0.6 }) == true
+            guard run.1 - run.0 <= 0.35 || interiorSingleton else { continue }
+            let candidate: LiveSpeakerIdentity?
+            if let before, let after {
+                candidate = before.2?.id == after.2?.id ? before.2 : nil
+            }
+            else {
+                candidate = before?.2 ?? after?.2
+            }
+            guard let candidate,
+                before.map({ $0.2?.id == candidate.id && run.0 - $0.1 <= 0.15 }) ?? true,
+                after.map({ $0.2?.id == candidate.id && $0.0 - run.1 <= 0.15 }) ?? true,
+                [before, after].compactMap({ $0 }).contains(where: {
+                    $0.2?.id == candidate.id && $0.1 - $0.0 >= 0.6
+                }),
+                !relevant.contains(where: {
+                    $0.speakerID != candidate.id && $0.start < run.1 && $0.end > run.0
+                })
+            else { continue }
+            groups[index].2 = candidate
+        }
+        var joined: [(Double, Double, LiveSpeakerIdentity?)] = []
+        for group in groups {
+            if let previous = joined.last, previous.2?.id == group.2?.id {
+                joined[joined.count - 1].1 = group.1
+            }
+            else {
+                joined.append(group)
+            }
+        }
+        if joined.count == 1 { return [apply(joined[0].2, to: phrase)] }
+        return joined.enumerated().compactMap { index, group in
+            guard var row = phrase.fragment(start: group.0, end: group.1) else { return nil }
+            // The leading row keeps its recognition identity as later words arrive.
+            if index == 0 { row.id = phrase.id }
+            return apply(group.2, to: row)
         }
     }
 }

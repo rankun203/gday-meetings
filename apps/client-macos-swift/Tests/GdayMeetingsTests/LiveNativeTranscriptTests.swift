@@ -27,6 +27,18 @@ import Testing
         #expect(deleted[0].personID == nil)
     }
 
+    @Test func liveColorsSurviveUnrelatedSpeakerChangesAndRowReplacement() {
+        let session = UUID()
+        let first = LiveTranscriptPhrase(session: session, source: .microphone, start: 0, end: 1, text: "First")
+        let replacement = LiveTranscriptPhrase(session: session, source: .microphone, start: 1, end: 2, text: "Second")
+        let other = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "Other")
+        let original = LiveTranscriptDisplay.rows(finalized: [first], partials: [], people: [])[0]
+        let expanded = LiveTranscriptDisplay.rows(finalized: [other, first, replacement], partials: [], people: [])
+        #expect(expanded.first { $0.id == first.id }?.speakerColorIndex == original.speakerColorIndex)
+        #expect(expanded.first { $0.id == replacement.id }?.speakerColorIndex == original.speakerColorIndex)
+        #expect(expanded.first { $0.id == replacement.id }?.speakerID == replacement.id)
+    }
+
     @Test func provisionalUnderlineEndsWhenFinalized() {
         var row = TranscriptDisplayRow(
             id: UUID(), start: 0, speaker: "Speaker 1", speakerID: UUID(), text: "A changing phrase",
@@ -93,6 +105,32 @@ import Testing
         coordinator.tearDown()
     }
 
+    @Test func nativeRefreshSkipsUnchangedRowsAndReloadsOnlyRevisedRow() {
+        let first = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "First")
+        let second = TranscriptDisplayRow(id: UUID(), start: 1, speaker: "", speakerID: nil, text: "Second")
+        var view = NativeTranscriptView(
+            rows: [first, second], generation: 1, showsSpeakers: false,
+            editable: true, canPlay: false, followsLive: false, play: { _ in }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let table = ReloadTrackingTranscriptTable()
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.update(view)
+        let initialReloads = table.fullReloads
+        view.generation += 1
+        coordinator.update(view)
+        #expect(table.fullReloads == initialReloads)
+        #expect(table.changedRows.isEmpty)
+        view.rows[1] = TranscriptDisplayRow(id: second.id, start: 1, speaker: "", speakerID: nil, text: "Revised")
+        view.generation += 1
+        coordinator.update(view)
+        #expect(table.fullReloads == initialReloads)
+        #expect(table.changedRows == IndexSet(integer: 1))
+        coordinator.tearDown()
+    }
+
     @Test func followRemainsPausedUntilExplicitlyEnabled() {
         var pauses = 0
         var view = NativeTranscriptView(
@@ -127,5 +165,18 @@ import Testing
         coordinator.settleLayout()
         #expect(scroll.contentView.bounds.minY > 0)
         coordinator.tearDown()
+    }
+}
+
+@MainActor private final class ReloadTrackingTranscriptTable: TranscriptNativeTable {
+    var fullReloads = 0
+    var changedRows = IndexSet()
+    override func reloadData() {
+        fullReloads += 1
+        super.reloadData()
+    }
+    override func reloadData(forRowIndexes rows: IndexSet, columnIndexes columns: IndexSet) {
+        changedRows.formUnion(rows)
+        super.reloadData(forRowIndexes: rows, columnIndexes: columns)
     }
 }

@@ -5,6 +5,39 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct NativeTranscriptTests {
+    @Test func timestampRevisionClearsUntouchedPlaybackCell() throws {
+        let playback = MeetingPlayback()
+        let meeting = Meeting(title: "Synthetic playback revision")
+        playback.select(meeting: meeting, files: [])
+        playback.progress.update(5)
+        let first = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "First")
+        let second = TranscriptDisplayRow(id: UUID(), start: 10, speaker: "", speakerID: nil, text: "Second")
+        var view = NativeTranscriptView(
+            rows: [first, second], generation: 1, showsSpeakers: false, editable: true, canPlay: true,
+            playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        let table = TranscriptNativeTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        let untouched = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? TranscriptNativeCell)
+        #expect(untouched.isPlaybackRow)
+        view.rows[1] = TranscriptDisplayRow(id: second.id, start: 3, speaker: "", speakerID: nil, text: "Second")
+        view.generation += 1
+        coordinator.update(view)
+        #expect(coordinator.activeRow == 1)
+        #expect(!untouched.isPlaybackRow)
+        let current = try #require(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? TranscriptNativeCell)
+        #expect(current.isPlaybackRow)
+        coordinator.tearDown()
+    }
+
     @Test func playbackHighlightFollowsClockSeekAndMeetingWithoutReloadingRows() {
         let meetingID = UUID()
         let rows = [0.0, 2, 5, 14, 18].map {
@@ -135,11 +168,14 @@ import Testing
         #expect(scroll.contentView.bounds.minY == 0)
     }
 
-    @Test func speakerPaletteAvoidsCollisionsAndIsIndependentOfRowOrder() {
-        let keys = (0..<8).map { "speaker-\($0)" }
+    @Test func speakerPaletteSurvivesInsertionRemovalAndReordering() {
+        let keys = (0..<32).map { "speaker-\($0)" }
         let colors = TranscriptSpeakerPalette.indices(for: keys)
-        #expect(Set(colors.values).count == 8)
         #expect(colors == TranscriptSpeakerPalette.indices(for: keys.reversed()))
+        for key in keys {
+            #expect(TranscriptSpeakerPalette.indices(for: [key])[key] == colors[key])
+            #expect(TranscriptSpeakerPalette.indices(for: ["new-speaker", key])[key] == colors[key])
+        }
     }
 
     @Test func speakerChipsFollowPersonIdentityAndUnassignedOutline() {

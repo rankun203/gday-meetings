@@ -287,3 +287,160 @@ extension LiveSpeakerTimelineTests {
         #expect(shown.personID == nil && shown.speakerLabel == "sys_04")
     }
 }
+
+extension LiveSpeakerTimelineTests {
+    private func boundaryFixture() -> (LiveSpeakerTimeline, LiveTranscriptPhrase, LiveSpeakerIdentity) {
+        let generation = UUID()
+        let speaker = identity(.microphone, generation, 1)
+        var timeline = LiveSpeakerTimeline()
+        _ = timeline.accept(
+            .init(
+                source: .microphone, generation: generation, sequence: 0,
+                speakers: [speaker], intervals: [.init(speakerID: speaker.id, start: 0.2, end: 1.2)], start: 0, end: 1.2
+            ))
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone, start: 0, end: 1.2,
+            text: "请检查草稿。",
+            words: [
+                .init(text: "请", start: 0, end: 0.2),
+                .init(text: "检查", start: 0.2, end: 0.6), .init(text: "草稿。", start: 0.6, end: 1.2),
+            ])
+        return (timeline, phrase, speaker)
+    }
+
+    @Test func shortUnassignedBoundaryWordStaysWithStableSpeakerAndKeepsPhraseID() {
+        let (timeline, phrase, speaker) = boundaryFixture()
+        let rows = timeline.attributing(phrase)
+        #expect(rows.count == 1)
+        #expect(rows[0].text == phrase.text && rows[0].id == phrase.id)
+        #expect(rows[0].speakerIdentity == speaker.id)
+        #expect(rows[0].speakerLabel == "mic_02")
+    }
+
+    @Test func boundaryBridgePreservesKnownShortTurnOverlapAndAudioGaps() {
+        let (base, phrase, speaker) = boundaryFixture()
+        let other = identity(.microphone, speaker.generation, 0)
+        var knownTurn = base
+        knownTurn.speakers.append(other)
+        knownTurn.intervals.append(.init(speakerID: other.id, start: 0, end: 0.2))
+        let knownRows = knownTurn.attributing(phrase)
+        #expect(knownRows.map(\.text) == ["请", "检查草稿。"])
+        #expect(knownRows[0].speakerIdentity == other.id)
+        #expect(knownRows[0].id == phrase.id)
+        var overlap = knownTurn
+        overlap.intervals.append(.init(speakerID: speaker.id, start: 0, end: 0.2))
+        #expect(overlap.attributing(phrase).first?.speakerIdentity == nil)
+        #expect(overlap.attributing(phrase).count == 2)
+        var missingAudio = base
+        missingAudio.gaps = [.init(source: .microphone, start: 0, end: 0.2, reason: "Synthetic gap")]
+        #expect(missingAudio.attributing(phrase).count == 2)
+        let separateShortPhrase = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone,
+            start: 2, end: 2.2, text: "好", words: [.init(text: "好", start: 2, end: 2.2)])
+        #expect(base.attributing(separateShortPhrase) == [separateShortPhrase])
+    }
+
+    @Test func zeroDurationWordTimingDoesNotDropCharactersWhenAttributing() {
+        let (timeline, original, _) = boundaryFixture()
+        var phrase = original
+        phrase.words[0].end = phrase.words[0].start
+        let rows = timeline.attributing(phrase)
+        #expect(rows.count == 1 && rows[0].text == original.text)
+        #expect(!phrase.hasCompleteWordTiming)
+    }
+
+    @Test func editedBoundaryRangeSurvivesLaterAttributionBridge() {
+        let (base, phrase, _) = boundaryFixture()
+        var timeline = base
+        timeline.gaps = [.init(source: .microphone, start: 0, end: 0.2, reason: "Synthetic gap")]
+        var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "zh")
+        draft.speakerTimeline = timeline
+        draft.accept(phrase)
+        let anchor = draft.resolvedRows().finalized[0]
+        draft.updateText("先", for: anchor)
+        draft.speakerTimeline?.gaps = []
+        let rows = draft.resolvedRows().finalized
+        #expect(rows.map(\.text).joined() == "先检查草稿。")
+        #expect(rows.first?.id == anchor.id && rows.first?.isUserEdited == true)
+        #expect(draft.phrases[0].text == phrase.text)
+    }
+}
+
+extension LiveSpeakerTimelineTests {
+    @Test func interiorBridgeRequiresMatchingNeighborsAndShortUnassignedRun() {
+        let generation = UUID()
+        let first = identity(.microphone, generation, 0)
+        let second = identity(.microphone, generation, 1)
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [first, second]
+        timeline.intervals = [
+            .init(speakerID: first.id, start: 0, end: 0.8),
+            .init(speakerID: first.id, start: 1, end: 1.8),
+        ]
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone, start: 0, end: 1.8,
+            text: "查看和保存",
+            words: [
+                .init(text: "查看", start: 0, end: 0.8),
+                .init(text: "和", start: 0.8, end: 1), .init(text: "保存", start: 1, end: 1.8),
+            ])
+        #expect(timeline.attributing(phrase).count == 1)
+        timeline.intervals[1].speakerID = second.id
+        #expect(timeline.attributing(phrase).map(\.text) == ["查看", "和", "保存"])
+        timeline.intervals[1].speakerID = first.id
+        timeline.intervals[1].start = 1.7
+        var longer = phrase
+        longer.words[1].end = 1.7
+        longer.words[2].start = 1.7
+        #expect(timeline.attributing(longer).map(\.text) == ["查看", "和", "保存"])
+    }
+}
+
+extension LiveSpeakerTimelineTests {
+    @Test func pausedSingletonBridgesOnlyBetweenSameStableSpeaker() {
+        let generation = UUID()
+        let first = identity(.microphone, generation, 1)
+        let second = identity(.microphone, generation, 5)
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [first, second]
+        timeline.intervals = [
+            .init(speakerID: first.id, start: 0, end: 2),
+            .init(speakerID: first.id, start: 2.96, end: 5),
+        ]
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .microphone, start: 0, end: 5,
+            text: "检查草稿并保存记录。",
+            words: [
+                .init(text: "检查草稿", start: 0, end: 2),
+                .init(text: "并", start: 2, end: 2.96), .init(text: "保存记录。", start: 2.96, end: 5),
+            ])
+        #expect(timeline.attributing(phrase).map(\.text) == [phrase.text])
+        timeline.intervals[1].speakerID = second.id
+        #expect(timeline.attributing(phrase).map(\.text) == ["检查草稿", "并", "保存记录。"])
+        timeline.intervals[1].speakerID = first.id
+        timeline.intervals.append(.init(speakerID: second.id, start: 2.3, end: 2.4))
+        #expect(timeline.attributing(phrase).count == 3)
+        timeline.intervals.removeLast()
+        var longerText = phrase
+        longerText.text = "检查草稿然后保存记录。"
+        longerText.words[1].text = "然后"
+        #expect(timeline.attributing(longerText).count == 3)
+        var leading = phrase
+        leading.start = 2
+        leading.text = "并保存记录。"
+        leading.words.removeFirst()
+        #expect(timeline.attributing(leading).count == 2)
+    }
+
+    @Test func overlappingOrReorderedWordTimesKeepOriginalText() {
+        let (timeline, original, _) = boundaryFixture()
+        var overlapping = original
+        overlapping.words[1].start = 0.1
+        #expect(!overlapping.hasCompleteWordTiming)
+        #expect(timeline.attributing(overlapping).map(\.text) == [original.text])
+        var reversed = original
+        reversed.words.swapAt(0, 1)
+        #expect(!reversed.hasCompleteWordTiming)
+        #expect(timeline.attributing(reversed).map(\.text) == [original.text])
+    }
+}

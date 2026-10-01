@@ -84,3 +84,24 @@ struct LocalProviderConfigurationTests {
         }
     }
 }
+
+extension LocalProviderConfigurationTests {
+    @Test func unifiedLiveRecognitionPreservesEitherLegacySettingAndSynchronizesEdits() throws {
+        for json in ["{\"showLiveSpeakerLabels\":true}", "{\"recognizeLiveSpeakers\":true}"] {
+            var settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.liveSpeakerRecognitionEnabled)
+            #expect(!settings.recognizeSpeakers)
+            let untouched = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+            #expect(untouched == settings)
+            settings.liveSpeakerRecognitionEnabled = false
+            #expect(!settings.showLiveSpeakerLabels && !settings.recognizeLiveSpeakers)
+            settings.liveSpeakerRecognitionEnabled = true
+            #expect(settings.showLiveSpeakerLabels && settings.recognizeLiveSpeakers)
+            let updated = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+            #expect(updated.liveSpeakerRecognitionEnabled)
+            #expect(!updated.recognizeSpeakers)
+        }
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(!old.liveSpeakerRecognitionEnabled)
+    }
+}

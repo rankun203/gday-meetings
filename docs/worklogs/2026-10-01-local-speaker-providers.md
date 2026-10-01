@@ -7,6 +7,14 @@ scope: swift-speaker-providers
 
 # Local speaker providers and model controls
 
+## Defaults grouping follow-up
+
+The user's latest screenshot showed repeated capability sections and explanations. Defaults now groups live and recorded-audio controls under **Transcription** and **Speaker Recognition**. Each section has one **Open Service Providers** action. Provider rows retain unavailable selections and local model readiness. Recording and Summaries keep their existing controls.
+
+**During Recording** controls both live speaker labels and voice matching through the shared settings property; **After Recording** controls saved voice matching independently. The three speaker provider choices remain explicit because live labeling, recorded-audio labeling, and voice matching use different capabilities. This replaces the earlier separate live recognition and label-display settings layout described below.
+
+The isolated production-view captures use synthetic provider/model state and no downloads. Presentation checks cover light and dark appearances; integrated release validation remains owned by the final application checks. No new storage schema or compatibility bridge is introduced by this layout change.
+
 ## Problem
 
 Speaker labels were coupled to server transcription. The app had no independent local live-label provider, saved-audio label action, or shared model installation controls.
@@ -112,3 +120,19 @@ The same standalone fixture produced 128 progress callbacks after the fix, inclu
 This correction adds no storage or protocol compatibility bridge. Retry still reuses previously verified model files and restarts an interrupted file; byte-range resume remains unimplemented.
 
 The follow-up isolated release build passed in 192.54 seconds, with successful bundle validation/signing and unchanged toolchain search-path warnings. Formatting, lint, and diff checks passed. The release sources match the final 571-test snapshot.
+
+## Unified recognition controls
+
+The recording panel now has one **Speaker Recognition** switch for anonymous speaker labels and optional person matching. The previous pair duplicated the dependency between those stages. The inspected recording screenshot showed both controls on the same row above the native transcript. The replacement retains the transcript controls, rows, and separate stage status messages: a missing embedding model does not hide working anonymous labels.
+
+Defaults uses `liveSpeakerRecognitionEnabled`, which reads either legacy live-speaker flag as enabled and writes both together when changed. Meeting startup applies the unified value to both stages. Saved-meeting recognition remains independent. Existing persisted flags remain readable and are not rewritten during decoding; regression coverage checks labels-only, recognition-only, old empty settings, user changes, and encoding round-trips. This retains two serialized fields as a compatibility bridge; a future versioned settings migration can replace them after older-client compatibility ends. Updated full-panel capture and integrated release validation are delegated to the coordinating agent.
+
+The isolated validation pipeline includes one temporary full-panel capture test in addition to repository tests; any combined test count includes that capture test. It renders production `LiveTranscriptView` with a synthetic library, transcription disabled, and no configured speaker provider, then captures the unified switch on and off. This checks layout and unavailable-provider messages without capture, inference, downloads, or interaction with the user's recording. The capture helper remains under `tmp/` and is not part of the repository test suite.
+
+## Short unassigned words in live text
+
+The reviewed live screenshot showed isolated Chinese characters using the source fallback badge between longer labeled passages. The join code split every unassigned word run into its own row; the fallback label could resemble a different detected speaker. This is a presentation and attribution explanation, not evidence that the recording contains only one person.
+
+Within one recognition phrase, a short unassigned run of at most 350 ms can now join an adjacent identified run of at least 600 ms when their word boundaries are within 150 ms. A single-character interior run may span up to one second, because recognition timing can include a preceding pause; this exception requires the same identity in stable runs of at least 600 ms on both sides. Other interior runs require the same identity on both sides. Any competing speaker activity or explicit audio gap prevents this bridge. Known short turns, overlap, longer unknown runs, separate recognition phrases, and manual edit anchors remain distinct. The leading row keeps its recognition ID as fragments split or rejoin. Zero-duration, overlapping, or reordered word timing now retains the intact phrase rather than risking a dropped character during splitting.
+
+Synthetic Chinese regressions cover those boundaries and verify that an existing text edit survives a later bridge without changing raw recognition text. The integrated run passed 581 tests in 106 suites, including one temporary production-view capture. A private, aggregate-only structural replay also confirmed that the policy joins qualifying singletons while retaining ambiguous cases; that Python diagnostic supplements the Swift tests and does not establish model accuracy. This timing policy has not been calibrated against speaker annotations. Its limited scope avoids a general one-character merge, but cannot correct genuine model identity errors or combine separately recognized utterances. A future reviewed alignment evaluation can refine these thresholds.
