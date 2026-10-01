@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speaker Review</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<header><h1>Speaker Review</h1><span id="save-state" role="status">Loading Samples…</span></header>
+<div class="layout">
+<nav aria-label="Samples and clips"><h2>Clips</h2><div id="navigation"></div></nav>
+<main>
+<div class="heading"><div><h2 id="clip-title">Select a Clip</h2><p id="progress"></p></div><button id="undo" disabled>Undo</button></div>
+<p>Listen to the clip, then drag across the waveform to select speech. Assign the same speaker number across clips of a sample. Add separate intervals for overlapping speakers.</p>
+<div class="toolbar"><label>Zoom <input id="zoom" type="range" min="1" max="16" value="1" step="1"></label><button id="select-all">Select Full Clip</button><button id="clear-selection">Clear Selection</button></div>
+<div id="timeline-scroll"><div id="timeline" tabindex="0" aria-label="Audio selection timeline"><canvas id="waveform" height="150" aria-label="Audio waveform. Use the start and end fields to select a range with the keyboard."></canvas><div id="ruler" aria-hidden="true"></div><div id="lanes"></div><div id="playhead" aria-hidden="true"></div><div id="selection" hidden><button class="edge start" aria-label="Drag selection start"></button><button class="edge end" aria-label="Drag selection end"></button></div></div></div>
+<p id="audio-state" role="status"></p>
+<audio id="audio" controls preload="metadata"></audio>
+<div class="toolbar"><button id="replay">Replay Selection</button><label><input id="loop" type="checkbox"> Loop Selection</label><label>Playback Speed <select id="speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label></div>
+<p class="shortcuts">Space: play or pause · 1–9: assign speaker · R: replay selection · Delete: remove selected interval · ⌘/Ctrl Z: undo · ←/→: move selection by 0.05 seconds · Shift ←/→: adjust end</p>
+<section aria-labelledby="interval-heading"><h3 id="interval-heading">Speech and Uncertainty</h3><div id="interval-list"></div></section>
+<div class="finish"><p>Finish only after listening to the full clip. Uncertain ranges are excluded from evaluation; remaining unlabeled audio is treated as silence.</p><button id="finish" class="primary">Finish Clip &amp; Next</button><button id="export" disabled>Export Reviewed Sample</button></div>
+<section id="export-result" aria-label="Review comparison" hidden></section>
+</main>
+<aside aria-label="Selection inspector"><h2>Selection</h2><label>Start (Seconds)<input id="start" type="number" min="0" step="0.01"></label><label>End (Seconds)<input id="end" type="number" min="0" step="0.01"></label><label>Speaker<select id="speaker"></select></label><button id="add-speaker">Add Speaker</button><button id="assign">Assign Speaker</button><button id="uncertain">Mark Uncertain</button><button id="remove">Remove Interval</button><p id="selection-help">Select a range to label speech or mark uncertainty.</p><h3>Speaker References</h3><p>Save a short selection to compare the same voice across clips.</p><button id="save-reference">Save Speaker Reference</button><div id="references"></div></aside>
+</div>
+<div id="conflict" class="conflict" hidden role="alert"><strong>Annotations Changed in Another Window</strong><p>Your changes have not been saved. Save a draft before loading the saved annotations.</p><button id="download-draft">Save My Draft</button><button id="reload">Load Saved Annotations</button><p id="draft-state" role="status"></p></div>
+<div id="error" role="alert" hidden></div>
+</body></html>

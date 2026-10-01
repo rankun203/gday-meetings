@@ -95,11 +95,29 @@ def diagnostics(systems, total, width, rate, random_clips, count):
     return [(a, b) for _, a, b in candidates[:count]]
 
 
-def build(audio, reference, models, output, seconds=20.0, count=10, diagnostic_count=3, seed=0):
+def speaker_coverage(reference, total, width, rate):
+    """Target each saved label's longest interval; labels are not verified people."""
+    longest = {}
+    for row in sorted(reference, key=lambda row: (row['start'], row['end'], row['speaker'])):
+        previous = longest.get(row['speaker'])
+        if previous is None or row['end'] - row['start'] > previous['end'] - previous['start']:
+            longest[row['speaker']] = row
+    width = min(width, total)
+    windows = set()
+    for speaker in sorted(longest):
+        row = longest[speaker]
+        center = (row['start'] + row['end']) * rate / 2
+        start = min(max(0, math.floor(center - width / 2)), total - width)
+        windows.add((start, start + width))
+    return sorted(windows)
+
+
+def build(audio, reference, models, output, seconds=20.0, count=10, diagnostic_count=3, seed=0,
+          cover_reference_speakers=False):
     if not math.isfinite(seconds) or seconds <= 0 or count <= 0 or diagnostic_count < 0:
         raise ValueError('Clip duration and count must be positive; diagnostic count cannot be negative')
-    if not models:
-        raise ValueError('Provide at least one model output')
+    if not models and diagnostic_count:
+        raise ValueError('Set diagnostic count to 0 when no model outputs are provided')
     audio_hash = file_sha256(audio)
     with wave.open(str(audio), 'rb') as source:
         total, rate, params = source.getnframes(), source.getframerate(), source.getparams()
@@ -121,7 +139,10 @@ def build(audio, reference, models, output, seconds=20.0, count=10, diagnostic_c
             systems.append(intervals([json.loads(line) for line in model_bytes.splitlines()
                                       if line.strip()], total / rate, model=True))
         extra = diagnostics(systems, total, width, rate, random_clips, diagnostic_count) if diagnostic_count else []
-        selections = [(a, b, 'random') for a, b in random_clips] + [(a, b, 'diagnostic') for a, b in extra]
+        coverage = speaker_coverage(systems[0], total, width, rate) if cover_reference_speakers else []
+        selections = ([(a, b, 'random') for a, b in random_clips]
+                      + [(a, b, 'diagnostic') for a, b in extra]
+                      + [(a, b, 'speaker_coverage') for a, b in coverage])
         random.Random(seed).shuffle(selections)
         names = [f'clip-{i:04d}' for i in range(1, len(selections) + 1)]
         files = ['private/key.json', 'blind/annotations.json'] + [f'blind/{name}.wav' for name in names]
@@ -137,8 +158,16 @@ def build(audio, reference, models, output, seconds=20.0, count=10, diagnostic_c
                    requested_random_count=count, requested_diagnostic_count=diagnostic_count,
                    evaluation='Review blind clips first. Compare every system, including the saved reference, '
                    'against reviewed gold with permutation-invariant speaker matching. Report random and '
-                   'diagnostic results separately. Exclude uncertain regions; retain reviewed silence and overlap.',
+                   'targeted results separately. Speaker coverage targets saved labels, not verified people. '
+                   'Exclude uncertain regions; retain reviewed silence and overlap.',
                    clips=[])
+        if cover_reference_speakers:
+            key['speaker_coverage'] = dict(
+                policy='longest_saved_label_interval_centered_window_exact_window_deduplication',
+                reference_labels=sorted({row['speaker'] for row in systems[0]}),
+                clip_count=len(coverage), requested_window_seconds=seconds,
+                interpretation='Saved speaker labels are a coverage proxy, not independently verified people. '
+                'These targeted clips are excluded from independent scoring.')
         annotations = dict(schema_version=1, clips=[])
         for name, (start, end, category) in zip(names, selections):
             source.setpos(start)
@@ -223,22 +252,25 @@ def main():
     parser.add_argument('--export-reviewed', type=Path)
     parser.add_argument('--audio', type=Path)
     parser.add_argument('--reference', type=Path)
-    parser.add_argument('--model', type=Path, action='append',
-                        help='Full-file segment JSONL; repeat for each model')
+    parser.add_argument('--model', type=Path, action='append', default=[],
+                        help='Optional full-file segment JSONL; repeat for each model')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--clip-seconds', type=float, default=20)
     parser.add_argument('--count', type=int, default=10)
-    parser.add_argument('--diagnostic-count', type=int, default=3)
+    parser.add_argument('--diagnostic-count', type=int, default=3,
+                        help='Number of disagreement clips; use 0 without --model')
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--cover-reference-speakers', action='store_true',
+                        help='Add targeted clips covering saved speaker labels; exclude these clips from independent scores')
     args = parser.parse_args()
     try:
         if args.export_reviewed:
             export_review(args.export_reviewed, args.output)
             return
-        if not args.audio or not args.reference or not args.model:
-            parser.error('Building requires --audio, --reference, and --model')
+        if not args.audio or not args.reference:
+            parser.error('Building requires --audio and --reference')
         build(args.audio, args.reference, args.model, args.output, args.clip_seconds,
-              args.count, args.diagnostic_count, args.seed)
+              args.count, args.diagnostic_count, args.seed, args.cover_reference_speakers)
     except (ValueError, OSError, KeyError, TypeError, wave.Error) as error:
         parser.error(str(error))
 

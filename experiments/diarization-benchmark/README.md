@@ -145,6 +145,10 @@ uv run --no-project python -B build_review.py \
 
 Listen to the WAV files in `blind/` and complete `blind/annotations.json` without opening `private/key.json`. Keep anonymous speaker IDs consistent across clips from the same recording. Record checked speech and silence through `reviewedRegions`; leave uncertain regions out. Empty templates are not annotations. The private key contains source coordinates and model predictions and must remain separate from the reviewer.
 
+To prepare independent clips before local model predictions are available, omit `--model` and set `--diagnostic-count 0`. This creates a review set with only the saved reference as a comparison system. It does not create placeholder model predictions. Preserve the sampled clips and their provenance if adding model comparisons later.
+
+Add `--cover-reference-speakers` to include a targeted clip centered on each saved speaker label's longest interval. Identical windows are deduplicated. These clips help reviewers find less frequent voices, but saved labels are not verified people and may split or merge voices. Their private category is `speaker_coverage`; they remain separate from the random sample and are excluded from independent scores. Speaker numbers still need to remain consistent across all clips from the recording.
+
 After review, export the independent sample and score all systems, including the saved server output:
 
 ```sh

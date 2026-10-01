@@ -9,7 +9,8 @@ from unittest.mock import patch
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_review import build, export_review, select_random, validate_output, intervals
+from build_review import build, export_review, select_random, validate_output, intervals, speaker_coverage
+from score_review import score
 import private_paths
 
 
@@ -101,6 +102,98 @@ class ReviewTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     export_review(root / 'set', root / 'export')
                 self.assertFalse((root / 'export').exists())
+
+    def test_saved_reference_only_review_and_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio, ref, model = self.fixture(root)
+            model.unlink()
+            key = build(audio, ref, [], root / 'set', 2, 3, 0, 7)
+            self.assertEqual(key['systems'], [dict(
+                id='system-00', role='saved_reference_not_gold', path=str(ref.resolve()),
+                sha256=hashlib.sha256(ref.read_bytes()).hexdigest())])
+            self.assertEqual(sorted((clip['startFrame'], clip['endFrame']) for clip in key['clips']),
+                             select_random(1000, 200, 3, 7))
+            self.assertTrue(all(clip['category'] == 'random' and set(clip['systems']) == {'system-00'}
+                                for clip in key['clips']))
+            path = root / 'set/blind/annotations.json'
+            annotations = json.loads(path.read_text())
+            for clip in annotations['clips']:
+                self.assertEqual(clip['intervals'], [])
+                clip.update(status='reviewed', reviewedRegions=[dict(start=0, end=2)],
+                            intervals=[dict(start=0, end=2, speaker='person-01')])
+            path.write_text(json.dumps(annotations))
+            gold = export_review(root / 'set', root / 'export')
+            self.assertEqual({file.name for file in (root / 'export').iterdir()},
+                             {'gold.json', 'system-00.json'})
+            baseline = json.loads((root / 'export/system-00.json').read_text())['intervals']
+            self.assertEqual(sorted(baseline, key=lambda row: row['start']),
+                             [dict(start=start / 100, end=end / 100, speaker='reference')
+                              for start, end in select_random(1000, 200, 3, 7)])
+            result = score(gold, {'system-00': baseline})
+            self.assertEqual(set(result['systems']), {'system-00'})
+            self.assertEqual(result['systems']['system-00'][0]['diarization_error_rate'], 0)
+            with self.assertRaisesRegex(ValueError, 'diagnostic count to 0'):
+                build(audio, ref, [], root / 'invalid', 2, 3, 1, 7)
+            self.assertFalse((root / 'invalid').exists())
+
+    def test_saved_reference_only_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio, ref, _ = self.fixture(root)
+            command = [sys.executable, str(Path(__file__).resolve().parents[1] / 'build_review.py'),
+                       '--audio', str(audio), '--reference', str(ref), '--output', str(root / 'set')]
+            invalid = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn('diagnostic count to 0', invalid.stderr)
+            self.assertFalse((root / 'set').exists())
+            subprocess.run(command + ['--diagnostic-count', '0', '--cover-reference-speakers'],
+                           check=True, capture_output=True, text=True)
+            key = json.loads((root / 'set/private/key.json').read_text())
+            self.assertEqual(len(key['systems']), 1)
+            self.assertEqual(key['systems'][0]['role'], 'saved_reference_not_gold')
+            self.assertEqual(key['speaker_coverage']['reference_labels'], ['reference'])
+
+    def test_targeted_speaker_coverage_preserves_independent_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio, ref, _ = self.fixture(root)
+            rows = [dict(start=0, end=1, speaker='label-a'),
+                    dict(start=3, end=5, speaker='label-a'),
+                    dict(start=3, end=5, speaker='label-b'),
+                    dict(start=9.99, end=10, speaker='rare-label')]
+            ref.write_text(json.dumps(dict(audioDurationSeconds=10, intervals=rows)))
+            ordinary = build(audio, ref, [], root / 'ordinary', 2, 2, 0, 7)
+            key = build(audio, ref, [], root / 'targeted', 2, 2, 0, 7, cover_reference_speakers=True)
+            repeated = build(audio, ref, [], root / 'repeated', 2, 2, 0, 7, cover_reference_speakers=True)
+            primary = lambda k: sorted((c['startFrame'], c['endFrame']) for c in k['clips'] if c['category'] == 'random')
+            self.assertEqual(primary(ordinary), primary(key))
+            self.assertEqual(key['clips'], repeated['clips'])
+            targeted = [clip for clip in key['clips'] if clip['category'] == 'speaker_coverage']
+            self.assertEqual([(clip['startFrame'], clip['endFrame']) for clip in sorted(targeted, key=lambda c: c['startFrame'])],
+                             [(300, 500), (800, 1000)])
+            self.assertEqual({row['speaker'] for clip in targeted for row in clip['systems']['system-00']},
+                             {'label-a', 'label-b', 'rare-label'})
+            self.assertEqual(key['speaker_coverage']['reference_labels'], ['label-a', 'label-b', 'rare-label'])
+            path = root / 'targeted/blind/annotations.json'
+            annotations = json.loads(path.read_text())
+            for text in ('speaker_coverage', 'label-a', 'rare-label'):
+                self.assertNotIn(text, path.read_text())
+            primary_ids = {clip['id'] for clip in key['clips'] if clip['category'] == 'random'}
+            for clip in annotations['clips']:
+                if clip['id'] in primary_ids:
+                    clip.update(status='reviewed', reviewedRegions=[dict(start=0, end=2)])
+            path.write_text(json.dumps(annotations))
+            gold = export_review(root / 'targeted', root / 'export')
+            self.assertEqual(sorted((r['start'], r['end']) for r in gold['reviewedRegions']),
+                             [(a / 100, b / 100) for a, b in primary(ordinary)])
+            self.assertEqual(len(gold['reviewedRegions']), 2)
+
+    def test_targeted_coverage_short_audio_and_fractional_intervals(self):
+        rows = [dict(start=0, end=.001, speaker='first'), dict(start=.099, end=.1, speaker='last')]
+        self.assertEqual(speaker_coverage(rows, 10, 2000, 100), [(0, 10)])
+        self.assertEqual(speaker_coverage(list(reversed(rows)), 10, 2000, 100), [(0, 10)])
+        self.assertEqual(speaker_coverage([], 10, 2000, 100), [])
 
     def test_invalid_inputs_do_not_create_output(self):
         with tempfile.TemporaryDirectory() as directory:
