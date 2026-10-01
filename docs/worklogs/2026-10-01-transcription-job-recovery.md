@@ -27,10 +27,12 @@ Existing generic error messages remain unchanged until the person retries the ta
 
 ## Validation
 
-Source formatting completed. Central validation must run `ManagedTaskRecoveryTests`, Swift lint, and the isolated release build alongside the task presentation changes. Existing tests already cover missing-job restart, endpoint failures outside polling, uncertain submissions, and durable task recovery. No real provider request was made.
+Existing tests cover missing-job restart, endpoint failures outside polling, uncertain submissions, and durable task recovery. Combined results below include the new regression cases. No real provider request was made.
 
 ## Combined validation
 
 Combined validation passed: 517 tests in 96 suites (66.864 seconds), strict Swift formatting/lint, and isolated `make build-macos` (54.65 seconds), including signing. The build retained the documented missing Command Line Tools search-path linker warnings. No new API deprecation warning appeared. The real recording and running app bundle were preserved.
 
 The full passing suite includes both connection-check 404 variants and the legacy saved-job polling regression. Existing user failure records retain their original messages until an explicit retry.
+
+Commit `3ceb78f` was pushed to `master`. [Release CI](https://github.com/rankun203/meeting-notes/actions/runs/36816224156) passed on macOS 15, 26, and 27.

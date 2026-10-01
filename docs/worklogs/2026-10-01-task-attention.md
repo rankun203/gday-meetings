@@ -32,7 +32,7 @@ None.
 - Inspected the user-provided screenshot before editing and described the intended hierarchy and controls.
 - Reviewed new and surrounding wording against `docs/writing.md`.
 - `make format-macos` and `make lint-macos` passed.
-- Release validation and after-change screenshots are assigned to the main agent's separate validation app. Check light, dark, and system appearance; narrow layout; keyboard focus; **Review Tasks** navigation; local synthetic **Retry**, **Restart**, and **Dismiss** actions; and recording-strip coexistence. These checks are pending, not established by formatting.
+- Release validation, screenshots, checked interactions, and remaining limits are recorded below.
 - No real recording, saved request, or running preview was changed during this UI sub-task.
 
 ## Combined validation
@@ -40,3 +40,5 @@ None.
 Combined validation passed: 517 tests in 96 suites (66.864 seconds), strict Swift formatting/lint, and isolated `make build-macos` (54.65 seconds), including signing. The build retained the documented missing Command Line Tools search-path linker warnings. No new API deprecation warning appeared. The real recording and running app bundle were preserved.
 
 After-change screenshots in System (light) and Dark showed failed tasks first, stronger error text, the attention count, and the review button alongside the synthetic recording strip. **Review 2 Tasks** navigated to Tasks. Synthetic **Retry** changed the count to one; **Restart** removed the remaining attention state and restored the activity-only bar. No real provider request was submitted. Keyboard Tab navigation was exercised, but recovery-button keyboard activation, Dismiss, narrow windows, and explicit Light appearance were not checked. Screenshots captured inactive-window button styling, so active-window tint was not established.
+
+Commit `3ceb78f` was pushed to `master`. [Release CI](https://github.com/rankun203/meeting-notes/actions/runs/36816224156) passed on macOS 15, 26, and 27.

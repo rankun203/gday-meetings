@@ -38,16 +38,15 @@ None.
 ## Validation
 
 Before-state evidence: user-supplied recording-bar screenshot and inspection of
-the playback title button. Release build and after-state screenshots are pending
-central validation in the isolated validation app. No real recording was
-stopped, and no app was launched for this change.
+the playback title button. The combined release build, after-state screenshots,
+and interaction limits are recorded below. No real recording was stopped.
 
 Targeted `swift-format` formatting and strict lint passed for the new component
 and `LibraryView.swift`; `git diff --check` passed. The existing log-follow
-changes in `LibraryView.swift` were preserved. The documentation index is left
-for central integration as requested.
+changes in `LibraryView.swift` were preserved. The documentation index links
+this worklog.
 
-Check the synthetic recording while viewing Tasks or another meeting:
+The remaining manual acceptance checklist is:
 
 - Hover the icon, status, title, and gaps between them. All should show the
   same complete-label highlight without moving text or duration.
@@ -65,4 +64,8 @@ Combined validation passed: 517 tests in 96 suites (66.864 seconds), strict Swif
 
 The separate validation app exposed one **Show Recording** button for the icon/status/title, with **Reveal in Finder** as an accessibility action. Clicking the status text and activating the complete button both navigated from Tasks to the active synthetic recording. Screenshots in System (light) and Dark showed the intended unchanged geometry beside duration and stop controls. Continuous pointer-hover rendering, Command-click, keyboard activation of this specific button, narrow windows, and preparing/saving states were not verified through the automation tool. Shared playback button styling was confirmed in source.
 
-The user later reported a frozen-looking preview and high WindowServer/Computer Use CPU. A two-second stack sample of the validation process showed event-loop waiting and rendering, not a sustained deadlock. The synthetic validation process was terminated without touching the real recorder. Resetting the automation session did not stop the helper's rendering load; terminating that helper reduced its CPU to zero and lowered WindowServer load in the next observation. Further GUI checks were stopped. This establishes a validation-tool issue, not a complete explanation of the machine's remaining rendering load.
+The user later reported a frozen-looking preview and high WindowServer/Computer Use CPU. A two-second stack sample of the validation process showed event-loop waiting and rendering, not a sustained deadlock. The synthetic validation process was terminated without touching the real recorder. Resetting the automation session did not stop the helper's rendering load; terminating that helper reduced its CPU to zero and lowered WindowServer load in the next observation. Further GUI checks were stopped. The helper sample also showed ScreenCaptureKit video reception. WindowServer later remained elevated after the helper exited, so this confirms additional validation-tool load, not the cause of all remaining rendering cost. A read-only sample of the real recorder showed ongoing encoding and speech processing, without a sustained deadlock. No frame-rate change was made; comparing a 30-fps waveform preference without screen capture remains a possible follow-up.
+
+Commit `3ceb78f` was pushed to `master`. [Release CI](https://github.com/rankun203/meeting-notes/actions/runs/36816224156) passed on macOS 15, 26, and 27.
+
+The user confirmed that the Mac was responsive again after the synthetic preview and Computer Use helper were stopped. Remaining work continued without UI automation.

@@ -40,8 +40,10 @@ Five additional guard tests cover duplicate rebuild and recovery, incremental co
 
 The initial test run exposed two path issues, now corrected: parent-folder comparisons must compare normalized path strings rather than directory-hint-sensitive URL equality, and cached folder names must be resolved against the caller's library URL so transaction path checks continue to work with filesystem aliases. The transaction guard was not weakened.
 
-No UI changes, real library migration, commit, or push are part of this task.
+No UI changes or real library migration were needed.
 
 ## Combined validation
 
 Combined validation passed: 517 tests in 96 suites (66.864 seconds), strict Swift formatting/lint, and isolated `make build-macos` (54.65 seconds), including signing. The build retained the documented missing Command Line Tools search-path linker warnings. No new API deprecation warning appeared. The real recording and running app bundle were preserved.
+
+Commit `3ceb78f` was pushed to `master`. [Release CI](https://github.com/rankun203/meeting-notes/actions/runs/36816224156) passed on macOS 15, 26, and 27.

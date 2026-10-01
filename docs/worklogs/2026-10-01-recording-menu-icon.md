@@ -23,10 +23,12 @@ None.
 
 # Validation
 
-Before-edit screenshot inspected. Release and isolated synthetic-recording visual checks are pending. The active recording must not be stopped for validation.
+The supplied before-edit screenshot was inspected. Combined release validation and the visual-check limitation are recorded below.
 
 ## Combined validation
 
 Combined validation passed: 517 tests in 96 suites (66.864 seconds), strict Swift formatting/lint, and isolated `make build-macos` (54.65 seconds), including signing. The build retained the documented missing Command Line Tools search-path linker warnings. No new API deprecation warning appeared. The real recording and running app bundle were preserved.
 
 The isolated app launched with a synthetic recording. Menu-bar capture through SystemUIServer timed out; the after-state menu-bar icon could not be visually verified. Source and release compilation confirm `stop.circle.fill`. No recording control was invoked.
+
+Commit `3ceb78f` was pushed to `master`. [Release CI](https://github.com/rankun203/meeting-notes/actions/runs/36816224156) passed on macOS 15, 26, and 27.
