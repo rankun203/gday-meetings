@@ -106,8 +106,20 @@ the end of the recording using the production writer and decoder.
 
 `make format-macos`, `make lint-macos`, and diff whitespace checks passed. The final
 release checkout’s app sources match the validated working tree. The streaming
-change is prepared for its own commit; unrelated Dock and logging edits are
-excluded. Hosted matrix results will be reported after pushing. Real device capture,
-acoustic quality, Intel execution, and hosted macOS runners remain unvalidated.
+change was committed separately as `633372b`; unrelated Dock and logging edits
+were excluded. Real device capture, acoustic quality, and Intel execution remain
+unvalidated. Hosted build results are recorded below.
 The built app is in `/private/tmp/gday-opus-validation.BLcLOZ/apps/client-macos-swift/.build/macos/`;
 the active installation was not replaced.
+
+## Hosted compiler compatibility
+
+The first hosted run passed macOS 27 but failed macOS 15 and 26 because their Swift
+compilers require explicit `self` for `format` inside the converter callback.
+The local Swift 6.4 compiler accepted the implicit reference. The follow-up uses
+`self.format`; it changes no audio behavior. The initial run is
+[36811183312](https://github.com/rankun203/meeting-notes/actions/runs/36811183312).
+The corrected source passed the isolated local release rebuild, packaging, and
+signature verification, with the same existing Command Line Tools search-path
+warnings. Formatting and diff checks passed. Hosted validation is pending the
+follow-up push.

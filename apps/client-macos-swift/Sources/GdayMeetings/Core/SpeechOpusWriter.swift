@@ -138,7 +138,7 @@ final class SpeechOpusWriter {
                 let count = min(requested, inputChunk.frameCapacity, buffer.frameLength - offset)
                 let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
                 let destination = UnsafeMutableAudioBufferListPointer(inputChunk.mutableAudioBufferList)
-                let stride = Int(format.streamDescription.pointee.mBytesPerFrame)
+                let stride = Int(self.format.streamDescription.pointee.mBytesPerFrame)
                 inputChunk.frameLength = count
                 for index in source.indices {
                     memcpy(
