@@ -37,7 +37,7 @@ Validate that returned URLs use the expected destination and transport before pa
 
 ## Filedrop adapter
 
-The implementation follows the [Rust client's direct transcription flow](../../apps/client-macos-rust/src/server/routes.rs) and the [file-drop service](../../tools/file-drop/README.md).
+The implementation follows the [Rust client's direct transcription flow](../../apps/client-macos-rust/src/server/routes.rs) and the [file-drop service](../../apps/file-drop/README.md).
 
 | Operation | Request | Result |
 | --- | --- | --- |

@@ -75,10 +75,10 @@ CPU execution takes longer than GPU execution. Model downloads require network a
 apps/
   client-macos-swift/      Native SwiftUI client, Swift package, macOS packaging
   client-macos-rust/       Rust client, UI, Cargo files, scripts and macOS packaging
+  file-drop/              Optional helper for the direct RunPod workflow
   server/                 Payload/Next.js CMS, auth, APIs and server tests
   worker-audio-extraction/ Python ML worker, local HTTP and RunPod adapters
 integrations/             Reserved Logseq and Obsidian integrations
-tools/file-drop/           Optional helper for the direct RunPod workflow
 docs/                     Architecture, deployment, and worklogs
 Makefile                  Common commands delegating to independent components
 ```

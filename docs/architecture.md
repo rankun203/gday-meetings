@@ -19,7 +19,7 @@ Gday Meetings is one repository with three separately installed and deployed com
 5. The worker downloads the task's input URLs and processes audio. Local HTTP mode commits the output to its job database before attempting the task-scoped server callback, so polling can recover it after callback failure. RunPod mode requires the callback to succeed before reporting success.
 6. The server also polls the provider and repairs interrupted result projections. The client retrieves results from the server; MCP searches the server under user OAuth.
 
-The client can disconnect while the server and worker complete a submitted job. The worker's job database is execution/recovery state; the server's stored output is the durable meeting result. The direct RunPod workflow remains separately configured in the client for existing usage and uses tools/file-drop. It is not used by the standard client → server → worker deployment.
+The client can disconnect while the server and worker complete a submitted job. The worker's job database is execution/recovery state; the server's stored output is the durable meeting result. The direct RunPod workflow remains separately configured in the client for existing usage and uses apps/file-drop. It is not used by the standard client → server → worker deployment.
 
 ## Local networking and trust
 
