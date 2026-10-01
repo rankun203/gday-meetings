@@ -47,8 +47,8 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
         case .gdayWebsite: return "Gday Meetings Website"
-        case .nemotron: return "Nemotron"
-        case .community1: return "Community-1"
+        case .nemotron: return "Live Diarization (Nemotron)"
+        case .community1: return "Diarization (Community-1)"
         }
     }
     var capabilities: Set<ProviderCapability> {

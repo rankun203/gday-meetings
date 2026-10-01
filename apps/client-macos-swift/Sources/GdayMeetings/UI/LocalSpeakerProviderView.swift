@@ -4,7 +4,6 @@ import SwiftUI
 /// Local capabilities share the provider form, but have no remote connection fields.
 struct LocalSpeakerProviderView: View {
     @EnvironmentObject private var store: MeetingStore
-    @ObservedObject private var models = LocalModelManager.shared
     @ViewState private var draft: ServiceProvider
     @ViewState private var failure: String?
 
@@ -86,7 +85,6 @@ struct LocalSpeakerProviderView: View {
                     !changed || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .task { await models.refresh() }
     }
     private func save() {
         guard let index = store.settings.serviceProviders.firstIndex(where: { $0.id == draft.id }) else { return }

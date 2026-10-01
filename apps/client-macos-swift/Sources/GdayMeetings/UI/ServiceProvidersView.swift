@@ -1,8 +1,10 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct ServiceProvidersView: View {
     @EnvironmentObject private var store: MeetingStore
+    @ViewState private var activeRecognitionEnabled = false
     @ViewState private var selection: UUID?
     @ViewState private var confirmsRemoval = false
     @ViewState private var saveError: String?
@@ -18,14 +20,13 @@ struct ServiceProvidersView: View {
                         Text("Live Transcription").font(.caption).foregroundStyle(.secondary)
                     }.tag(ThisMacProvider.id).padding(.vertical, 4)
                     ForEach(store.settings.serviceProviders) { provider in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Label(
-                                provider.name,
-                                systemImage: provider.kind.isLocal
-                                    ? "desktopcomputer" : provider.kind == .gdayWebsite ? "globe" : "server.rack")
-                            Text(provider.isEnabled ? provider.kind.title : "Disabled")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        ProviderReadinessRow(
+                            provider: provider,
+                            liveRecognitionEnabled: store.settings.liveSpeakerRecognitionEnabled
+                                || (store.recordingID != nil && activeRecognitionEnabled
+                                    && store.liveTranscript.draft?.meetingID == store.recordingID),
+                            selectProvider: { selection = provider.id }
+                        )
                         .tag(provider.id)
                         .padding(.vertical, 4)
                     }
@@ -82,6 +83,10 @@ struct ServiceProvidersView: View {
             }
         }
         .onAppear { if selection == nil { selection = ThisMacProvider.id } }
+        .task { await LocalModelManager.shared.refresh() }
+        .onReceive(store.liveTranscript.$speakerRecognitionEnabled.removeDuplicates()) {
+            activeRecognitionEnabled = $0
+        }
         .alert(
             "Couldn’t Update Providers",
             isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
