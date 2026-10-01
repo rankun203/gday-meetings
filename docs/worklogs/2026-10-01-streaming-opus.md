@@ -121,5 +121,6 @@ The local Swift 6.4 compiler accepted the implicit reference. The follow-up uses
 [36811183312](https://github.com/rankun203/meeting-notes/actions/runs/36811183312).
 The corrected source passed the isolated local release rebuild, packaging, and
 signature verification, with the same existing Command Line Tools search-path
-warnings. Formatting and diff checks passed. Hosted validation is pending the
-follow-up push.
+warnings. Formatting and diff checks passed. The follow-up commit `4561962` passed
+all hosted release jobs on macOS 15 (Xcode 26.0.1), macOS 26, and macOS 27 in
+[run 36811627125](https://github.com/rankun203/meeting-notes/actions/runs/36811627125).

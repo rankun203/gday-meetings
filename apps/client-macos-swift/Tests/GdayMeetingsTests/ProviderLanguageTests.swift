@@ -8,7 +8,8 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
     return ProviderResult(
         value: ProviderLanguageCatalog(languages: languages, source: source),
         dataFlow: DataFlow(
-            location: .remote, targetName: source, domain: "example.test", requestBytes: 0, responseBytes: 32,
+            location: .remote, targetID: UUID(), targetName: source, domain: "example.test", requestBytes: 0,
+            responseBytes: 32,
             startedAt: now, endedAt: now, bodies: ["language discovery"], purpose: "Load languages"))
 }
 

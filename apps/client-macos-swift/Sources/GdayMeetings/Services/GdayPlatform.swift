@@ -29,9 +29,9 @@ extension GdayServerService {
             )
         }
     }
-    func upload(file: URL) async throws -> ProviderResult<URL> {
+    func upload(file: URL, provider: ServiceProvider) async throws -> ProviderResult<URL> {
         return try await ProviderDataOperation.perform(
-            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: [file.lastPathComponent],
+            targetID: provider.id, target: provider.name, endpoint: origin ?? "", bodies: [file.lastPathComponent],
             purpose: "Audio upload"
         ) {
 
@@ -59,10 +59,10 @@ extension GdayServerService {
     }
     func submit(
         externalID: String, title: String, inputs: [ServerTrackInput], language: String, diarize: Bool,
-        idempotencyKey: String
+        idempotencyKey: String, provider: ServiceProvider
     ) async throws -> ProviderResult<String> {
         return try await ProviderDataOperation.perform(
-            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "",
+            targetID: provider.id, target: provider.name, endpoint: origin ?? "",
             bodies: inputs.map { $0.trackName + " audio link" } + ["metadata.json (title)", "content.json (language)"],
             purpose: "Transcription submission"
         ) {
@@ -93,9 +93,9 @@ extension GdayServerService {
 
         }
     }
-    func task(id: String) async throws -> ProviderResult<ServerTaskResult> {
+    func task(id: String, provider: ServiceProvider) async throws -> ProviderResult<ServerTaskResult> {
         return try await ProviderDataOperation.perform(
-            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: ["transcript"],
+            targetID: provider.id, target: provider.name, endpoint: origin ?? "", bodies: ["transcript"],
             purpose: "Transcription result"
         ) {
 
@@ -142,9 +142,9 @@ extension GdayServerService {
         }
         return capabilities["meetingImageArtifacts"] as? Bool == true
     }
-    func importArchive(_ body: [String: Any]) async throws -> ProviderResult<[String: Any]> {
+    func importArchive(_ body: [String: Any], provider: ServiceProvider) async throws -> ProviderResult<[String: Any]> {
         return try await ProviderDataOperation.perform(
-            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: Self.archiveDataBodies(body),
+            targetID: provider.id, target: provider.name, endpoint: origin ?? "", bodies: Self.archiveDataBodies(body),
             purpose: "Meeting archive"
         ) {
 
@@ -176,9 +176,9 @@ extension GdayServerService {
         }
         return ["server-archive.json (meeting metadata, people and tags)"] + artifacts + audio
     }
-    func verifyArchive(externalID: String) async throws -> ProviderResult<[String: Any]> {
+    func verifyArchive(externalID: String, provider: ServiceProvider) async throws -> ProviderResult<[String: Any]> {
         return try await ProviderDataOperation.perform(
-            target: ServiceProviderKind.gdayWebsite.title, endpoint: origin ?? "", bodies: ["archive verification"],
+            targetID: provider.id, target: provider.name, endpoint: origin ?? "", bodies: ["archive verification"],
             purpose: "Verify meeting archive"
         ) {
 
@@ -189,7 +189,7 @@ extension GdayServerService {
 
         }
     }
-    /// Server calls are not tied to one provider record; the website is the only one.
+    /// Transport logs use the service kind; receipts retain the selected provider identity.
     nonisolated static func trace(_ data: String) -> NetworkTrace {
         NetworkTrace(provider: ServiceProviderKind.gdayWebsite.title, data: data)
     }

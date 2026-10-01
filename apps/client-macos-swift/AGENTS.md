@@ -49,6 +49,7 @@ Read the relevant documents before changing the app:
 - [Summary task isolation](../../docs/worklogs/2026-09-28-summary-task-isolation.md): independent summary lifetime, incomplete responses, and paused playback route changes.
 - [Summary images](../../docs/worklogs/2026-09-28-summary-images.md): image capability settings, attachments, source links, and retention.
 - [Meeting data events](../../docs/worklogs/2026-09-29-meeting-data-events.md): provider receipts, per-meeting history, persistence, and validation.
+- [Data event groups](../../docs/worklogs/2026-10-01-data-event-groups.md): stable destination IDs, file references, and grouped history.
 - [Agents page](../../docs/worklogs/2026-09-29-agents-page.md): saved library instructions, launch commands, and fenced-code presentation.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 - [Streaming Opus recording](../../docs/worklogs/2026-10-01-streaming-opus.md): speech encoding, DTX, bounded capture writes, and validation.

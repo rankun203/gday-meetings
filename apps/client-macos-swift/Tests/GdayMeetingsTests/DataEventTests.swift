@@ -7,7 +7,8 @@ struct DataEventTests {
     @Test func successfulProviderResultContainsMeasuredReceipt() async throws {
         let before = Date()
         let result = try await ProviderDataOperation.perform(
-            target: "Example Provider", endpoint: "https://processing.example.invalid/v1?token=synthetic",
+            targetID: UUID(), target: "Example Provider",
+            endpoint: "https://processing.example.invalid/v1?token=synthetic",
             bodies: ["microphone.opus", "notes.md"], purpose: "Transcription"
         ) {
             ProviderDataOperation.metrics?.record(sent: 120, received: 30)
@@ -37,7 +38,7 @@ struct DataEventTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
             let result: ProviderResult<String> = try await ProviderDataOperation.perform(
-                target: "Example Provider", endpoint: "https://processing.example.invalid",
+                targetID: UUID(), target: "Example Provider", endpoint: "https://processing.example.invalid",
                 bodies: ["notes.md"], purpose: "Summary"
             ) {
                 ProviderDataOperation.metrics?.record(sent: 200, received: 40)
@@ -53,12 +54,12 @@ struct DataEventTests {
 
     @Test func nestedMeasurementsRemainSeparateAndUnknownSizesStayUnknown() async throws {
         let result = try await ProviderDataOperation.perform(
-            target: "Local Provider", endpoint: "http://127.0.0.1:8080",
+            targetID: UUID(), target: "Local Provider", endpoint: "http://127.0.0.1:8080",
             bodies: ["transcript"], purpose: "Summary"
         ) {
             ProviderDataOperation.metrics?.record(sent: 12, received: nil)
             let nested = try await ProviderDataOperation.perform(
-                target: "Other Provider", endpoint: "https://other.example.invalid",
+                targetID: UUID(), target: "Other Provider", endpoint: "https://other.example.invalid",
                 bodies: ["notes.md"], purpose: "Summary"
             ) {
                 ProviderDataOperation.metrics?.record(sent: 99, received: 88)
@@ -81,7 +82,7 @@ struct DataEventTests {
         let event = MeetingDataEvent(
             action: .sent,
             dataFlow: .init(
-                location: .local, targetName: "This Mac", startedAt: start,
+                location: .local, targetID: ThisMacProvider.id, targetName: "This Mac", startedAt: start,
                 endedAt: start.addingTimeInterval(0.375), bodies: ["System Audio"], purpose: "Live transcription"))
         try DataEventJournal.append(event, directory: directory)
         let file = directory.appendingPathComponent(DataEventJournal.filename)

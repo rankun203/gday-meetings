@@ -223,6 +223,22 @@ enum UIPreview {
                 store.settings.serviceProviders = providers
                 store.settings.transcriptionProviderID = providers.first { $0.kind == .runpod }?.id
             }
+            if let meeting = store.meetings.first(where: { $0.title == "Synthetic conversation" }) {
+                let folder = store.directory(for: meeting.id)
+                let now = Date()
+                for index in 0..<12 {
+                    let time = now.addingTimeInterval(Double(index) / 100)
+                    try DataEventJournal.append(
+                        MeetingDataEvent(
+                            action: .modified,
+                            dataFlow: DataFlow(
+                                location: .local, targetID: ThisMacProvider.id, targetName: "This Mac",
+                                responseBytes: 1024 + index * 128, startedAt: time, endedAt: time,
+                                bodies: ["live-transcript.json"], filePaths: ["live-transcript.json"],
+                                purpose: "Saved file"
+                            )), directory: folder)
+                }
+            }
         }
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         return store
@@ -527,15 +543,18 @@ extension UIPreview {
             MeetingDataEvent(
                 action: .sent,
                 dataFlow: DataFlow(
-                    location: .local, targetName: "This Mac", startedAt: now.addingTimeInterval(-35),
+                    location: .local, targetID: ThisMacProvider.id, targetName: "This Mac",
+                    startedAt: now.addingTimeInterval(-35),
                     endedAt: now.addingTimeInterval(-5), bodies: ["System Audio"],
                     purpose: "Live transcription (synthetic)")), directory: directory)
         try DataEventJournal.append(
             MeetingDataEvent(
                 action: .sent,
                 dataFlow: DataFlow(
-                    location: .remote, targetName: "Example Provider", domain: "processing.example.invalid",
+                    location: .remote, targetID: UUID(uuidString: "58935856-61B2-4C1F-8A7F-BBD81B7B6743")!,
+                    targetName: "Example Provider", domain: "processing.example.invalid",
                     requestBytes: 12288, responseBytes: 4096, startedAt: now.addingTimeInterval(-4), endedAt: now,
-                    bodies: ["notes.md", "transcript.json"], purpose: "Summary (synthetic)")), directory: directory)
+                    bodies: ["notes.md", "transcript.json"], filePaths: ["notes.md", "transcript.json"],
+                    purpose: "Summary (synthetic)")), directory: directory)
     }
 }

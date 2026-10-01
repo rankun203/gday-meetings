@@ -85,7 +85,7 @@ extension MeetingStore {
                         "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…")
                     let prepared = try await prepareServerAudio(file)
                     defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
-                    let uploadResult = try await server.upload(file: prepared.url)
+                    let uploadResult = try await server.upload(file: prepared.url, provider: provider)
                     recordDataFlow(uploadResult.dataFlow.referencing(file: file, prepared: prepared.url), meetingID: id)
                     let url = uploadResult.value
                     let isMic = file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
@@ -98,7 +98,7 @@ extension MeetingStore {
                 let submission = try await server.submit(
                     externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs,
                     language: attempt.providerLanguage ?? attempt.language,
-                    diarize: attempt.diarize, idempotencyKey: attempt.idempotencyKey)
+                    diarize: attempt.diarize, idempotencyKey: attempt.idempotencyKey, provider: provider)
                 recordDataFlow(submission.dataFlow.referencingAudio(files), meetingID: id)
                 attempt.taskID = submission.value
                 try saveTranscriptionAttempt(attempt, meetingID: id)
@@ -109,7 +109,7 @@ extension MeetingStore {
                 try Task.checkCancellation()
                 setJobProgress(.transcription, .meeting(id), "Waiting for \(provider.name)…")
                 let status: ProviderResult<ServerTaskResult>
-                do { status = try await server.task(id: taskID) }
+                do { status = try await server.task(id: taskID, provider: provider) }
                 catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
                     attempt.remoteJobExpired = true
                     try saveTranscriptionAttempt(attempt, meetingID: id)

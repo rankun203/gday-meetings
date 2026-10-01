@@ -171,7 +171,7 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
         String
     > {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint,
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint,
             bodies: tracks.map { $0.trackName + " audio link" } + ["language"], purpose: "Transcription submission"
         ) {
 
@@ -224,7 +224,8 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
     }
     func status(jobID: String) async throws -> ProviderResult<ProviderTranscriptionStatus> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["transcript"], purpose: "Transcription result"
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["transcript"],
+            purpose: "Transcription result"
         ) {
 
             try Self.parseStatus(await ServiceHTTP.json(jobRequest("status", jobID: jobID), trace: jobTrace))
@@ -234,7 +235,8 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
     func status(jobID: String, expectedTracks: Set<String>) async throws -> ProviderResult<ProviderTranscriptionStatus>
     {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["transcript"], purpose: "Transcription result"
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["transcript"],
+            purpose: "Transcription result"
         ) {
 
             try Self.parseStatus(
@@ -245,7 +247,7 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
     }
     @discardableResult func cancel(jobID: String) async throws -> ProviderResult<Void> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["job identifier"],
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["job identifier"],
             purpose: "Cancel transcription"
         ) {
 
@@ -317,11 +319,13 @@ struct OpenAISummaryProvider: SummarizationProvider {
         ])
     }
     func complete(
-        messages: [LLMMessage], bodies: [String] = ["transcript", "instructions"], purpose: String = "Summary",
+        messages: [LLMMessage], bodies: [String] = ["transcript", "instructions"], filePaths: [String] = [],
+        purpose: String = "Summary",
         onPartial: (@MainActor (String) -> Void)? = nil
     ) async throws -> ProviderResult<String> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: bodies, purpose: purpose
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: bodies,
+            filePaths: filePaths, purpose: purpose
         ) {
 
             guard provider.kind == .openAICompatible, provider.supports(.summarization) else {
@@ -351,7 +355,7 @@ struct OpenAISummaryProvider: SummarizationProvider {
         guard provider.isEnabled else { throw ServiceError("Turn on Enable This Provider to check its connection.") }
         if provider.kind == .filedrop { return try await FiledropProvider(provider: provider).checkConnection() }
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["connection metadata"],
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["connection metadata"],
             purpose: "Connection check"
         ) {
 
@@ -421,7 +425,7 @@ struct FiledropProvider: FileTransferProvider {
 
     func info() async throws -> ProviderResult<FiledropInfo> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["upload limits"],
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["upload limits"],
             purpose: "Provider information"
         ) {
 
@@ -443,7 +447,7 @@ struct FiledropProvider: FileTransferProvider {
 
     func checkConnection() async throws -> ProviderResult<String> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: ["connection metadata"],
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["connection metadata"],
             purpose: "Connection check"
         ) {
 
@@ -480,7 +484,7 @@ struct FiledropProvider: FileTransferProvider {
 
     func upload(file: URL) async throws -> ProviderResult<FiledropUpload> {
         return try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint, bodies: [file.lastPathComponent],
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: [file.lastPathComponent],
             purpose: "Audio upload"
         ) {
 

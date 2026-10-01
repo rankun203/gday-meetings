@@ -26,7 +26,7 @@ enum ProviderModelList {
 
     static func fetch(_ provider: ServiceProvider) async throws -> ProviderResult<[ProviderModel]> {
         try await ProviderDataOperation.perform(
-            target: provider.name, endpoint: provider.endpoint,
+            targetID: provider.id, target: provider.name, endpoint: provider.endpoint,
             bodies: ["model discovery"], purpose: "Load models"
         ) {
             let response = try await ServiceHTTP.json(

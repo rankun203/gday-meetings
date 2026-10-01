@@ -175,7 +175,7 @@ actor AppleLiveTranscription {
         return ProviderResult(
             value: (),
             dataFlow: DataFlow(
-                location: .local, targetName: "This Mac", startedAt: Date(),
+                location: .local, targetID: ThisMacProvider.id, targetName: "This Mac", startedAt: Date(),
                 bodies: sources.map(\.title), purpose: "Live transcription"))
     }
 

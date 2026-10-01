@@ -103,7 +103,8 @@ extension MeetingStore {
         defer { summaryDrafts.removeValue(forKey: id) }
         let messages = try await summaryMessages(provider: provider.provider, meeting: meeting)
         let response = try await provider.complete(
-            messages: messages, bodies: summaryDataBodies(meeting, messages: messages), purpose: "Summary",
+            messages: messages, bodies: summaryDataBodies(meeting, messages: messages),
+            filePaths: summaryDataFilePaths(meeting, messages: messages), purpose: "Summary",
             onPartial: { [weak self] text in
                 guard !Task.isCancelled else { return }
                 self?.summaryDrafts[id] = text
@@ -149,7 +150,8 @@ extension MeetingStore {
                             + context(meeting))
                 ] + meeting.chat.map { LLMMessage(role: $0.role, content: $0.content) }
             let response = try await summaryProvider().complete(
-                messages: messages, bodies: chatDataBodies(meeting), purpose: "Meeting chat")
+                messages: messages, bodies: chatDataBodies(meeting), filePaths: chatDataFilePaths(meeting),
+                purpose: "Meeting chat")
             recordDataFlow(response.dataFlow, meetingID: id)
             let result = response.value
             if var current = self.meeting(id: id) {
@@ -195,6 +197,7 @@ extension MeetingStore {
             for meeting in selected {
                 var flow = response.dataFlow
                 flow.bodies = chatDataBodies(meeting, contextual: true)
+                flow.filePaths = chatDataFilePaths(meeting, contextual: true)
                 recordDataFlow(flow, meetingID: meeting.id)
             }
             var current = contextualChats[key] ?? []

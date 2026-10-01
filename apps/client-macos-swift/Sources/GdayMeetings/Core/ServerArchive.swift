@@ -71,7 +71,7 @@ extension MeetingStore {
         do {
             let server = GdayServerService.shared
             guard let origin = server.origin,
-                settings.serviceProviders.contains(where: {
+                let provider = settings.serviceProviders.first(where: {
                     $0.kind == .gdayWebsite && $0.isEnabled
                         && (try? ServiceHTTP.origin($0.endpoint).absoluteString) == origin
                 })
@@ -199,8 +199,8 @@ extension MeetingStore {
                 }
                 setJobProgress(
                     .archive, .meeting(id), "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…")
-                let uploadResult = try await server.upload(file: source)
-                recordDataFlow(uploadResult.dataFlow, meetingID: id)
+                let uploadResult = try await server.upload(file: source, provider: provider)
+                recordDataFlow(uploadResult.dataFlow.referencing(file: source, prepared: source), meetingID: id)
                 checkpoint.audio[index].url = uploadResult.value
                 try Self.saveArchive(checkpoint, to: checkpointURL)
             }
@@ -213,10 +213,12 @@ extension MeetingStore {
                     as [String: Any]
             }
             setJobProgress(.archive, .meeting(id), "Saving the archive to the server…")
-            let imported = try await server.importArchive(body)
-            recordDataFlow(imported.dataFlow, meetingID: id)
+            let imported = try await server.importArchive(body, provider: provider)
+            var archiveFlow = imported.dataFlow
+            archiveFlow.filePaths = ["server-archive.json"] + checkpoint.audio.map(\.path)
+            recordDataFlow(archiveFlow, meetingID: id)
             setJobProgress(.archive, .meeting(id), "Verifying the archived meeting and audio…")
-            let verification = try await server.verifyArchive(externalID: checkpoint.externalID)
+            let verification = try await server.verifyArchive(externalID: checkpoint.externalID, provider: provider)
             let verified = verification.value
             guard verified["importKey"] as? String == checkpoint.importKey,
                 verified["audioCount"] as? Int == checkpoint.audio.count,

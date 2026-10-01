@@ -4,8 +4,9 @@ import SwiftUI
 struct MeetingDataPrivacyView: View {
     @EnvironmentObject private var store: MeetingStore
     let meetingID: UUID
-    @ViewState private var events: [MeetingDataEvent] = []
+    @ViewState private var groups: [DataEventGroup] = []
     @ViewState private var message: String?
+    @ViewState private var expandedGroups: Set<DataEventGroup.ID> = []
     @ViewState private var unreadableLines = 0
 
     var body: some View {
@@ -19,7 +20,7 @@ struct MeetingDataPrivacyView: View {
                 .fixedSize()
             }
             .frame(maxWidth: .infinity)
-            Text("Successful file changes and data transfers for this meeting.")
+            Text("File changes and data transfers, grouped by file, action, and destination.")
                 .font(.callout).foregroundStyle(.secondary)
             if let message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
             if unreadableLines > 0 {
@@ -28,7 +29,7 @@ struct MeetingDataPrivacyView: View {
                 )
                 .font(.callout).foregroundStyle(.secondary)
             }
-            if events.isEmpty && message == nil {
+            if groups.isEmpty && message == nil {
                 ContentUnavailableView(
                     "No Data Events", systemImage: "arrow.left.arrow.right",
                     description: Text(
@@ -39,8 +40,8 @@ struct MeetingDataPrivacyView: View {
             else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(events) { event in
-                            eventRow(event)
+                        ForEach(groups) { group in
+                            groupRow(group)
                             Divider().padding(.vertical, 10)
                         }
                     }.padding(.trailing, 8)
@@ -48,54 +49,107 @@ struct MeetingDataPrivacyView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .focusedValue(\.directoryControlFocus, true)
         .task(id: meetingID) { await watchHistory() }
     }
 
-    private func eventRow(_ event: MeetingDataEvent) -> some View {
+    private var destinations: [UUID: ServiceProvider] {
+        Dictionary(store.settings.serviceProviders.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+    }
+
+    private func destination(_ flow: DataFlow) -> String {
+        guard let id = flow.targetID else { return flow.targetName + " (recorded name)" }
+        let providers = destinations
+        let name = flow.resolvedTargetName(providers: providers)
+        if id == ThisMacProvider.id { return name }
+        guard providers[id] != nil else { return name + " (removed provider)" }
+        let namesakes = providers.values.filter { $0.name == name }
+        return namesakes.count > 1 ? name + " · " + String(id.uuidString.prefix(8)) : name
+    }
+
+    private func groupRow(_ group: DataEventGroup) -> some View {
+        let flow = group.latest.dataFlow
+        return DisclosureGroup(
+            isExpanded: Binding(
+                get: { expandedGroups.contains(group.id) },
+                set: { expanded in
+                    if expanded {
+                        expandedGroups.insert(group.id)
+                    }
+                    else {
+                        expandedGroups.remove(group.id)
+                    }
+                }
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if group.isFile, let file = revealableFile(group.file) {
+                    Button("Reveal File", systemImage: "doc") {
+                        NSWorkspace.shared.activateFileViewerSelecting([file])
+                    }.buttonStyle(.link)
+                }
+                ForEach(group.events) { event in
+                    receipt(event)
+                }
+            }
+            .padding(.leading, 18)
+            .padding(.vertical, 8)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label(
+                        group.file.isEmpty ? "Other Data" : group.file,
+                        systemImage: group.action == .sent
+                            ? "arrow.up.right" : group.action == .received ? "arrow.down.left" : "doc"
+                    )
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Text(group.events.count == 1 ? "1 event" : "\(group.events.count) events")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize()
+                }
+                Text("\(group.action.rawValue.capitalized) · \(destination(flow))")
+                    .font(.callout)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(flow.location == .local ? "Local" : "Remote")\(flow.domain.map { " · " + $0 } ?? "")")
+                    Spacer(minLength: 8)
+                    Text("Latest \(flow.startedAt.formatted(date: .abbreviated, time: .standard))")
+                        .multilineTextAlignment(.trailing)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+        .disclosureGroupStyle(AppDisclosureStyle())
+    }
+
+    private func receipt(_ event: MeetingDataEvent) -> some View {
         let flow = event.dataFlow
         return DisclosureGroup {
             Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 7) {
-                detail("Destination", flow.targetName + " · " + flow.location.rawValue.capitalized)
+                detail("Destination", destination(flow))
+                detail("Destination ID", flow.targetID?.uuidString ?? "Not recorded")
+                if destination(flow) != flow.targetName { detail("Recorded Name", flow.targetName) }
                 if let domain = flow.domain { detail("Domain", domain) }
                 detail("Started", flow.startedAt.formatted(date: .abbreviated, time: .standard))
                 detail("Ended", flow.endedAt?.formatted(date: .abbreviated, time: .standard) ?? "Live session")
                 detail(
                     "Duration",
                     flow.duration.map { String(format: "%.3f seconds", $0) } ?? "Not available during live processing")
-                detail("Request", size(flow.requestBytes))
-                detail("Response", size(flow.responseBytes))
+                detail("Total Request", size(flow.requestBytes))
+                detail("Total Response", size(flow.responseBytes))
+                detail("Contents", flow.bodies.joined(separator: ", "))
             }
             .font(.caption)
             .textSelection(.enabled)
             .padding(.vertical, 8)
-            ForEach(flow.bodies, id: \.self) { body in
-                if let file = revealableFile(body) {
-                    Button("Reveal \(file.lastPathComponent)", systemImage: "doc") {
-                        NSWorkspace.shared.activateFileViewerSelecting([file])
-                    }.buttonStyle(.link)
-                }
-            }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
-                    Label(
-                        event.action.rawValue.capitalized,
-                        systemImage: event.action == .sent
-                            ? "arrow.up.right" : event.action == .received ? "arrow.down.left" : "doc"
-                    )
-                    .font(.callout.weight(.semibold))
-                    Text(flow.purpose).font(.callout)
-                    Spacer(minLength: 8)
-                    Text(flow.startedAt, format: .dateTime.hour().minute().second())
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Text(flow.bodies.joined(separator: ", ")).font(.callout).textSelection(.enabled)
-                Text(
-                    "\(flow.location == .local ? "Local" : "Remote") · \(flow.targetName)\(flow.domain.map { " · " + $0 } ?? "")"
-                )
-                .font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text(flow.purpose).font(.callout)
+                Spacer(minLength: 8)
+                Text(flow.startedAt, format: .dateTime.hour().minute().second())
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.vertical, 4)
         }
         .disclosureGroupStyle(AppDisclosureStyle())
     }
@@ -111,7 +165,7 @@ struct MeetingDataPrivacyView: View {
             ?? "Not measured"
     }
     private func revealableFile(_ body: String) -> URL? {
-        let path = body.components(separatedBy: " (").first ?? body
+        let path = body
         guard !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return nil }
         let folder = store.directory(for: meetingID).resolvingSymlinksInPath()
         let file = folder.appendingPathComponent(path).resolvingSymlinksInPath()
@@ -121,7 +175,8 @@ struct MeetingDataPrivacyView: View {
         return file
     }
     private func watchHistory() async {
-        events = []
+        groups = []
+        expandedGroups = []
         message = nil
         unreadableLines = 0
         let folder = store.directory(for: meetingID)
@@ -136,9 +191,12 @@ struct MeetingDataPrivacyView: View {
                 previousSize = values?.fileSize
                 previousModified = values?.contentModificationDate
                 do {
-                    let history = try await Task.detached { try DataEventJournal.history(directory: folder) }.value
+                    let (history, updatedGroups) = try await Task.detached {
+                        let history = try DataEventJournal.history(directory: folder)
+                        return (history, DataEventGroup.groups(history.events))
+                    }.value
                     guard !Task.isCancelled else { return }
-                    events = history.events.reversed()
+                    groups = updatedGroups
                     unreadableLines = history.unreadableLines
                     message = nil
                 }

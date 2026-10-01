@@ -155,7 +155,7 @@ enum MeetingExport {
             let parent = output.deletingLastPathComponent().path + "/"
             let bodies = files.map { String($0.path.dropFirst(parent.count)) }
             let flow = DataFlow(
-                location: .local, targetName: "This Mac",
+                location: .local, targetID: ThisMacProvider.id, targetName: "This Mac",
                 responseBytes: sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(0, +) : nil,
                 startedAt: started, endedAt: Date(), bodies: bodies, purpose: "\(format.title) export")
             try DataEventJournal.append(

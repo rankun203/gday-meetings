@@ -16,6 +16,8 @@ extension ProviderResult: Sendable where Value: Sendable {}
 struct DataFlow: Codable, Equatable, Sendable {
     enum Location: String, Codable, Sendable { case local, remote }
     var location: Location
+    /// Missing only in legacy receipts. Names must never be used to infer identity.
+    private(set) var targetID: UUID?
     var targetName: String
     var domain: String?
     var requestBytes: Int?
@@ -24,16 +26,21 @@ struct DataFlow: Codable, Equatable, Sendable {
     var endedAt: Date?
     var duration: TimeInterval? { endedAt.map { max(0, $0.timeIntervalSince(startedAt)) } }
     var bodies: [String]
+    /// Explicit meeting-relative paths, separate from human-readable payload descriptions.
+    var filePaths: [String]
     var purpose: String
 
     enum CodingKeys: String, CodingKey {
-        case location, targetName, domain, requestBytes, responseBytes, startedAt, endedAt, duration, bodies, purpose
+        case location, targetID, targetName, domain, requestBytes, responseBytes, startedAt, endedAt, duration, bodies,
+            filePaths, purpose
     }
     init(
-        location: Location, targetName: String, domain: String? = nil, requestBytes: Int? = nil,
-        responseBytes: Int? = nil, startedAt: Date, endedAt: Date? = nil, bodies: [String], purpose: String
+        location: Location, targetID: UUID, targetName: String, domain: String? = nil, requestBytes: Int? = nil,
+        responseBytes: Int? = nil, startedAt: Date, endedAt: Date? = nil, bodies: [String], filePaths: [String] = [],
+        purpose: String
     ) {
         self.location = location
+        self.targetID = targetID
         self.targetName = targetName
         self.domain = domain
         self.requestBytes = requestBytes
@@ -41,11 +48,13 @@ struct DataFlow: Codable, Equatable, Sendable {
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.bodies = bodies
+        self.filePaths = filePaths
         self.purpose = purpose
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         location = try c.decode(Location.self, forKey: .location)
+        targetID = try c.decodeIfPresent(UUID.self, forKey: .targetID)
         targetName = try c.decode(String.self, forKey: .targetName)
         domain = try c.decodeIfPresent(String.self, forKey: .domain)
         requestBytes = try c.decodeIfPresent(Int.self, forKey: .requestBytes)
@@ -53,11 +62,13 @@ struct DataFlow: Codable, Equatable, Sendable {
         startedAt = try c.decode(Date.self, forKey: .startedAt)
         endedAt = try c.decodeIfPresent(Date.self, forKey: .endedAt)
         bodies = try c.decode([String].self, forKey: .bodies)
+        filePaths = try c.decodeIfPresent([String].self, forKey: .filePaths) ?? []
         purpose = try c.decode(String.self, forKey: .purpose)
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(location, forKey: .location)
+        try c.encodeIfPresent(targetID, forKey: .targetID)
         try c.encode(targetName, forKey: .targetName)
         try c.encode(domain, forKey: .domain)
         try c.encode(requestBytes, forKey: .requestBytes)
@@ -66,7 +77,15 @@ struct DataFlow: Codable, Equatable, Sendable {
         try c.encode(endedAt, forKey: .endedAt)
         try c.encode(duration, forKey: .duration)
         try c.encode(bodies, forKey: .bodies)
+        try c.encode(filePaths, forKey: .filePaths)
         try c.encode(purpose, forKey: .purpose)
+    }
+
+    /// Resolve only a saved identity; deleted providers and legacy receipts keep their snapshot.
+    func resolvedTargetName(providers: [UUID: ServiceProvider]) -> String {
+        guard let targetID else { return targetName }
+        if targetID == ThisMacProvider.id { return "This Mac" }
+        return providers[targetID]?.name ?? targetName
     }
 }
 
@@ -100,7 +119,7 @@ enum ProviderDataOperation {
     @TaskLocal static var metrics: ProviderTransferMetrics?
 
     static func perform<Value>(
-        target: String, endpoint: String, bodies: [String], purpose: String,
+        targetID: UUID, target: String, endpoint: String, bodies: [String], filePaths: [String] = [], purpose: String,
         operation: () async throws -> Value
     ) async throws -> ProviderResult<Value> {
         let start = Date()
@@ -112,9 +131,9 @@ enum ProviderDataOperation {
         return ProviderResult(
             value: value,
             dataFlow: DataFlow(
-                location: local ? .local : .remote, targetName: target, domain: host,
+                location: local ? .local : .remote, targetID: targetID, targetName: target, domain: host,
                 requestBytes: sizes.0, responseBytes: sizes.1, startedAt: start, endedAt: Date(),
-                bodies: bodies, purpose: purpose))
+                bodies: bodies, filePaths: filePaths, purpose: purpose))
     }
 }
 
@@ -182,9 +201,11 @@ enum DataEventJournal {
             MeetingDataEvent(
                 action: previous == nil ? .created : .modified,
                 dataFlow: DataFlow(
-                    location: .local, targetName: "This Mac", responseBytes: current.count, startedAt: now,
+                    location: .local, targetID: ThisMacProvider.id, targetName: "This Mac",
+                    responseBytes: current.count, startedAt: now,
                     endedAt: now,
-                    bodies: [path], purpose: "Saved file")), directory: folder)
+                    bodies: [path], filePaths: file.path.hasPrefix(folder.path + "/") ? [path] : [],
+                    purpose: "Saved file")), directory: folder)
     }
 }
 
@@ -208,6 +229,7 @@ extension DataFlow {
             file.lastPathComponent
                 + (prepared == file ? "" : " (converted to \(prepared.pathExtension.uppercased()) for upload)")
         ]
+        copy.filePaths = [file.lastPathComponent]
         return copy
     }
     func referencingAudio(_ files: [URL]) -> Self {
@@ -215,11 +237,28 @@ extension DataFlow {
         copy.bodies =
             files.map { $0.lastPathComponent + " (audio download link)" }
             + bodies.filter { !$0.hasSuffix(" audio link") }
+        copy.filePaths = files.map(\.lastPathComponent)
         return copy
     }
 }
 
 extension MeetingStore {
+    func summaryDataFilePaths(_ meeting: Meeting, messages: [LLMMessage]) -> [String] {
+        var paths = ["metadata.json", "content.json"]
+        if !meeting.notes.isEmpty { paths.append("notes.md") }
+        if !meeting.transcript.isEmpty { paths.append("transcript.json") }
+        paths += messages.flatMap { $0.images ?? [] }.map(\.path)
+        return paths
+    }
+    func chatDataFilePaths(_ meeting: Meeting, contextual: Bool = false) -> [String] {
+        var paths = ["metadata.json"]
+        // Context chat history belongs to the library, not this meeting folder.
+        if !contextual { paths.append("content.json") }
+        if !meeting.notes.isEmpty { paths.append("notes.md") }
+        if !meeting.transcript.isEmpty { paths.append("transcript.json") }
+        if !meeting.summary.isEmpty { paths.append("summary.md") }
+        return paths
+    }
     func summaryDataBodies(_ meeting: Meeting, messages: [LLMMessage]) -> [String] {
         var bodies = ["metadata.json (title, date, duration)", "content.json (language)", "Summary Prompt"]
         if !meeting.notes.isEmpty { bodies.append("notes.md") }
@@ -266,8 +305,10 @@ extension DataEventJournal {
             MeetingDataEvent(
                 action: action,
                 dataFlow: DataFlow(
-                    location: .local, targetName: "This Mac", responseBytes: size, startedAt: now, endedAt: now,
-                    bodies: [path], purpose: "Saved file")), directory: directory)
+                    location: .local, targetID: ThisMacProvider.id, targetName: "This Mac", responseBytes: size,
+                    startedAt: now, endedAt: now,
+                    bodies: [path], filePaths: file.path.hasPrefix(directory.path + "/") ? [path] : [],
+                    purpose: "Saved file")), directory: directory)
     }
     struct History: Sendable {
         let events: [MeetingDataEvent]
