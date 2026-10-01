@@ -35,6 +35,8 @@ Post-change checks used one-shot native Accessibility and keyboard tools, with n
 
 Captured and inspected `/private/tmp/gday-activation-after.png`. The recreated scene retains the library/sidebar and shared paused playback; its view-local meeting selection is empty after recreation. No layout or controls changed. Multi-Space/full-screen behavior, alternate appearances, manual Dock clicking, and a real recording during these lifecycle transitions were not exercised. Early multi-process keyboard checks sometimes switched to the test host rather than the target app; a bounded single-process check confirmed the actual Command-Tab path. CI release results are recorded after pushing.
 
+The pushed implementation passed the [macOS release CI matrix](https://github.com/rankun203/meeting-notes/actions/runs/36823851899) on macOS 15, 26, and 27 (runner preview). All runners were available and all three builds succeeded.
+
 ## Technical debt
 
 No new application debt. Window classification uses public AppKit properties; no private class names or polling are introduced. The existing Command Line Tools installation references missing `Developer/usr/lib` and `Developer/Library/Frameworks` search directories. Builds succeed without suppressing the warnings; repair or update that installation and rerun the release build to remove them.
