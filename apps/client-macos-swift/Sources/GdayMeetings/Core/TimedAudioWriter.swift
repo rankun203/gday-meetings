@@ -80,8 +80,8 @@ extension RecordingProfile {
     }
 }
 
-/// Apple documents ExtAudioFileWriteAsync as a bounded internal ring-buffer handoff;
-/// warm it outside callbacks and dispose to flush. No filesystem work occurs in append.
+/// WAV uses ExtAudioFileWriteAsync; Opus uses a bounded serial encoding worker.
+/// Both copy samples before returning, without file writes on capture callbacks.
 /// https://developer.apple.com/documentation/audiotoolbox/extaudiofilewriteasync(_:_:_:)
 /// AVAudioEngine regular taps are not realtime render blocks (WWDC19, 510).
 ///
@@ -92,6 +92,7 @@ extension RecordingProfile {
 /// - M < N: output channel c averages the input channels k where k mod M == c (N to mono averages all).
 final class TimedAudioWriter {
     private var file: ExtAudioFileRef?
+    private var opus: CaptureOpusWorker?
     /// Fixed for the whole file; every appended sample is converted to it.
     private let format: AVAudioFormat
     private let silence: AVAudioPCMBuffer
@@ -149,6 +150,7 @@ final class TimedAudioWriter {
 
     init(
         url: URL, format: AVAudioFormat, epoch: TimeInterval, voiceProcessed: Bool = false,
+        recordingFormat: RecordingFormat = .wav,
         alignedAudio: ((AVAudioPCMBuffer, Double) -> Void)? = nil
     ) throws {
         self.alignedAudio = alignedAudio
@@ -163,6 +165,10 @@ final class TimedAudioWriter {
         silence.frameLength = silence.frameCapacity
         for buffer in UnsafeMutableAudioBufferListPointer(silence.mutableAudioBufferList) {
             if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+        }
+        if recordingFormat == .opus {
+            opus = try CaptureOpusWorker(url: url, format: format)
+            return
         }
         // Integer PCM has predictable size and interoperates with the transcription service.
         var fileFormat = AudioStreamBasicDescription(
@@ -194,7 +200,10 @@ final class TimedAudioWriter {
             throw error
         }
     }
-    deinit { if let file { ExtAudioFileDispose(file) } }
+    deinit {
+        try? opus?.finish()
+        if let file { ExtAudioFileDispose(file) }
+    }
 
     /// Host-time anchoring pads startup skew and dropped intervals instead of collapsing time.
     /// Buffers in another format are converted to the track format before placement.
@@ -204,7 +213,7 @@ final class TimedAudioWriter {
         // Late tap callbacks after stop are expected and must not surface as errors.
         guard !finished else { return }
         if let failure { throw failure }
-        guard let file else { return }
+        guard file != nil || opus != nil else { return }
         do {
             let target = try Self.targetFrame(hostSeconds: hostSeconds, epoch: epoch, sampleRate: format.sampleRate)
             if muted {
@@ -212,14 +221,14 @@ final class TimedAudioWriter {
                     hostSeconds: hostSeconds + Double(buffer.frameLength) / buffer.format.sampleRate,
                     epoch: epoch, sampleRate: format.sampleRate)
                 let before = framesWritten
-                try padLocked(file, through: end, forwardSilence: true)
+                try padLocked(through: end, forwardSilence: true)
                 // A deliberately muted source is healthy even if the entire
                 // recording is silent. Keep no-audio detection about delivery.
                 sourceFrames += max(0, framesWritten - max(before, target))
                 return
             }
             // Pad first so a converter reset after an outage applies to this buffer.
-            try padLocked(file, through: target)
+            try padLocked(through: target)
             let samples = buffer.format == format ? buffer : try convertLocked(buffer)
             guard samples.frameLength > 0 else { return }
             let overlap = max(0, framesWritten - target)
@@ -241,13 +250,13 @@ final class TimedAudioWriter {
                         memcpy(dst, src.advanced(by: Int(skipped) * bytesPerFrame), Int(count) * bytesPerFrame)
                     }
                 }
-                try Self.check(ExtAudioFileWriteAsync(file, count, trimmed.audioBufferList))
+                try writeLocked(trimmed)
                 alignedAudio?(trimmed, Double(framesWritten) / format.sampleRate)
                 framesWritten += Int64(count)
                 sourceFrames += Int64(count)
             }
             else {
-                try Self.check(ExtAudioFileWriteAsync(file, samples.frameLength, samples.audioBufferList))
+                try writeLocked(samples)
                 alignedAudio?(samples, Double(framesWritten) / format.sampleRate)
                 framesWritten += Int64(samples.frameLength)
                 sourceFrames += Int64(samples.frameLength)
@@ -265,11 +274,11 @@ final class TimedAudioWriter {
         defer { lock.unlock() }
         guard !finished else { return }
         if let failure { throw failure }
-        guard let file else { return }
+        guard file != nil || opus != nil else { return }
         do {
             let target = try Self.targetFrame(
                 hostSeconds: throughHostSeconds, epoch: epoch, sampleRate: format.sampleRate)
-            try padLocked(file, through: target)
+            try padLocked(through: target)
         }
         catch {
             failure = error
@@ -280,16 +289,21 @@ final class TimedAudioWriter {
     func finish(throughHostSeconds: TimeInterval? = nil) throws {
         lock.lock()
         defer { lock.unlock() }
-        if !finished, failure == nil, let file, let throughHostSeconds {
+        if !finished, failure == nil, let throughHostSeconds {
             do {
                 let target = try Self.targetFrame(
                     hostSeconds: throughHostSeconds, epoch: epoch, sampleRate: format.sampleRate)
-                try padLocked(file, through: target)
+                try padLocked(through: target)
             }
             catch { failure = error }
         }
         finished = true
         converter = nil
+        if let opus {
+            do { try opus.finish() }
+            catch { if failure == nil { failure = error } }
+            self.opus = nil
+        }
         var disposal: OSStatus = noErr
         if let file {
             disposal = ExtAudioFileDispose(file)
@@ -312,7 +326,8 @@ final class TimedAudioWriter {
 
     /// Writes silence in fixed chunks from the preallocated buffer, so memory does not grow with
     /// outage length. Must be called with `lock` held.
-    private func padLocked(_ file: ExtAudioFileRef, through target: Int64, forwardSilence: Bool = false) throws {
+    private func padLocked(through target: Int64, forwardSilence: Bool = false) throws {
+        try opus?.checkFailure()
         var gap = target - framesWritten
         guard gap > (forwardSilence ? 0 : tolerance) else { return }
         if let last = gapRuns.last, last.start + last.frames == framesWritten {
@@ -322,14 +337,15 @@ final class TimedAudioWriter {
         else {
             gapRuns.append((framesWritten, gap))
         }
+        try opus?.appendSilence(frames: gap)
         var burst: Int64 = 0
         while gap > 0 {
             let count = UInt32(min(gap, Int64(silence.frameCapacity)))
             // Beyond one second in a single call, yield so the background writer drains the ring;
             // periodic padSilence calls keep normal outages below this threshold.
-            if burst >= Int64(format.sampleRate) { usleep(1000) }
+            if opus == nil, burst >= Int64(format.sampleRate) { usleep(1000) }
             silence.frameLength = count
-            try Self.check(ExtAudioFileWriteAsync(file, count, silence.audioBufferList))
+            if let file { try Self.check(ExtAudioFileWriteAsync(file, count, silence.audioBufferList)) }
             if forwardSilence {
                 // Intentional mute is silence, not missing coverage. Keep live
                 // recognition timestamps advancing without sending captured PCM.
@@ -434,11 +450,146 @@ final class TimedAudioWriter {
         return output
     }
 
+    private func writeLocked(_ buffer: AVAudioPCMBuffer) throws {
+        if let opus {
+            try opus.append(buffer)
+        }
+        else if let file {
+            try Self.check(ExtAudioFileWriteAsync(file, buffer.frameLength, buffer.audioBufferList))
+        }
+    }
+
     private static func check(_ status: OSStatus) throws {
         guard status == noErr else {
             throw MeetingError.message(
                 "Audio recording failed (Core Audio \(status)). The disk may be full or unable to keep up; the partial recording is retained."
             )
         }
+    }
+}
+
+/// Owns the synchronous encoder on one queue. Reservations include the running job,
+/// bounding copied PCM and closure overhead even when disk writes stall. Silence is
+/// represented by a frame count and expanded into fixed chunks only on the worker.
+final class CaptureOpusWorker: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.gdaymeetings.capture-opus", qos: .userInitiated)
+    private let lock = NSLock()
+    private let encoder: SpeechOpusWriter
+    private let silence: AVAudioPCMBuffer
+    private var pendingBytes = 0
+    private var pendingJobs = 0
+    private var failure: Error?
+    private var closed = false
+    /// Accessed only on the encoding queue; overflow does not set this flag.
+    private var encoderFailed = false
+    private let maximumBytes: Int
+    private let maximumJobs: Int
+
+    init(url: URL, format: AVAudioFormat, maximumBytes: Int = 8 * 1024 * 1024, maximumJobs: Int = 1024) throws {
+        self.maximumBytes = maximumBytes
+        self.maximumJobs = maximumJobs
+        guard let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096) else {
+            throw MeetingError.message("Could not allocate audio silence buffer.")
+        }
+        self.silence = silence
+        silence.frameLength = silence.frameCapacity
+        for buffer in UnsafeMutableAudioBufferListPointer(silence.mutableAudioBufferList) {
+            if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+        }
+        encoder = try SpeechOpusWriter(url: url, format: format)
+    }
+
+    func checkFailure() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure { throw failure }
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) throws {
+        let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        let bytes = buffers.reduce(0) { $0 + Int($1.mDataByteSize) }
+        try enqueue(bytes: bytes) {
+            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
+                throw MeetingError.message("Could not copy captured audio.")
+            }
+            copy.frameLength = buffer.frameLength
+            for (source, destination) in zip(buffers, UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList))
+            {
+                if let sourceData = source.mData, let destinationData = destination.mData {
+                    memcpy(destinationData, sourceData, Int(source.mDataByteSize))
+                }
+            }
+            return { [self] in try encoder.append(copy) }
+        }
+    }
+
+    func appendSilence(frames: Int64) throws {
+        guard frames > 0 else { return }
+        try enqueue(bytes: 0) {
+            return { [self] in
+                var remaining = frames
+                while remaining > 0 {
+                    silence.frameLength = AVAudioFrameCount(min(remaining, Int64(silence.frameCapacity)))
+                    try encoder.append(silence)
+                    remaining -= Int64(silence.frameLength)
+                }
+            }
+        }
+    }
+
+    /// The caller copies before dispatch while holding the reservation lock, so
+    /// finish cannot overtake a reserved buffer and no borrowed samples escape.
+    private func enqueue(bytes: Int, makeJob: () throws -> (() throws -> Void)) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure { throw failure }
+        guard !closed else { return }
+        guard bytes <= maximumBytes - pendingBytes, pendingJobs < maximumJobs else {
+            let error = MeetingError.message(
+                "Audio recording could not keep up with incoming audio. The partial Opus recording is kept in this meeting."
+            )
+            failure = error
+            throw error
+        }
+        let job: () throws -> Void
+        do { job = try makeJob() }
+        catch {
+            failure = error
+            throw error
+        }
+        pendingBytes += bytes
+        pendingJobs += 1
+        queue.async { [self] in
+            // Drain accepted audio even after overflow. Encoder failures remain
+            // sticky, but must not prevent finish from closing the partial file.
+            do {
+                if !encoderFailed { try job() }
+            }
+            catch {
+                encoderFailed = true
+                lock.lock()
+                if failure == nil { failure = error }
+                lock.unlock()
+            }
+            lock.lock()
+            pendingBytes -= bytes
+            pendingJobs -= 1
+            lock.unlock()
+        }
+    }
+
+    func finish() throws {
+        lock.lock()
+        closed = true
+        lock.unlock()
+        queue.sync {
+            do { try encoder.finish() }
+            catch {
+                lock.lock()
+                if failure == nil { failure = error }
+                lock.unlock()
+            }
+        }
+        try checkFailure()
     }
 }

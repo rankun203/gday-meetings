@@ -751,7 +751,7 @@ final class MeetingStore: ObservableObject {
                 directory: directory(for: meeting.id), microphoneEnabled: microphone,
                 systemEnabled: systemAudio,
                 voiceProcessing: settings.automaticVoiceProcessing ? .automatic : .off,
-                microphoneDevice: settings.microphoneDevice)
+                microphoneDevice: settings.microphoneDevice, format: activeRecordingFormat)
             var recorded = meeting
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
@@ -844,7 +844,7 @@ final class MeetingStore: ObservableObject {
             meetings[index].recordingProfile = profile
             if !save() { stopFailed = true }
         }
-        if !stopFailed && activeRecordingFormat != .wav {
+        if !stopFailed && activeRecordingFormat == .m4a {
             do { try await finalizeRecordingAudio(id: id, format: activeRecordingFormat) }
             catch {
                 errorMessage =
@@ -874,6 +874,10 @@ final class MeetingStore: ObservableObject {
         let originals = audioURLs(for: meeting)
         guard !originals.isEmpty, originals.count == meeting.audioFiles.count else {
             throw MeetingError.message("A recorded audio file is missing.")
+        }
+        if originals.allSatisfy({ $0.pathExtension.lowercased() == format.rawValue }) { return }
+        guard originals.allSatisfy({ $0.pathExtension.lowercased() == "wav" }) else {
+            throw MeetingError.message("Recording conversion requires WAV source tracks.")
         }
         var encoded: [URL] = []
         do {

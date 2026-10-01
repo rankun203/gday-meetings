@@ -24,7 +24,7 @@ struct RecordingEncoderTests {
         return url
     }
     @Test(arguments: [(48000.0, UInt32(1), 24101), (44100.0, UInt32(2), 22073), (48000.0, UInt32(1), 100)])
-    func nativeOpusRoundTripPreservesDurationChannelsAndSignal(arguments: (Double, UInt32, Int)) async throws {
+    func opusRoundTripPreservesDurationChannelsAndSignal(arguments: (Double, UInt32, Int)) async throws {
         let (sampleRate, channels, frames) = arguments
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

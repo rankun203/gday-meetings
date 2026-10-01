@@ -1,11 +1,12 @@
 import AVFoundation
 import Foundation
 
-/// The system supplies the codec; the .opus container is RFC 7845 Ogg, never renamed CAF.
+/// Opus uses the bundled speech encoder; AAC uses the system codec.
+/// The .opus container is RFC 7845 Ogg, never renamed CAF.
 /// https://developer.apple.com/documentation/avfaudio/avaudioconverter
 /// https://www.rfc-editor.org/rfc/rfc7845.html
 /// https://www.xiph.org/ogg/doc/framing.html
-/// Encoding runs after capture, outside audio delivery and the main actor. PCM originals
+/// File conversion runs outside audio delivery and the main actor. PCM originals
 /// are owned by the caller and must only be removed after metadata is durably updated.
 enum RecordingEncoder {
     static func encode(source: URL, destination: URL, format: RecordingFormat) async throws {
@@ -35,7 +36,7 @@ enum RecordingEncoder {
         }
     }
 
-    static var supportsOpus: Bool { nativeEncoderAvailable(kAudioFormatOpus) }
+    static var supportsOpus: Bool { true }
     static var supportsMP3: Bool { nativeEncoderAvailable(kAudioFormatMPEGLayer3) }
     private static func nativeEncoderAvailable(_ codec: AudioFormatID) -> Bool {
         guard let input = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1),
@@ -74,98 +75,21 @@ enum RecordingEncoder {
     }
 
     private static func encodeOpus(source: URL, destination: URL) throws {
-        let input = try AVAudioFile(forReading: source)
-        let channels = input.processingFormat.channelCount
+        let input = try AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard input.length > 0 else { throw MeetingError.message("Cannot encode an empty recording.") }
-        guard channels == 1 || channels == 2 else {
-            throw MeetingError.message(
-                "Opus recording supports mono or stereo tracks. The original multichannel WAV was retained; choose WAV for this device."
-            )
+        let writer = try SpeechOpusWriter(url: destination, format: input.processingFormat)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8192) else {
+            throw MeetingError.message("Could not allocate audio encoding buffer.")
         }
-        guard
-            let target = AVAudioFormat(settings: [
-                AVFormatIDKey: kAudioFormatOpus, AVSampleRateKey: 48000, AVNumberOfChannelsKey: channels,
-            ]),
-            let converter = AVAudioConverter(from: input.processingFormat, to: target)
-        else {
-            throw MeetingError.message(
-                "This Mac cannot create a native Opus encoder. The original WAV was retained; choose M4A or WAV in Settings."
-            )
-        }
-        // Prefer VBR when the native codec exposes bitrate-strategy control.
-        // Keep native complexity: AVAudioConverter has no libopus 0–10 control.
-        // https://developer.apple.com/documentation/avfaudio/avaudioconverter/bitratestrategy
-        if converter.bitRateStrategy != nil { converter.bitRateStrategy = AVAudioBitRateStrategy_Variable }
-        converter.bitRate = channels == 1 ? 32000 : 64000
-        let preSkip = converter.primeInfo.leadingFrames
-        guard preSkip <= UInt16.max else {
-            throw MeetingError.message("The native Opus encoder reported unsupported priming.")
-        }
-        let audibleFrames = Int64((Double(input.length) * 48000 / input.processingFormat.sampleRate).rounded())
-        let finalGranule = audibleFrames + Int64(preSkip)
-        let muxer = try OggOpusWriter(
-            destination: destination, channels: UInt8(channels), preSkip: UInt16(preSkip),
-            inputSampleRate: UInt32(input.processingFormat.sampleRate.rounded()))
-        defer { try? muxer.close() }
-        let compressed = AVAudioCompressedBuffer(
-            format: target, packetCapacity: 64, maximumPacketSize: converter.maximumOutputPacketSize)
-        var readError: Error?
-        var pending: [Data] = []
-        var packetFrames: Int64 = 0
-        while true {
+        while input.framePosition < input.length {
             try Task.checkCancellation()
-            var conversionError: NSError?
-            let status = converter.convert(to: compressed, error: &conversionError) { requested, state in
-                if input.framePosition >= input.length {
-                    state.pointee = .endOfStream
-                    return nil
-                }
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: max(1, requested))
-                else {
-                    readError = MeetingError.message("Could not allocate encoding input.")
-                    state.pointee = .endOfStream
-                    return nil
-                }
-                do { try input.read(into: buffer) }
-                catch {
-                    readError = error
-                    state.pointee = .endOfStream
-                    return nil
-                }
-                state.pointee = .haveData
-                return buffer
+            try input.read(into: buffer)
+            guard buffer.frameLength > 0 else {
+                throw MeetingError.message("Audio input ended before all samples were read.")
             }
-            if let readError { throw readError }
-            if let conversionError { throw conversionError }
-            guard status != .error else { throw MeetingError.message("Native Opus conversion failed.") }
-            if compressed.packetCount > 0 {
-                guard let descriptions = compressed.packetDescriptions else {
-                    throw MeetingError.message("Native Opus encoder returned no packet descriptions.")
-                }
-                for index in 0..<Int(compressed.packetCount) {
-                    let description = descriptions[index]
-                    let packet = Data(
-                        bytes: compressed.data.advanced(by: Int(description.mStartOffset)),
-                        count: Int(description.mDataByteSize))
-                    // Keep the last page pending until EOS so final padding can be trimmed.
-                    if pending.count == 20 {
-                        try muxer.writeAudio(pending, granule: packetFrames, final: false)
-                        pending.removeAll(keepingCapacity: true)
-                    }
-                    packetFrames += Int64(try opusPacketFrames(packet))
-                    pending.append(packet)
-                }
-            }
-            if status == .endOfStream { break }
-            guard status != .inputRanDry || compressed.packetCount > 0 else {
-                throw MeetingError.message("The Opus encoder stopped requesting input before finishing.")
-            }
+            try writer.append(buffer)
         }
-        guard !pending.isEmpty, packetFrames >= finalGranule else {
-            throw MeetingError.message("Opus encoder output did not cover the full recording.")
-        }
-        try muxer.writeAudio(pending, granule: finalGranule, final: true)
-        try muxer.close()
+        try writer.finish()
     }
 
     /// Packet duration comes from the Opus TOC, since Apple's packet descriptions
@@ -198,9 +122,14 @@ enum RecordingEncoder {
 
 final class OggOpusWriter {
     private var handle: FileHandle?
+    private let writePage: (FileHandle, Data) throws -> Void
     private let serial = UInt32.random(in: 1...UInt32.max)
     private var sequence: UInt32 = 0
-    init(destination: URL, channels: UInt8, preSkip: UInt16, inputSampleRate: UInt32) throws {
+    init(
+        destination: URL, channels: UInt8, preSkip: UInt16, inputSampleRate: UInt32,
+        writePage: @escaping (FileHandle, Data) throws -> Void = { try $0.write(contentsOf: $1) }
+    ) throws {
+        self.writePage = writePage
         guard
             FileManager.default.createFile(
                 atPath: destination.path, contents: nil, attributes: [.posixPermissions: 0o600])
@@ -215,7 +144,7 @@ final class OggOpusWriter {
         identification.append(0)  // gain=0, mapping family 0
         try page(packets: [identification], granule: 0, flags: 2)
         var tags = Data("OpusTags".utf8)
-        let vendor = Data("Gday Meetings / Apple AudioConverter".utf8)
+        let vendor = Data("Gday Meetings / libopus".utf8)
         tags.appendLE(UInt32(vendor.count))
         tags.append(vendor)
         tags.appendLE(UInt32(0))
@@ -254,7 +183,7 @@ final class OggOpusWriter {
         let checksum = Self.crc(data)
         for offset in 0..<4 { data[22 + offset] = UInt8(truncatingIfNeeded: checksum >> (offset * 8)) }
         guard let handle else { throw MeetingError.message("Encoded recording was already closed.") }
-        try handle.write(contentsOf: data)
+        try writePage(handle, data)
         sequence &+= 1
     }
     static func crc(_ data: Data) -> UInt32 {

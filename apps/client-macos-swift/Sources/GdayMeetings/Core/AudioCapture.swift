@@ -17,6 +17,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     /// How long the live view explains that echo detection turned processing on.
     static let echoNoticeDuration: TimeInterval = 10
 
+    private var recordingFormat: RecordingFormat = .wav
+    private var captureExtension: String { recordingFormat == .opus ? "opus" : "wav" }
     private var microphoneWriter: TimedAudioWriter?
     private var systemWriter: TimedAudioWriter?
     private let queue = DispatchQueue(label: "com.gdaymeetings.macos.system-audio")
@@ -130,11 +132,13 @@ final class AudioCapture: NSObject, @unchecked Sendable {
 
     func start(
         directory: URL, microphoneEnabled: Bool, systemEnabled: Bool,
-        voiceProcessing: VoiceProcessingPolicy = .automatic, microphoneDevice: MicrophoneDeviceChoice? = nil
+        voiceProcessing: VoiceProcessingPolicy = .automatic, microphoneDevice: MicrophoneDeviceChoice? = nil,
+        format: RecordingFormat = .wav
     ) async throws -> [String] {
         guard microphoneEnabled || systemEnabled else {
             throw MeetingError.message("Choose Microphone or System Audio in New Recording.")
         }
+        recordingFormat = format
         expectedMicrophone = microphoneEnabled
         expectedSystem = systemEnabled
         initialPolicy = voiceProcessing
@@ -175,7 +179,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             if microphoneEnabled {
                 let recovery = makeMicrophoneRecovery()
                 microphoneRecovery = recovery
-                let url = directory.appendingPathComponent("microphone.wav")
+                let url = directory.appendingPathComponent("microphone.\(captureExtension)")
                 let session = try makeMicrophoneSession(generation: 0) { [self] format, processed in
                     // A voice-processing fallback reuses the first writer; it converts formats.
                     if let microphoneWriter { return microphoneWriter }
@@ -183,6 +187,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     try prepareSystemWriter(directory: directory)
                     let writer = try TimedAudioWriter(
                         url: url, format: format, epoch: epoch, voiceProcessed: processed,
+                        recordingFormat: recordingFormat,
                         alignedAudio: { [weak self] buffer, start in
                             self?.liveAudioSink?.append(buffer, start: start, source: .microphone)
                         })
@@ -198,7 +203,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             }
             if systemEnabled {
                 if !microphoneEnabled { try prepareSystemWriter(directory: directory) }
-                files.append("system.wav")
+                files.append("system.\(captureExtension)")
             }
             let now = ProcessInfo.processInfo.systemUptime
             locked {
@@ -247,13 +252,18 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         // End both tracks at the same host time, padding a source that was still
         // reconnecting. Finished writers ignore late callbacks from abandoned sessions.
         let stopHost = hostNow()
-        var stopError: Error?
-        queue.sync {
-            do { try systemWriter?.finish(throughHostSeconds: stopHost) }
-            catch { stopError = error }
+        let stopError = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                var error: Error?
+                queue.sync {
+                    do { try systemWriter?.finish(throughHostSeconds: stopHost) }
+                    catch let failure { error = failure }
+                }
+                do { try microphoneWriter?.finish(throughHostSeconds: stopHost) }
+                catch let failure { error = failure }
+                continuation.resume(returning: error)
+            }
         }
-        do { try microphoneWriter?.finish(throughHostSeconds: stopHost) }
-        catch { stopError = error }
         if let captureFailure = currentFailure() { throw captureFailure }
         if let stopError { throw stopError }
         if let teardownError = locked({ teardownError }) { throw teardownError }
@@ -1255,7 +1265,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         guard let format = initialSystemFormat else { return }
         try queue.sync {
             systemWriter = try TimedAudioWriter(
-                url: directory.appendingPathComponent("system.wav"), format: format, epoch: epoch,
+                url: directory.appendingPathComponent("system.\(captureExtension)"), format: format, epoch: epoch,
+                recordingFormat: recordingFormat,
                 alignedAudio: { [weak self] buffer, start in
                     self?.liveAudioSink?.append(buffer, start: start, source: .system)
                 })

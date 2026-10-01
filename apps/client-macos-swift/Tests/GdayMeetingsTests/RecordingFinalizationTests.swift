@@ -5,6 +5,24 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct RecordingFinalizationTests {
+    @Test func alreadyOpusTracksAreNeverReencodedOrRemoved() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        let id = store.createMeeting(title: "Synthetic capture")
+        let folder = store.directory(for: id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let source = folder.appendingPathComponent("microphone.opus")
+        let original = OpusFixture.all[0].data
+        try original.write(to: source)
+        var meeting = try #require(store.meetings.first)
+        meeting.audioFiles = [source.lastPathComponent]
+        store.updateMeeting(meeting)
+        try await store.finalizeRecordingAudio(id: id, format: .opus)
+        #expect(try Data(contentsOf: source) == original)
+        #expect(store.meeting(id: id)?.audioFiles == ["microphone.opus"])
+    }
+
     @Test func savedCompressedTracksReplacePCMOnlyAfterMetadataCommit() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -51,6 +51,7 @@ Read the relevant documents before changing the app:
 - [Meeting data events](../../docs/worklogs/2026-09-29-meeting-data-events.md): provider receipts, per-meeting history, persistence, and validation.
 - [Agents page](../../docs/worklogs/2026-09-29-agents-page.md): saved library instructions, launch commands, and fenced-code presentation.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
+- [Streaming Opus recording](../../docs/worklogs/2026-10-01-streaming-opus.md): speech encoding, DTX, bounded capture writes, and validation.
 - [Recording source mute](../../docs/worklogs/2026-09-29-recording-source-mute.md): independent source controls, saved and live silence, and validation.
 - [Notes controls layout](../../docs/worklogs/2026-09-29-notes-controls-layout.md): recording header alignment, fixed source icon slots, and floating Markdown copy controls.
 

@@ -92,19 +92,22 @@ import Testing
         store.endJob(.summary, .library)
         #expect(store.statusMessage.isEmpty)
     }
-    @Test func failedRecordingFinalizationRaisesError() async throws {
+    @Test func missingRecordedSourceFailsFinalizationWithoutChangingMetadata() async throws {
         let url = try directory()
         defer { try? FileManager.default.removeItem(at: url) }
         let store = MeetingStore(dataDirectory: url)
-        // A meeting with no audio files makes compression fail after capture stops.
-        let id = store.createMeeting(title: "Interrupted")
-        store.recordingID = id
-        await store.stopRecording(transcribeAfter: false)
-        let message = try #require(store.errorMessage)
-        #expect(message.contains("original WAV audio is kept"))
-        #expect(store.recordingID == nil)
+        let id = store.createMeeting(title: "Synthetic recording")
+        var meeting = try #require(store.meeting(id: id))
+        meeting.audioFiles = ["microphone.wav"]
+        #expect(store.updateMeeting(meeting))
+        await #expect(throws: (any Error).self) {
+            try await store.finalizeRecordingAudio(id: id, format: .m4a)
+        }
+        #expect(store.meeting(id: id)?.audioFiles == ["microphone.wav"])
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: store.directory(for: id).appendingPathComponent("microphone.m4a").path))
         #expect(store.backgroundJobs.isEmpty && !store.isFinalizingRecording)
-        #expect(store.statusMessage.isEmpty)
     }
 }
 
