@@ -15,6 +15,7 @@ struct GdayMeetingsApp: App {
                 .disabled(store.isChangingLibrary)
                 .onAppear {
                     delegate.store = store
+                    delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
                     if UIPreview.enabled, !playback.hasSelection, let meeting = store.meetings.first {
                         playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
                     }
@@ -70,6 +71,7 @@ struct GdayMeetingsApp: App {
                             || (store.recordingID == nil && !store.canStartRecording))
             }
             CommandGroup(after: .help) {
+                Button("Follow Logs") { MeetingPanels.followLogs(store) }
                 Button("Export Logs") { MeetingPanels.exportLogs(store) }
             }
             CommandMenu("Playback") {
@@ -119,10 +121,23 @@ private enum MenuBarArtwork {
 @MainActor
 final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     weak var store: MeetingStore?
+    let mainWindowLifecycle = MainWindowLifecycle()
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        mainWindowLifecycle.requestRestoration()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // Dock reopen can arrive while already active, without another activation callback.
+        !mainWindowLifecycle.requestRestoration()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        mainWindowLifecycle.isTerminating = true
         guard let store else { return .terminateNow }
         Task {
             let saved = await store.finalizeForQuit()
+            if !saved { mainWindowLifecycle.isTerminating = false }
             sender.reply(toApplicationShouldTerminate: saved)
         }
         return .terminateLater
@@ -160,7 +175,7 @@ private struct RecordingMenuView: View {
                 || (store.recordingID == nil && !store.canStartRecording))
         Button {
             openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         } label: {
             Label("Show App", systemImage: "macwindow")
         }
@@ -174,7 +189,7 @@ private struct RecordingMenuView: View {
 
     private func openRecordingSetup() {
         openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         store.presentsRecordingSetup = true
     }
 
@@ -190,7 +205,7 @@ private struct RecordingMenuView: View {
                     await store.startRecording()
                     if store.recordingID == nil, store.errorMessage != nil || store.recordingPermissionNeeded != nil {
                         openWindow(id: "main")
-                        NSApp.activate(ignoringOtherApps: true)
+                        NSApp.activate()
                     }
                 }
             }

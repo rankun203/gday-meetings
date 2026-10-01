@@ -48,6 +48,9 @@ Read the relevant documents before changing the app:
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
+- [Window activation](../../docs/worklogs/2026-10-01-window-activation.md): restore a usable window on app activation and Dock reopening.
+- [Dock reopening](../../docs/worklogs/2026-09-28-dock-reopen.md): restore Meetings after all windows close.
+- [Follow logs](../../docs/worklogs/2026-09-28-follow-logs.md): Help menu access to Console.
 - [Tag exclusion](../../docs/worklogs/2026-09-28-tag-exclusion.md): excluded meeting and person lists, person tags, and recovery controls.
 - [Summary task isolation](../../docs/worklogs/2026-09-28-summary-task-isolation.md): independent summary lifetime, incomplete responses, and paused playback route changes.
 - [Summary images](../../docs/worklogs/2026-09-28-summary-images.md): image capability settings, attachments, source links, and retention.

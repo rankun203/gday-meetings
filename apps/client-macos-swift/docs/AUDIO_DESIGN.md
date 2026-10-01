@@ -86,6 +86,7 @@ Limitations: envelope correlation needs system audio with speech-like level chan
 Capture writes structured entries to the unified log under the subsystem `com.gdaymeetings.macos` (`com.gdaymeetings.macos.preview` for UI Preview), in categories `capture` (source setup, device binding and read-back, formats, voice-processing decisions, triggers, watchdog firings, fallbacks, and frames at stop) and `recovery` (rebuild scheduling, attempts, errors, backoff, and the loop guard). Entries describe decisions and state changes, never individual buffers or audio content. Device names are public in the log; other values are technical.
 
 - Live: `log stream --level info --predicate 'subsystem == "com.gdaymeetings.macos"'`
+- **Help → Follow Logs** opens Console. Select your Mac, click **Start**, and filter by subsystem `com.gdaymeetings.macos` (or `com.gdaymeetings.macos.preview` for UI Preview). Choose **Action → Include Info Messages** for informational entries. The app does not automatically configure Console's filter or streaming state.
 - Earlier runs: `log show --last 30m --info --predicate 'subsystem == "com.gdaymeetings.macos" OR (process == "GdayMeetings" AND subsystem == "com.apple.avfaudio")'`
 - In the app: **Help → Export Logs** (also in **Settings → Data Privacy**) saves the last hour of this app run's entries, including the `network` category, plus AVAudioEngine's, to `~/Library/Logs/Gday Meetings/` and shows the file in Finder. `OSLogStore` limited to the current process needs no entitlement, so earlier app runs need `log show`.
 

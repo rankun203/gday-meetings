@@ -195,7 +195,9 @@ Voice samples remain in the data folder and can therefore be synchronized by its
 
 Every outbound request is logged in the `network` category of the unified log with the provider, host and path, data category, bytes sent, and outcome. Entries never include bodies, headers, query strings, credentials, or local file paths (`Services/NetworkLog.swift`).
 
-Choose **Help → Export Logs**, or **Export Logs** in Data Privacy, to save the last hour of this app run's logs to `~/Library/Logs/Gday Meetings/` and show the file in Finder. The logs contain device names, formats, recovery decisions, and network transmission records, but no audio or meeting text. To follow a recording live, or to read logs from an earlier app run, see [Recording diagnostics](docs/AUDIO_DESIGN.md#recording-diagnostics).
+Choose **Help → Follow Logs** to open Console. Select your Mac, click **Start**, and filter by subsystem `com.gdaymeetings.macos` (`com.gdaymeetings.macos.preview` for UI Preview). Enable **Action → Include Info Messages** to include informational entries. Console manages streaming and saved searches; the app does not set the filter automatically.
+
+Choose **Help → Export Logs**, or **Export Logs** in Data Privacy, to save the last hour of this app run's logs to `~/Library/Logs/Gday Meetings/` and show the file in Finder. The logs contain device names, formats, recovery decisions, and network transmission records, but no audio or meeting text. For terminal commands and logs from earlier app runs, see [Recording diagnostics](docs/AUDIO_DESIGN.md#recording-diagnostics).
 
 ## Human Interface Guidelines
 

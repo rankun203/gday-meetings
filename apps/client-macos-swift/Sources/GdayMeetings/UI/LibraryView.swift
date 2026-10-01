@@ -449,6 +449,13 @@ struct LibraryView: View {
 
 @MainActor
 enum MeetingPanels {
+    static func followLogs(_ store: MeetingStore) {
+        Task {
+            do { try await LogFollow.open() }
+            catch { store.errorMessage = "Couldn’t follow logs. \(error.localizedDescription)" }
+        }
+    }
+
     /// Help → Export Logs and Settings → Data Privacy: saves the last hour of this
     /// run's capture and network entries as a text file and shows it in Finder.
     /// No audio, meeting text, or credentials are included.
