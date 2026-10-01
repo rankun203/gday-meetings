@@ -20,12 +20,15 @@ enum TranscriptionLanguage {
 
 /// App capability contracts are documented in docs/protocols/.
 enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
-    case transcription, liveTranscription, diarization, summarization, search, playback, fileTransfer
+    case transcription, liveTranscription, liveDiarization, diarization, speakerRecognition, summarization, search,
+        playback, fileTransfer
     var id: String { rawValue }
     var title: String {
         switch self {
         case .transcription: return "Transcription"
         case .liveTranscription: return "Live Transcription"
+        case .liveDiarization: return "Live Speaker Labels"
+        case .speakerRecognition: return "Speaker Recognition"
         case .diarization: return "Speaker Labels"
         case .summarization: return "Summaries"
         case .search: return "Search"
@@ -36,7 +39,7 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
 }
 
 enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
-    case runpod, openAICompatible, gdayWebsite, filedrop
+    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -44,6 +47,8 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
         case .gdayWebsite: return "Gday Meetings Website"
+        case .nemotron: return "Nemotron"
+        case .community1: return "Community-1"
         }
     }
     var capabilities: Set<ProviderCapability> {
@@ -53,8 +58,11 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .openAICompatible: return [.summarization]
         // Search and remote playback have no app adapters. Do not advertise them as available.
         case .gdayWebsite: return [.transcription, .diarization]
+        case .nemotron: return [.liveDiarization]
+        case .community1: return [.diarization, .speakerRecognition]
         }
     }
+    var isLocal: Bool { self == .nemotron || self == .community1 }
 }
 
 struct ServiceProvider: Identifiable, Codable, Equatable {
@@ -78,6 +86,8 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         self.kind = kind
         name = kind.title
         enabledCapabilities = kind.capabilities
+        if kind == .nemotron { model = "nemotronLow" }
+        if kind == .community1 { model = "community1" }
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
@@ -353,6 +363,9 @@ struct OpenAISummaryProvider: SummarizationProvider {
         -> ProviderResult<String>
     {
         guard provider.isEnabled else { throw ServiceError("Turn on Enable This Provider to check its connection.") }
+        guard !provider.kind.isLocal else {
+            throw ServiceError("Manage local model readiness in Service Providers.")
+        }
         if provider.kind == .filedrop { return try await FiledropProvider(provider: provider).checkConnection() }
         return try await ProviderDataOperation.perform(
             targetID: provider.id, target: provider.name, endpoint: provider.endpoint, bodies: ["connection metadata"],
@@ -366,6 +379,8 @@ struct OpenAISummaryProvider: SummarizationProvider {
             let server = suppliedServer ?? GdayServerService.shared
             let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
             switch provider.kind {
+            case .nemotron, .community1:
+                throw ServiceError("Manage local model readiness in Service Providers.")
             case .filedrop:
                 return try await FiledropProvider(provider: provider).checkConnection().value
             case .runpod:

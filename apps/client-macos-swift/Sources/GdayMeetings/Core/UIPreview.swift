@@ -164,10 +164,21 @@ enum UIPreview {
                     }
                     store.liveTranscript.seedPreview(
                         meetingID: conversation.id, directory: store.directory(for: conversation.id))
+                    if let row = store.liveTranscript.presentedFinalized.first {
+                        store.liveTranscript.assignPerson(rowID: row.id, personID: person)
+                    }
                 }
             }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
                 store.settings = syntheticProviderSettings(store.settings)
+            }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-local-speakers") {
+                let live = ServiceProvider(kind: .nemotron)
+                let saved = ServiceProvider(kind: .community1)
+                store.settings.serviceProviders.append(contentsOf: [live, saved])
+                store.settings.liveDiarizationProviderID = live.id
+                store.settings.diarizationProviderID = saved.id
+                store.settings.speakerRecognitionProviderID = saved.id
             }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-multiple-transcription-providers") {
                 store.settings = syntheticProviderSettings(store.settings)

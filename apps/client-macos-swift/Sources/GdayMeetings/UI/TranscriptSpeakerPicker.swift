@@ -21,6 +21,9 @@ struct TranscriptSpeakerPicker: View {
     let meetingID: UUID
     let speaker: MeetingSpeaker
     var completed: (() -> Void)? = nil
+    var assignment: ((UUID?) -> Void)? = nil
+    var lineAssignment: ((UUID?) -> Void)? = nil
+    @ViewState private var appliesToSpeaker = true
     @ViewState private var query = ""
     @FocusState private var focused: Bool
 
@@ -33,6 +36,12 @@ struct TranscriptSpeakerPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Assign Person").font(.headline)
+            if lineAssignment != nil {
+                Toggle("Apply to This Speaker", isOn: $appliesToSpeaker)
+                    .toggleStyle(.checkbox)
+                Text(appliesToSpeaker ? "Updates this speaker’s linked passages." : "Updates only this passage.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             TextField("Search people", text: $query).focused($focused)
                 .onSubmit { if let person = matches.first { assign(person.id) } }
             ScrollView {
@@ -62,7 +71,15 @@ struct TranscriptSpeakerPicker: View {
     }
 
     private func assign(_ personID: UUID?) {
-        store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
+        if !appliesToSpeaker, let lineAssignment {
+            lineAssignment(personID)
+        }
+        else if let assignment {
+            assignment(personID)
+        }
+        else {
+            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
+        }
         completed?()
         dismiss()
     }

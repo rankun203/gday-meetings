@@ -133,7 +133,8 @@ extension MeetingStore {
                 case .complete(let segments):
                     recordDataFlow(status.dataFlow, meetingID: id, action: .received)
                     try Task.checkCancellation()
-                    let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
+                    let recognized = SpeakerRecognition.result(
+                        segments, attempt: attempt, people: settings.recognizeSpeakers ? people : [])
                     let result = recognized.segments
                     attempt.resultSpeakers = recognized.speakers
                     attempt.result = result
@@ -144,7 +145,7 @@ extension MeetingStore {
             }
         case .runpod:
             try await transcribeOnRunPod(id: id, provider: provider, meeting: meeting, attempt: &attempt)
-        case .openAICompatible, .filedrop:
+        case .openAICompatible, .filedrop, .nemotron, .community1:
             throw ServiceError("This provider supports summaries, not transcription.")
         }
     }
@@ -298,7 +299,8 @@ extension MeetingStore {
                 guard segments.allSatisfy({ expected.contains($0.track) }) else {
                     throw ServiceError("RunPod returned a transcript for an unexpected audio track.")
                 }
-                let recognized = SpeakerRecognition.result(segments, attempt: attempt, people: people)
+                let recognized = SpeakerRecognition.result(
+                    segments, attempt: attempt, people: settings.recognizeSpeakers ? people : [])
                 let result = recognized.segments
                 attempt.resultSpeakers = recognized.speakers
                 attempt.result = result

@@ -65,12 +65,34 @@ struct DefaultsSettingsView: View {
                     "Transcribes audio on this Mac and shows text in Transcript while recording. Requires macOS 26 or later and a supported speech model."
                 )
                 .font(.caption).foregroundStyle(.secondary)
+                Toggle("Live Speaker Recognition", isOn: setting(\.recognizeLiveSpeakers))
+                    .help("Uses the selected Speaker Recognition provider during recording.")
+                Text("Live recognition also needs the selected Nemotron model, even when Live Speaker Labels is off.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            CapabilityDefaultSection(
+                capability: .liveDiarization, selection: setting(\.liveDiarizationProviderID),
+                caption:
+                    "Adds local speaker labels independently of live transcription. Download the model in Service Providers before use."
+            ) {
+                Toggle("Show Live Speaker Labels", isOn: setting(\.showLiveSpeakerLabels))
+            }
+            CapabilityDefaultSection(
+                capability: .speakerRecognition, selection: setting(\.speakerRecognitionProviderID),
+                caption: "Matches compatible voice samples to People. Unknown voices keep their speaker labels."
+            ) {}
+            CapabilityDefaultSection(
+                capability: .diarization, selection: setting(\.diarizationProviderID),
+                caption:
+                    "Labels saved audio locally without transcribing again. Server providers add labels during transcription."
+            ) {}
             CapabilityDefaultSection(
                 capability: .transcription, selection: setting(\.transcriptionProviderID),
                 caption: "Transcription sends recording audio to the selected provider."
             ) {
                 MeetingLanguagePicker(title: "Default Language", selection: setting(\.defaultLanguage))
+                Toggle("Speaker Recognition", isOn: setting(\.recognizeSpeakers))
+                    .help("Matches speaker voices after transcription using the selected Speaker Recognition provider.")
                 Toggle("Automatically Transcribe", isOn: setting(\.autoTranscribe))
                     .toggleStyle(.checkbox)
                 if store.settings.autoTranscribe {
@@ -98,6 +120,7 @@ struct DefaultsSettingsView: View {
 /// settings and the caption that states what the provider receives.
 struct CapabilityDefaultSection<Extra: View>: View {
     @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var localModels = LocalModelManager.shared
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     let capability: ProviderCapability
     @Binding var selection: UUID?
@@ -116,7 +139,9 @@ struct CapabilityDefaultSection<Extra: View>: View {
 
     private var eligible: [ServiceProvider] {
         store.settings.serviceProviders.filter {
-            ProviderConfigurationEligibility.canSelect($0, for: capability, providers: store.settings.serviceProviders)
+            (capability != .diarization || $0.kind == .community1)
+                && ProviderConfigurationEligibility.canSelect(
+                    $0, for: capability, providers: store.settings.serviceProviders)
         }
     }
 
@@ -146,6 +171,17 @@ struct CapabilityDefaultSection<Extra: View>: View {
                 }
             }
             extra
+            if let provider = eligible.first(where: { $0.id == selection }), provider.kind.isLocal,
+                let model = capability == .speakerRecognition
+                    ? LocalModelID.voiceEmbedding : LocalModelID(rawValue: provider.model),
+                localModels.state(for: model).phase != .ready
+            {
+                HStack {
+                    Text(localModels.state(for: model).phase.settingsTitle).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Service Providers") { settingsTab = "providers" }
+                }
+            }
             if let caption { Text(caption).font(.caption).foregroundStyle(.secondary) }
         }
     }

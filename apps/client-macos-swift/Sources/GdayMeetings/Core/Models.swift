@@ -85,6 +85,12 @@ struct AppSettings: Codable, Equatable {
     var serviceProviders: [ServiceProvider] = []
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
+    var liveDiarizationProviderID: UUID?
+    var diarizationProviderID: UUID?
+    var speakerRecognitionProviderID: UUID?
+    var showLiveSpeakerLabels = false
+    var recognizeSpeakers = false
+    var recognizeLiveSpeakers = false
     var defaultLanguage = "en"
     var autoSummarize = false
     var autoExtractTodos = true
@@ -107,6 +113,8 @@ struct AppSettings: Codable, Equatable {
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID,
+            liveDiarizationProviderID, diarizationProviderID, speakerRecognitionProviderID,
+            showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers,
             defaultLanguage, autoTranscribe, autoSummarize, autoExtractTodos,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
             captureSystemAudio,
@@ -228,6 +236,12 @@ extension AppSettings {
         serviceProviders = try values.decodeIfPresent([ServiceProvider].self, forKey: .serviceProviders) ?? []
         transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
+        liveDiarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .liveDiarizationProviderID)
+        diarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .diarizationProviderID)
+        speakerRecognitionProviderID = try values.decodeIfPresent(UUID.self, forKey: .speakerRecognitionProviderID)
+        showLiveSpeakerLabels = try values.decodeIfPresent(Bool.self, forKey: .showLiveSpeakerLabels) ?? false
+        recognizeSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeSpeakers) ?? false
+        recognizeLiveSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeLiveSpeakers) ?? false
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoSummarize = try values.decodeIfPresent(Bool.self, forKey: .autoSummarize) ?? false
         autoExtractTodos = try values.decodeIfPresent(Bool.self, forKey: .autoExtractTodos) ?? true

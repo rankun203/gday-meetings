@@ -19,7 +19,10 @@ struct ServiceProvidersView: View {
                     }.tag(ThisMacProvider.id).padding(.vertical, 4)
                     ForEach(store.settings.serviceProviders) { provider in
                         VStack(alignment: .leading, spacing: 3) {
-                            Label(provider.name, systemImage: provider.kind == .gdayWebsite ? "globe" : "server.rack")
+                            Label(
+                                provider.name,
+                                systemImage: provider.kind.isLocal
+                                    ? "desktopcomputer" : provider.kind == .gdayWebsite ? "globe" : "server.rack")
                             Text(provider.isEnabled ? provider.kind.title : "Disabled")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -56,7 +59,12 @@ struct ServiceProvidersView: View {
                 ThisMacProviderView()
             }
             else if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
-                ServiceProviderPanel(provider: provider, addProvider: add, signInTask: $signInTask).id(provider.id)
+                if provider.kind.isLocal {
+                    LocalSpeakerProviderView(provider: provider).id(provider.id)
+                }
+                else {
+                    ServiceProviderPanel(provider: provider, addProvider: add, signInTask: $signInTask).id(provider.id)
+                }
             }
             else {
                 ContentUnavailableView {
@@ -87,7 +95,9 @@ struct ServiceProvidersView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                "This removes the connection and saved credentials from this Mac. Meetings and files stored by the provider are kept."
+                store.settings.serviceProviders.first(where: { $0.id == selection })?.kind.isLocal == true
+                    ? "This removes the provider configuration. Downloaded models and meetings are kept."
+                    : "This removes the connection and saved credentials from this Mac. Meetings and files stored by the provider are kept."
             )
         }
     }
@@ -123,6 +133,11 @@ struct ServiceProvidersView: View {
             store.settings.serviceProviders.removeAll { $0.id == selection }
             if store.settings.transcriptionProviderID == selection { store.settings.transcriptionProviderID = nil }
             if store.settings.summaryProviderID == selection { store.settings.summaryProviderID = nil }
+            if store.settings.liveDiarizationProviderID == selection { store.settings.liveDiarizationProviderID = nil }
+            if store.settings.diarizationProviderID == selection { store.settings.diarizationProviderID = nil }
+            if store.settings.speakerRecognitionProviderID == selection {
+                store.settings.speakerRecognitionProviderID = nil
+            }
             guard store.saveSettings() else {
                 store.settings = previous
                 saveError = store.errorMessage
@@ -467,6 +482,8 @@ private struct ServiceProviderPanel: View {
             "Enter the address of the Gday Meetings website that hosts this account."
         case .filedrop:
             "Enter the Filedrop service base URL supplied by the service administrator."
+        case .nemotron, .community1:
+            "This provider processes audio on this Mac."
         }
     }
 
@@ -486,6 +503,8 @@ private struct ServiceProviderPanel: View {
     private func disclosure(_ capability: ProviderCapability) -> String {
         switch capability {
         case .liveTranscription: "Transcribes audio during recording."
+        case .liveDiarization: "Labels speakers during recording on this Mac."
+        case .speakerRecognition: "Matches compatible voice samples to People on this Mac."
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization:

@@ -6,10 +6,22 @@ enum ProviderConfigurationEligibility {
     static func canSelect(
         _ provider: ServiceProvider, for capability: ProviderCapability, providers: [ServiceProvider]
     ) -> Bool {
-        guard provider.supports(capability), hasText(provider.name),
+        guard provider.supports(capability), hasText(provider.name) else { return false }
+        if provider.kind.isLocal {
+            switch provider.kind {
+            case .nemotron:
+                return LocalModelID.allCases.contains {
+                    $0.rawValue.hasPrefix("nemotron") && $0.rawValue == provider.model
+                }
+            case .community1: return provider.model == "community1"
+            default: return false
+            }
+        }
+        guard
             (try? ProviderEndpoint.base(provider.endpoint)) != nil
         else { return false }
         switch provider.kind {
+        case .nemotron, .community1: return false
         case .runpod:
             guard (try? ProviderEndpoint.runpod(provider.endpoint)) != nil,
                 hasText(provider.apiKey)

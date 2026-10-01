@@ -203,7 +203,7 @@ enum DataPrivacy {
                 for trigger in triggers {
                     routes.append(.init(data: [.audio, .meetingDetails], trigger: trigger, receivers: [transcriber]))
                 }
-            case .openAICompatible, .filedrop:
+            case .openAICompatible, .filedrop, .nemotron, .community1:
                 continue
             }
         }
@@ -242,7 +242,7 @@ enum DataPrivacy {
         // to list models while their endpoint or key is edited.
         var credentialRoutes: [PrivacyRoute] = []
         for provider in providers {
-            guard (try? ProviderEndpoint.base(provider.endpoint)) != nil,
+            guard !provider.kind.isLocal, (try? ProviderEndpoint.base(provider.endpoint)) != nil,
                 provider.kind == .gdayWebsite ? signedIn(provider) : hasText(provider.apiKey)
             else { continue }
             var triggers = Set(routes.filter { $0.receivers.contains { $0.id == provider.id } }.map(\.trigger))

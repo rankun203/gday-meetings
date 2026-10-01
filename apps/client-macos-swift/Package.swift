@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.2
 
 import Foundation
 import PackageDescription
@@ -16,6 +16,11 @@ let package = Package(
     name: "GdayMeetings",
     platforms: [.macOS("14.2")],
     products: [.executable(name: "GdayMeetings", targets: ["GdayMeetings"])],
+    dependencies: [
+        .package(
+            url: "https://github.com/FluidInference/FluidAudio.git",
+            revision: "21493f8dac5a97e65742e6ff26f42f164c2fda0f", traits: [])
+    ],
     targets: [
         .systemLibrary(name: "CSQLite"),
         .target(name: "AudioCaptureBridge", publicHeadersPath: "include"),
@@ -27,7 +32,13 @@ let package = Package(
                     audioRoot + "/lib/libopusfile.a", audioRoot + "/lib/libopus.a", audioRoot + "/lib/libogg.a",
                 ])
             ]),
-        .executableTarget(name: "GdayMeetings", dependencies: ["AudioCaptureBridge", "OpusFileBridge", "CSQLite"]),
+        .executableTarget(
+            name: "GdayMeetings",
+            dependencies: [
+                "AudioCaptureBridge", "OpusFileBridge", "CSQLite",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ]),
         .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"]),
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )

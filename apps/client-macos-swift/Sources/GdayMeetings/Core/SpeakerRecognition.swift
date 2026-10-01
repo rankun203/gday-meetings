@@ -6,14 +6,21 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable {
     var label: String
     var track: String
     var providerName: String
-    /// RunPod does not report an embedding model version. Never compare across
-    /// configured endpoints, or assume an imported Rust vector uses that model.
+    /// Legacy provenance only. An endpoint does not establish model compatibility.
     var voiceScope: String?
     var embedding: [Double]?
+    var voiceEmbedding: TypedVoiceEmbedding?
     var personID: UUID?
     var confidence: Double?
     /// Legacy library key retained for older clients. Assignment is determined by personID.
     var confirmed = false
+
+    var resolvedVoiceEmbedding: TypedVoiceEmbedding? {
+        voiceEmbedding
+            ?? embedding.map {
+                .init(type: .unknownLegacy(dimension: $0.count), values: $0, provenance: voiceScope)
+            }
+    }
 }
 
 struct PersonVoiceSample: Codable, Equatable {
@@ -21,10 +28,56 @@ struct PersonVoiceSample: Codable, Equatable {
     var speakerID: UUID
     var scope: String
     var embedding: [Double]
+    var voiceEmbedding: TypedVoiceEmbedding?
+
+    init(meetingID: UUID, speakerID: UUID, scope: String, embedding: [Double]) {
+        self.meetingID = meetingID
+        self.speakerID = speakerID
+        self.scope = scope
+        self.embedding = embedding
+    }
+
+    init(meetingID: UUID, speakerID: UUID, voiceEmbedding: TypedVoiceEmbedding) {
+        self.meetingID = meetingID
+        self.speakerID = speakerID
+        self.scope = voiceEmbedding.provenance ?? voiceEmbedding.type.modelID
+        self.embedding = voiceEmbedding.values
+        self.voiceEmbedding = voiceEmbedding
+    }
+
+    var resolvedVoiceEmbedding: TypedVoiceEmbedding {
+        voiceEmbedding ?? .init(type: .unknownLegacy(dimension: embedding.count), values: embedding, provenance: scope)
+    }
 }
 
 enum SpeakerRecognition {
-    static let threshold = 0.75
+    // Conservative initial policy; not a calibrated probability of identity.
+    static let threshold = 0.85
+
+    static func match(
+        embedding: TypedVoiceEmbedding, people: [Person],
+        threshold: Double = 0.85, minimumMargin: Double = 0.08
+    ) -> VoiceMatch? {
+        guard embedding.isValid, threshold.isFinite, minimumMargin.isFinite,
+            (-1...1).contains(threshold), minimumMargin >= 0
+        else { return nil }
+        let scores: [(UUID, Double)] = people.compactMap { person in
+            let samples = person.voiceSamples.map(\.resolvedVoiceEmbedding).filter {
+                $0.type == embedding.type && $0.isValid
+            }
+            guard !samples.isEmpty else { return nil }
+            var centroid = Array(repeating: 0.0, count: embedding.values.count)
+            for sample in samples {
+                for i in centroid.indices { centroid[i] += sample.values[i] / Double(samples.count) }
+            }
+            guard let score = similarity(embedding.values, centroid) else { return nil }
+            return (person.id, score)
+        }.sorted { $0.1 == $1.1 ? $0.0.uuidString < $1.0.uuidString : $0.1 > $1.1 }
+        guard let best = scores.first else { return nil }
+        let margin = best.1 - (scores.dropFirst().first?.1 ?? -1)
+        guard best.1 >= threshold, margin >= minimumMargin else { return nil }
+        return .init(personID: best.0, score: best.1, margin: margin)
+    }
 
     static func isValid(_ vector: [Double]) -> Bool {
         !vector.isEmpty && vector.count <= 4096 && vector.allSatisfy(\.isFinite)
@@ -45,21 +98,9 @@ enum SpeakerRecognition {
     static func match(_ speakers: inout [MeetingSpeaker], people: [Person]) {
         var scores: [(speaker: Int, person: UUID, score: Double)] = []
         for (index, speaker) in speakers.enumerated() {
-            guard let scope = speaker.voiceScope, let embedding = speaker.embedding else { continue }
-            for person in people {
-                let samples = person.voiceSamples.filter {
-                    $0.scope == scope && $0.embedding.count == embedding.count && isValid($0.embedding)
-                }
-                guard !samples.isEmpty else { continue }
-                var centroid = Array(repeating: 0.0, count: embedding.count)
-                for sample in samples {
-                    for dimension in centroid.indices {
-                        centroid[dimension] += sample.embedding[dimension] / Double(samples.count)
-                    }
-                }
-                if let score = similarity(embedding, centroid), score >= threshold {
-                    scores.append((index, person.id, score))
-                }
+            guard let embedding = speaker.resolvedVoiceEmbedding else { continue }
+            if let match = match(embedding: embedding, people: people) {
+                scores.append((index, match.personID, match.score))
             }
         }
         scores.sort {
@@ -163,6 +204,12 @@ extension MeetingStore {
             people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
         }
         if let personIndex = people.firstIndex(where: { $0.id == personID }),
+            let embedding = replacement[index].voiceEmbedding, embedding.isValid
+        {
+            people[personIndex].voiceSamples.append(
+                .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
+        }
+        else if let personIndex = people.firstIndex(where: { $0.id == personID }),
             let scope = replacement[index].voiceScope, let embedding = replacement[index].embedding,
             SpeakerRecognition.isValid(embedding)
         {

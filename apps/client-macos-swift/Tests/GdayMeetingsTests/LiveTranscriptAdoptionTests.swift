@@ -18,7 +18,8 @@ import Testing
         let batch = SpeakerRecognition.result(
             [.init(start: 1, end: 2, text: "First", speaker: nil, track: "mic", embedding: nil)],
             attempt: .init(provider: .init(kind: .runpod), meeting: Meeting()), people: [])
-        #expect(live.segments.allSatisfy { $0.speaker.isEmpty && $0.speakerID == nil })
+        #expect(live.segments.map(\.speaker) == ["mic_01", "sys_01"])
+        #expect(live.speakers.allSatisfy { $0.personID == nil && $0.embedding == nil })
         #expect(batch.segments.first?.speaker == "")
         #expect(batch.segments.first?.speakerID == nil)
         #expect(batch.speakers.isEmpty)
@@ -46,8 +47,9 @@ import Testing
         await store.stopRecording(transcribeAfter: false)
         let saved = try #require(MeetingStore(dataDirectory: root).meeting(id: id))
         #expect(saved.transcript.first?.text == "Final phrase")
-        #expect(saved.transcript.first?.speakerID == nil)
-        #expect(saved.speakers.isEmpty)
+        #expect(saved.transcript.first?.speaker == "mic_01")
+        #expect(saved.speakers.count == 1)
+        #expect(saved.speakers.first?.personID == nil)
         #expect(try LiveTranscriptDraft.read(at: store.directory(for: id), meetingID: id)?.phrases.count == 1)
     }
     @Test func existingEditsStayUntilExplicitRecoveryAndRevisionIsKept() throws {

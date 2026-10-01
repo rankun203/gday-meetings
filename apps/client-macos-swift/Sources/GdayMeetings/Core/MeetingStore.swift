@@ -44,6 +44,7 @@ final class MeetingStore: ObservableObject {
     /// block recording. Progress is transient: outcomes appear in the content
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
+    var localDiarizationTasks: [UUID: Task<Void, Never>] = [:]
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskJournalError: String?
     lazy var managedTaskJournal = ManagedTaskJournal(url: dataDirectory.appendingPathComponent("tasks.jsonl"))
@@ -779,7 +780,18 @@ final class MeetingStore: ObservableObject {
             liveTranscript.begin(
                 meetingID: meeting.id, language: meeting.language, directory: directory(for: meeting.id),
                 sources: [microphone ? .microphone : nil, systemAudio ? .system : nil].compactMap { $0 },
-                sink: liveSink, enabled: settings.liveTranscriptionEnabled)
+                sink: liveSink, enabled: settings.liveTranscriptionEnabled,
+                diarizationProvider: settings.serviceProviders.first {
+                    $0.id == settings.liveDiarizationProviderID && $0.supports(.liveDiarization)
+                },
+                speakerLabelsEnabled: settings.showLiveSpeakerLabels,
+                speakerRecognitionEnabled: settings.recognizeLiveSpeakers,
+                people: { [weak self] in self?.people ?? [] },
+                enrollVoice: { [weak self] personID, speakerID, embedding in
+                    self?.enrollLiveVoice(
+                        meetingID: meeting.id, personID: personID,
+                        speakerID: speakerID, embedding: embedding)
+                })
             captureHealth = [
                 microphone
                     ? (capture.profile.microphoneVoiceProcessing
@@ -1068,6 +1080,7 @@ final class MeetingStore: ObservableObject {
             meeting.speakers[index].confidence = nil
             meeting.speakers[index].confirmed = false
             meeting.speakers[index].embedding = nil
+            meeting.speakers[index].voiceEmbedding = nil
             meeting.speakers[index].voiceScope = nil
         }
         meeting.restoreSpeakerIdentities()
@@ -1094,5 +1107,30 @@ final class MeetingStore: ObservableObject {
             errorMessage =
                 "Meeting text was imported. Its JSON file did not include an image manifest, so images linked from Notes or Summary were not imported."
         }
+    }
+}
+extension MeetingStore {
+    /// Only an explicit live assignment enrolls a clean, typed voice sample.
+    /// Refresh this speaker's contribution without removing other model types.
+    func enrollLiveVoice(meetingID: UUID, personID: UUID?, speakerID: UUID, embedding: TypedVoiceEmbedding?) {
+        guard libraryWritable, recordingID == meetingID,
+            personID == nil || people.contains(where: { $0.id == personID })
+        else { return }
+        let previous = people
+        for personIndex in people.indices {
+            let isAssignedPerson = people[personIndex].id == personID
+            people[personIndex].voiceSamples.removeAll {
+                guard $0.meetingID == meetingID && $0.speakerID == speakerID else { return false }
+                return !isAssignedPerson
+                    || (embedding != nil && $0.voiceEmbedding?.type == embedding?.type)
+            }
+        }
+        if let personID, let embedding, embedding.isValid,
+            let index = people.firstIndex(where: { $0.id == personID })
+        {
+            people[index].voiceSamples.append(
+                .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
+        }
+        if !save() { people = previous }
     }
 }

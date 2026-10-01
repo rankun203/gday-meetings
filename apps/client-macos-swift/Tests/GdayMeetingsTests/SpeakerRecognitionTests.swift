@@ -81,7 +81,7 @@ import Testing
         #expect(reopened.meetings.first?.speakers[0].personID == nil)
     }
 
-    @Test func recognitionUsesOnlyCompatibleAssignedSamplesAndOnePersonPerTrack() {
+    @Test func unknownEndpointVectorsNeverAutomaticallyMatch() {
         let person = Person(
             name: "Alex",
             voiceSamples: [
@@ -102,10 +102,7 @@ import Testing
                 label: "F", track: "other", providerName: "RunPod", voiceScope: "runpod:test", embedding: [1, 0, 0]),
         ]
         SpeakerRecognition.match(&speakers, people: [person])
-        #expect(speakers[0].personID == person.id)
-        #expect(speakers[1].personID == nil)
-        #expect(speakers[2].personID == person.id)
-        #expect(speakers.dropFirst(3).allSatisfy { $0.personID == nil })
+        #expect(speakers.allSatisfy { $0.personID == nil })
         #expect(speakers.allSatisfy { $0.confirmed == ($0.personID != nil) })
         #expect(SpeakerRecognition.similarity([0, 0], [1, 0]) == nil)
         #expect(SpeakerRecognition.similarity([.infinity], [1]) == nil)
@@ -205,6 +202,7 @@ import Testing
         let person = store.addPerson(name: "Local Person")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
+            voiceEmbedding: .init(type: .community1, values: [1] + Array(repeating: 0, count: 255)),
             personID: person, confidence: 1, confirmed: true)
         var archive = Meeting()
         archive.speakers = [speaker]
@@ -214,6 +212,7 @@ import Testing
         try JSONEncoder().encode(archive).write(to: file)
         try store.importArchive(url: file)
         #expect(store.meetings[0].speakers[0].personID == nil)
+        #expect(store.meetings[0].speakers[0].voiceEmbedding == nil)
         #expect(!store.meetings[0].speakers[0].confirmed)
         #expect(store.meetings[0].personIDs.isEmpty)
         archive.speakers = []

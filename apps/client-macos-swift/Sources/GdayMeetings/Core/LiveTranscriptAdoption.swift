@@ -2,7 +2,7 @@ import Foundation
 
 extension LiveTranscriptDraft {
     var hasUsableText: Bool {
-        phrases.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        !segments.isEmpty
     }
 }
 
@@ -50,7 +50,12 @@ extension MeetingStore {
             !isJobRunning(.transcription, .meeting(meeting.id))
         else { return false }
         let source = liveTranscriptSource(draft, meeting: meeting)
-        if meeting.transcript == draft.segments && meeting.liveTranscriptAdopted
+        var speakers = draft.speakers
+        for index in speakers.indices where !people.contains(where: { $0.id == speakers[index].personID }) {
+            speakers[index].personID = nil
+            speakers[index].confirmed = false
+        }
+        if meeting.transcript == draft.segments && meeting.speakers == speakers && meeting.liveTranscriptAdopted
             && meeting.transcriptSource?.id == source.id
         {
             return true
@@ -60,7 +65,7 @@ extension MeetingStore {
         meeting.transcript = draft.segments
         meeting.transcriptSource = source
         meeting.liveTranscriptAdopted = true
-        meeting.replaceSpeakers([])
+        meeting.replaceSpeakers(speakers)
         return updateMeeting(meeting)
     }
 }

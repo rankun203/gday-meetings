@@ -8,6 +8,10 @@ final class LiveTranscriptController: ObservableObject {
     @Published private(set) var partials: [LiveTranscriptPhrase] = []
     @Published private(set) var status = ""
     @Published private(set) var enabled = false
+    @Published private(set) var speakerLabelsEnabled = false
+    @Published private(set) var speakerLabelStatus = ""
+    @Published private(set) var speakerRecognitionEnabled = false
+    @Published private(set) var speakerRecognitionStatus = ""
     private var generation = UUID()
     private var acceptedGenerations = Set<UUID>()
     private var directory: URL?
@@ -21,12 +25,106 @@ final class LiveTranscriptController: ObservableObject {
     private var ready = false
     private var dataEvents: [UUID: MeetingDataEvent] = [:]
     private var cancelProvider: (() async -> Void)?
+    private var knownRecognitionSessions = Set<UUID>()
+    private var diarizationProvider: ServiceProvider?
+    private var speakerAnalysisReady = false
+    private var speakerProvider: LocalLiveDiarization?
+    private var speakerStartup: Task<Void, Never>?
+    private var speakerGeneration = UUID()
+    private var acceptedSpeakerGenerations = Set<UUID>()
+    private var pendingSpeakerFinalizations: [UUID: Task<Bool, Never>] = [:]
+    private var voiceWorker: LiveVoiceEmbeddingWorker?
+    private var voiceStartup: Task<Void, Never>?
+    private var voiceWork: Task<Void, Never>?
+    private var voiceGeneration = UUID()
+    private var voiceEmbeddings: [UUID: TypedVoiceEmbedding] = [:]
+    private var voiceCandidates: [UUID: (person: UUID, count: Int)] = [:]
+    private var peopleProvider: () -> [Person] = { [] }
+    private var enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)?
+    private var modelObservation: AnyCancellable?
+    private var waitingForSpeakerModel = false
+    private var waitingForVoiceModel = false
+    private var lastSpeakerCheckpoint = Date.distantPast
+
+    var presentedFinalized: [LiveTranscriptPhrase] {
+        let people = Set(peopleProvider().map(\.id))
+        return (draft?.resolvedRows(partials: partials).finalized ?? []).map {
+            $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people)
+        }
+    }
+    var presentedPartials: [LiveTranscriptPhrase] {
+        let people = Set(peopleProvider().map(\.id))
+        return (draft?.resolvedRows(partials: partials).partials ?? partials).map {
+            $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people)
+        }
+    }
+
+    func updateText(rowID: UUID, text: String) {
+        guard let phrase = (presentedFinalized + presentedPartials).first(where: { $0.id == rowID }) else { return }
+        updateText(phrase: phrase, text: text)
+    }
+
+    /// The editor captures this anchor when editing begins, before recognition
+    /// can merge, split, or replace the row currently visible in the table.
+    func updateText(phrase: LiveTranscriptPhrase, text: String) {
+        guard knownRecognitionSessions.contains(phrase.session) else { return }
+        draft?.updateText(text, for: phrase)
+        checkpoint()
+    }
+
+    func assignPerson(rowID: UUID, personID: UUID?) {
+        guard let phrase = (presentedFinalized + presentedPartials).first(where: { $0.id == rowID }) else { return }
+        assignPerson(phrase: phrase, personID: personID)
+    }
+
+    func assignPerson(phrase: LiveTranscriptPhrase, personID: UUID?) {
+        guard knownRecognitionSessions.contains(phrase.session) else { return }
+        draft?.assignPerson(personID, for: phrase, speakerIdentity: phrase.speakerIdentity)
+        if let identity = phrase.speakerIdentity {
+            draft?.speakerTimeline?.assign(personID, to: identity, manual: true)
+            enrollVoice?(personID, identity, voiceEmbeddings[identity] ?? phrase.voiceEmbedding)
+        }
+        checkpoint()
+    }
+
+    func assignPersonToLine(phrase: LiveTranscriptPhrase, personID: UUID?) {
+        guard knownRecognitionSessions.contains(phrase.session) else { return }
+        draft?.assignPerson(personID, for: phrase)
+        checkpoint()
+    }
 
     func begin(
         meetingID: UUID, language: String, directory: URL, sources: [LiveAudioSource],
-        sink: LiveAudioSink, enabled: Bool
+        sink: LiveAudioSink, enabled: Bool, diarizationProvider: ServiceProvider? = nil,
+        speakerLabelsEnabled: Bool = false, speakerRecognitionEnabled: Bool = false,
+        people: @escaping () -> [Person] = { [] },
+        enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil
     ) {
         acceptedGenerations = []
+        knownRecognitionSessions = []
+        acceptedSpeakerGenerations = []
+        pendingSpeakerFinalizations = [:]
+        self.diarizationProvider = diarizationProvider
+        peopleProvider = people
+        self.enrollVoice = enrollVoice
+        modelObservation = LocalModelManager.shared.$states.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.sink != nil else { return }
+                if self.waitingForSpeakerModel, self.speakerLabelsEnabled || self.speakerRecognitionEnabled,
+                    let raw = self.diarizationProvider?.model, let model = LocalModelID(rawValue: raw),
+                    LocalModelManager.shared.state(for: model).phase == .ready
+                {
+                    self.setSpeakerLabelsEnabled(self.speakerLabelsEnabled)
+                }
+                if self.waitingForVoiceModel, self.speakerRecognitionEnabled,
+                    LocalModelManager.shared.state(for: .voiceEmbedding).phase == .ready
+                {
+                    self.setSpeakerRecognitionEnabled(true)
+                }
+            }
+        }
+        voiceEmbeddings = [:]
+        voiceCandidates = [:]
         pendingFinalizations = [:]
         finalizationFailed = false
         boundaries = [:]
@@ -36,20 +134,245 @@ final class LiveTranscriptController: ObservableObject {
         self.sink = sink
         draft = LiveTranscriptDraft(meetingID: meetingID, locale: language)
         setEnabled(enabled)
+        self.speakerRecognitionEnabled = speakerRecognitionEnabled
+        setSpeakerLabelsEnabled(speakerLabelsEnabled)
+        setSpeakerRecognitionEnabled(speakerRecognitionEnabled)
+    }
+
+    func setSpeakerLabelsEnabled(_ value: Bool) {
+        speakerLabelsEnabled = value
+        guard value || speakerRecognitionEnabled else {
+            waitingForSpeakerModel = false
+            detachSpeakerSession()
+            speakerLabelStatus = "Live speaker labels are off."
+            return
+        }
+        guard speakerProvider == nil else {
+            if speakerAnalysisReady {
+                speakerLabelStatus =
+                    value ? "Live speaker labels · Nemotron" : "Speaker analysis is running for recognition."
+            }
+            return
+        }
+        waitingForSpeakerModel = false
+        speakerGeneration = UUID()
+        let token = speakerGeneration
+        guard let provider = diarizationProvider, provider.supports(.liveDiarization),
+            let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil, let sink
+        else {
+            speakerLabelStatus = "Choose a Nemotron provider in Settings to use live speaker labels."
+            return
+        }
+        if UIPreview.enabled {
+            speakerLabelStatus = "Synthetic speaker labels · No model is running."
+            return
+        }
+        acceptedSpeakerGenerations.insert(token)
+        speakerLabelStatus = "Preparing live speaker labels…"
+        let runtime = LocalLiveDiarization()
+        speakerProvider = runtime
+        let boundaries = Dictionary(
+            uniqueKeysWithValues: (draft?.speakerTimeline?.cursors ?? []).map { ($0.source, $0.end) })
+        speakerStartup = Task { [self] in
+            do {
+                try await runtime.start(
+                    model: model, sources: sources, sink: sink, boundaries: boundaries,
+                    event: { [weak self] event in await self?.receiveSpeakerEvent(event, token: token) },
+                    gap: { [weak self] gap in await self?.receiveSpeakerGap(gap, token: token) },
+                    failure: { [weak self] message in await self?.speakerFailure(message, token: token) },
+                    sample: { [weak self] sample in await self?.receiveVoiceSample(sample, token: token) })
+                guard token == speakerGeneration, !Task.isCancelled else {
+                    await runtime.cancel()
+                    return
+                }
+                speakerAnalysisReady = true
+                speakerLabelStatus =
+                    speakerLabelsEnabled
+                    ? "Live speaker labels · Nemotron" : "Speaker analysis is running for recognition."
+                refreshVoiceReadyStatus()
+                openLocalDataEvent(
+                    token, targetID: provider.id, targetName: provider.name,
+                    purpose: "Live speaker analysis", bodies: ["Live audio frames", "Source-scoped speaker activity"])
+            }
+            catch {
+                await runtime.cancel()
+                guard token == speakerGeneration, !Task.isCancelled else { return }
+                speakerProvider = nil
+                acceptedSpeakerGenerations.remove(token)
+                speakerAnalysisReady = false
+                refreshVoiceReadyStatus()
+                waitingForSpeakerModel = LocalModelManager.shared.state(for: model).phase != .ready
+                speakerLabelStatus =
+                    "Live speaker labels are unavailable. \(error.localizedDescription) Recording continues."
+            }
+        }
+    }
+
+    private func detachSpeakerSession() {
+        speakerAnalysisReady = false
+        speakerStartup?.cancel()
+        speakerStartup = nil
+        guard let runtime = speakerProvider else { return }
+        let token = speakerGeneration
+        speakerProvider = nil
+        pendingSpeakerFinalizations[token] = Task {
+            let completed = await LiveFinishRace.run(seconds: 5) { await runtime.finish() }
+            if !completed { Task { await runtime.cancel() } }
+            acceptedSpeakerGenerations.remove(token)
+            closeDataEvent(token)
+            pendingSpeakerFinalizations.removeValue(forKey: token)
+            return completed
+        }
+    }
+
+    private func receiveSpeakerEvent(_ event: LiveSpeakerEvent, token: UUID) {
+        guard acceptedSpeakerGenerations.contains(token) else { return }
+        if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
+        guard draft?.speakerTimeline?.accept(event) == true else { return }
+        if event.final || Date().timeIntervalSince(lastSpeakerCheckpoint) >= 2 {
+            checkpoint()
+            lastSpeakerCheckpoint = Date()
+        }
+    }
+
+    private func receiveSpeakerGap(_ gap: LiveTranscriptGap, token: UUID) {
+        guard acceptedSpeakerGenerations.contains(token) else { return }
+        if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
+        draft?.speakerTimeline?.gaps.append(gap)
+        checkpoint()
+    }
+
+    private func speakerFailure(_ message: String, token: UUID) {
+        guard token == speakerGeneration else { return }
+        speakerAnalysisReady = false
+        speakerLabelStatus = message
+        refreshVoiceReadyStatus()
+    }
+
+    private func refreshVoiceReadyStatus() {
+        guard speakerRecognitionEnabled, voiceWorker != nil else { return }
+        speakerRecognitionStatus =
+            speakerAnalysisReady
+            ? "Speaker recognition is ready. Waiting for clear speech."
+            : "Speaker recognition is waiting for Nemotron speaker analysis. Check its provider and model in Settings."
+    }
+
+    func setSpeakerRecognitionEnabled(_ value: Bool) {
+        waitingForVoiceModel = false
+        closeDataEvent(voiceGeneration)
+        voiceGeneration = UUID()
+        voiceStartup?.cancel()
+        voiceWork?.cancel()
+        voiceWork = nil
+        if let worker = voiceWorker { Task { await worker.cancel() } }
+        voiceWorker = nil
+        speakerRecognitionEnabled = value
+        setSpeakerLabelsEnabled(speakerLabelsEnabled)
+        guard value else {
+            speakerRecognitionStatus = "Speaker recognition is off."
+            return
+        }
+        guard !UIPreview.enabled else {
+            speakerRecognitionStatus = "Synthetic people · No voice matching is running."
+            return
+        }
+        guard let provider = diarizationProvider, provider.supports(.liveDiarization),
+            let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil
+        else {
+            speakerRecognitionStatus = "Choose a Nemotron provider in Settings for live speaker recognition."
+            return
+        }
+        let token = voiceGeneration
+        let worker = LiveVoiceEmbeddingWorker()
+        speakerRecognitionStatus = "Preparing speaker recognition…"
+        voiceStartup = Task {
+            do {
+                try await worker.prepare()
+                guard token == voiceGeneration, !Task.isCancelled else {
+                    await worker.cancel()
+                    return
+                }
+                voiceWorker = worker
+                refreshVoiceReadyStatus()
+                openLocalDataEvent(
+                    token, targetID: ThisMacProvider.id, targetName: "This Mac",
+                    purpose: "Live speaker recognition", bodies: ["Clear speech excerpts", "Typed voice embeddings"])
+            }
+            catch {
+                await worker.cancel()
+                guard token == voiceGeneration, !Task.isCancelled else { return }
+                waitingForVoiceModel = LocalModelManager.shared.state(for: .voiceEmbedding).phase != .ready
+                speakerRecognitionStatus = "Speaker recognition is unavailable. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func receiveVoiceSample(_ sample: LiveSpeakerAudioSample, token: UUID) {
+        guard acceptedSpeakerGenerations.contains(token), speakerRecognitionEnabled,
+            let worker = voiceWorker, voiceWork == nil
+        else { return }
+        let voiceToken = voiceGeneration
+        voiceWork = Task {
+            defer { if voiceGeneration == voiceToken { voiceWork = nil } }
+            do {
+                guard let embedding = try await worker.extract(sample), !Task.isCancelled,
+                    voiceGeneration == voiceToken, acceptedSpeakerGenerations.contains(token)
+                else { return }
+                voiceEmbeddings[sample.speakerID] = embedding
+                draft?.speakerTimeline?.retainEmbedding(embedding, for: sample.speakerID)
+                checkpoint()
+                guard let speaker = draft?.speakerTimeline?.speakers.first(where: { $0.id == sample.speakerID }) else {
+                    return
+                }
+                if speaker.manuallyAssigned {
+                    if let personID = speaker.personID { enrollVoice?(personID, speaker.id, embedding) }
+                    return
+                }
+                guard let match = SpeakerRecognition.match(embedding: embedding, people: peopleProvider()) else {
+                    voiceCandidates.removeValue(forKey: speaker.id)
+                    return
+                }
+                let previous = voiceCandidates[speaker.id]
+                let count = previous?.person == match.personID ? (previous?.count ?? 0) + 1 : 1
+                voiceCandidates[speaker.id] = (match.personID, count)
+                if count >= 3 {
+                    draft?.speakerTimeline?.assign(match.personID, to: speaker.id, manual: false)
+                    speakerRecognitionStatus = "Speaker recognition updated a matching voice."
+                    checkpoint()
+                }
+            }
+            catch {
+                guard voiceGeneration == voiceToken, !Task.isCancelled else { return }
+                speakerRecognitionStatus = "Couldn’t match this voice. Anonymous speaker labels are kept."
+            }
+        }
     }
 
     func seedPreview(meetingID: UUID, directory: URL) {
         begin(
             meetingID: meetingID, language: "en", directory: directory,
             sources: [.microphone, .system], sink: LiveAudioSink(), enabled: true)
-        draft?.accept(
-            .init(
-                session: UUID(), source: .system, start: 1, end: 4,
-                text: "Let’s review the release plan.", locale: "en-AU"))
+        let microphoneSession = UUID()
+        let systemSession = UUID()
+        knownRecognitionSessions.formUnion([microphoneSession, systemSession])
+        for index in 0..<18 {
+            let source: LiveAudioSource = index.isMultiple(of: 2) ? .system : .microphone
+            draft?.accept(
+                .init(
+                    session: source == .system ? systemSession : microphoneSession,
+                    source: source, start: Double(index * 5 + 1), end: Double(index * 5 + 4),
+                    text: index == 8
+                        ? "The draft includes the schedule, open questions, and the next review. We can check each section together and record any changes before sharing it."
+                        : (index.isMultiple(of: 2) ? "Let’s review the next item." : "I’ll add that to the draft."),
+                    locale: "en-AU"))
+        }
         partials = [
             .init(
-                session: UUID(), source: .microphone, start: 5, end: 8,
-                text: "I’ll update the schedule…", locale: "en-AU")
+                session: systemSession, source: .system, start: 91, end: 94,
+                text: "The next review will cover…", locale: "en-AU", recognizedFinal: false),
+            .init(
+                session: microphoneSession, source: .microphone, start: 94, end: 97,
+                text: "I’ll update the schedule…", locale: "en-AU", recognizedFinal: false),
         ]
         checkpoint()
     }
@@ -121,7 +444,7 @@ final class LiveTranscriptController: ObservableObject {
                 dataEvents[token] = event
                 if let directory {
                     do { try DataEventJournal.append(event, directory: directory) }
-                    catch { status = "Listening · Couldn’t save the live transcription data event." }
+                    catch { status = "Listening · Couldn’t save the live processing data event." }
                 }
             }
             catch {
@@ -150,6 +473,11 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func finish() async {
+        modelObservation = nil
+        waitingForSpeakerModel = false
+        waitingForVoiceModel = false
+        detachSpeakerSession()
+        let speakerFinishes = Array(pendingSpeakerFinalizations.values)
         if !enabled || !ready { recordInactiveCoverage() }
         sink?.replace([:])
         startup?.cancel()
@@ -168,6 +496,20 @@ final class LiveTranscriptController: ObservableObject {
         for task in Array(pendingFinalizations.values) {
             if !(await task.value) { finalizationFailed = true }
         }
+        if speakerLabelsEnabled || draft?.speakerTimeline != nil {
+            var labelsComplete = !speakerFinishes.isEmpty
+            for task in speakerFinishes {
+                if !(await task.value) { labelsComplete = false }
+            }
+            draft?.speakerLabelsComplete = labelsComplete && (draft?.speakerTimeline?.gaps.isEmpty ?? false)
+        }
+        acceptedSpeakerGenerations = []
+        closeDataEvent(voiceGeneration)
+        voiceGeneration = UUID()
+        voiceStartup?.cancel()
+        voiceWork?.cancel()
+        if let worker = voiceWorker { Task { await worker.cancel() } }
+        voiceWorker = nil
         if !(draft?.gaps.isEmpty ?? true) { draft?.complete = false }
         if finalizationFailed {
             draft?.complete = false
@@ -208,8 +550,11 @@ final class LiveTranscriptController: ObservableObject {
     }
     func receive(_ value: LiveTranscriptPhrase, final: Bool, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }
+        knownRecognitionSessions.insert(value.session)
         var value = value
         value.text = value.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.preservingIdentity(from: (draft?.phrases ?? []) + partials)
+        value.recognizedFinal = final
         partials = LiveTranscriptPhrase.replacingPartials(
             partials, with: value, final: final || token != generation)
         if final {
@@ -222,11 +567,26 @@ final class LiveTranscriptController: ObservableObject {
         do { try draft.save(at: directory) }
         catch { status = "Couldn’t save the live draft. Recording continues. Check available storage." }
     }
+    private func openLocalDataEvent(
+        _ token: UUID, targetID: UUID, targetName: String,
+        purpose: String, bodies: [String]
+    ) {
+        guard let directory else { return }
+        let event = MeetingDataEvent(
+            action: .sent,
+            dataFlow: .init(
+                location: .local, targetID: targetID, targetName: targetName,
+                startedAt: Date(), bodies: bodies, purpose: purpose))
+        dataEvents[token] = event
+        do { try DataEventJournal.append(event, directory: directory) }
+        catch { status = "Couldn’t save the live processing data event." }
+    }
+
     private func closeDataEvent(_ token: UUID) {
         guard var event = dataEvents.removeValue(forKey: token), let directory else { return }
         event.dataFlow.endedAt = Date()
         do { try DataEventJournal.append(event, directory: directory) }
-        catch { status = "Couldn’t save the live transcription data event." }
+        catch { status = "Couldn’t save the live processing data event." }
     }
 }
 

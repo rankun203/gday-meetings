@@ -1,120 +1,154 @@
-import AppKit
 import SwiftUI
 
-/// Only this tab observes volatile recognition text. Recording controls never
-/// share its scroll view or subscribe to partial-result updates.
+/// The live tab uses the same native rows and editing gestures as saved text.
+/// Recognition updates remain isolated from the recording controls.
 struct LiveTranscriptView: View {
+    @EnvironmentObject private var store: MeetingStore
     @ObservedObject var controller: LiveTranscriptController
     @ViewState private var followsLive = true
-    @ViewState private var finalized: [LiveTranscriptPhrase] = []
+    @ViewState private var displayRows: [TranscriptDisplayRow] = []
+    @ViewState private var displayGeneration = 0
+    @ViewState private var hasUnresolvedTiming = false
+    @ViewState private var displayedPhrases: [UUID: LiveTranscriptPhrase] = [:]
 
     var body: some View {
-        ScrollViewReader { proxy in
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Toggle("Live Transcript", isOn: Binding(get: { controller.enabled }, set: controller.setEnabled))
-                        .toggleStyle(.switch).controlSize(.small)
-                    Spacer()
-                    Button("Follow Live") {
-                        followsLive = true
-                        proxy.scrollTo("live-end", anchor: .bottom)
-                    }.disabled(followsLive || !controller.enabled)
-                }
-                Text(controller.status).font(.caption).foregroundStyle(.secondary)
+        let phrases = displayedPhrases
+        let displayedMeetingID = controller.draft?.meetingID
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle("Live Transcript", isOn: Binding(get: { controller.enabled }, set: controller.setEnabled))
+                    .toggleStyle(.switch).controlSize(.small)
+                Spacer()
+                Button("Follow Live") { followsLive = true }
+                    .disabled(followsLive || displayRows.isEmpty)
+            }
+            Text(controller.status).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Toggle(
+                    "Live Speaker Labels",
+                    isOn: Binding(
+                        get: { controller.speakerLabelsEnabled }, set: controller.setSpeakerLabelsEnabled))
+                Toggle(
+                    "Speaker Recognition",
+                    isOn: Binding(
+                        get: { controller.speakerRecognitionEnabled }, set: controller.setSpeakerRecognitionEnabled))
+            }.toggleStyle(.switch).controlSize(.small)
+            if controller.speakerLabelsEnabled, !controller.speakerLabelStatus.isEmpty {
+                Text(controller.speakerLabelStatus).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        if finalized.isEmpty && controller.partials.isEmpty {
-                            ContentUnavailableView {
-                                Label(
-                                    controller.enabled ? "No Live Text Yet" : "Live Transcript Is Off",
-                                    systemImage: "text.bubble")
-                            } description: {
-                                Text(
-                                    controller.enabled
-                                        ? "Recording continues. You can transcribe the saved audio after recording."
-                                        : "Turn on Live Transcript to see text here. You can also transcribe the saved audio after recording."
-                                )
-                            }
-                            .frame(maxWidth: .infinity)
+            }
+            if controller.speakerRecognitionEnabled, !controller.speakerRecognitionStatus.isEmpty {
+                Text(controller.speakerRecognitionStatus).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if hasUnresolvedTiming {
+                Text("Some edited passages overlap recognition text because their word timing is unavailable.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if displayRows.isEmpty {
+                ContentUnavailableView {
+                    Label(
+                        controller.enabled ? "No Live Text Yet" : "Live Transcript Is Off", systemImage: "text.bubble")
+                } description: {
+                    Text(
+                        controller.enabled
+                            ? "Recording continues. You can transcribe the saved audio after recording."
+                            : "Turn on Live Transcript to see text here. You can also transcribe the saved audio after recording."
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            else {
+                NativeTranscriptView(
+                    rows: displayRows, generation: displayGeneration, showsSpeakers: true,
+                    editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
+                    followsLive: followsLive, pauseLiveFollowing: { followsLive = false }, play: { _ in },
+                    save: { id, text in
+                        guard store.libraryWritable, controller.draft?.meetingID == displayedMeetingID,
+                            let phrase = phrases[id]
+                        else { return }
+                        followsLive = false
+                        controller.updateText(phrase: phrase, text: text)
+                    },
+                    speakerPicker: { id, completed in
+                        if let meetingID = controller.draft?.meetingID,
+                            let phrase = phrases[id]
+                        {
+                            return AnyView(
+                                TranscriptSpeakerPicker(
+                                    meetingID: meetingID,
+                                    speaker: MeetingSpeaker(
+                                        id: id, label: phrase.speakerLabel, track: phrase.source.rawValue,
+                                        providerName: controller.draft?.provider ?? "This Mac",
+                                        personID: phrase.personID),
+                                    completed: completed,
+                                    assignment: { personID in
+                                        guard store.libraryWritable,
+                                            controller.draft?.meetingID == displayedMeetingID,
+                                            personID == nil || store.people.contains(where: { $0.id == personID })
+                                        else { return }
+                                        followsLive = false
+                                        controller.assignPerson(phrase: phrase, personID: personID)
+                                    },
+                                    lineAssignment: phrase.speakerIdentity == nil
+                                        ? nil
+                                        : { personID in
+                                            guard store.libraryWritable,
+                                                controller.draft?.meetingID == displayedMeetingID,
+                                                personID == nil || store.people.contains(where: { $0.id == personID })
+                                            else { return }
+                                            followsLive = false
+                                            controller.assignPersonToLine(phrase: phrase, personID: personID)
+                                        }
+                                ).environmentObject(store))
                         }
-                        ForEach(LiveTranscriptPresentation.rows(finalized: finalized, partials: controller.partials)) {
-                            row in
-                            phraseView(row.phrase, provisional: row.provisional)
-                        }
-                        Color.clear.frame(height: 1).id("live-end")
-                    }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .background(LiveScrollObserver { followsLive = false })
-                .onChange(of: controller.partials) { _, _ in
-                    if followsLive { proxy.scrollTo("live-end", anchor: .bottom) }
-                }
-                .onChange(of: finalized) { _, _ in
-                    if followsLive { proxy.scrollTo("live-end", anchor: .bottom) }
-                }
+                        return AnyView(Text("Speaker is unavailable."))
+                    })
             }
         }
-        .onAppear { refreshFinalized() }
-        .onChange(of: controller.draft?.phrases) { _, _ in refreshFinalized() }
+        .onAppear { refreshRows() }
+        .onChange(of: controller.draft) { _, _ in refreshRows() }
+        .onChange(of: controller.partials) { _, _ in refreshRows() }
+        .onChange(of: controller.speakerLabelsEnabled) { _, _ in refreshRows() }
+        .onChange(of: store.people) { _, _ in refreshRows() }
     }
-    private func refreshFinalized() {
-        finalized = (controller.draft?.phrases ?? []).sorted(by: LiveTranscriptPhrase.ordered)
-    }
-    private func styledText(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> AttributedString {
-        var text = AttributedString(phrase.text)
-        if provisional, controller.enabled,
-            phrase.id == LiveTranscriptPresentation.activePhraseID(controller.partials)
-        {
-            let ranges = LiveTranscriptPresentation.recentWordRanges(in: phrase)
-            for (index, range) in ranges.enumerated() {
-                guard let attributedRange = Range(range, in: text) else { continue }
-                text[attributedRange].foregroundColor = index == ranges.count - 1 ? .red : trailingWordColor
-            }
-        }
-        return text
-    }
-    private var trailingWordColor: Color {
-        if #available(macOS 15, *) { return .red.mix(with: .primary, by: 0.5) }
-        return Color(nsColor: NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed)
-    }
-    private func phraseView(_ phrase: LiveTranscriptPhrase, provisional: Bool) -> some View {
-        TranscriptRow(start: phrase.start, source: phrase.source.title, provisional: provisional) {
-            Text(styledText(phrase, provisional: provisional)).foregroundStyle(.primary).textSelection(.enabled)
-                .accessibilityLabel(provisional ? "Draft: \(phrase.text)" : phrase.text)
-        }
+
+    private func refreshRows() {
+        let finalized = controller.presentedFinalized.sorted(by: LiveTranscriptPhrase.ordered)
+        let partials = controller.presentedPartials
+        displayedPhrases = Dictionary(uniqueKeysWithValues: (finalized + partials).map { ($0.id, $0) })
+        hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
+        displayRows = LiveTranscriptDisplay.rows(finalized: finalized, partials: partials, people: store.people)
+        displayGeneration += 1
     }
 }
 
-/// Observe local native wheel events without intercepting or changing scrolling.
-private struct LiveScrollObserver: NSViewRepresentable {
-    var scrolled: () -> Void
-    func makeNSView(context: Context) -> Observer { Observer(scrolled: scrolled) }
-    func updateNSView(_ view: Observer, context: Context) { view.scrolled = scrolled }
-    final class Observer: NSView {
-        var scrolled: () -> Void
-        private var monitor: Any?
-        init(scrolled: @escaping () -> Void) {
-            self.scrolled = scrolled
-            super.init(frame: .zero)
+enum LiveTranscriptDisplay {
+    static func rows(finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase], people: [Person])
+        -> [TranscriptDisplayRow]
+    {
+        let names = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0.name) })
+        let rows = LiveTranscriptPresentation.rows(finalized: finalized, partials: partials)
+        func personID(_ phrase: LiveTranscriptPhrase) -> UUID? {
+            phrase.personID.flatMap { names[$0] == nil ? nil : $0 }
         }
-        required init?(coder: NSCoder) { nil }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                if let self, event.window === self.window,
-                    self.bounds.contains(self.convert(event.locationInWindow, from: nil)), event.scrollingDeltaY != 0
-                {
-                    self.scrolled()
-                }
-                return event
-            }
+        func key(_ phrase: LiveTranscriptPhrase) -> String {
+            personID(phrase)?.uuidString ?? phrase.speakerIdentity?.uuidString ?? phrase.speakerLabel
         }
-        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+        let colors = TranscriptSpeakerPalette.indices(for: rows.map { key($0.phrase) })
+        return rows.map { row in
+            let phrase = row.phrase
+            return TranscriptDisplayRow(
+                id: phrase.id, start: phrase.start,
+                speaker: phrase.personID.flatMap { names[$0] } ?? phrase.speakerLabel,
+                speakerID: phrase.id, text: phrase.text,
+                personID: personID(phrase), speakerColorIndex: colors[key(phrase)],
+                isProvisional: row.provisional && !phrase.isUserEdited,
+                recentWordRanges: row.provisional && !phrase.isUserEdited
+                    ? LiveTranscriptPresentation.recentWordRanges(in: phrase).map { NSRange($0, in: phrase.text) } : [],
+                accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil)
+        }
     }
 }

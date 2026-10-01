@@ -95,6 +95,7 @@ extension MeetingStore {
                 // assignments without sending those vectors to the website.
                 for index in archivedMeeting.speakers.indices {
                     archivedMeeting.speakers[index].embedding = nil
+                    archivedMeeting.speakers[index].voiceEmbedding = nil
                     archivedMeeting.speakers[index].voiceScope = nil
                 }
                 let encoder = JSONEncoder()

@@ -75,7 +75,8 @@ final class LiveAudioQueue: @unchecked Sendable {
 /// One stable fan-out is installed before capture starts. Downloads and toggle changes only replace its destinations.
 final class LiveAudioSink: @unchecked Sendable {
     private let lock = NSLock()
-    private var queues: [LiveAudioSource: LiveAudioQueue] = [:]
+    private var consumers: [UUID: [LiveAudioSource: LiveAudioQueue]] = [:]
+    private let transcriptionConsumer = UUID()
     private var latestEnds: [LiveAudioSource: Double] = [:]
     func positions() -> [LiveAudioSource: Double] {
         lock.lock()
@@ -83,15 +84,23 @@ final class LiveAudioSink: @unchecked Sendable {
         return latestEnds
     }
     func replace(_ queues: [LiveAudioSource: LiveAudioQueue]) {
+        replace(queues, consumer: transcriptionConsumer)
+    }
+    func replace(_ queues: [LiveAudioSource: LiveAudioQueue], consumer: UUID) {
         lock.lock()
-        self.queues = queues
+        if queues.isEmpty {
+            consumers.removeValue(forKey: consumer)
+        }
+        else {
+            consumers[consumer] = queues
+        }
         lock.unlock()
     }
     func append(_ buffer: AVAudioPCMBuffer, start: Double, source: LiveAudioSource) {
         lock.lock()
         latestEnds[source] = max(latestEnds[source] ?? 0, start + Double(buffer.frameLength) / buffer.format.sampleRate)
-        let queue = queues[source]
+        let queues = consumers.values.compactMap { $0[source] }
         lock.unlock()
-        queue?.append(buffer, start: start)
+        for queue in queues { queue.append(buffer, start: start) }
     }
 }

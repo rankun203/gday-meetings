@@ -10,6 +10,9 @@ struct TranscriptDisplayRow: Identifiable {
     let text: String
     var personID: UUID? = nil
     var speakerColorIndex: Int? = nil
+    var isProvisional = false
+    var recentWordRanges: [NSRange] = []
+    var accessibilityHelp: String? = nil
 }
 
 /// One selected transcript, reusable native rows, and the window's shared field
@@ -23,6 +26,9 @@ struct NativeTranscriptView: NSViewRepresentable {
     var playback: MeetingPlayback? = nil
     var meetingID: UUID? = nil
     var transcriptSourceID: UUID? = nil
+    /// nil retains saved-transcript playback following.
+    var followsLive: Bool? = nil
+    var pauseLiveFollowing: (() -> Void)? = nil
     var play: (Double) -> Void
     var save: (UUID, String) -> Void
     var speakerPicker: (UUID, @escaping () -> Void) -> AnyView
@@ -66,6 +72,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             guard let coordinator else { return }
             coordinator.edit(row: coordinator.table?.selectedRow ?? -1)
         }
+        table.userInteracted = { [weak coordinator = context.coordinator] in coordinator?.userSelected() }
         scroll.documentView = table
         return scroll
     }
@@ -74,7 +81,10 @@ struct NativeTranscriptView: NSViewRepresentable {
         coordinator.tearDown()
     }
 
-    @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    @MainActor
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate,
+        NSPopoverDelegate
+    {
         var parent: NativeTranscriptView
         weak var table: TranscriptNativeTable?
         var generation: Int?
@@ -99,6 +109,8 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var editedID: UUID?
         private weak var editedCell: TranscriptNativeCell?
         private let editSession = TranscriptEditSession()
+        private var deferredLiveUpdate = false
+        private var liveFollowPaused = false
 
         init(_ parent: NativeTranscriptView) { self.parent = parent }
         func update(_ value: NativeTranscriptView) {
@@ -106,14 +118,23 @@ struct NativeTranscriptView: NSViewRepresentable {
                 parent.meetingID != value.meetingID
                 || parent.transcriptSourceID != value.transcriptSourceID || generation == nil
             let changed = generation != value.generation || sourceChanged
+            let followChanged = parent.followsLive != value.followsLive
+            if followChanged, value.followsLive == true { liveFollowPaused = false }
             parent = value
+            if !sourceChanged, value.followsLive != nil, editedID != nil || popover?.isShown == true {
+                deferredLiveUpdate = deferredLiveUpdate || changed
+                return
+            }
             guard changed, let table else {
                 observePlayback()
                 refreshPlayback()
+                if followChanged { scheduleLayout() }
                 return
             }
             cancelFollow()
             if sourceChanged {
+                deferredLiveUpdate = false
+                liveFollowPaused = false
                 needsInitialPosition = true
                 userScrollUntil = 0
                 popover?.close()
@@ -186,6 +207,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             if follows { followActiveRow(force: false) }
         }
         func tearDown() {
+            deferredLiveUpdate = false
             finishEdit()
             pendingClick?.cancel()
             popover?.close()
@@ -195,14 +217,26 @@ struct NativeTranscriptView: NSViewRepresentable {
             playbackSubscription = nil
         }
         func userScrolled() {
+            pauseLiveFollow()
             userScrollUntil = ProcessInfo.processInfo.systemUptime + 4
             cancelFollow()
+        }
+        func userSelected() {
+            guard parent.followsLive != nil else { return }
+            pauseLiveFollow()
+            cancelFollow()
+        }
+        private func pauseLiveFollow() {
+            guard parent.followsLive != nil else { return }
+            liveFollowPaused = true
+            parent.pauseLiveFollowing?()
         }
         func cancelFollow() {
             followTimer?.invalidate()
             followTimer = nil
         }
         private func followActiveRow(force: Bool, animated: Bool = true) {
+            guard parent.followsLive == nil else { return }
             guard !needsInitialPosition else { return }
             guard editedID == nil, popover?.isShown != true,
                 force || ProcessInfo.processInfo.systemUptime >= userScrollUntil,
@@ -243,7 +277,11 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            heights.height(rows[row], width: tableView.bounds.width, showsSpeakers: parent.showsSpeakers)
+            // Native table styles inset columns. Measure the actual cell width,
+            // not the wider scroll document, so wrapped final lines stay visible.
+            heights.height(
+                rows[row], width: tableView.tableColumns.first?.width ?? tableView.bounds.width,
+                showsSpeakers: parent.showsSpeakers)
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let view = TranscriptNativeRowView()
@@ -272,6 +310,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell.body.delegate = self
             cell.play = parent.canPlay ? { [weak self] in self?.parent.play(value.start) } : nil
             cell.editText = { [weak self] in self?.edit(id: value.id) }
+            cell.userInteracted = { [weak self] in self?.userSelected() }
             cell.assignSpeaker = { [weak self, weak cell] in
                 guard let self, let cell else { return }
                 self.showSpeaker(value, cell: cell)
@@ -295,6 +334,9 @@ struct NativeTranscriptView: NSViewRepresentable {
             }
         }
         func settleLayout() {
+            // Reloading an AppKit table detaches its shared field editor. Live
+            // updates are coalesced until the person finishes their edit.
+            guard editedID == nil, parent.followsLive == nil || popover?.isShown != true else { return }
             guard let table, let scroll = table.enclosingScrollView,
                 scroll.contentView.bounds.width > 1, scroll.contentView.bounds.height > 1
             else { return }
@@ -313,7 +355,13 @@ struct NativeTranscriptView: NSViewRepresentable {
                     settledWidth = width
                     settledGeneration = generation
                 }
-                if needsInitialPosition {
+                if parent.followsLive == true, !liveFollowPaused {
+                    needsInitialPosition = false
+                    scroll.contentView.scroll(
+                        to: NSPoint(
+                            x: 0, y: max(0, table.bounds.height - scroll.contentView.bounds.height)))
+                }
+                else if needsInitialPosition {
                     needsInitialPosition = false
                     if activeRow != nil {
                         followActiveRow(force: true, animated: false)
@@ -364,15 +412,21 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func showSpeaker(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell) {
             guard parent.editable, let speakerID = row.speakerID else { return }
+            pauseLiveFollow()
             finishEdit()
             cancelFollow()
             popover?.close()
             let popover = NSPopover()
             popover.behavior = .transient
+            popover.delegate = self
             popover.contentViewController = NSHostingController(
                 rootView: parent.speakerPicker(speakerID) { [weak popover] in popover?.close() })
             self.popover = popover
             popover.show(relativeTo: cell.badge.bounds, of: cell.badge, preferredEdge: .maxY)
+        }
+        func popoverDidClose(_ notification: Notification) {
+            applyDeferredLiveUpdate()
+            scheduleLayout()
         }
         func edit(id: UUID) { if let index = rows.firstIndex(where: { $0.id == id }) { edit(row: index) } }
         func edit(row: Int) {
@@ -387,6 +441,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             beginEdit(cell, value: value)
         }
         func beginEdit(_ cell: TranscriptNativeCell, value: TranscriptDisplayRow) {
+            pauseLiveFollow()
             cancelFollow()
             finishEdit()
             editedID = value.id
@@ -431,7 +486,18 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell?.body.isSelectable = false
             editSession.finish(cancel: cancel)
             if cancel, let id = cell?.rowID, let row = rows.first(where: { $0.id == id }) {
-                cell?.body.stringValue = row.text
+                cell?.configure(row, showsSpeakers: parent.showsSpeakers)
+            }
+            applyDeferredLiveUpdate()
+            scheduleLayout()
+        }
+        private func applyDeferredLiveUpdate() {
+            if deferredLiveUpdate {
+                deferredLiveUpdate = false
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.update(self.parent)
+                }
             }
         }
     }
@@ -499,6 +565,7 @@ struct NativeTranscriptView: NSViewRepresentable {
 @MainActor class TranscriptNativeTable: NSTableView {
     var widthChanged: (() -> Void)?
     var editSelected: (() -> Void)?
+    var userInteracted: (() -> Void)?
     private var lastWidth: CGFloat = 0
     private(set) var hoverEnabled = false
     private var hoverWork: DispatchWorkItem?
@@ -541,12 +608,17 @@ struct NativeTranscriptView: NSViewRepresentable {
         DispatchQueue.main.async { [weak self] in self?.widthChanged?() }
     }
     override func keyDown(with event: NSEvent) {
+        userInteracted?()
         if event.keyCode == 36 {
             editSelected?()
         }
         else {
             super.keyDown(with: event)
         }
+    }
+    override func mouseDown(with event: NSEvent) {
+        userInteracted?()
+        super.mouseDown(with: event)
     }
 }
 
@@ -692,8 +764,11 @@ enum TranscriptSpeakerPalette {
     var rowID: UUID?
     var editText: (() -> Void)?
     var assignSpeaker: (() -> Void)?
-    var play: (() -> Void)?
+    var play: (() -> Void)? {
+        didSet { updatePlaybackAccessibility() }
+    }
     var allowsEditing = false
+    var userInteracted: (() -> Void)?
     private var showsSpeakers = false
     private var speakerHeight: CGFloat = 20
     private var speakerWidth: CGFloat = 100
@@ -731,9 +806,6 @@ enum TranscriptSpeakerPalette {
         body.setAccessibilityCustomActions([
             NSAccessibilityCustomAction(name: "Edit Transcript", target: self, selector: #selector(accessibilityEdit))
         ])
-        time.setAccessibilityCustomActions([
-            NSAccessibilityCustomAction(name: "Play", target: self, selector: #selector(accessibilityPlay))
-        ])
         speaker.setAccessibilityCustomActions([
             NSAccessibilityCustomAction(name: "Assign Person", target: self, selector: #selector(accessibilityAssign))
         ])
@@ -743,7 +815,7 @@ enum TranscriptSpeakerPalette {
         rowID = row.id
         self.showsSpeakers = showsSpeakers
         time.stringValue = TranscriptRow<Text>.timestamp(row.start)
-        time.setAccessibilityLabel("Play from \(time.stringValue)")
+        updatePlaybackAccessibility()
         speaker.stringValue = row.speaker
         speakerHeight = 20
         speakerWidth = min(100, ceil((row.speaker as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
@@ -751,7 +823,24 @@ enum TranscriptSpeakerPalette {
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey, index: row.speakerColorIndex)
         badge.unresolved = row.personID == nil
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
-        if !body.isEditable { body.stringValue = row.text }
+        if !body.isEditable {
+            var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
+            if row.isProvisional {
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.underlineColor] = NSColor.tertiaryLabelColor
+            }
+            let text = NSMutableAttributedString(string: row.text, attributes: attributes)
+            if row.isProvisional {
+                for range in row.recentWordRanges
+                where range.location >= 0 && range.length > 0
+                    && range.location <= text.length && range.length <= text.length - range.location
+                {
+                    text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: range)
+                }
+            }
+            body.attributedStringValue = text
+            body.setAccessibilityHelp(row.accessibilityHelp ?? (row.isProvisional ? "Transcription may change." : nil))
+        }
         badge.isHidden = !showsSpeakers
         badge.needsDisplay = true
         needsLayout = true
@@ -765,6 +854,15 @@ enum TranscriptSpeakerPalette {
         let left: CGFloat = showsSpeakers ? 196 : 84
         body.frame = NSRect(x: left, y: 4, width: max(40, bounds.width - left - 4), height: max(20, bounds.height - 8))
     }
+    private func updatePlaybackAccessibility() {
+        time.setAccessibilityLabel(play == nil ? time.stringValue : "Play from \(time.stringValue)")
+        time.setAccessibilityCustomActions(
+            play == nil
+                ? []
+                : [
+                    NSAccessibilityCustomAction(name: "Play", target: self, selector: #selector(accessibilityPlay))
+                ])
+    }
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard bounds.contains(point) else { return nil }
         if body.isEditable, body.frame.contains(point) { return super.hitTest(point) }
@@ -772,6 +870,7 @@ enum TranscriptSpeakerPalette {
     }
     override func mouseDown(with event: NSEvent) { enclosingTable?.mouseDown(with: event) }
     override func menu(for event: NSEvent) -> NSMenu? {
+        userInteracted?()
         let menu = NSMenu()
         let copy = NSMenuItem(title: "Copy Text", action: #selector(copyText), keyEquivalent: "")
         copy.target = self

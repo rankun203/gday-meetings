@@ -1,11 +1,232 @@
 ---
-title: Live transcription research
-date: 2026-09-26
+title: Live Transcription and Diarization
+date: 2026-10-01
 status: active
-scope: research
+scope: live-transcription-and-diarization-design
 ---
 
-# Live transcription for Gday Meetings
+# Live Transcription and Diarization
+
+This document combines the existing transcription research with the October 1 decisions for local speaker labels, voice matching, model downloads, and a shared live/saved transcript interface. The filename is retained so existing links continue to work. The October 1 design below takes precedence over the older phased plan where they differ.
+
+## Current status and agreed direction — October 1, 2026
+
+| Area | Status | Agreed direction |
+| --- | --- | --- |
+| Live Transcription | Apple SpeechAnalyzer integration exists | Show text as it arrives, independently of speaker processing |
+| Transcript interface | Shared native table, durable live edits, and person picker implemented and regression-tested | Preserve manual edits, stable row identities, and explicit Follow Live resume |
+| Live Diarization | Native Nemotron adapter and seven presets implemented; `low` remains the quality-evaluated default | Independent source sessions, versioned smoothing, bounded subscriptions, and explicit restart gaps |
+| Diarization after recording | Independent Community-1 job and reversible label application implemented | Preserve transcript text and manual person assignments; retain uncertain phrase labels |
+| Speaker Recognition | Typed local extraction, exact-type matching, repeated live evidence, and explicit enrollment implemented | Keep unknown legacy vectors out of automatic matching; validate false-name rates |
+| Model management | Shared pinned downloads, manual-copy verification, startup preparation, and in-use leases implemented | Independent Core ML instances per lease; shared verified files; Apple assets remain system-managed |
+
+Implementation status describes the current working tree, not a released build. The isolated release build and 569 sequential regression tests passed. Production-adapter smoke checks passed for Nemotron low and split fast32 with paced two-source audio, and Community-1 with typed extraction. Full native interaction, long-session combined resource use, and name-matching quality still need user validation; the worklogs record evidence and limits.
+
+The providers serve different stages of a meeting. Nemotron supplies timely anonymous speaker activity; Community-1 clusters saved audio and can represent more than eight speakers. Neither identifies a person's name by itself. Speaker Recognition and manual attribution connect anonymous identities to People. Model evaluation is complete for the tested configurations, but combined transcription, diarization, and recognition performance is not yet measured.
+
+### One transcript interface
+
+Use `NativeTranscriptView` for both recording and saved transcripts: timestamp, speaker badge, and text in the same compact columns. Keep selection, copying, keyboard navigation, double-click text editing, and the existing person picker. Playback actions become available when the relevant saved audio is playable; they must not appear to work against an unavailable recording stream.
+
+- Display a fallback badge such as `mic_01` or `sys_01` immediately. Do not show a separate “Microphone” subtitle. A placeholder identifies an unresolved source row, not proof that all speech on that source belongs to one person.
+- Underline text that recognition can still revise. Do not display the word “Draft” on each line. Following user testing, retain the red two-word trail alongside the underline; clear both when the text finalizes or is manually edited. Provide an accessible description for the changing text.
+- Double-click text to edit during recording; double-click its badge to assign a person. Opening either editor, or scrolling away, turns **Follow Live** off. Saving, cancelling, closing the picker, or waiting does not turn it back on. Only selecting **Follow Live** resumes it.
+- While an editor or picker is open, retain the row identity, selection, and popover anchor. Coalesce incoming presentation updates and apply them after editing ends. Recognition and audio capture continue.
+- Preserve manual text and attribution separately from recognition output. ASR finality and user authorship are different states: an explicit edit to an unfinished phrase is durable even if the recognizer never finalizes it.
+- Until diarization establishes an identity, assigning a placeholder row affects that row only. Once a reliable track-scoped speaker identity exists, assigning that speaker can update its linked lines. Provide a separate line-level correction for a mistaken diarization assignment.
+
+The earlier suggestion to display “Microphone · Unknown Speaker” is superseded by this shared-table design. Speaker labels and names must not change the transcript's layout.
+
+### Provider capabilities and selection
+
+| Provider or service | Capability contract | Inputs and result |
+| --- | --- | --- |
+| This Mac or another selected speech provider | `liveTranscription` | Timestamped source audio → provisional/final text and available word timings |
+| Nemotron | `liveDiarization` | Timestamped source audio → revisable speaker activity intervals |
+| Community-1 | Existing `diarization`, extended for a standalone job | Saved source audio → file-wide speaker intervals and embeddings where available |
+| Compatible local embedding extractor and People matcher | `speakerRecognition` | Selected speech and scoped voice profiles → candidate person, score, and decision evidence |
+
+Use **Live Speaker Labels**, **Speaker Labels**, and **Speaker Recognition** as interface labels, consistent with the writing guide. “Live Diarization” and “Diarization” name the technical capabilities. Keep each provider selection independent of the transcription provider; turning speaker labels off must not turn transcription off.
+
+In **Settings → Defaults**, place **Live Speaker Recognition** inside the **Live Transcription** section and **Speaker Recognition** inside **Transcription**. These are separate on/off preferences for recording-time and saved-result name matching. Keep the shared recognition model/provider selection explicit. Manual person assignment remains available when either automatic-recognition switch is off.
+
+The current provider model lists `diarization` as an addition to transcription for server providers. Add a standalone local job contract without breaking those server adapters. Do not make a local diarizer implement text recognition merely to satisfy an inherited capability rule. Defaults, enabled capabilities, readiness checks, and per-meeting choices must distinguish live labeling from after-recording labeling. Persist the chosen model revision, preset, and processing configuration with each result.
+
+### Model choice, speaker capacity, and latency
+
+Nemotron's published Core ML presets share the same checkpoint and eight-channel speaker output. Arrival order is the intended channel ordering, not voice clarity. This is learned behavior, not a guaranteed register of the first eight people. With additional speakers it cannot emit a ninth independent channel; people may be merged or labels may become inconsistent. All eight active channels do not prove there are exactly eight people, and quiet speech may be missed before capacity is reached. [NVIDIA model card](https://huggingface.co/nvidia/Nemotron-3-Diarization)
+
+The limit applies to each model session, not a count of named People in the library. Separate microphone and system sessions do not solve a meeting with more than eight voices on one track. Resetting state creates a new identity namespace and does not safely extend capacity. Show the provider's limit in Settings; do not claim that overflow can always be detected. Community-1 has configurable clustering without this fixed eight-slot output, but its count and labels can still be wrong.
+
+| Core ML preset | Required input buffer | Product decision |
+| --- | ---: | --- |
+| `low` | 1.04 s | Initial live option; the configuration evaluated locally |
+| `fast` | 1.04 s | Optional preset with less retained FIFO context; local quality is unmeasured |
+| `fast32` | 2.88 s | Optional throughput/latency choice; compare with `low` while transcription also runs |
+| `fast128` | 10.56 s | Optional delayed-label preset; unsuitable as the initial immediate-label default |
+| `offline` | 30.40 s | Separate batch-shaped export; not the configuration used in our saved-file Nemotron evaluation |
+| `fast32-split-w8a8` / `c128-split-w8a8` | 2.88 s / 10.56 s | Optional quantized split exports; local quality/device placement unmeasured |
+
+These are buffer requirements, not measured latency to a correct stable speaker name. Compute, queuing, smoothing, and voice matching add delay. The Core ML exports use fixed shapes; changing a preset requires matching assets and configuration, even though the execution API is shared. Split exports also require host preprocessing and auxiliary files handled by FluidAudio. The original NVIDIA runtime documents subsecond configurations, but those are not shipped presets in the pinned Core ML snapshot. Do not expose them by changing a number in Settings. [Pinned conversion and preset documentation](https://huggingface.co/FluidInference/nemotron-3-diarization-coreml/blob/25a90f97f254428d4b30374b76af9c74fdee8327/README.md)
+
+Support all seven published presets through the same Swift inference adapter, using the preset's matching assets and `Nemotron3Config`. Use `low` as the initial default because it was evaluated locally. The final product decision permits CPU, GPU, and Neural Engine execution; ANE-only execution is not a requirement. Device placement must not be inferred from successful execution or a low CPU percentage. The split exports' documented ANE model graphs still require CPU audio preparation and state handling.
+
+Compare `fast32` with `low` on the same local meeting samples and under combined load. “Fast” refers to processing throughput, not necessarily earlier labels. Keep the preset fixed during a recording; selecting a new default applies to the next session. If a restart is necessary after a failure, record the gap and use a new generation rather than silently reusing slot-to-person mappings.
+
+### Accuracy evidence and its limits
+
+The reviewed local meeting samples contain 97 clips. The primary random subset is 66 clips from eight samples; targeted speaker-coverage and diagnostic clips are reported separately. Pooled overlap-inclusive diarization error rate (DER) is 28.45% for saved server output, 28.92% for Community-1, and 32.44% for Nemotron `low`. Excluding ±250 ms around reference boundaries gives 24.87%, 26.28%, and 30.52%. This supports offering both local models for their different operating modes, not claiming either wins every environment. [Evaluation results](../../experiments/diarization-benchmark/RESULTS.md)
+
+Crowded meetings and quiet open-microphone speech are separate validation cases. DER weights speaker-time, so good scores on frequent speakers can conceal missed brief participants or merged identities. An eight-slot model scoring well on sampled clips does not establish that it distinguishes every participant in the complete meeting. The quiet open-microphone sample has substantial extra-speech error; its acoustic cause is not established. The references have one reviewer, and the evaluation does not measure stable live speaker recognition. Keep all reviewed audio and annotations local; no dataset upload is planned.
+
+### Inference and environment overhead
+
+The following results are for FluidAudio v0.17.4 on an M1 Max with 64 GiB memory, macOS 26.6.2. Full-file ranges cover five additional local meeting samples, totaling 285.60 minutes per model. They are not combined app measurements. [Resource receipts and methodology](../../experiments/diarization-benchmark/RESULTS.md#model-size-architecture-resources-and-setup)
+
+| Measurement | Community-1 | Nemotron `low` |
+| --- | --- | --- |
+| Verified model payload | 21.60 MB | 199.12 MB |
+| Architecture | Powerset segmentation, WeSpeaker ResNet34 embeddings, PLDA/VBx clustering | Streaming Sortformer; 100M parameters, 31-layer RoPE Transformer |
+| Peak process RSS | 459.69–1,090.65 MB | 79.97–110.64 MB |
+| Peak process physical footprint | 712.70–968.25 MB | 56.80–95.01 MB |
+| Average process CPU | 116.45–167.42% | 7.55–8.13% |
+| Total process CPU time | 102.61 s | 105.20 s |
+| Total wall time including setup | 73.36 s | 1,363.32 s |
+| Cached model load | 127.41–159.03 ms | 126.42–156.48 ms |
+
+100% CPU means one core's worth of work summed across threads. For example, 116% means 1.16 core-equivalents on average; it does not describe equal use across cores. Nemotron's similar CPU seconds are spread over a much longer wall time. Both model pipelines allow Core ML `.all`; Community-1 additionally runs FBank on CPU and clustering on the host. High CPU use does not show that GPU or Neural Engine acceleration is absent. Actual device placement, GPU/Neural Engine utilization, whole-system memory, and energy were not measured. RSS and physical footprint are separate, nonadditive counters and omit some service/accelerator costs. Do not describe Nemotron as using less total compute or energy. [Core ML compute selection](https://developer.apple.com/documentation/coreml/mlcomputeunits/all)
+
+A separate five-minute paced single-track replay measured Community-1 at 331.04 MB peak process footprint and 3.25% average CPU, versus Nemotron at 49.33 MB and 1.37%. First outputs arrived after 10.215 s and 1.206 s. Community-1 used a ten-second window-update schedule with no persistent cross-window identities; these outputs were not verified stable labels. Earlier initial Nemotron preparation took about 66–69 s. Cached loading is not first-install or cold-cache startup.
+
+Both tested executables use native Swift, Core ML, and Apple frameworks, without Python, PyTorch, CUDA, or a local HTTP server at inference time. Building requires Swift 6.2+ and Apple build tools. FluidAudio v0.17.4 is pinned to `21493f8dac5a97e65742e6ff26f42f164c2fda0f`; the full Swift library and C/C++ helpers compile because the package has no separate diarization product. Disabling optional Rust text processing with `traits: []` prevented linking it in the tested binaries, but SwiftPM still fetched its artifact. Inspected build/development caches were about 1.06/1.17 GB; those are not shipped runtime files. Python/`uv` and FFmpeg are benchmark download/preparation tools, not requirements for inference on prepared audio. The app should consume captured PCM directly.
+
+Model payload excludes executable code, frameworks, download overhead, and specialization caches. The tested arm64 binaries declare macOS 14; Intel and actual execution on the minimum OS remain unvalidated. Keep the app's macOS 14.2 minimum with provider availability checks. Apple SpeechAnalyzer still requires macOS 26. Simultaneous two-source transcription, two diarization states, and periodic embedding extraction require a new benchmark; neither doubling the single-stream memory figure nor adding isolated percentages predicts that workload.
+
+The app adds timeline joins, versioned activity filtering, checkpoints, UI updates, and optional embedding extraction to these isolated workloads. Model instances are separate between leases, so concurrent jobs can add memory and preparation costs even when disk assets are shared. No end-to-end CPU, memory, energy, or correct-name latency figure has been established for that combined workload.
+
+### Execution helpers and audio flow
+
+The app uses native worker actors and a shared installation/lease manager. Keep model loading, inference, resampling, and clustering off the main actor and audio callback. No helper server or Python environment is needed for the selected integration. A subprocess can be reconsidered if isolation or measured library behavior warrants its lifecycle cost.
+
+```mermaid
+flowchart TD
+    A[Aligned microphone and system capture] --> W[Durable audio writer]
+    A --> F[Independent bounded audio subscriptions]
+    F --> T[Live transcription sessions]
+    F --> D[Nemotron sessions, one per source]
+    T --> R[Transcript and speaker timeline reducer]
+    D --> R
+    D --> E[Select clean speech and extract embeddings]
+    E --> P[Scoped People matching]
+    P --> R
+    U[Manual text and person overrides] --> R
+    R --> V[Shared native transcript table]
+    R --> J[Private versioned checkpoints]
+    W --> C[Community-1 after-recording job]
+    C --> N[New speaker-label revision]
+    J --> N
+```
+
+| Implemented component | Responsibility and boundary |
+| --- | --- |
+| Audio subscription hub | Fan out owned timestamped PCM to independent bounded consumers; preserve source, recording epoch, sequence, route generation, and gaps |
+| Local model manager | Pinned manifests, downloads, verification, preparation, cache inventory, and leases preventing removal during use |
+| Nemotron session actor | One state/cache per source and generation; feed 16 kHz mono buffers, drain probabilities, finalize the tail, reset explicitly |
+| Community-1 job actor | Process saved sources, preserve offsets, cluster file-wide, support cancellation, and write a new result revision |
+| Speaker timeline reducer | Convert activity probabilities to overlap-aware intervals with versioned engineering thresholds; reject stale generations and retain uncertainty |
+| Transcript attribution reducer | Join word/phrase time ranges to intervals, preserve stable UI IDs and overrides, and publish bounded updates |
+| Voice recognition worker | Select usable speech, extract scoped embeddings periodically, compare People candidates, and record matching evidence |
+
+The live PCM hub now provides independent bounded subscriptions for transcription and diarization. Consumers do not divide one queue between them. Each subscription records its own overflow gaps; slow analysis cannot block the durable writer. Source epochs and generations survive conversion and explicit restart boundaries. Model files are shared, but each lease loads separate Core ML instances because synchronous prediction on one instance must be serialized. Within a Nemotron runtime, one actor serializes model calls while each source retains separate speaker state.
+
+The benchmark helpers remain reproducible evaluation tools; app adapters now implement their own lifecycle:
+
+- [Build, model download, and execution commands](../../experiments/diarization-benchmark/README.md#build-and-fetch).
+- [Nemotron executable](../../experiments/diarization-benchmark/Sources/Benchmark/main.swift): load local `Nemotron3Models`, create `Nemotron3Diarizer`, feed 20 ms audio blocks, drain buffered output, and finalize. Its `.low` raw 0.5 threshold has no production smoothing.
+- [Community-1 executable](../../experiments/diarization-benchmark/Sources/Community1Benchmark/main.swift): local compiled-model loading, disk-backed source preparation, and complete-file clustering. The replay adapter recomputes windows and does not maintain live identities.
+- [Pinned manifest downloader](../../experiments/diarization-benchmark/download_model.py): verifies selected object sizes and hashes. The app-owned asynchronous manager implements pinned verification without requiring this script.
+- [Existing People matcher](../../apps/client-macos-swift/Sources/GdayMeetings/Core/SpeakerRecognition.swift): exact-type embedding validation, per-type centroid comparison, candidate margin, and person assignment.
+
+The app activity policy is `hysteresis-55-45-on50ms-off100ms-v1`: a slot becomes active after five 10 ms frames at or above 0.55, and inactive after ten frames below 0.45. These engineering thresholds differ from the benchmark's unsmoothed 0.5 decision. The published DER and first-output timing therefore do not establish the app's label accuracy, transition delay, or stability.
+
+### Joining text, speaker activity, and names
+
+Transcription and diarization have independent completion schedules. Render usable text immediately; do not await speaker labels or assume transcription always finishes first. Join results by source and audio time, never callback arrival time. Recompute only the affected timeline range when either stream revises a result.
+
+Persist distinct identities: recording ID, source, session generation, provider speaker slot, stable application speaker ID, and optional person ID. A numbered slot from a new meeting or restarted model must never inherit a previous person's name. Keep anonymous IDs even when showing names, so a later attribution change does not rewrite the acoustic identity.
+
+The current attribution reducer uses conservative phrase overlap and retains uncertain rows. Word-level splitting at transitions remains a future refinement; available word timing does not imply that it is implemented. Keep simultaneous-speaker evidence rather than forcing one winner, and do not invent word alignment. A manual correction anchored to a range must not expand across an ASR merge, disappear after a split, or replace unrelated words. The current edit anchors preserve manual content separately when recognition revisions cannot be reconciled safely.
+
+Maintain separate ASR-final and speaker-stability watermarks. A final text phrase can receive a later speaker update. Store model provenance, range, revision/generation, activity or match evidence, automatic assignment, and any explicit user override. User overrides take precedence over automatic results. Coalesce UI updates without blocking ingestion or checkpointing. Stop & Save drains each consumer with a deadline and persists incomplete coverage if one fails.
+
+After recording, Community-1 creates a new speaker-label revision against saved audio. It need not transcribe the words again. Map labels back by source/time and preserve manual text and person overrides. Surface conflicting automatic associations rather than silently transferring a person to a different voice. Retain the live result and permit restoring it through transcript history. Adoption must retain speaker records and person links; copying text while discarding those records is insufficient.
+
+### Live voice matching
+
+The implementation reuses People and explicitly attributed samples. Nemotron activity channels are not person embeddings. A separate actor runs the pinned Community-1 FBank/WeSpeaker models on selected speech and records the `gday-span-mask-v1` preprocessing type. Saved-audio recognition uses the same extractor rather than relabeling clustered or PLDA vectors as compatible live embeddings.
+
+Collect enough clear, non-overlapping speech before attempting a match. The live selector requires one slot at or above 0.7 with every other slot below 0.2, at least three seconds of selected speech, and five seconds between samples for that slot. It retains bounded audio and allows only one pending extraction job. This is an activity-based selection rule, not an independently validated echo or voice-quality detector. Retain anonymous badges when evidence is insufficient and evaluate false names as well as missed matches and time to a correct name. The earlier batch threshold of 0.75 has been replaced; the current policy still needs calibration.
+
+The current matcher uses a cosine threshold of 0.85 and a runner-up margin of 0.08. Live assignment requires three supporting candidate observations. These defaults are conservative engineering policy, not calibrated probabilities; repeated evidence does not independently establish accuracy.
+
+Every embedding must have an explicit type identifying the embedding model that generated it. Matching must reject different types before computing similarity, even when vector dimensions are equal. A person can retain multiple samples from each of several models; adding a new model must not replace that person's other embeddings.
+
+The implemented durable contract and remaining provenance requirements are:
+
+| Record | Required data and invariant |
+| --- | --- |
+| `EmbeddingType` | Stable model identifier, immutable weights revision, and preprocessing/output compatibility version. Dimension and normalization belong to this definition; dimension alone is not a type. |
+| `TypedVoiceEmbedding` | Type, vector, and extraction provenance. Validate finite values, expected dimension, and normalization before use. |
+| Person voice sample | Stored on the person with meeting ID, speaker ID, typed embedding, and extraction provenance. Precise source ranges remain in the associated speaker timeline where available; the sample itself does not store an enrollment range. |
+| Derived person profile | Centroid computed from that person's valid samples of exactly one type for each match request; no persistent centroid cache. |
+| Recognition request | Typed query embedding. Select profiles with the identical type, then apply the current score and candidate-margin policy. Calibration remains required; no compatible profile means no automatic match. |
+
+This is a matching invariant, not a best-effort compatibility guess. Apply it to batch and live recognition, enrollment, profile aggregation, imports, exports, and caches. A provider endpoint is provenance, not sufficient identification of its embedding model: changing model weights behind an unchanged endpoint must not retain compatibility. Persist person identity independently of the embedding type and preserve existing assignments when models change.
+
+Swift retains the old `voiceScope`/sample `scope` and raw vectors for library compatibility; they no longer establish matching compatibility. Imported Rust profiles are marked `legacy:rust`; that marker does not identify a known model. Preserve these vectors with an explicit unknown legacy type and exclude them from automatic comparisons until their generating model can be established. Do not infer a model from vector dimensions or relabel an unknown vector as a new type. Where retained, explicitly attributed audio is available, generate an additional embedding with the selected model and keep the original. Otherwise use manual attribution or new samples. Compatibility tests must cover equal-dimension different-model vectors, mixed-model samples on one person, unknown legacy types, and model changes at an unchanged provider endpoint.
+
+An explicit person assignment may supply an enrollment candidate only after suitable single-speaker audio and a compatible embedding exist. Do not create a voice sample from a source placeholder alone, train profiles from unconfirmed automatic matches, or let a manual line correction rename every unresolved source row. Removing or correcting an attribution must remove any associated enrollment contribution. Matching overhead includes audio selection and embedding inference and is additional to the Nemotron-only measurements.
+
+### Provider model downloads
+
+Model management belongs in **Settings → Service Providers**, beside model/preset selection. It is shared by Nemotron, Community-1, and the recognition extractor. Configuration identifies the desired model; readiness reflects verified local assets and runtime preparation.
+
+| State | Display and controls |
+| --- | --- |
+| Missing | Model size and **Download**; selected provider also shows **Download Required** |
+| Copied files found | **Verify…**; files remain unavailable for inference until verification and preparation finish |
+| Downloading | Progress bar, transferred/total bytes where known, and an × button with **Cancel Download** accessibility text |
+| Cancelled or failed | Concise cause and **Retry**; completed verified files are reused |
+| Verifying | **Verifying…**; incomplete files cannot be loaded |
+| Preparing | **Preparing…** with indeterminate progress when no truthful percentage exists |
+| Ready | **Ready**, installed size, and **Remove Download** when not in use |
+
+Downloads outlive Settings and do not block recording. The manager fetches the selected immutable manifest, verifies each temporary download, and shares verified files through a local object cache. Readiness is published only after all required hashes and Core ML preparation succeed; files can exist before readiness. Retry reuses completed verified files and restarts an interrupted file; byte-range resume is not implemented. Disk and permission errors remain actionable setup failures; free-space preflight is not implemented. A saved receipt requests fresh verification and preparation after restart, including direct runtime acquisition without opening Settings. It is never a substitute for checking the files.
+
+Provide **Open Model Folder** and the expected folder layout so a person can download with another tool and copy model files into place when network or permissions prevent the in-app download. Refresh the inventory whenever the provider panel opens. Discovering a folder shows **Verify…**, not **Ready**. Verification uses the app's trusted pinned manifest, not claims in the copied folder, and requires no network when the complete manifest and assets are present. Report missing, incorrect, or incompatible files with a repair action. Only successful verification and model preparation enable inference.
+
+Verifying a copied Community-1 installation also makes its identical embedding assets available through the shared cache without another download. Each installation keeps its own file links, so removing one does not remove assets used by another. A receipt that cannot be saved does not prevent using verified read-only assets in the current process; setup explains that another verification will be needed after restart.
+
+Lease loaded assets while sessions use them; prevent removal during use and release models after work ends. The catalog currently pins one revision per model; an in-place model-update workflow is not implemented. Preparation finishing updates readiness without an app restart. Changing a preset during recording changes the next session's choice, not the running session's model/state. If a model becomes ready mid-recording and live labels are enabled, start at an explicit timestamp with a fresh generation and recorded earlier coverage gap.
+
+Apple's system-managed speech assets remain behind an `AssetInventory` adapter. Present observable progress and supported actions without claiming app-owned files, byte counts, resumability, or removal controls that the system API does not provide. App-managed diarization downloads use immutable manifests and active-use tracking. Local inference sends no meeting audio for model installation; log asset requests separately from provider audio transmissions.
+
+### Implementation order and acceptance evidence
+
+| Stage | Deliverable | Required evidence |
+| --- | --- | --- |
+| 1. Shared transcript and editing | Native table reuse, source placeholders, durable text/person overrides, manual Follow Live resume | Synthetic light/dark and narrow/wide UI checks; edit/picker stability under ASR updates; stop/recovery/adoption tests; isolated release build |
+| 2. Provider and asset foundation | Independent capabilities/defaults, model manager, standalone diarization job | Cancel/retry/resume, wrong hash, interrupted preparation, offline launch, in-use removal, and restart recovery tests |
+| 3. Live speaker intervals | Independent audio subscriptions and Nemotron `low`, timeline joins and overlap handling | No capture loss or consumer starvation; two-source tests; boundaries, restarts, overflow, finalization, and more-than-eight-speaker cases |
+| 4. Live names | Compatible embedding extraction, scoped People profiles, conservative recognition and enrollment | Known/unknown speakers, false matches, profile incompatibility, manual correction, voice changes, and additional resource/latency measurements |
+| 5. After-recording labels | Community-1 jobs and reversible speaker-label revisions | Larger groups, quiet speech, overlap, cancellation, attribution preservation, and history restoration |
+| 6. Preset and release qualification | Compare `low`/`fast32` under combined load; qualify supported devices | Paced end-to-end labels/names, 60–120 minute resource/thermal tests, CPU/GPU/Neural Engine traces, energy and total memory, clean install and supported-OS checks |
+
+Keep the local meeting samples and evaluation results separate from synthetic repository fixtures. Test English, Mandarin, mixed speech, quiet voices, crowded rooms, short turns, and overlapping speech. Report DER, per-speaker coverage/confusion, identity churn, time to correct stable label/name, and manual-override survival. Compare single and combined workloads; first probability output is not successful attribution.
+
+The adapters and versioned smoothing are implemented, while final integrated checks remain in progress. The benchmark DER does not score the app smoothing policy. Cross-model profile migration still needs compatible attributed audio; ambiguous phrase timing is preserved rather than forced to one speaker. Representative false-name rates, sustained combined load, device placement, energy, and the supported-device matrix remain unmeasured. A ready model badge means verified and loadable, not accurate or qualified for every workload.
+
+## Original transcription research and implementation history
 
 Research date: 2026-09-25, against repository baseline `9b988ca`. Architecture audit: 2026-09-26, against `169ce49`; repository facts below reflect that commit, and external provider research was not repeated. Product decisions: 2026-09-26, recorded in the Recommendation and [Live Transcription providers and controls](#live-transcription-providers-and-controls). Original scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed during that audit. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
 
@@ -21,13 +242,13 @@ Synthetic regression tests cover replacement, source separation, PCM ownership, 
 
 The architecture table below describes the audited pre-implementation baseline, not today’s source. See the [implementation worklog](../worklogs/2026-09-26-live-transcription.md) for current results and remaining limitations.
 
-## Recommendation
+## Original transcription recommendation
 
 **Good English and Chinese transcription is a minimum product requirement.** Live Transcription is a provider capability. The first build ships one provider for it: **This Mac**, built in, using Apple SpeechAnalyzer and SpeechTranscriber on macOS 26 and later. Audio stays on the Mac and there is no account or usage charge, so This Mac runs automatically. The English, Mandarin, and English–Mandarin mixed-speech gates decide which language modes This Mac serves, not whether it ships. Preserve macOS 14.2 as the app minimum and keep recording and after-meeting transcription available everywhere.
 
 Cloud services and a self-hosted streaming server support Live Transcription only when the user configures one and selects it. They are the likely path for mixed English + Chinese if Apple's single-locale sessions fail the bilingual gate. Optional local Whisper, enabled once in Settings, adds another on-device engine later.
 
-Live text is a durable draft. After-meeting transcription (RunPod or the Gday Meetings website) remains a separate capability for alignment and diarization; it creates a new transcript revision and does not overwrite edits. This gives the native client a useful first release without simultaneously building a streaming server, shipping a model stack, and solving live speaker identification.
+Live text is a durable draft. After-meeting transcription (RunPod or the Gday Meetings website) remains a separate capability for alignment and diarization; it creates a new transcript revision and does not overwrite edits. The first implementation deferred live speaker identification. The October 1 design adds independent local speaker providers and recognition without replacing that transcription contract.
 
 Apple explicitly identifies SpeechAnalyzer as technology used by Voice Memos and Notes, and describes SpeechTranscriber as an on-device model for long-form and distant speech. This establishes a strong architectural fit, but does not prove identical application behavior or accuracy on our meeting audio. [Apple WWDC25](https://developer.apple.com/videos/play/wwdc2025/277/)
 
@@ -78,7 +299,7 @@ Our proposed experience:
 
 - Start recording immediately; show in the recording view whether live text is preparing, listening, unavailable, or interrupted.
 - Show stable phrases followed by visibly provisional text that can change without duplicating previous words.
-- Keep notes, recording controls, and source meters accessible. Follow the newest phrase until the user scrolls away; provide a “Follow live” action.
+- Keep notes, recording controls, and source meters accessible. Follow the newest phrase until the user scrolls away or starts editing/attribution; resume only through **Follow Live**.
 - Preserve text and its timeline when recording stops. Enable transcript-to-audio navigation; add word highlighting when actual timing data exists.
 - Continue recording if recognition, a model download, or a network connection fails.
 
@@ -242,15 +463,15 @@ Timing rules:
 
 Backpressure is a correctness issue. Start with a bounded queue sized in seconds and profile it; do not use an unbounded AsyncStream or create a Task for every buffer. On saturation, preserve recording, mark the skipped recognition interval, and offer later repair from saved audio. Do not invoke AudioCapture's recording-failure callback for an ASR-only failure. ASR startup should not hold the recording controls hostage to a download.
 
-For two-source capture, prefer independent recognition when resources permit; label text “Microphone” and “System audio” initially. A single mixed ASR stream is a possible lower-resource mode but loses source attribution and puts simultaneous local and remote speech back into one signal. Do not silently downshift.
+For two-source capture, prefer independent recognition when resources permit; use `mic_01` and `sys_01` fallback badges in the shared transcript table. These identify unresolved source rows until diarization supplies identities. A single mixed ASR stream is a possible lower-resource mode but loses source attribution and puts simultaneous local and remote speech back into one signal. Do not silently downshift.
 
 Leaked speaker audio can make the microphone recognizer repeat remote speech. Automatic voice processing makes this less likely, but does not prevent it: the automatic setting or the live switch can be off, unknown routes start unprocessed, echo detection needs speech-like system audio, and residual echo with processing on is unmeasured. Test with headphones, and with speakers with processing on and off. Avoid removing repeated phrases solely because their text matches. Untested idea: the echo detector's envelope correlation and lag could provide acoustic evidence that a microphone span repeats system audio before text is de-duplicated.
 
-Persist finalized live phrases in a versioned per-meeting journal/checkpoint, with source, engine/model/locale, coverage, and completion status. Keep volatile text in memory. Atomically checkpoint and bound journal growth; on recovery, retain confirmed text and identify unprocessed audio ranges. Store user edits separately from provider revisions or create immutable transcript revisions with an active revision pointer. Backward-compatible decoding and export behavior need tests.
+Persist finalized live phrases in a versioned per-meeting journal/checkpoint, with source, engine/model/locale, coverage, and completion status. Keep unedited volatile recognition text in memory; explicit user edits and attribution anchors must be durable separately. Atomically checkpoint and bound journal growth; on recovery, retain confirmed text and identify unprocessed audio ranges. Store user edits separately from provider revisions or create immutable transcript revisions with an active revision pointer. Backward-compatible decoding and export behavior need tests.
 
-The current batch completion code assigns `meeting.transcript` wholesale. Before enabling automatic post-processing alongside live drafts, change this to produce a new revision and preserve edits. A provider's “final” means stable within that recognition session, not a verified meeting record. Summaries/search should use the selected stable revision and should not be regenerated on every partial token.
+The original audit found batch completion replacing `meeting.transcript` wholesale; transcript revision preservation has since been implemented. Extend that preservation to separate speaker-label results and explicit live overrides. A provider's “final” means stable within that recognition session, not a verified meeting record. Summaries/search should use the selected stable revision and should not be regenerated on every partial token.
 
-## Delivery plan and decision gates
+## Original transcription delivery plan and decision gates
 
 The first build is stages 1–3 and ships This Mac as the only Live Transcription provider.
 
@@ -294,11 +515,11 @@ Apple avoids a separately contracted metered ASR service, but local inference st
 
 ## Open questions and limits of this research
 
-- No live recognition was run, no model was downloaded, and no meeting audio was sent to a provider. Accuracy, real latency, Apple two-session capacity, battery impact, and duplicate text caused by speaker leakage remain unmeasured.
+- The September 25 research audit ran no recognition. Subsequent Apple integration checks and local diarization evaluation are summarized above; they do not establish representative bilingual accuracy, sustained combined-session capacity, battery impact, or echo-related duplicate text.
 - Supported locales and device readiness must be queried at runtime; documentation language lists are not recognition-language lists.
 - Verify permissions for the selected modern Speech path in the packaged app. Existing microphone/system purpose strings are present; an SFSpeechRecognizer adapter would require its own speech authorization setup. Do not add unrelated screen-capture permissions.
-- Check the chosen release's SDK availability and compiler diagnostics during implementation. This documentation change generated no build diagnostics; it does not certify the application warning-free.
-- The current Swift segment schema cannot preserve word timings or alternative transcript revisions. Address that before claiming full Voice Memos-like playback highlighting or safe post-processing.
+- Check the chosen release's SDK availability and compiler diagnostics during implementation. This document does not certify a warning-free application; current build results and retained dependency/toolchain warnings belong in the implementation worklogs.
+- The original segment schema lacked timing and revision storage. Live timing runs, transcript revisions, speaker timelines, typed embeddings, and manual overrides are now implemented. Their current validation evidence is separate from representative language, identity, and sustained-load qualification.
 - The most consequential first experiment is two-source, long-duration Apple recognition on the lowest supported device for that mode. If it fails the latency/resource gate, prefer an explicit one-source mode or another provider instead of weakening recording reliability.
 - Whether Apple's single-locale sessions pass the mixed English + Chinese gate is unknown. The answer decides whether mixed mode needs a configured provider.
 - Apple speech model sizes are unmeasured; measure them before showing sizes or storage warnings.

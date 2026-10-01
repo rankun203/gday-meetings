@@ -9,6 +9,7 @@ struct BackgroundJob: Identifiable, Equatable {
         let rawValue: String
         init(rawValue: String) { self.rawValue = rawValue }
         static let transcription = Self(rawValue: "transcription")
+        static let diarization = Self(rawValue: "diarization")
         static let summary = Self(rawValue: "summary")
         static let chat = Self(rawValue: "chat")
         static let archive = Self(rawValue: "archive")

@@ -5,6 +5,7 @@ import SwiftUI
 struct MeetingTranscriptView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
+    @ObservedObject private var localModels = LocalModelManager.shared
     let meetingID: UUID
     @ViewState private var draft: LiveTranscriptDraft?
     @ViewState private var revisions: [TranscriptRevision] = []
@@ -17,7 +18,7 @@ struct MeetingTranscriptView: View {
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private var usesCheckpoint: Bool {
-        meeting?.transcript.isEmpty == true && meeting?.liveTranscriptAdopted != true && draft?.phrases.isEmpty == false
+        meeting?.transcript.isEmpty == true && meeting?.liveTranscriptAdopted != true && draft?.hasUsableText == true
     }
     private var segments: [TranscriptSegment] { usesCheckpoint ? draft?.segments ?? [] : meeting?.transcript ?? [] }
     private var canRestore: Bool {
@@ -34,10 +35,12 @@ struct MeetingTranscriptView: View {
                     HStack {
                         TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
                         Spacer(minLength: 8)
+                        speakerLabelAction
                         historyMenu
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
+                        speakerLabelAction
                         historyMenu
                     }
                 }
@@ -70,10 +73,19 @@ struct MeetingTranscriptView: View {
                             updateSegment(id, meetingID: meeting.id, text: text, checkpoint: editableCheckpoint)
                         },
                         speakerPicker: { id, completed in
-                            if let speaker = meeting.speakers.first(where: { $0.id == id }) {
+                            if let speaker = (editableCheckpoint?.speakers ?? meeting.speakers).first(where: {
+                                $0.id == id
+                            }) {
                                 return AnyView(
                                     TranscriptSpeakerPicker(
-                                        meetingID: meeting.id, speaker: speaker, completed: completed
+                                        meetingID: meeting.id, speaker: speaker, completed: completed,
+                                        assignment: { personID in
+                                            if let editableCheckpoint {
+                                                guard store.adoptLiveTranscript(editableCheckpoint) else { return }
+                                            }
+                                            store.assignSpeaker(
+                                                meetingID: meeting.id, speakerID: id, personID: personID)
+                                        }
                                     )
                                     .environmentObject(store))
                             }
@@ -104,12 +116,34 @@ struct MeetingTranscriptView: View {
             .onChange(of: store.people) { _, _ in refreshRows() }
         }
     }
+    @ViewBuilder private var speakerLabelAction: some View {
+        if store.isJobRunning(.diarization, .meeting(meetingID)) {
+            Button("Cancel Speaker Labels") { store.cancelLocalDiarization(id: meetingID) }
+        }
+        else if store.settings.serviceProviders.contains(where: {
+            $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+        }) {
+            Button("Label Speakers") {
+                if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
+                Task { await store.diarizeLocally(id: meetingID) }
+            }
+            .disabled(
+                !canRestore
+                    || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
+                    || localModels.state(for: .community1).phase != .ready
+            )
+            .help(
+                localModels.state(for: .community1).phase == .ready
+                    ? "Label speakers in saved audio without changing the text."
+                    : "Download and prepare Community-1 in Service Providers.")
+        }
+    }
     @ViewBuilder private var historyMenu: some View {
-        if let meeting, draft?.phrases.isEmpty == false || !meeting.transcript.isEmpty || !revisions.isEmpty {
+        if let meeting, draft?.hasUsableText == true || !meeting.transcript.isEmpty || !revisions.isEmpty {
             let choices = TranscriptRevisions.choices(revisions, current: meeting)
             let liveSource = draft.map { store.liveTranscriptSource($0, meeting: meeting) }
             Menu("Transcript History") {
-                if let draft, !draft.phrases.isEmpty, let liveSource,
+                if let draft, draft.hasUsableText, let liveSource,
                     !choices.contains(where: { $0.id == liveSource.id })
                 {
                     Button(
@@ -157,17 +191,18 @@ struct MeetingTranscriptView: View {
             return
         }
         let people = Dictionary(uniqueKeysWithValues: store.people.map { ($0.id, $0.name) })
-        let assignedPeople = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0.personID) })
+        let speakers = usesCheckpoint ? draft?.speakers ?? [] : meeting.speakers
+        let assignedPeople = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.personID) })
         let names = Dictionary(
-            uniqueKeysWithValues: meeting.speakers.map { speaker in
+            uniqueKeysWithValues: speakers.map { speaker in
                 (speaker.id, speaker.personID.flatMap { people[$0] } ?? SpeakerLabelPresentation.display(speaker.label))
             })
         let source = segments
         let checkpoint = usesCheckpoint
-        showsSpeakers = !checkpoint && source.contains { !$0.speaker.isEmpty || $0.speakerID != nil }
+        showsSpeakers = source.contains { !$0.speaker.isEmpty || $0.speakerID != nil }
         showsLiveText =
             checkpoint
-            || (draft?.phrases.isEmpty == false && Set(source.map(\.id)) == Set(draft?.phrases.map(\.id) ?? []))
+            || (draft?.hasUsableText == true && Set(source.map(\.id)) == Set(draft?.segments.map(\.id) ?? []))
         func colorKey(_ segment: TranscriptSegment) -> String {
             let personID = segment.speakerID.flatMap { assignedPeople[$0] ?? nil }
             return personID?.uuidString ?? segment.speakerID?.uuidString ?? segment.speaker
@@ -176,8 +211,7 @@ struct MeetingTranscriptView: View {
         displayRows = source.map { segment in
             TranscriptDisplayRow(
                 id: segment.id, start: segment.start,
-                speaker: checkpoint
-                    ? "" : segment.speakerID.flatMap { names[$0] } ?? SpeakerLabelPresentation.display(segment.speaker),
+                speaker: segment.speakerID.flatMap { names[$0] } ?? SpeakerLabelPresentation.display(segment.speaker),
                 speakerID: segment.speakerID,
                 text: String(segment.text.drop(while: { $0.isWhitespace })),
                 personID: segment.speakerID.flatMap { assignedPeople[$0] ?? nil },
