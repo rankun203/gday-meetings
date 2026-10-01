@@ -1,0 +1,5 @@
+.build/
+.models/
+.cache/
+results/
+.fixtures/
