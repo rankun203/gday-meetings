@@ -17,7 +17,7 @@ Before 1.0, format changes use a temporary, verified migration script. Do not sh
 com.gdaymeetings.macos/
   index.db
   settings.json
-  meetings/<base36-id>/
+  meetings/YYYYMMDD_<base36-id>/
     metadata.json
     content.json
     transcript.json
@@ -34,7 +34,7 @@ com.gdaymeetings.macos/
 
 Metadata contains only list fields and relationships; transcript, summary, notes, and other content stay separate. People and tags have stable IDs independent of display names. Meeting metadata stores person/tag IDs; reverse relationships are derived in the index. Task state remains in the task journal, not only index.db. Provider credentials retain existing secure storage.
 
-Meeting folder IDs use lowercase base36. New meetings allocate monotonic Unix-nanosecond values, preserving the Rust ID appearance, with collision/clock rollback handling. Internal UUID-shaped references can encode the same integer without leaking verbose folder names. All meeting folders are direct children of meetings/, as requested after reviewing the hash buckets. Paths are resolved centrally. Existing development meeting IDs are converted by the temporary script along with references.
+Meeting IDs use lowercase base36. New meeting folder names prepend the meeting’s local Gregorian date as `YYYYMMDD_`; the prefix is only a label. Existing plain-ID folders stay in place, and changing a saved meeting date does not rename its folder. The disposable index records actual folder names for direct lookup. New meetings allocate monotonic Unix-nanosecond values, preserving the Rust ID appearance, with collision/clock rollback handling. Internal UUID-shaped references can encode the same integer without leaking verbose folder names. All meeting folders are direct children of meetings/, as requested after reviewing the hash buckets. Paths are resolved centrally. Existing development meeting IDs are converted by the temporary script along with references.
 
 # Index and paging
 

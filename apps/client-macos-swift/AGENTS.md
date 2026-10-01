@@ -28,6 +28,9 @@ Read the relevant documents before changing the app:
 - [Expandable sections](../../docs/worklogs/2026-09-28-disclosure-rows.md): shared full-row disclosure interaction and validation.
 - [Transcript playback highlight](../../docs/worklogs/2026-09-28-transcript-playback-highlight.md): playback clock, seeking, hover, and speaker badge feedback.
 - [Conditional task status bar](../../docs/worklogs/2026-09-28-conditional-task-bar.md): visibility, layout, and validation.
+- [Task attention](../../docs/worklogs/2026-10-01-task-attention.md): visible review controls and failed-task ordering.
+- [Transcription job recovery](../../docs/worklogs/2026-10-01-transcription-job-recovery.md): connection-check errors and saved-job recovery.
+- [Recording bar hover](../../docs/worklogs/2026-10-01-recording-bar-hover.md): shared title hit area and hover feedback.
 - [Resource audit](../../docs/worklogs/2026-09-28-resource-audit.md): sampled resource usage and shared playback clock.
 - [Associated meeting pages](../../docs/worklogs/2026-09-28-associated-meeting-pages.md): bounded navigation through person and tag meetings.
 - [Markdown reading](../../docs/worklogs/2026-09-28-markdown-reading.md): selection, citations, task markers, and compact previews.
@@ -50,9 +53,11 @@ Read the relevant documents before changing the app:
 - [Summary images](../../docs/worklogs/2026-09-28-summary-images.md): image capability settings, attachments, source links, and retention.
 - [Meeting data events](../../docs/worklogs/2026-09-29-meeting-data-events.md): provider receipts, per-meeting history, persistence, and validation.
 - [Data event groups](../../docs/worklogs/2026-10-01-data-event-groups.md): stable destination IDs, file references, and grouped history.
+- [Meeting folder dates](../../docs/worklogs/2026-10-01-meeting-folder-dates.md): dated folder labels, unchanged identities, and compatibility.
 - [Agents page](../../docs/worklogs/2026-09-29-agents-page.md): saved library instructions, launch commands, and fenced-code presentation.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 - [Streaming Opus recording](../../docs/worklogs/2026-10-01-streaming-opus.md): speech encoding, DTX, bounded capture writes, and validation.
+- [Recording menu icon](../../docs/worklogs/2026-10-01-recording-menu-icon.md): square stop symbol while recording.
 - [Recording source mute](../../docs/worklogs/2026-09-29-recording-source-mute.md): independent source controls, saved and live silence, and validation.
 - [Notes controls layout](../../docs/worklogs/2026-09-29-notes-controls-layout.md): recording header alignment, fixed source icon slots, and floating Markdown copy controls.
 

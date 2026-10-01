@@ -15,6 +15,7 @@ final class NotesStorage {
         MeetingFolderStorage.folder(id: id, directory: directory).appendingPathComponent("notes.md")
     }
     func load(_ id: UUID, fallback: String) throws -> String {
+        _ = try MeetingFolderLocation.resolve(id: id, directory: directory)
         let file = url(id)
         let value =
             FileManager.default.fileExists(atPath: file.path)
@@ -41,6 +42,7 @@ final class NotesStorage {
     }
     func flushAll() throws { for id in Array(pending.keys) { try flush(id) } }
     func write(_ id: UUID, text: String) throws {
+        _ = try MeetingFolderLocation.resolve(id: id, directory: directory)
         let file = url(id)
         if saved[id] == text, pending[id] == nil { return }
         let previousBytes = try? Data(contentsOf: file)
@@ -99,6 +101,7 @@ final class NotesStorage {
     /// Returns only an external replacement. A pending app draft wins, with
     /// write() retaining the conflicting disk copy before its atomic save.
     func reloadExternal(_ id: UUID) throws -> String? {
+        _ = try MeetingFolderLocation.resolve(id: id, directory: directory)
         guard FileManager.default.fileExists(atPath: url(id).path) else { return nil }
         let external = try String(contentsOf: url(id), encoding: .utf8)
         guard external != saved[id] else { return nil }

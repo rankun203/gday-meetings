@@ -425,27 +425,7 @@ struct LibraryView: View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 14) {
-                if store.isStartingRecording || store.isFinalizingRecording {
-                    ProgressView().controlSize(.small)
-                }
-                else {
-                    Image(systemName: "record.circle.fill").foregroundStyle(.red).font(.title2).accessibilityHidden(
-                        true)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(
-                        store.isStartingRecording
-                            ? "Preparing Recording" : store.isFinalizingRecording ? "Saving Recording" : "Recording"
-                    )
-                    .font(.callout.weight(.semibold))
-                    if let id = store.recordingID, let meeting = store.meetings.first(where: { $0.id == id }) {
-                        Button(meeting.title) { showMeeting(id) }.buttonStyle(ActionButtonStyle()).font(.caption)
-                            .foregroundStyle(.secondary).lineLimit(1).help("Return to this recording")
-                    }
-                    else {
-                        Text("Complete the macOS audio consent prompt.").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+                RecordingStripTitle(showMeeting: showMeeting)
                 if let started = store.recordingStartedAt {
                     TimelineView(.periodic(from: .now, by: 1)) { timeline in
                         let elapsed =

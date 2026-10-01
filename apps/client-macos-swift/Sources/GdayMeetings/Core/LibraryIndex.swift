@@ -52,6 +52,7 @@ final class LibraryIndex: @unchecked Sendable {
             recoveredCorruptIndex = true
             requiresRebuild = true
         }
+        MeetingFolderLocation.registerIndex(self)
     }
     private func createSchema() throws {
         try execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;")
@@ -73,6 +74,7 @@ final class LibraryIndex: @unchecked Sendable {
                 "CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY, created REAL NOT NULL, sortTime REAL NOT NULL, title TEXT NOT NULL, metadata BLOB NOT NULL); CREATE INDEX IF NOT EXISTS meeting_seek ON meetings(sortTime,id); CREATE TABLE IF NOT EXISTS relations(meeting TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,sortTime REAL NOT NULL,PRIMARY KEY(meeting,kind,target)); CREATE INDEX IF NOT EXISTS relation_seek ON relations(kind,target,sortTime,meeting); CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, text); CREATE TABLE IF NOT EXISTS index_state(id INTEGER PRIMARY KEY CHECK(id=1),complete INTEGER NOT NULL); INSERT OR IGNORE INTO index_state VALUES(1,0); PRAGMA user_version=2;"
             )
         }
+        try execute("CREATE TABLE IF NOT EXISTS meeting_folders(id TEXT PRIMARY KEY, name TEXT NOT NULL)")
         let completion = try statement("SELECT complete FROM index_state WHERE id=1")
         defer { release(completion) }
         guard sqlite3_step(completion) == SQLITE_ROW else { throw failure() }
@@ -111,9 +113,57 @@ final class LibraryIndex: @unchecked Sendable {
         try execute("UPDATE index_state SET complete=1 WHERE id=1")
         requiresRebuild = false
     }
-    func upsert(_ entry: MeetingListEntry) throws {
+    func folderName(id: UUID) throws -> String? {
         lock.lock()
         defer { lock.unlock() }
+        let query = try statement("SELECT name FROM meeting_folders WHERE id=?")
+        defer { release(query) }
+        bind(id.uuidString, 1, query)
+        guard sqlite3_step(query) == SQLITE_ROW else { return nil }
+        return String(cString: sqlite3_column_text(query, 0))
+    }
+
+    func quarantine(id: UUID) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try remove(id: id)
+        let query = try statement("INSERT INTO meeting_folders VALUES(?,'') ON CONFLICT(id) DO UPDATE SET name=''")
+        defer { release(query) }
+        bind(id.uuidString, 1, query)
+        guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
+        MeetingFolderLocation.block(id: id, directory: directory)
+    }
+
+    func upsert(_ entry: MeetingListEntry, folder suppliedFolder: URL? = nil, confirmedUnique: Bool = false) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let folder =
+            try suppliedFolder
+            ?? MeetingFolderLocation.resolve(id: entry.id, directory: directory, date: entry.createdAt)
+        try MeetingFolderLocation.validate(folder, directory: directory)
+        if !confirmedUnique, let previous = try folderName(id: entry.id) {
+            if previous.isEmpty { throw MeetingFolderLocation.AccessError.duplicate }
+            if previous != folder.lastPathComponent,
+                FileManager.default.fileExists(
+                    atPath: directory.appendingPathComponent("meetings").appendingPathComponent(previous).path)
+            {
+                try quarantine(id: entry.id)
+                throw MeetingFolderLocation.AccessError.duplicate
+            }
+        }
+        else if !confirmedUnique, suppliedFolder != nil,
+            try MeetingFolderLocation.candidates(id: entry.id, directory: directory).count > 1
+        {
+            try quarantine(id: entry.id)
+            throw MeetingFolderLocation.AccessError.duplicate
+        }
+        MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
+        let location = try statement(
+            "INSERT INTO meeting_folders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
+        defer { release(location) }
+        bind(entry.id.uuidString, 1, location)
+        bind(folder.lastPathComponent, 2, location)
+        guard sqlite3_step(location) == SQLITE_DONE else { throw failure() }
         let data = try JSONEncoder().encode(entry)
         let stmt = try statement(
             "INSERT INTO meetings(id,created,title,metadata,sortTime) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created=excluded.created,title=excluded.title,metadata=excluded.metadata,sortTime=excluded.sortTime"
@@ -157,11 +207,12 @@ final class LibraryIndex: @unchecked Sendable {
     func remove(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
+        MeetingFolderLocation.forget(id: id, directory: directory)
         let search = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
         defer { release(search) }
         bind(id.uuidString, 1, search)
         guard sqlite3_step(search) == SQLITE_DONE else { throw failure() }
-        for table in ["meetings", "relations"] {
+        for table in ["meetings", "relations", "meeting_folders"] {
             let stmt = try statement("DELETE FROM \(table) WHERE \(table == "relations" ? "meeting" : "id")=?")
             defer { release(stmt) }
             bind(id.uuidString, 1, stmt)
@@ -302,11 +353,31 @@ final class LibraryIndex: @unchecked Sendable {
         lastCommittedCount = nil
         let publishBatches = try count() == 0
         try execute(
-            "BEGIN IMMEDIATE; CREATE TEMP TABLE IF NOT EXISTS rebuild_seen(id TEXT PRIMARY KEY); DELETE FROM rebuild_seen;"
+            "BEGIN IMMEDIATE; CREATE TEMP TABLE IF NOT EXISTS rebuild_seen(id TEXT PRIMARY KEY); DELETE FROM rebuild_seen; CREATE TEMP TABLE IF NOT EXISTS rebuild_folder_counts(id TEXT PRIMARY KEY, occurrences INTEGER NOT NULL); DELETE FROM rebuild_folder_counts;"
         )
         do {
             var count = 0
             let root = directory.appendingPathComponent("meetings")
+            try MeetingFolderLocation.validate(root.appendingPathComponent("check"), directory: directory)
+            // Count identities before publishing any metadata, independent of enumeration order.
+            if let scan = FileManager.default.enumerator(
+                at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])
+            {
+                for case let folder as URL in scan {
+                    let values = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                    guard values.isDirectory == true, values.isSymbolicLink != true,
+                        let id = MeetingFolderLocation.identity(folder.lastPathComponent)
+                    else { continue }
+                    let insert = try statement(
+                        "INSERT INTO rebuild_folder_counts VALUES(?,1) ON CONFLICT(id) DO UPDATE SET occurrences=occurrences+1"
+                    )
+                    bind(id.uuidString, 1, insert)
+                    let result = sqlite3_step(insert)
+                    release(insert)
+                    guard result == SQLITE_DONE else { throw failure() }
+                }
+            }
             if let enumerator = FileManager.default.enumerator(
                 at: root, includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])
@@ -316,7 +387,7 @@ final class LibraryIndex: @unchecked Sendable {
                         guard let folder = enumerator.nextObject() as? URL else { return false }
                         let values = try folder.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
                         guard values.isSymbolicLink != true, values.isDirectory == true,
-                            let id = MeetingIdentity.parse(folder.lastPathComponent)
+                            let id = MeetingFolderLocation.identity(folder.lastPathComponent)
                         else { return true }
                         let url = folder.appendingPathComponent("metadata.json")
                         let seen = try statement("INSERT OR IGNORE INTO rebuild_seen VALUES(?)")
@@ -326,13 +397,23 @@ final class LibraryIndex: @unchecked Sendable {
                             throw failure()
                         }
                         release(seen)
+                        let occurrences = try statement("SELECT occurrences FROM rebuild_folder_counts WHERE id=?")
+                        bind(id.uuidString, 1, occurrences)
+                        let duplicate =
+                            sqlite3_step(occurrences) == SQLITE_ROW && sqlite3_column_int(occurrences, 0) > 1
+                        release(occurrences)
+                        if duplicate {
+                            try quarantine(id: id)
+                            lastRebuildErrorCount += 1
+                            return true
+                        }
                         try execute("SAVEPOINT rebuild_row")
                         do {
                             let entry = try JSONDecoder().decode(MeetingListEntry.self, from: Data(contentsOf: url))
                             guard entry.id == id else {
                                 throw MeetingError.message("Meeting ID differs from its folder.")
                             }
-                            try upsert(entry)
+                            try upsert(entry, folder: folder, confirmedUnique: true)
                             try execute("RELEASE rebuild_row")
                         }
                         catch {
@@ -353,7 +434,7 @@ final class LibraryIndex: @unchecked Sendable {
                 }
             }
             try execute(
-                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search WHERE id NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1; COMMIT"
+                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search WHERE id NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1; COMMIT"
             )
             requiresRebuild = false
             lastCommittedCount = try self.count()
@@ -368,19 +449,44 @@ final class LibraryIndex: @unchecked Sendable {
         for path in paths {
             var folder = path
             while folder.path.hasPrefix(directory.path), folder != directory {
-                if let id = MeetingIdentity.parse(folder.lastPathComponent),
-                    MeetingFolderStorage.folder(id: id, directory: directory).standardizedFileURL.path
-                        == folder.standardizedFileURL.path
+                if let id = MeetingFolderLocation.identity(folder.lastPathComponent),
+                    folder.deletingLastPathComponent().standardizedFileURL.path
+                        == directory.appendingPathComponent("meetings").standardizedFileURL.path
                 {
+                    try MeetingFolderLocation.validate(folder, directory: directory)
+                    if try folderName(id: id) == "" {
+                        let matches = try MeetingFolderLocation.candidates(id: id, directory: directory)
+                        guard matches.count <= 1 else { throw MeetingFolderLocation.AccessError.duplicate }
+                        if let remaining = matches.first {
+                            let entry = try JSONDecoder().decode(
+                                MeetingListEntry.self,
+                                from: Data(contentsOf: remaining.appendingPathComponent("metadata.json")))
+                            guard entry.id == id else {
+                                throw MeetingError.message("Meeting ID differs from its folder.")
+                            }
+                            try upsert(entry, folder: remaining, confirmedUnique: true)
+                        }
+                        else {
+                            try remove(id: id)
+                        }
+                        break
+                    }
                     let metadata = folder.appendingPathComponent("metadata.json")
                     if FileManager.default.fileExists(atPath: metadata.path) {
                         let entry = try JSONDecoder().decode(MeetingListEntry.self, from: Data(contentsOf: metadata))
                         guard entry.id == id else {
                             throw MeetingError.message("Meeting ID differs from its folder.")
                         }
-                        try upsert(entry)
+                        try upsert(entry, folder: folder)
                     }
                     else {
+                        if let canonical = try folderName(id: id), canonical != folder.lastPathComponent,
+                            FileManager.default.fileExists(
+                                atPath: directory.appendingPathComponent("meetings").appendingPathComponent(canonical)
+                                    .path)
+                        {
+                            break
+                        }
                         try remove(id: id)
                     }
                     break

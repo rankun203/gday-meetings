@@ -32,18 +32,25 @@ enum LibraryFolderImport {
         let manager = FileManager.default
         let values = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isDirectory == true, values.isSymbolicLink != true else { return nil }
+        try MeetingFolderLocation.validate(folder, directory: root)
         guard !manager.fileExists(atPath: folder.appendingPathComponent(".app-import").path) else { return nil }
         let metadata = folder.appendingPathComponent("metadata.json")
         // Preserve referenced IDs when an agent drops an already-described meeting.
         if manager.fileExists(atPath: metadata.path) {
-            if let id = MeetingIdentity.parse(folder.lastPathComponent),
-                MeetingFolderStorage.folder(id: id, directory: root).standardizedFileURL.path
-                    == folder.standardizedFileURL.path
+            let entry = try JSONDecoder().decode(MeetingListEntry.self, from: Data(contentsOf: metadata))
+            if let id = MeetingFolderLocation.identity(folder.lastPathComponent),
+                folder.deletingLastPathComponent().standardizedFileURL.path
+                    == root.appendingPathComponent("meetings").standardizedFileURL.path
             {
+                guard entry.id == id else { throw MeetingError.message("Meeting ID differs from its folder.") }
+                let existing = try MeetingFolderLocation.resolve(id: id, directory: root, date: entry.createdAt)
+                guard existing.standardizedFileURL.path == folder.standardizedFileURL.path else {
+                    try MeetingFolderLocation.registeredIndex(directory: root)?.quarantine(id: id)
+                    throw MeetingFolderLocation.AccessError.duplicate
+                }
                 return nil
             }
-            let entry = try JSONDecoder().decode(MeetingListEntry.self, from: Data(contentsOf: metadata))
-            let target = MeetingFolderStorage.folder(id: entry.id, directory: root)
+            let target = try MeetingFolderLocation.resolve(id: entry.id, directory: root, date: entry.createdAt)
             guard target.standardizedFileURL.path != folder.standardizedFileURL.path else { return nil }
             guard !manager.fileExists(atPath: target.path) else {
                 throw MeetingError.message(
@@ -68,16 +75,16 @@ enum LibraryFolderImport {
             if Date().timeIntervalSince(modification) < settleInterval { throw ImportPending() }
         }
         var meeting = Meeting()
-        meeting.id = MeetingIdentity.parse(folder.lastPathComponent) ?? MeetingIdentity.newID()
+        meeting.id = MeetingFolderLocation.identity(folder.lastPathComponent) ?? MeetingIdentity.newID()
         meeting.title = folder.lastPathComponent
         meeting.createdAt = try folder.resourceValues(forKeys: [.creationDateKey]).creationDate ?? Date()
         meeting.audioFiles = audio.map(\.lastPathComponent).sorted()
-        var target = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+        var target = try MeetingFolderLocation.resolve(id: meeting.id, directory: root, date: meeting.createdAt)
         while target.standardizedFileURL.path != folder.standardizedFileURL.path
             && manager.fileExists(atPath: target.path)
         {
             meeting.id = MeetingIdentity.newID()
-            target = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+            target = try MeetingFolderLocation.resolve(id: meeting.id, directory: root, date: meeting.createdAt)
         }
         if target.standardizedFileURL.path != folder.standardizedFileURL.path {
             try manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -208,7 +208,9 @@ enum UIPreview {
             if ProcessInfo.processInfo.arguments.contains("--synthetic-summary-stream") {
                 seedSummaryStream(store)
             }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks") {
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks")
+                || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
+            {
                 seedTasks(store)
             }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {

@@ -162,9 +162,22 @@ extension MeetingStore {
             }
             let upload = try uploadProvider(for: provider, attempt: attempt)
             let filedrop = FiledropProvider(provider: upload)
-            _ = try await ProviderConnectionChecker.check(provider)
-            _ = try await filedrop.checkConnection()
-            let info = try await filedrop.info().value
+            do { _ = try await ProviderConnectionChecker.check(provider) }
+            catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
+                throw ServiceError(
+                    "The RunPod connection check returned HTTP 404. Check the address for \(provider.name) in Service Providers. No transcription job was submitted."
+                )
+            }
+            let info: FiledropInfo
+            do {
+                _ = try await filedrop.checkConnection()
+                info = try await filedrop.info().value
+            }
+            catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
+                throw ServiceError(
+                    "The audio upload connection check returned HTTP 404. Check the address for \(upload.name) in Service Providers. No transcription job was submitted."
+                )
+            }
             guard let expiry = attempt.uploadsExpireAt, expiry > Date() else {
                 attempt.inputs = []
                 attempt.uploadsExpireAt = nil

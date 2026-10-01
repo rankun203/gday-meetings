@@ -10,7 +10,8 @@ struct TaskQueueView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Tasks").font(.largeTitle.bold())
                 Spacer()
-                Text(store.taskQueueSummary).foregroundStyle(.secondary)
+                Text(store.taskQueueSummary)
+                    .foregroundStyle(store.taskAttentionCount > 0 ? Color.accentColor : Color.secondary)
             }
             if let error = store.managedTaskJournalError {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
@@ -28,7 +29,19 @@ struct TaskQueueView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 20) {
-                            ForEach(store.tasksNewestFirst) { record in taskRow(record).id(record.id) }
+                            if store.taskAttentionCount > 0 {
+                                Label("Needs Attention", systemImage: "exclamationmark.circle.fill")
+                                    .font(.headline).foregroundStyle(Color.accentColor)
+                                ForEach(store.tasksNewestFirst.filter { $0.state == .failed }) { record in
+                                    taskRow(record).id(record.id)
+                                }
+                                if store.managedTasks.contains(where: { $0.state != .failed }) {
+                                    Text("Other Tasks").font(.headline)
+                                }
+                            }
+                            ForEach(store.tasksNewestFirst.filter { $0.state != .failed }) { record in
+                                taskRow(record).id(record.id)
+                            }
                             if !store.taskQueueOtherJobs.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Other Activity").font(.headline)
@@ -65,7 +78,9 @@ struct TaskQueueView: View {
                     ProgressView().controlSize(.small).padding(.top, 3)
                 }
                 else {
-                    Image(systemName: icon(record.state)).foregroundStyle(.secondary).padding(.top, 3)
+                    Image(systemName: icon(record.state))
+                        .foregroundStyle(record.state == .failed ? Color.accentColor : Color.secondary)
+                        .padding(.top, 3)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline) {
@@ -77,9 +92,11 @@ struct TaskQueueView: View {
                                 "Created " + record.createdAt.formatted(date: .complete, time: .shortened))
                     }
                     Text(operation(record.kind) + providerSuffix(record)).font(.subheadline).foregroundStyle(.secondary)
-                    Text(record.progress).font(.callout).textSelection(.enabled)
+                    Text(record.progress).font(.callout)
+                        .fontWeight(record.state == .failed ? .semibold : .regular)
+                        .textSelection(.enabled)
                     if let error = record.errorMessage, !error.isEmpty {
-                        Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(error).font(.callout).textSelection(.enabled)
                     }
                     if record.recovery == .restartRequired {
                         Text("Restart sends the recording to the provider again.")
@@ -112,6 +129,14 @@ struct TaskQueueView: View {
     }
 
     @ViewBuilder private func actions(_ record: ManagedTaskRecord) -> some View {
+        if store.canRestartManagedTask(record) {
+            Button("Restart") { store.restartManagedTask(id: record.id) }
+                .buttonStyle(.borderedProminent)
+        }
+        if store.canRetryManagedTask(record) {
+            Button(store.managedTaskActionTitle(record)) { store.retryManagedTask(id: record.id) }
+                .buttonStyle(.borderedProminent)
+        }
         if store.containsMeeting(id: record.meetingID) {
             Button("Open Meeting") { showMeeting(record.meetingID) }
         }
@@ -122,12 +147,6 @@ struct TaskQueueView: View {
             Button(record.state == .queued ? "Remove from Queue" : "Stop Waiting") {
                 store.cancelManagedTask(id: record.id)
             }
-        }
-        if store.canRestartManagedTask(record) {
-            Button("Restart") { store.restartManagedTask(id: record.id) }
-        }
-        if store.canRetryManagedTask(record) {
-            Button(store.managedTaskActionTitle(record)) { store.retryManagedTask(id: record.id) }
         }
         if !record.state.isActive {
             Button("Dismiss") { store.removeManagedTask(id: record.id) }
@@ -158,7 +177,7 @@ struct TaskQueueView: View {
         case .queued: "clock"
         case .running: "arrow.triangle.2.circlepath"
         case .completed: "checkmark.circle"
-        case .failed: "exclamationmark.circle"
+        case .failed: "exclamationmark.circle.fill"
         case .cancelled: "minus.circle"
         }
     }
@@ -169,6 +188,35 @@ struct TaskQueueStatusButton: View {
     let action: () -> Void
 
     var body: some View {
+        if store.taskAttentionCount > 0 {
+            HStack(spacing: 12) {
+                Label(
+                    store.taskAttentionCount == 1
+                        ? "1 Task Needs Attention" : "\(store.taskAttentionCount) Tasks Need Attention",
+                    systemImage: "exclamationmark.circle.fill"
+                )
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                if !store.taskQueueActivitySummary.isEmpty {
+                    Text(store.taskQueueActivitySummary).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button(
+                    store.taskAttentionCount == 1 ? "Review Task" : "Review \(store.taskAttentionCount) Tasks",
+                    action: action
+                )
+                .buttonStyle(.borderedProminent)
+                .help("Show tasks that need attention")
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .background(.bar)
+        }
+        else {
+            activityButton
+        }
+    }
+
+    private var activityButton: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if store.managedTasks.contains(where: { $0.state == .running }) || !store.taskQueueOtherJobs.isEmpty {
@@ -191,6 +239,8 @@ struct TaskQueueStatusButton: View {
 }
 
 extension MeetingStore {
+    var taskAttentionCount: Int { managedTasks.filter { $0.state == .failed }.count }
+
     var showsTaskQueueStatus: Bool {
         managedTasks.contains { $0.state.isActive || $0.state == .failed } || !taskQueueOtherJobs.isEmpty
     }
@@ -204,14 +254,19 @@ extension MeetingStore {
     }
 
     var taskQueueSummary: String {
+        let failed = taskAttentionCount
+        var parts = taskQueueActivitySummary.isEmpty ? [] : [taskQueueActivitySummary]
+        if failed > 0 { parts.append(failed == 1 ? "1 needs attention" : "\(failed) need attention") }
+        return parts.isEmpty ? "No active tasks" : parts.joined(separator: " · ")
+    }
+
+    var taskQueueActivitySummary: String {
         let running = managedTasks.filter { $0.state == .running }.count + taskQueueOtherJobs.count
         let queued = managedTasks.filter { $0.state == .queued }.count
-        let failed = managedTasks.filter { $0.state == .failed }.count
         var parts: [String] = []
         if running > 0 { parts.append("\(running) running") }
         if queued > 0 { parts.append("\(queued) queued") }
-        if failed > 0 { parts.append(failed == 1 ? "1 needs attention" : "\(failed) need attention") }
-        return parts.isEmpty ? "No active tasks" : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 }
 

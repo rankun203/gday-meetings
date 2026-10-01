@@ -96,6 +96,73 @@ private final class RecoveryResponseCounter: @unchecked Sendable {
         #expect(server.requests.allSatisfy { $0.target.hasSuffix("/status/saved-job") })
     }
 
+    @Test func legacyPolling404ResumesOnlyTheSavedJobThenRequiresRestart() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in .init(status: 404) }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let (provider, id, attempt) = try seed(store, origin: server.origin)
+        let row = ManagedTaskRecord(
+            kind: .transcription, meetingID: id, meetingTitle: "Saved status failure",
+            providerID: provider.id, state: .failed,
+            errorMessage: ServiceHTTPStatusError(statusCode: 404).localizedDescription,
+            recovery: .manual, attemptKey: attempt.idempotencyKey, remoteJobID: attempt.taskID)
+        try store.managedTaskJournal.upsert(row)
+        store.managedTasks = [row]
+        store.recoverUnfinishedManagedTasks()
+        #expect(server.requests.isEmpty)
+        store.retryManagedTask(id: row.id)
+        await store.waitForManagedTask(row.id)
+        #expect(store.managedTasks.first?.recovery == .restartRequired)
+        #expect(store.meetings.first?.transcriptionAttempt?.remoteJobExpired == true)
+        #expect(server.requests.count == 1)
+        #expect(server.requests.allSatisfy { $0.method == "GET" && $0.target.hasSuffix("/status/saved-job") })
+        store.recoverUnfinishedManagedTasks()
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func preflight404NamesFailingProviderWithoutExpiringOrSubmittingJob(uploadFailure: Bool) async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { request in
+            if uploadFailure && request.target == "/v2/fixture/health" {
+                return .init(body: #"{"workers":{},"jobs":{}}"#)
+            }
+            return .init(status: 404)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        var (provider, id, attempt) = try seed(store, origin: server.origin)
+        var upload = ServiceProvider(kind: .filedrop)
+        upload.name = "Example Uploads"
+        upload.endpoint = server.origin + "/uploads"
+        upload.apiKey = "fixture-key"
+        upload.enabledCapabilities = [.fileTransfer]
+        provider.name = "Example Transcription"
+        provider.uploadProviderID = upload.id
+        store.settings.serviceProviders = [provider, upload]
+        attempt.taskID = nil
+        attempt.inputs = []
+        try store.saveTranscriptionAttempt(attempt, meetingID: id)
+        await store.transcribe(id: id)
+        let task = try #require(store.managedTasks.first)
+        #expect(task.state == .failed)
+        #expect(task.recovery == .manual)
+        #expect(!store.canRestartManagedTask(task))
+        #expect(task.errorMessage?.contains(uploadFailure ? upload.name : provider.name) == true)
+        #expect(task.errorMessage?.contains("No transcription job was submitted.") == true)
+        #expect(store.meetings.first?.transcriptionAttempt?.remoteJobExpired != true)
+        #expect(store.meetings.first?.transcriptionAttempt?.taskID == nil)
+        #expect(server.requests.count == (uploadFailure ? 2 : 1))
+        #expect(server.requests.allSatisfy { $0.method == "GET" && $0.target.hasSuffix("/health") })
+        store.recoverUnfinishedManagedTasks()
+        #expect(server.requests.count == (uploadFailure ? 2 : 1))
+    }
+
     @Test func endpoint404OutsideJobPollingDoesNotOfferRestart() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }

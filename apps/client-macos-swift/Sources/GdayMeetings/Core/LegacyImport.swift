@@ -155,7 +155,8 @@ extension MeetingStore {
                 meeting.summary =
                     (summary as? [String: Any])?["summary"] as? String ?? String(data: raw, encoding: .utf8) ?? ""
             }
-            let destination = directory(for: meeting.id)
+            let destination = try MeetingFolderLocation.newFolder(
+                id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
             try fm.createDirectory(at: destination, withIntermediateDirectories: true)
             do {
                 for file in try fm.contentsOfDirectory(

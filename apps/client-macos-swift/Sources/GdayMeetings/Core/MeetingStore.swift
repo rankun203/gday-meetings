@@ -288,6 +288,9 @@ final class MeetingStore: ObservableObject {
             let changed = meetings.filter { meeting in
                 lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting
             }
+            for meeting in changed {
+                _ = try MeetingFolderLocation.resolve(id: meeting.id, directory: dataDirectory, date: meeting.createdAt)
+            }
             let dataEventBaselines = Dictionary(
                 uniqueKeysWithValues: changed.map { meeting in
                     (meeting.id, DataEventJournal.documentSnapshot(directory: directory(for: meeting.id)))
@@ -537,6 +540,13 @@ final class MeetingStore: ObservableObject {
     @discardableResult func createMeeting(title: String = "Untitled Meeting", language: String? = nil) -> UUID {
         guard canSave else { return UUID() }
         let meeting = Meeting(title: title, language: language ?? settings.defaultLanguage)
+        do {
+            _ = try MeetingFolderLocation.newFolder(id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
+        }
+        catch {
+            errorMessage = error.localizedDescription
+            return meeting.id
+        }
         meetings.insert(meeting, at: 0)
         if save() { latestCreatedMeetingID = meeting.id }
         return meeting.id
@@ -718,7 +728,9 @@ final class MeetingStore: ObservableObject {
             title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle,
             language: language ?? settings.defaultLanguage)
         do {
-            try FileManager.default.createDirectory(at: directory(for: meeting.id), withIntermediateDirectories: true)
+            let folder = try MeetingFolderLocation.newFolder(
+                id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let capture = AudioCapture()
             let liveSink = LiveAudioSink()
             capture.liveAudioSink = liveSink
@@ -950,7 +962,7 @@ final class MeetingStore: ObservableObject {
         var importMarkers: [URL] = []
         defer { for marker in importMarkers { try? FileManager.default.removeItem(at: marker) } }
         var newFolders: [URL] = []
-        var additions: [(id: UUID, title: String, file: String, duration: Double)] = []
+        var additions: [(id: UUID, title: String, file: String, duration: Double, createdAt: Date)] = []
         do {
             for source in urls {
                 try Task.checkCancellation()
@@ -967,7 +979,11 @@ final class MeetingStore: ObservableObject {
                     throw MeetingError.message("Choose a file, not a folder: \(source.lastPathComponent).")
                 }
                 let id = target ?? MeetingIdentity.newID()
-                let folder = directory(for: id)
+                let createdAt = Date()
+                let folder =
+                    target != nil
+                    ? directory(for: id)
+                    : try MeetingFolderLocation.newFolder(id: id, date: createdAt, directory: dataDirectory)
                 if !FileManager.default.fileExists(atPath: folder.path) {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                     newFolders.append(folder)
@@ -1004,7 +1020,7 @@ final class MeetingStore: ObservableObject {
                 guard duration.isFinite, duration > 0 else {
                     throw MeetingError.message("No playable audio in \(source.lastPathComponent).")
                 }
-                additions.append((id, base, destination.lastPathComponent, duration))
+                additions.append((id, base, destination.lastPathComponent, duration, createdAt))
             }
             try Task.checkCancellation()
             if let target {
@@ -1017,7 +1033,8 @@ final class MeetingStore: ObservableObject {
             else {
                 let imported = additions.map {
                     Meeting(
-                        id: $0.id, title: $0.title, language: settings.defaultLanguage, duration: $0.duration,
+                        id: $0.id, title: $0.title, language: settings.defaultLanguage, createdAt: $0.createdAt,
+                        duration: $0.duration,
                         audioFiles: [$0.file])
                 }
                 meetings.insert(contentsOf: imported, at: 0)
@@ -1054,7 +1071,8 @@ final class MeetingStore: ObservableObject {
             meeting.speakers[index].voiceScope = nil
         }
         meeting.restoreSpeakerIdentities()
-        let importedDirectory = directory(for: meeting.id)
+        let importedDirectory = try MeetingFolderLocation.newFolder(
+            id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
         do {
             try MeetingExport.importAssets(
                 from: archiveData, source: url, notes: meeting.notes, directory: importedDirectory)

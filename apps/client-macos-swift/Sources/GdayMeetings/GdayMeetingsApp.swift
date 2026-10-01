@@ -94,7 +94,7 @@ struct GdayMeetingsApp: App {
                 Image(nsImage: MenuBarArtwork.waveform).accessibilityLabel("Gday Meetings")
             }
             else {
-                Image(systemName: "record.circle.fill").accessibilityLabel("Gday Meetings — Recording")
+                Image(systemName: "stop.circle.fill").accessibilityLabel("Gday Meetings — Recording")
             }
         }
     }

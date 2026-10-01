@@ -37,11 +37,12 @@ struct MeetingListEntry: Codable, Identifiable, Equatable {
 }
 
 enum MeetingFolderStorage {
-    static func folder(id: UUID, directory: URL) -> URL {
-        directory.appendingPathComponent("meetings").appendingPathComponent(MeetingIdentity.string(id))
+    static func folder(id: UUID, directory: URL, date: Date = Date()) -> URL {
+        (try? MeetingFolderLocation.resolve(id: id, directory: directory, date: date))
+            ?? MeetingFolderLocation.unavailable(id: id)
     }
     static func read(id: UUID, directory: URL) throws -> Meeting {
-        let folder = folder(id: id, directory: directory)
+        let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
         let entry = try JSONDecoder().decode(
             MeetingListEntry.self, from: Data(contentsOf: folder.appendingPathComponent("metadata.json")))
         guard entry.id == id else { throw MeetingError.message("The meeting ID does not match its folder.") }
@@ -69,7 +70,7 @@ enum MeetingFolderStorage {
         return meeting
     }
     static func searchText(id: UUID, directory: URL) throws -> String {
-        let folder = folder(id: id, directory: directory)
+        let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
         var text = ""
         for name in ["notes.md", "summary.md"] {
             let file = folder.appendingPathComponent(name)
@@ -86,7 +87,8 @@ enum MeetingFolderStorage {
         return text
     }
     static func write(_ meeting: Meeting, directory: URL) throws {
-        let folder = folder(id: meeting.id, directory: directory)
+        let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: directory, date: meeting.createdAt)
+        MeetingFolderLocation.remember(folder, id: meeting.id, directory: directory)
         try FileManager.default.createDirectory(
             at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder()
