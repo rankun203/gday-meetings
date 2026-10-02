@@ -9,10 +9,9 @@ actor AppleLiveTranscription {
     struct Session {
         let analyzer: SpeechAnalyzer
         let queue: LiveAudioQueue
-        let feed: Task<Void, Never>
+        let reporter: LiveTranscriptGapReporter
         let results: Task<Void, Never>
         let source: LiveAudioSource
-        let gap: @Sendable (LiveTranscriptGap) async -> Void
     }
     private var sessions: [Session] = []
     private var cancelled = false
@@ -87,9 +86,18 @@ actor AppleLiveTranscription {
                 await analyzer.cancelAndFinishNow()
                 throw CancellationError()
             }
-            let input = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingOldest(8))
-            try await analyzer.start(inputSequence: input.stream)
             let queue = LiveAudioQueue()
+            let reporter = LiveTranscriptGapReporter(deliver: gap)
+            let input = AppleLiveAudioInput(
+                queue: queue, format: format, boundary: boundaries[source] ?? 0, source: source,
+                reporter: reporter,
+                failure: { message in
+                    await self.markFailed()
+                    await failure(message)
+                })
+            // The analyzer pulls converted packets. The duration-bounded capture
+            // queue is the sole backlog; tiny system packets have the same budget as microphone packets.
+            try await analyzer.start(inputSequence: AsyncStream(unfolding: { await input.next() }))
             let sessionID = UUID()
             let results = Task {
                 do {
@@ -122,51 +130,9 @@ actor AppleLiveTranscription {
                     }
                 }
             }
-            let feed = Task {
-                let converter = LivePCMConverter(output: format)
-                var timeline = LiveAudioInputTimeline(boundary: boundaries[source] ?? 0)
-                for await packet in queue.stream {
-                    queue.consumed(packet)
-                    if Task.isCancelled { break }
-                    do {
-                        let previousEnd = timeline.previousEnd
-                        if timeline.receive(start: packet.start, duration: packet.duration) {
-                            await gap(
-                                .init(
-                                    source: source, start: previousEnd, end: packet.start,
-                                    reason: "Audio was not processed for live transcription."))
-                            converter.reset()
-                        }
-                        if let buffer = try converter.convert(packet.buffer) {
-                            // Resampling can hold or release samples across callback boundaries.
-                            // Timestamp converted frames on one cursor, not each source packet's start.
-                            guard
-                                let start = timeline.convertedStart(
-                                    frameCount: Int(buffer.frameLength), sampleRate: format.sampleRate)
-                            else { throw MeetingError.message("Couldn’t align live transcription audio.") }
-                            let value = AnalyzerInput(
-                                buffer: buffer,
-                                bufferStartTime: CMTime(value: start, timescale: Int32(format.sampleRate)))
-                            switch input.continuation.yield(value) {
-                            case .dropped:
-                                await gap(
-                                    .init(
-                                        source: source, start: packet.start, end: packet.start + packet.duration,
-                                        reason: "Live transcription couldn’t keep up."))
-                            default: break
-                            }
-                        }
-                    }
-                    catch {
-                        self.markFailed()
-                        await failure("Live transcript stopped for \(source.title). Recording continues.")
-                        break
-                    }
-                }
-                input.continuation.finish()
-            }
             sessions.append(
-                Session(analyzer: analyzer, queue: queue, feed: feed, results: results, source: source, gap: gap))
+                Session(
+                    analyzer: analyzer, queue: queue, reporter: reporter, results: results, source: source))
             queues[source] = queue
         }
         try Task.checkCancellation()
@@ -184,7 +150,6 @@ actor AppleLiveTranscription {
         guard !pending.isEmpty, !cancelled else { return false }
         for session in pending { session.queue.finish() }
         for session in pending {
-            await session.feed.value
             do { try await session.analyzer.finalizeAndFinishThroughEndOfInput() }
             catch {
                 failed = true
@@ -192,11 +157,14 @@ actor AppleLiveTranscription {
             }
             await session.results.value
             for range in session.queue.takeDroppedRanges() {
-                await session.gap(
+                session.reporter.append(
                     .init(
-                        source: session.source, start: range.0, end: range.1,
-                        reason: "Live transcription couldn’t keep up."))
+                        source: session.source, start: range.start, end: range.end,
+                        reason: range.isExact
+                            ? "Live transcription couldn’t keep up."
+                            : "Some audio within this interval could not be transcribed; exact gaps are unavailable."))
             }
+            await session.reporter.flush()
         }
         sessions.removeAll()
         await releaseLocale()
@@ -209,9 +177,9 @@ actor AppleLiveTranscription {
         sessions.removeAll()
         for session in pending {
             session.queue.finish()
-            session.feed.cancel()
             session.results.cancel()
             await session.analyzer.cancelAndFinishNow()
+            await session.reporter.flush()
         }
         await releaseLocale()
     }
@@ -276,5 +244,73 @@ final class LivePCMConverter {
         }
         if result == .error { throw error ?? NSError(domain: "LiveTranscript", code: 1) }
         return buffer.frameLength > 0 ? buffer : nil
+    }
+}
+
+/// SpeechAnalyzer requests one converted packet at a time. Device changes keep
+/// the same queue and recording clock; only conversion history resets at a gap.
+@available(macOS 26.0, *)
+actor AppleLiveAudioInput {
+    private var iterator: AsyncStream<LiveAudioQueue.Packet>.Iterator
+    private let queue: LiveAudioQueue
+    private let converter: LivePCMConverter
+    private var timeline: LiveAudioInputTimeline
+    private let format: AVAudioFormat
+    private let source: LiveAudioSource
+    private let reporter: LiveTranscriptGapReporter
+    private let failure: @Sendable (String) async -> Void
+    private var ended = false
+
+    init(
+        queue: LiveAudioQueue, format: AVAudioFormat, boundary: Double, source: LiveAudioSource,
+        reporter: LiveTranscriptGapReporter, failure: @escaping @Sendable (String) async -> Void
+    ) {
+        self.queue = queue
+        iterator = queue.stream.makeAsyncIterator()
+        converter = LivePCMConverter(output: format)
+        timeline = LiveAudioInputTimeline(boundary: boundary)
+        self.format = format
+        self.source = source
+        self.reporter = reporter
+        self.failure = failure
+    }
+
+    func next() async -> AnalyzerInput? {
+        guard !ended else { return nil }
+        while !Task.isCancelled {
+            // AsyncStream calls its unfolding closure serially; no concurrent next calls.
+            var current = iterator
+            guard let packet = await current.next() else {
+                ended = true
+                return nil
+            }
+            iterator = current
+            queue.consumed(packet)
+            do {
+                let previousEnd = timeline.previousEnd
+                if timeline.receive(start: packet.start, duration: packet.duration) {
+                    reporter.append(
+                        .init(
+                            source: source, start: previousEnd, end: packet.start,
+                            reason: "Audio was not processed for live transcription."))
+                    converter.reset()
+                }
+                guard let buffer = try converter.convert(packet.buffer) else { continue }
+                guard
+                    let start = timeline.convertedStart(
+                        frameCount: Int(buffer.frameLength), sampleRate: format.sampleRate)
+                else { throw MeetingError.message("Couldn’t align live transcription audio.") }
+                return AnalyzerInput(
+                    buffer: buffer, bufferStartTime: CMTime(value: start, timescale: Int32(format.sampleRate)))
+            }
+            catch {
+                ended = true
+                queue.finish()
+                await failure("Live transcript stopped for \(source.title). Recording continues.")
+                return nil
+            }
+        }
+        ended = true
+        return nil
     }
 }

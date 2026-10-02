@@ -58,7 +58,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .openAICompatible: return [.summarization]
         // Search and remote playback have no app adapters. Do not advertise them as available.
         case .gdayWebsite: return [.transcription, .diarization]
-        case .nemotron: return [.liveDiarization]
+        case .nemotron: return [.liveDiarization, .speakerRecognition]
         case .community1: return [.diarization, .speakerRecognition]
         }
     }
@@ -82,6 +82,8 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var uploadProviderID: UUID?
     var isEnabled = true
     var enabledCapabilities: Set<ProviderCapability> = []
+    // Older Nemotron providers could not opt in or out of association.
+    private var capabilityVersion = 2
     init(kind: ServiceProviderKind) {
         self.kind = kind
         name = kind.title
@@ -91,8 +93,25 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
-        case summaryImageOverride
+        case summaryImageOverride, capabilityVersion
     }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(ServiceProviderKind.self, forKey: .kind)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        endpoint = try values.decode(String.self, forKey: .endpoint)
+        model = try values.decode(String.self, forKey: .model)
+        isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
+        enabledCapabilities = try values.decode(Set<ProviderCapability>.self, forKey: .enabledCapabilities)
+        uploadProviderID = try values.decodeIfPresent(UUID.self, forKey: .uploadProviderID)
+        summarizationPrompt = try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
+        summaryImageOverride = try values.decodeIfPresent(SummaryImageOverride.self, forKey: .summaryImageOverride)
+        if kind == .nemotron, (try values.decodeIfPresent(Int.self, forKey: .capabilityVersion) ?? 1) < 2 {
+            enabledCapabilities.insert(.speakerRecognition)
+        }
+    }
+
     func supports(_ capability: ProviderCapability) -> Bool {
         isEnabled && kind.capabilities.contains(capability) && enabledCapabilities.contains(capability)
     }

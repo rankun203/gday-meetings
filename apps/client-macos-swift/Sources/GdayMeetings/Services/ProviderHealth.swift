@@ -25,7 +25,9 @@ enum ProviderHealth: Equatable, Sendable {
 
 extension ServiceProvider {
     /// A readiness estimate; never opens a model or starts billable work.
-    @MainActor func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
+    @MainActor func health(for capability: ProviderCapability, settings: AppSettings, models: LocalModelManager? = nil)
+        async -> ProviderHealth
+    {
         guard kind.capabilities.contains(capability) else { return .notReady("Capability unavailable.") }
         guard isEnabled else { return .notReady("Provider is turned off.") }
         guard enabledCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
@@ -37,10 +39,10 @@ extension ServiceProvider {
             else {
                 id = LocalModelID(rawValue: model)
             }
-            guard let id, kind != .nemotron || id.nemotronPreset != nil,
+            guard let id, kind != .nemotron || capability == .speakerRecognition || id.nemotronPreset != nil,
                 kind != .community1 || capability == .speakerRecognition || id == .community1
             else { return .notReady("Choose a supported model.") }
-            return await LocalModelManager.shared.health(for: id)
+            return await (models ?? .shared).health(for: id)
         }
         do {
             // Check the requested capability independently of other enabled capabilities.
@@ -217,6 +219,38 @@ extension ThisMacProvider {
 }
 
 extension MeetingStore {
+    /// Model changes affect selected local capabilities and capabilities that have
+    /// never had a selection. Explicit None and unrelated remote providers stay untouched.
+    @MainActor func refreshLocalProviderHealth(health suppliedHealth: ProviderHealthStore? = nil) async {
+        let health = suppliedHealth ?? .shared
+        let snapshot = settings
+        let configuration = ProviderHealthStore.Configuration(snapshot)
+        for capability in ProviderCapability.allCases {
+            let selected = settings.selectedProvider(for: capability)
+            let candidates: [ServiceProvider]
+            if let selected {
+                candidates = snapshot.serviceProviders.filter { $0.id == selected && $0.kind.isLocal }
+            }
+            else if !settings.initializedProviderCapabilities.contains(capability) {
+                candidates = snapshot.serviceProviders.filter { $0.kind.isLocal && $0.supports(capability) }
+            }
+            else {
+                continue
+            }
+            for provider in candidates where provider.kind.capabilities.contains(capability) {
+                let result = await health.check(
+                    providerID: provider.id, capability: capability, settings: snapshot, force: true)
+                guard ProviderHealthStore.Configuration(settings) == configuration else { return }
+                if result.isReady {
+                    if settings.assignInitiallyHealthyProvider(provider.id, capabilities: [capability]) {
+                        saveSettings()
+                    }
+                    break
+                }
+            }
+        }
+    }
+
     @MainActor func refreshProviderHealth(providerID: UUID) async {
         let snapshot = settings
         let results = await ProviderHealthStore.shared.checkProvider(providerID: providerID, settings: snapshot)

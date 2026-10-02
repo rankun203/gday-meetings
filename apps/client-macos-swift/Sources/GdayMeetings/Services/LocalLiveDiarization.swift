@@ -37,6 +37,7 @@ actor LocalLiveDiarization {
         var cleanStart = 0
         var lastSampleEnds: [Int: Double] = [:]
         var failed = false
+        var droppedAudio = false
         var feed: Task<Void, Never>?
         init(source: LiveAudioSource, boundary: Double, config: Nemotron3Config, models: Nemotron3Models) {
             self.source = source
@@ -51,7 +52,7 @@ actor LocalLiveDiarization {
     private var modelID: LocalModelID?
     private var cancelled = false
     private var event: (@Sendable (LiveSpeakerEvent) async -> Void)?
-    private var gap: (@Sendable (LiveTranscriptGap) async -> Void)?
+    private var gapReporter: LiveTranscriptGapReporter?
     private var failure: (@Sendable (String) async -> Void)?
     private var sample: (@Sendable (LiveSpeakerAudioSample) async -> Void)?
 
@@ -83,7 +84,8 @@ actor LocalLiveDiarization {
         modelID = model
         self.sink = sink
         self.event = event
-        self.gap = gap
+        self.gapReporter = LiveTranscriptGapReporter(
+            uncertainReason: "Live speaker labeling coverage is uncertain while reporting catches up.", deliver: gap)
         self.failure = failure
         self.sample = sample
         do {
@@ -142,10 +144,11 @@ actor LocalLiveDiarization {
         for await packet in session.queue.stream {
             session.queue.consumed(packet)
             guard !cancelled, !Task.isCancelled else { break }
+            reportDroppedAudio(session)
             do {
                 if LiveAudioInputTimeline.hasGap(from: session.previousEnd, to: packet.start) {
                     try await flush(session)
-                    await gap?(
+                    gapReporter?.append(
                         .init(
                             source: session.source, start: session.previousEnd, end: packet.start,
                             reason: "Audio was not processed for live speaker labels."))
@@ -192,6 +195,18 @@ actor LocalLiveDiarization {
                 await failure?("Live speaker labels stopped for \(session.source.title). Recording continues.")
                 break
             }
+        }
+    }
+
+    private func reportDroppedAudio(_ session: Session) {
+        for range in session.queue.takeDroppedRanges() {
+            session.droppedAudio = true
+            gapReporter?.append(
+                .init(
+                    source: session.source, start: range.start, end: range.end,
+                    reason: range.isExact
+                        ? "Live speaker labeling couldn’t keep up."
+                        : "Some audio within this interval could not be labeled; exact gaps are unavailable."))
         }
     }
 
@@ -293,24 +308,20 @@ actor LocalLiveDiarization {
                 do { try await flush(session) }
                 catch { session.failed = true }
             }
-            for range in session.queue.takeDroppedRanges() {
-                complete = false
-                await gap?(
-                    .init(
-                        source: session.source, start: range.0, end: range.1,
-                        reason: "Live speaker labels couldn’t keep up."))
-            }
+            reportDroppedAudio(session)
+            if session.droppedAudio { complete = false }
             if session.failed {
                 complete = false
                 let end = sink?.positions()[session.source] ?? session.previousEnd
                 if end > session.previousEnd {
-                    await gap?(
+                    gapReporter?.append(
                         .init(
                             source: session.source, start: session.previousEnd, end: end,
                             reason: "Live speaker labels stopped before this audio was processed."))
                 }
             }
         }
+        await gapReporter?.flush()
         sessions.removeAll()
         await releaseLease()
         return complete
@@ -324,6 +335,7 @@ actor LocalLiveDiarization {
             session.feed?.cancel()
         }
         for session in sessions { await session.feed?.value }
+        await gapReporter?.flush()
         sessions.removeAll()
         await releaseLease()
     }

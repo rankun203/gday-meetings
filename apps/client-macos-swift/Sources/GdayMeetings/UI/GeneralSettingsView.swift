@@ -4,6 +4,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject private var health = ProviderHealthStore.shared
+    @ObservedObject private var models = LocalModelManager.shared
     @AppStorage("settingsTab") private var settingsTab = "general"
     @ViewState private var previewScenario = UIPreview.generalScenario ?? 1
 
@@ -126,6 +127,9 @@ struct GeneralSettingsView: View {
             }
         }
         .task(id: healthFingerprint) { await health.checkSelected(settings: store.settings) }
+        .task(id: LocalHealthIdentity(settings: healthFingerprint, phases: models.states.mapValues(\.phase))) {
+            await store.refreshLocalProviderHealth()
+        }
         .background(
             ProviderPanelWindowObserver {
                 Task { await health.checkSelected(settings: store.settings) }
@@ -170,6 +174,11 @@ struct GeneralSettingsView: View {
     private struct HealthIdentity: Equatable {
         let configuration: ProviderHealthStore.Configuration
         let selections: [UUID?]
+    }
+
+    private struct LocalHealthIdentity: Equatable {
+        let settings: HealthIdentity
+        let phases: [LocalModelID: LocalModelPhase]
     }
 
     private var healthFingerprint: HealthIdentity {

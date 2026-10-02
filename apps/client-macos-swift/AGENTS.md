@@ -46,10 +46,12 @@ Read the relevant documents before changing the app:
 - [Meeting header folder](../../docs/worklogs/2026-09-28-meeting-header-folder.md): Command-click opens the displayed meeting's folder.
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
 - [General settings and provider health](../../docs/worklogs/2026-10-02-general-settings.md): stage behavior, shared scrolling, capability readiness, and initial provider selection.
+- [Speaker association health](../../docs/worklogs/2026-10-02-speaker-association-health.md): Nemotron capability migration and automatic local model verification.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Shared live transcript editing](../../docs/worklogs/2026-10-01-live-transcript-unification.md): shared native rows, provisional text, manual edits, person assignment, and explicit live following.
 - [Continuous transcript paragraphs](../../docs/worklogs/2026-10-02-live-transcript-paragraphs.md): recognition chunk grouping, captured edit ranges, saved adoption, and partial text styling.
+- [Long recording performance](../../docs/worklogs/2026-10-02-live-recording-performance.md): incremental attribution, bounded delivery, checkpoint persistence, and device-change continuity.
 - [Local speaker providers](../../docs/worklogs/2026-10-01-local-speaker-providers.md): independent speaker capabilities, model installation controls, live attribution, and saved-audio labeling.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
 - [Window activation](../../docs/worklogs/2026-10-01-window-activation.md): restore a usable window on app activation and Dock reopening.

@@ -8,6 +8,7 @@ struct LocalProviderConfigurationTests {
         let live = ServiceProvider(kind: .nemotron)
         let saved = ServiceProvider(kind: .community1)
         #expect(live.supports(.liveDiarization))
+        #expect(live.supports(.speakerRecognition))
         #expect(!live.supports(.transcription))
         #expect(!live.supports(.liveTranscription))
         #expect(saved.supports(.diarization))
@@ -19,6 +20,7 @@ struct LocalProviderConfigurationTests {
         var unsupported = live
         unsupported.model = "unknown-model"
         #expect(!ProviderConfigurationEligibility.canSelect(unsupported, for: .liveDiarization, providers: []))
+        #expect(ProviderConfigurationEligibility.canSelect(unsupported, for: .speakerRecognition, providers: []))
     }
 
     @Test func speakerDefaultsRoundTripIndependentlyAndOldSettingsStayOff() throws {

@@ -36,7 +36,7 @@ enum LocalModelError: LocalizedError {
         case .busy: return "Wait for the current model task to finish."
         case .invalidFile(let path):
             return
-                "The model file is missing or does not match the required version: \(path). Copy the required files into the model folder, then choose Verify."
+                "The model file is missing or does not match the required version: \(path). Copy the required files into the model folder, then choose Refresh."
         case .download(let status): return "The model download returned HTTP \(status). Try again."
         case .invalidAssetPath: return "The model manifest contains an invalid file path."
         }
@@ -131,18 +131,18 @@ final class LocalModelManager: ObservableObject {
         return await worker.health(descriptor(id), directory: modelDirectory(for: id))
     }
 
-    func refresh() async {
+    func refresh(_ ids: Set<LocalModelID> = Set(LocalModelID.allCases)) async {
         storageOperations += 1
         defer { storageOperations -= 1 }
         do { try await prepareStorage() }
         catch {
-            for id in LocalModelID.allCases where tasks[id] == nil {
+            for id in ids where tasks[id] == nil {
                 states[id]?.phase = .failed
                 states[id]?.message = error.localizedDescription
             }
             return
         }
-        for id in LocalModelID.allCases where tasks[id] == nil && state(for: id).inUse == 0 {
+        for id in ids where tasks[id] == nil && state(for: id).inUse == 0 {
             // Ready means this process verified and prepared the exact pinned assets.
             // An externally copied folder is never a readiness receipt.
             let directory = modelDirectory(for: id)
@@ -155,8 +155,8 @@ final class LocalModelManager: ObservableObject {
             }
             let exists = FileManager.default.fileExists(atPath: directory.path)
             states[id]?.phase = exists ? .unverified : .missing
-            if exists, await worker.hasPreparationReceipt(descriptor(id), directory: directory) {
-                // A receipt requests verification; it never bypasses hashes or preparation.
+            if exists {
+                // Discovery verifies copied files automatically; presence never bypasses hashes or preparation.
                 verify(id)
             }
         }
@@ -238,7 +238,7 @@ final class LocalModelManager: ObservableObject {
         try await prepareStorage()
         if state(for: id).phase != .ready {
             if tasks[id] == nil,
-                await worker.hasPreparationReceipt(descriptor(id), directory: modelDirectory(for: id))
+                await worker.health(descriptor(id), directory: modelDirectory(for: id)).isReady
             {
                 verify(id)
             }
@@ -565,8 +565,11 @@ actor LocalModelFiles {
                 (attributes[.size] as? NSNumber)?.int64Value == asset.bytes
             else { return .notReady("Required model files are missing or incomplete.") }
         }
-        guard hasPreparationReceipt(descriptor, directory: directory) else {
-            return .notReady("Verify the model in provider settings.")
+        if !hasPreparationReceipt(descriptor, directory: directory) {
+            // Check discovered files without loading Core ML. Acquisition still prepares
+            // verified assets before use; opening provider settings does so automatically.
+            do { try verify(descriptor, directory: directory) }
+            catch { return .notReady(error.localizedDescription) }
         }
         return .ready
     }

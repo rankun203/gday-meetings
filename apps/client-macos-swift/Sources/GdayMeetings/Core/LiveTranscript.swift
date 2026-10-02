@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// The live draft is independent of the editable/batch transcript. Replacing one never deletes the other.
-struct LiveTranscriptDraft: Codable, Equatable {
+struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     var version = 1
     var meetingID: UUID
     var provider = "This Mac"
@@ -88,16 +88,20 @@ struct LiveTranscriptDraft: Codable, Equatable {
     /// Timed words partition recognition around fixed manual ranges. If word
     /// timing is missing, retain the complete recognition row beside the edit.
     /// Never guess which unaligned text lies outside a person's edited range.
-    func resolvedRows(partials: [LiveTranscriptPhrase] = []) -> (
+    func resolvedRows(partials: [LiveTranscriptPhrase] = [], cache: LiveTranscriptResolutionCache? = nil) -> (
         finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]
     ) {
+        let cache = cache ?? LiveTranscriptResolutionCache()
+        cache.begin(meetingID: meetingID, timeline: speakerTimeline)
+        defer { cache.finish() }
         let changes = overrides ?? []
+        if changes.isEmpty { return cache.uneditedRows(finalized: phrases, partials: partials) }
         var finalized: [LiveTranscriptPhrase] = []
         var pending: [LiveTranscriptPhrase] = []
         var preceding: [LiveAudioSource: LiveTranscriptPhrase] = [:]
         func attribute(_ values: [LiveTranscriptPhrase]) -> [LiveTranscriptPhrase] {
             values.sorted(by: LiveTranscriptPhrase.ordered).flatMap { phrase in
-                let rows = speakerTimeline?.attributing(phrase, preceding: preceding[phrase.source]) ?? [phrase]
+                let rows = cache.attributing(phrase, preceding: preceding[phrase.source])
                 preceding[phrase.source] = phrase
                 return rows
             }
@@ -144,12 +148,12 @@ struct LiveTranscriptDraft: Codable, Equatable {
             let matching = raw.filter { $0.0.overlaps(change.anchor) }
             guard change.text != nil || change.anchor.recognitionIsFinal || !matching.isEmpty else { continue }
             var row = change.anchor
-            if let timeline = speakerTimeline {
+            if speakerTimeline != nil {
                 row.speakerIdentity = nil
                 row.diarizationLabel = nil
                 row.personID = nil
                 row.voiceEmbedding = nil
-                let attributed = timeline.attributing(row)
+                let attributed = cache.attributing(row)
                 if attributed.count == 1 {
                     row.speakerIdentity = attributed[0].speakerIdentity
                     row.diarizationLabel = attributed[0].diarizationLabel
@@ -359,7 +363,7 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-struct LiveTranscriptOverride: Codable, Equatable, Identifiable {
+struct LiveTranscriptOverride: Codable, Equatable, Identifiable, Sendable {
     var anchor: LiveTranscriptPhrase
     var text: String?
     var personID: UUID?
@@ -393,5 +397,184 @@ extension LiveTranscriptPhrase {
         presented.speakerIdentity = nil
         presented.voiceEmbedding = nil
         return presented
+    }
+}
+
+/// Caches attribution only. Manual text/person overrides are reapplied on every
+/// resolution, so edits and late recognition revisions retain their semantics.
+final class LiveTranscriptResolutionCache {
+    private struct Entry {
+        let phrase: LiveTranscriptPhrase
+        let preceding: LiveTranscriptPhrase?
+        let evidence: LiveSpeakerTimeline
+        let rows: [LiveTranscriptPhrase]
+    }
+    private var meetingID: UUID?
+    private var timeline: LiveSpeakerTimeline?
+    private var index: LiveSpeakerIntervalIndex?
+    private var entries: [UUID: Entry] = [:]
+    private var visited: Set<UUID> = []
+    private(set) var attributionCount = 0
+    private var finalizedInput: [LiveTranscriptPhrase] = []
+    private var finalizedOutput: [LiveTranscriptPhrase] = []
+    private var finalizedPreceding: [LiveAudioSource: LiveTranscriptPhrase] = [:]
+    private var finalizedIDs: Set<UUID> = []
+    private var finalizedTimeline: LiveSpeakerTimeline?
+    private var finalizedEnd = 0.0
+    private var finalizedLast: LiveTranscriptPhrase?
+    private var transientIDs: Set<UUID> = []
+    private var keepsFinalizedEntries = false
+    private(set) var finalizedAssemblyCount = 0
+
+    func begin(meetingID: UUID, timeline: LiveSpeakerTimeline?) {
+        if self.meetingID != meetingID {
+            entries.removeAll()
+            finalizedInput = []
+            finalizedOutput = []
+            finalizedPreceding = [:]
+            finalizedIDs = []
+            finalizedEnd = 0
+            finalizedLast = nil
+            transientIDs = []
+            finalizedTimeline = nil
+            self.meetingID = meetingID
+        }
+        keepsFinalizedEntries = false
+        finalizedAssemblyCount = 0
+        if self.timeline != timeline {
+            self.timeline = timeline
+            if let timeline, index != nil {
+                index?.update(timeline)
+            }
+            else {
+                index = timeline.map(LiveSpeakerIntervalIndex.init)
+            }
+        }
+        visited.removeAll(keepingCapacity: true)
+        attributionCount = 0
+    }
+
+    func attributing(_ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil) -> [LiveTranscriptPhrase] {
+        guard let index else { return [phrase] }
+        visited.insert(phrase.id)
+        let evidence = index.evidence(for: phrase, preceding: preceding)
+        if let entry = entries[phrase.id], entry.phrase == phrase, entry.preceding == preceding,
+            entry.evidence == evidence
+        {
+            return entry.rows
+        }
+        attributionCount += 1
+        let rows = evidence.attributing(phrase, preceding: preceding)
+        entries[phrase.id] = Entry(phrase: phrase, preceding: preceding, evidence: evidence, rows: rows)
+        return rows
+    }
+
+    func uneditedRows(finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) -> (
+        finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]
+    ) {
+        keepsFinalizedEntries = true
+        let sameEvidence = Self.keepsEvidence(finalizedTimeline, timeline, through: finalizedEnd)
+        let prefixUnchanged =
+            finalized == finalizedInput
+            || finalized.count > finalizedInput.count
+                && finalized.prefix(finalizedInput.count).elementsEqual(finalizedInput)
+        let added = Array(finalized.dropFirst(finalizedInput.count))
+        let appendOrdered = added.enumerated().allSatisfy { offset, phrase in
+            let previous = offset > 0 ? added[offset - 1] : finalizedLast
+            return previous.map { LiveTranscriptPhrase.ordered($0, phrase) } ?? true
+        }
+        if !(sameEvidence && prefixUnchanged && appendOrdered) {
+            let ids = Set(finalized.map(\.id))
+            for id in finalizedIDs.subtracting(ids) { entries.removeValue(forKey: id) }
+            finalizedInput = []
+            finalizedOutput = []
+            finalizedPreceding = [:]
+            finalizedIDs = []
+            finalizedEnd = 0
+            finalizedLast = nil
+        }
+        let remaining = finalized.dropFirst(finalizedInput.count).sorted(by: LiveTranscriptPhrase.ordered)
+        let previousOutputCount = finalizedOutput.count
+        for phrase in remaining {
+            let attributed = attributing(phrase, preceding: finalizedPreceding[phrase.source]).map {
+                var row = $0
+                row.recognizedFinal = true
+                return row
+            }
+            finalizedOutput.append(contentsOf: attributed)
+            finalizedPreceding[phrase.source] = phrase
+            finalizedIDs.insert(phrase.id)
+            finalizedEnd = max(finalizedEnd, phrase.end)
+            finalizedLast = phrase
+            finalizedAssemblyCount += 1
+        }
+        finalizedInput = finalized
+        finalizedTimeline = timeline
+        // Full rebuilds can split overlapping source phrases, whose fragments
+        // need timeline ordering. Appended fragments remain ordered normally.
+        if finalizedAssemblyCount > 0 {
+            let changedStart = max(0, previousOutputCount - 1)
+            let tail = finalizedOutput[changedStart...]
+            if !zip(tail, tail.dropFirst()).allSatisfy({ LiveTranscriptPhrase.ordered($0, $1) }) {
+                finalizedOutput.sort(by: LiveTranscriptPhrase.ordered)
+            }
+        }
+        var preceding = finalizedPreceding
+        let pending = partials.sorted(by: LiveTranscriptPhrase.ordered).flatMap { phrase in
+            let rows = attributing(phrase, preceding: preceding[phrase.source])
+            preceding[phrase.source] = phrase
+            return rows.map {
+                var row = $0
+                row.recognizedFinal = false
+                return row
+            }
+        }.sorted(by: LiveTranscriptPhrase.ordered)
+        return (finalizedOutput, pending)
+    }
+
+    private static func keepsEvidence(
+        _ previous: LiveSpeakerTimeline?, _ current: LiveSpeakerTimeline?, through end: Double
+    ) -> Bool {
+        if previous == current { return true }
+        guard let previous, let current, previous.speakers == current.speakers else { return false }
+        guard previous.gaps.filter({ $0.start < end }) == current.gaps.filter({ $0.start < end }),
+            previous.intervals.count <= current.intervals.count
+        else { return false }
+        for (old, new) in zip(previous.intervals, current.intervals) {
+            guard old.speakerID == new.speakerID, old.start == new.start,
+                min(old.end, end) == min(new.end, end)
+            else { return false }
+        }
+        guard current.intervals.dropFirst(previous.intervals.count).allSatisfy({ $0.start >= end }) else {
+            return false
+        }
+        for source in [LiveAudioSource.microphone, .system] {
+            let old = previous.cursors.first { $0.source == source }
+            let new = current.cursors.first { $0.source == source }
+            guard
+                old == nil && new == nil
+                    || old != nil && new != nil
+                        && min(old!.end, end) == min(new!.end, end)
+            else { return false }
+        }
+        return true
+    }
+
+    func finish() {
+        if keepsFinalizedEntries {
+            for id in transientIDs where !visited.contains(id) { entries.removeValue(forKey: id) }
+            transientIDs = visited.subtracting(finalizedIDs)
+        }
+        else {
+            entries = entries.filter { visited.contains($0.key) }
+            finalizedInput = []
+            finalizedOutput = []
+            finalizedIDs = []
+            finalizedPreceding = [:]
+            finalizedTimeline = nil
+            finalizedEnd = 0
+            finalizedLast = nil
+            transientIDs = visited
+        }
     }
 }

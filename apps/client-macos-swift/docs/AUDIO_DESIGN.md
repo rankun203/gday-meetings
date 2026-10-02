@@ -81,6 +81,14 @@ Detection runs only when both the microphone and system audio are recorded and t
 
 Limitations: envelope correlation needs system audio with speech-like level changes; continuous double-talk, heavy room reverberation, or a very quiet leak can keep it below the threshold, and steady music may never qualify. It cannot distinguish leaked playback from the same content reaching the microphone another way. Thresholds were tuned on synthetic envelopes only.
 
+## Live consumer backpressure
+
+Capture owns source recovery. File writers, the recording clock, and `LiveAudioSink` subscriptions survive source rebuilds. Transcription and speaker labeling consume independent queues, each limited to two seconds of PCM; a stalled subscriber does not block another subscriber. Invalid timestamps are rejected before updating source positions.
+
+SpeechAnalyzer pulls converted input directly from its source queue. There is no second packet-count buffer: small system-audio callbacks have the same duration budget as microphone callbacks. A timestamp gap resets conversion history and reports missing coverage without waiting for the UI. Stop closes the queue and waits for the analyzer to consume accepted input and finalize results, following Apple's [end-of-input contract](https://developer.apple.com/documentation/speech/speechanalyzer).
+
+Loss metadata is bounded separately from PCM. When exact disjoint ranges exceed the bound, the overflow retains a conservative interval explicitly marked as uncertain. A bounded gap reporter delivers updates asynchronously. Draft checkpoints keep one background save and the latest pending snapshot; finalization waits for persistence. Slow UI updates and JSON encoding therefore do not directly block recognition input. This does not recover audio lost before capture or guarantee real-time recognition under sustained overload.
+
 ## Recording diagnostics
 
 Capture writes structured entries to the unified log under the subsystem `com.gdaymeetings.macos` (`com.gdaymeetings.macos.preview` for UI Preview), in categories `capture` (source setup, device binding and read-back, formats, voice-processing decisions, triggers, watchdog firings, fallbacks, and frames at stop) and `recovery` (rebuild scheduling, attempts, errors, backoff, and the loop guard). Entries describe decisions and state changes, never individual buffers or audio content. Device names are public in the log; other values are technical.

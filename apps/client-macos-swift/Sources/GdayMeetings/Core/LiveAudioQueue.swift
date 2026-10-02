@@ -1,5 +1,13 @@
 import AVFoundation
 
+/// A bounded loss record. Inexact records cover several losses and may contain
+/// successfully processed intervals; callers must preserve that distinction.
+struct LiveAudioLoss: Equatable, Sendable {
+    var start: Double
+    var end: Double
+    var isExact = true
+}
+
 /// Called only from the regular microphone tap / system consumer, never from the real-time IOProc.
 /// Queue ownership ends on dequeue. At most two seconds of PCM await conversion, regardless of callback size.
 final class LiveAudioQueue: @unchecked Sendable {
@@ -13,8 +21,9 @@ final class LiveAudioQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var queuedSeconds = 0.0
     private var ended = false
-    private var dropped: [(Double, Double)] = []
+    private var dropped: [LiveAudioLoss] = []
     static let maximumSeconds = 2.0
+    static let maximumDroppedRanges = 64
 
     init() {
         let pair = AsyncStream<Packet>.makeStream()
@@ -24,18 +33,24 @@ final class LiveAudioQueue: @unchecked Sendable {
 
     func append(_ buffer: AVAudioPCMBuffer, start: Double) {
         let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
-        guard seconds.isFinite, seconds > 0, start.isFinite, start >= 0 else { return }
+        guard seconds.isFinite, seconds > 0, start.isFinite, start >= 0, (start + seconds).isFinite else { return }
         lock.lock()
         defer { lock.unlock() }
         guard !ended else { return }
         guard queuedSeconds + seconds <= Self.maximumSeconds,
             let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength)
         else {
-            if let last = dropped.last, start <= last.1 + 0.01 {
-                dropped[dropped.count - 1].1 = max(last.1, start + seconds)
+            if let last = dropped.last, start <= last.end + 0.01 {
+                dropped[dropped.count - 1] = LiveAudioLoss(
+                    start: min(last.start, start), end: max(last.end, start + seconds),
+                    isExact: last.isExact && start <= last.end + 0.000_001)
             }
-            else {
-                dropped.append((start, start + seconds))
+            else if dropped.count < Self.maximumDroppedRanges {
+                dropped.append(LiveAudioLoss(start: start, end: start + seconds))
+            }
+            else if let last = dropped.last {
+                dropped[dropped.count - 1] = LiveAudioLoss(
+                    start: min(last.start, start), end: max(last.end, start + seconds), isExact: false)
             }
             return
         }
@@ -56,7 +71,7 @@ final class LiveAudioQueue: @unchecked Sendable {
         lock.unlock()
     }
 
-    func takeDroppedRanges() -> [(Double, Double)] {
+    func takeDroppedRanges() -> [LiveAudioLoss] {
         lock.lock()
         defer { lock.unlock() }
         let result = dropped
@@ -97,8 +112,10 @@ final class LiveAudioSink: @unchecked Sendable {
         lock.unlock()
     }
     func append(_ buffer: AVAudioPCMBuffer, start: Double, source: LiveAudioSource) {
+        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
+        guard start.isFinite, start >= 0, duration.isFinite, duration > 0, (start + duration).isFinite else { return }
         lock.lock()
-        latestEnds[source] = max(latestEnds[source] ?? 0, start + Double(buffer.frameLength) / buffer.format.sampleRate)
+        latestEnds[source] = max(latestEnds[source] ?? 0, start + duration)
         let queues = consumers.values.compactMap { $0[source] }
         lock.unlock()
         for queue in queues { queue.append(buffer, start: start) }

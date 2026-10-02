@@ -232,7 +232,7 @@ extension MeetingStore {
         let recognize =
             settings.recognizeSpeakers
             && settings.serviceProviders.contains {
-                $0.id == settings.speakerRecognitionProviderID && $0.kind == .community1
+                $0.id == settings.speakerRecognitionProviderID && $0.kind.isLocal
                     && $0.supports(.speakerRecognition)
             }
         let task = Task { [weak self] in

@@ -284,6 +284,7 @@ extension LiveTranscriptEditingTests {
                     .init(
                         session: session, source: .system, start: 0, end: 1,
                         text: "First phrase"), final: true, token: token)
+                await controller.flushCheckpoint()
                 #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
                 #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
                 do {
@@ -295,6 +296,7 @@ extension LiveTranscriptEditingTests {
                     .init(
                         session: session, source: .system, start: 1, end: 2,
                         text: "Second phrase"), final: true, token: token)
+                await controller.flushCheckpoint()
                 #expect(!controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
                 #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
                 controller.receiveTranscriptionFailure("Synthetic system recognition failed.", token: token)

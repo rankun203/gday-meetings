@@ -30,8 +30,8 @@ struct LiveTranscriptTests {
         buffer.floatChannelData![0][0] = 0.75
         let ranges = queue.takeDroppedRanges()
         #expect(ranges.count == 1)
-        #expect(ranges.first?.0 == 2)
-        #expect(ranges.first?.1 == 4)
+        #expect(ranges.first?.start == 2)
+        #expect(ranges.first?.end == 4)
         #expect(queue.takeDroppedRanges().isEmpty)
         var iterator = queue.stream.makeAsyncIterator()
         let first = await iterator.next()!

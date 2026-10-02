@@ -137,7 +137,6 @@ struct LocalModelDownloadView: View {
                 switch state.phase {
                 case .missing:
                     if readiness.isReady {
-                        Button("Verify…") { models.verify(modelID) }.disabled(state.inUse > 0)
                         Button("Remove Download", role: .destructive) {
                             Task {
                                 do {
@@ -152,7 +151,7 @@ struct LocalModelDownloadView: View {
                         Button("Download") { models.download(modelID) }.disabled(state.inUse > 0)
                     }
                 case .unverified:
-                    Button("Verify…") { models.verify(modelID) }.disabled(state.inUse > 0)
+                    ProgressView().controlSize(.small)
                 case .failed, .cancelled:
                     Button("Retry") { models.retry(modelID) }.disabled(state.inUse > 0)
                 case .downloading, .verifying, .preparing:
@@ -212,7 +211,7 @@ struct LocalModelDownloadView: View {
                 )
                 .font(.caption.monospaced()).textSelection(.enabled)
                 Text(
-                    "Return here and select Refresh, then Verify. Verification checks every file before preparing the model."
+                    "Return here and select Refresh. The app checks every file and prepares the model automatically."
                 )
                 .font(.caption).foregroundStyle(.secondary)
                 Link(
@@ -224,7 +223,10 @@ struct LocalModelDownloadView: View {
             }
             .disclosureGroupStyle(AppDisclosureStyle())
         }
-        .task { readiness = await models.health(for: modelID) }
+        .task {
+            await models.refresh([modelID])
+            readiness = await models.health(for: modelID)
+        }
         .onReceive(models.$states) { _ in Task { readiness = await models.health(for: modelID) } }
     }
     private func openFolder() {

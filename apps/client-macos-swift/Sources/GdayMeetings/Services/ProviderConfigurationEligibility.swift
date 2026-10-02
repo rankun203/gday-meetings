@@ -8,6 +8,7 @@ enum ProviderConfigurationEligibility {
     ) -> Bool {
         guard provider.supports(capability), hasText(provider.name) else { return false }
         if provider.kind.isLocal {
+            if capability == .speakerRecognition { return true }
             switch provider.kind {
             case .nemotron:
                 return LocalModelID.allCases.contains {

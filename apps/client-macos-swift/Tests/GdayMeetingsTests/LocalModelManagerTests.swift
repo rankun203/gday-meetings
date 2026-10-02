@@ -125,16 +125,13 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         Issue.record("Model task did not settle")
     }
 
-    @Test func copiedFoldersRequireVerificationAndLeasesPreventRemoval() async throws {
+    @Test func copiedFoldersVerifyAutomaticallyAndLeasesPreventRemoval() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
         let id = LocalModelID.voiceEmbedding
         try writeModel(manager.modelDirectory(for: id))
         await manager.refresh()
-        #expect(manager.state(for: id).phase == .unverified)
-        await #expect(throws: (any Error).self) { _ = try await manager.acquire(id) }
-        manager.verify(id)
         try await settle(manager, id: id)
         #expect(manager.state(for: id).phase == .ready)
         let lease = try await manager.acquire(id)
@@ -145,6 +142,18 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         #expect(manager.state(for: id).inUse == 0)
         try await manager.remove(id)
         #expect(manager.state(for: id).phase == .missing)
+    }
+
+    @Test func copiedModelCanBeAcquiredWithoutOpeningProviderSettings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
+        let id = LocalModelID.voiceEmbedding
+        try writeModel(manager.modelDirectory(for: id))
+        let lease = try await manager.acquire(id)
+        #expect(manager.state(for: id).phase == .ready)
+        #expect(manager.state(for: id).inUse == 1)
+        manager.release(lease)
     }
 
     @Test func badHashCannotBecomeReadyAndCancellationCanRetryVerification() async throws {
@@ -160,7 +169,7 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         try writeModel(manager.modelDirectory(for: id))
         let file = manager.modelDirectory(for: id).appendingPathComponent("Model.mlmodelc/data")
         try Data(repeating: 1, count: bytes.count).write(to: file)
-        manager.verify(id)
+        await manager.refresh()
         try await settle(manager, id: id)
         #expect(manager.state(for: id).phase == .failed)
         try writeModel(manager.modelDirectory(for: id))

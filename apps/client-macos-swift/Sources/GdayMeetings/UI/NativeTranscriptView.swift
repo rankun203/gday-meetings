@@ -157,23 +157,20 @@ struct NativeTranscriptView: NSViewRepresentable {
             heights.removeMissingIDs(Set(rows.map(\.id)))
             activeRow = nil
             withoutLayoutAnimation {
-                let commonCount = min(previousRows.count, rows.count)
-                let samePrefix = previousRows.prefix(commonCount).map(\.id) == rows.prefix(commonCount).map(\.id)
-                if sourceChanged || presentationChanged || !samePrefix {
+                if sourceChanged || presentationChanged {
                     table.reloadData()
                 }
                 else {
-                    if rows.count > previousRows.count {
-                        table.insertRows(at: IndexSet(previousRows.count..<rows.count), withAnimation: [])
-                    }
-                    else if rows.count < previousRows.count {
-                        table.removeRows(at: IndexSet(rows.count..<previousRows.count), withAnimation: [])
-                    }
-                    let changedRows = IndexSet((0..<commonCount).filter { previousRows[$0] != rows[$0] })
-                    if !changedRows.isEmpty {
+                    let update = TranscriptRowUpdate(previous: previousRows, current: rows)
+                    table.beginUpdates()
+                    if !update.removed.isEmpty { table.removeRows(at: update.removed, withAnimation: []) }
+                    if !update.inserted.isEmpty { table.insertRows(at: update.inserted, withAnimation: []) }
+                    table.endUpdates()
+                    if !update.changed.isEmpty {
                         table.reloadData(
-                            forRowIndexes: changedRows, columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
-                        table.noteHeightOfRows(withIndexesChanged: changedRows)
+                            forRowIndexes: update.changed,
+                            columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+                        table.noteHeightOfRows(withIndexesChanged: update.changed)
                     }
                 }
             }
@@ -965,5 +962,22 @@ enum TranscriptLiveWordColor {
     static var trailing: NSColor {
         if #available(macOS 15, *) { return NSColor(Color.red.mix(with: .primary, by: 0.5)) }
         return NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed
+    }
+}
+
+/// A revised partial may change its identity or split into several rows. Replace
+/// only that suffix, leaving the preceding native cells and scroll anchor intact.
+struct TranscriptRowUpdate {
+    let removed: IndexSet
+    let inserted: IndexSet
+    let changed: IndexSet
+
+    init(previous: [TranscriptDisplayRow], current: [TranscriptDisplayRow]) {
+        var prefix = 0
+        let common = min(previous.count, current.count)
+        while prefix < common, previous[prefix].id == current[prefix].id { prefix += 1 }
+        removed = IndexSet(prefix..<previous.count)
+        inserted = IndexSet(prefix..<current.count)
+        changed = IndexSet((0..<prefix).filter { previous[$0] != current[$0] })
     }
 }

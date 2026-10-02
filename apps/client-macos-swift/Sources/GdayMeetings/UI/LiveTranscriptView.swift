@@ -8,6 +8,7 @@ struct LiveTranscriptView: View {
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var followsLive = true
+    @ViewState private var displayCache = LiveTranscriptDisplayCache()
     @ViewState private var displayRows: [TranscriptDisplayRow] = []
     @ViewState private var displayGeneration = 0
     @ViewState private var hasUnresolvedTiming = false
@@ -112,7 +113,8 @@ struct LiveTranscriptView: View {
         let finalized = presented.finalized
         let partials = presented.partials
         hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
-        let snapshot = LiveTranscriptDisplay.snapshot(
+        let snapshot = displayCache.snapshot(
+            meetingID: controller.draft?.meetingID,
             finalized: finalized, partials: partials, people: store.people, recognitionEnabled: controller.enabled,
             overrides: controller.draft?.overrides ?? [])
         displayedPhrases = snapshot.phrases
@@ -142,6 +144,12 @@ enum LiveTranscriptDisplay {
         let activePhraseID = recognitionEnabled ? LiveTranscriptPresentation.activePhraseID(partials) : nil
         let names = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0.name) })
         let groups = LiveTranscriptParagraphs.groups(finalized: finalized, partials: partials, overrides: overrides)
+        return snapshot(groups: groups, names: names, activePhraseID: activePhraseID)
+    }
+
+    static func snapshot(
+        groups: [LiveTranscriptParagraphs.Paragraph], names: [UUID: String], activePhraseID: UUID?
+    ) -> (rows: [TranscriptDisplayRow], phrases: [UUID: LiveTranscriptPhrase]) {
         let rows = groups.map { group in
             let phrase = group.phrase
             let personID = phrase.personID.flatMap { names[$0] == nil ? nil : $0 }

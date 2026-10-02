@@ -35,6 +35,10 @@ final class LiveTranscriptController: ObservableObject {
     @Published private var speakerAnalysisIssue: String?
     @Published private var voiceMatchingIssue: String?
     private var voiceMatchingError: Error?
+    private var checkpointWriter = LiveTranscriptCheckpointWriter()
+    private var checkpointGeneration = UUID()
+    private let resolutionCache = LiveTranscriptResolutionCache()
+    private let speakerDisplayCache = LiveTranscriptSpeakerDisplayCache()
 
     var liveTranscriptIssues: [String] {
         var issues = [transcriptionIssue, checkpointIssue, journalIssue].compactMap { $0 } + transcriptionFailures
@@ -75,9 +79,11 @@ final class LiveTranscriptController: ObservableObject {
 
     var presentedRows: (finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) {
         let people = Set(peopleProvider().map(\.id))
-        let resolved = draft?.resolvedRows(partials: partials) ?? (finalized: [], partials: partials)
+        let resolved =
+            draft?.resolvedRows(partials: partials, cache: resolutionCache) ?? (finalized: [], partials: partials)
         return (
-            finalized: resolved.finalized.map { $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people) },
+            finalized: speakerDisplayCache.rows(
+                resolved.finalized, meetingID: draft?.meetingID, enabled: speakerLabelsEnabled, people: people),
             partials: resolved.partials.map { $0.displayingSpeakerLabels(speakerLabelsEnabled, knownPeople: people) }
         )
     }
@@ -130,6 +136,8 @@ final class LiveTranscriptController: ObservableObject {
         transcriptionIssue = nil
         transcriptionFailures = []
         checkpointIssue = nil
+        checkpointWriter = LiveTranscriptCheckpointWriter()
+        checkpointGeneration = UUID()
         journalIssue = nil
         speakerAnalysisIssue = nil
         voiceMatchingIssue = nil
@@ -590,6 +598,7 @@ final class LiveTranscriptController: ObservableObject {
         generation = UUID()
         partials = []
         checkpoint()
+        await flushCheckpoint()
         stopProvider = nil
         cancelProvider = nil
         sink = nil
@@ -640,15 +649,19 @@ final class LiveTranscriptController: ObservableObject {
     }
     private func checkpoint() {
         guard let draft, let directory else { return }
-        do {
-            try draft.save(at: directory)
-            checkpointIssue = nil
-        }
-        catch {
-            status = "Couldn’t save the live draft. Recording continues. Check available storage."
-            checkpointIssue = status
+        let meetingID = draft.meetingID
+        let checkpointGeneration = self.checkpointGeneration
+        checkpointWriter.submit(draft, at: directory) { [weak self] issue in
+            guard let self, self.draft?.meetingID == meetingID, self.checkpointGeneration == checkpointGeneration else {
+                return
+            }
+            if self.checkpointIssue != issue { self.checkpointIssue = issue }
+            if let issue, self.status != issue { self.status = issue }
         }
     }
+
+    /// Waits for the latest accepted snapshot, including its storage error report.
+    func flushCheckpoint() async { await checkpointWriter.flush() }
     private func openLocalDataEvent(
         _ token: UUID, targetID: UUID, targetName: String,
         purpose: String, bodies: [String]

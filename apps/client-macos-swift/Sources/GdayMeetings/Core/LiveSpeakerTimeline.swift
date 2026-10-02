@@ -31,8 +31,8 @@ struct LiveSpeakerEvent: Sendable {
     var final = false
 }
 
-struct LiveSpeakerTimeline: Codable, Equatable {
-    struct Cursor: Codable, Equatable {
+struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
+    struct Cursor: Codable, Equatable, Sendable {
         var source: LiveAudioSource
         var generation: UUID
         var sequence: Int
@@ -312,5 +312,114 @@ struct LiveSpeakerActivityFilter {
             }
         }
         return active
+    }
+}
+
+/// An augmented range tree skips nonoverlapping subtrees even when a long
+/// interval spans many shorter entries. The index is disposable and keeps no audio.
+struct LiveSpeakerIntervalIndex {
+    private struct RangeIndex<Value> {
+        let values: [Value]
+        let maximumEnds: [Double]
+        let leafCount: Int
+        let start: (Value) -> Double
+
+        init(_ values: [Value], start: @escaping (Value) -> Double, end: (Value) -> Double) {
+            self.values = values.sorted { start($0) < start($1) }
+            self.start = start
+            var count = 1
+            while count < values.count { count *= 2 }
+            leafCount = count
+            var ends = Array(repeating: -Double.infinity, count: count * 2)
+            for (index, value) in self.values.enumerated() { ends[count + index] = end(value) }
+            if count > 1 {
+                for index in stride(from: count - 1, through: 1, by: -1) {
+                    ends[index] = max(ends[index * 2], ends[index * 2 + 1])
+                }
+            }
+            maximumEnds = ends
+        }
+
+        func overlapping(start lowerBound: Double, end upperBound: Double) -> [Value] {
+            var result: [Value] = []
+            func visit(_ node: Int, lower: Int, upper: Int) {
+                guard lower < values.count, maximumEnds[node] > lowerBound,
+                    start(values[lower]) < upperBound
+                else { return }
+                if upper - lower == 1 {
+                    result.append(values[lower])
+                    return
+                }
+                let middle = (lower + upper) / 2
+                visit(node * 2, lower: lower, upper: middle)
+                visit(node * 2 + 1, lower: middle, upper: upper)
+            }
+            visit(1, lower: 0, upper: leafCount)
+            return result
+        }
+    }
+
+    private var sources: [LiveAudioSource: RangeIndex<LiveSpeakerInterval>] = [:]
+    private var gapsBySource: [LiveAudioSource: RangeIndex<LiveTranscriptGap>] = [:]
+    private var speakersBySource: [LiveAudioSource: [LiveSpeakerIdentity]] = [:]
+    private var timeline: LiveSpeakerTimeline
+
+    init(_ timeline: LiveSpeakerTimeline) {
+        self.timeline = timeline
+        gapsBySource = Dictionary(grouping: timeline.gaps, by: \.source).mapValues {
+            RangeIndex($0, start: { $0.start }, end: { $0.end })
+        }
+        speakersBySource = Dictionary(grouping: timeline.speakers, by: \.source)
+        let sourcesByID = Dictionary(grouping: timeline.speakers, by: \.id).mapValues { Set($0.map(\.source)) }
+        var grouped: [LiveAudioSource: [LiveSpeakerInterval]] = [:]
+        for interval in timeline.intervals {
+            for source in sourcesByID[interval.speakerID] ?? [] { grouped[source, default: []].append(interval) }
+        }
+        for (source, values) in grouped {
+            sources[source] = RangeIndex(values, start: { $0.start }, end: { $0.end })
+        }
+    }
+
+    mutating func update(_ timeline: LiveSpeakerTimeline) {
+        let sameSources =
+            self.timeline.speakers.count == timeline.speakers.count
+            && zip(self.timeline.speakers, timeline.speakers).allSatisfy {
+                $0.id == $1.id && $0.source == $1.source
+            }
+        if sameSources, self.timeline.intervals == timeline.intervals {
+            if self.timeline.gaps != timeline.gaps {
+                gapsBySource = Dictionary(grouping: timeline.gaps, by: \.source).mapValues {
+                    RangeIndex($0, start: { $0.start }, end: { $0.end })
+                }
+            }
+            if self.timeline.speakers != timeline.speakers {
+                speakersBySource = Dictionary(grouping: timeline.speakers, by: \.source)
+            }
+            self.timeline = timeline
+        }
+        else {
+            self = Self(timeline)
+        }
+    }
+
+    func evidence(for phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase?) -> LiveSpeakerTimeline {
+        let usesPreceding =
+            preceding.map {
+                $0.source == phrase.source && $0.session == phrase.session && $0.hasCompleteWordTiming
+                    && $0.end <= phrase.start && phrase.start - $0.end <= 0.5
+            } ?? false
+        let start = usesPreceding ? min(phrase.start, preceding!.start) : phrase.start
+        var evidence = LiveSpeakerTimeline()
+        evidence.speakers = speakersBySource[phrase.source] ?? []
+        evidence.intervals = sources[phrase.source]?.overlapping(start: start, end: phrase.end) ?? []
+        evidence.gaps = gapsBySource[phrase.source]?.overlapping(start: start, end: phrase.end) ?? []
+        evidence.cursors = timeline.cursors.filter { $0.source == phrase.source }.map {
+            // Sequence and finality do not affect attribution. Once coverage has
+            // reached this phrase, advancing the live tail cannot change it.
+            .init(
+                source: $0.source, generation: $0.generation, sequence: 0,
+                end: min($0.end, phrase.end), final: false)
+        }
+        return evidence
     }
 }

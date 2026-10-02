@@ -7,6 +7,8 @@ scope: repository-workflow
 
 # Repository workflow
 
+- Push back on user requests when implementing them would require hacks that introduce technical debt.
+
 ## Writing (all apps and documents)
 
 - Before making any repository edit, read [docs/writing.md](docs/writing.md).
