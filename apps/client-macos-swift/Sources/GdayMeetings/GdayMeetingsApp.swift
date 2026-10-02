@@ -93,29 +93,70 @@ struct GdayMeetingsApp: App {
             RecordingMenuView().environmentObject(store).environmentObject(playback)
         } label: {
             if store.recordingID == nil {
-                Image(nsImage: MenuBarArtwork.waveform).accessibilityLabel("Gday Meetings")
+                Image(nsImage: MenuBarArtwork.normal).accessibilityLabel("Gday Meetings")
             }
             else {
-                Image(systemName: "stop.circle.fill").accessibilityLabel("Gday Meetings — Recording")
+                Image(nsImage: MenuBarArtwork.recording).accessibilityLabel("Gday Meetings — Recording")
             }
         }
     }
 }
 
 private enum MenuBarArtwork {
-    // Match the Rust client's 18-point template, with vector drawing for Retina.
-    // Keep these bar dimensions in sync with desktop.rs waveform_icon().
-    static let waveform: NSImage = {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.setFill()
-            for (x, height) in [(2, 6), (5, 12), (8, 16), (11, 10), (14, 4)] {
-                NSBezierPath(rect: NSRect(x: x, y: (18 - height) / 2, width: 2, height: height)).fill()
+    static let normal = image(recording: false)
+    static let recording = image(recording: true)
+
+    private static func image(recording: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: true) { bounds in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.saveGState()
+            defer { context.restoreGState() }
+            context.translateBy(x: bounds.minX, y: bounds.minY)
+            context.scaleBy(x: bounds.width / 24, y: bounds.height / 24)
+            context.setFillColor(NSColor.black.cgColor)
+            context.setStrokeColor(NSColor.black.cgColor)
+
+            let band = CGMutablePath()
+            band.move(to: CGPoint(x: 3.6, y: 7.3))
+            band.addCurve(
+                to: CGPoint(x: 20.4, y: 7.3),
+                control1: CGPoint(x: 4.1, y: -0.1), control2: CGPoint(x: 19.9, y: -0.1))
+            context.addPath(band)
+            context.setLineWidth(1.1)
+            context.setLineCap(.round)
+            context.strokePath()
+
+            let head = CGMutablePath()
+            head.move(to: CGPoint(x: 7.5, y: 10.4))
+            head.addCurve(to: CGPoint(x: 1.5, y: 7), control1: CGPoint(x: 7, y: 7), control2: CGPoint(x: 4, y: 5))
+            head.addCurve(
+                to: CGPoint(x: 2, y: 15.7), control1: CGPoint(x: -1, y: 9.5), control2: CGPoint(x: -0.3, y: 14))
+            head.addCurve(
+                to: CGPoint(x: 5, y: 15.8), control1: CGPoint(x: 3, y: 16.5), control2: CGPoint(x: 4.3, y: 16.3))
+            head.addCurve(to: CGPoint(x: 12, y: 22), control1: CGPoint(x: 4.5, y: 20), control2: CGPoint(x: 7, y: 22))
+            head.addCurve(
+                to: CGPoint(x: 19, y: 15.8), control1: CGPoint(x: 17, y: 22), control2: CGPoint(x: 19.5, y: 20))
+            head.addCurve(
+                to: CGPoint(x: 22, y: 15.7), control1: CGPoint(x: 19.7, y: 16.3), control2: CGPoint(x: 21, y: 16.5))
+            head.addCurve(
+                to: CGPoint(x: 22.5, y: 7), control1: CGPoint(x: 24.3, y: 14), control2: CGPoint(x: 25, y: 9.5))
+            head.addCurve(to: CGPoint(x: 16.5, y: 10.4), control1: CGPoint(x: 20, y: 5), control2: CGPoint(x: 17, y: 7))
+            head.addCurve(to: CGPoint(x: 7.5, y: 10.4), control1: CGPoint(x: 15, y: 7), control2: CGPoint(x: 9, y: 7))
+            head.closeSubpath()
+            context.addPath(head)
+            if recording {
+                // The stop mark is transparent so the menu bar supplies its appearance.
+                context.addPath(
+                    CGPath(
+                        roundedRect: CGRect(x: 9.4, y: 13, width: 5.2, height: 5.2),
+                        cornerWidth: 0.7, cornerHeight: 0.7, transform: nil))
             }
+            context.drawPath(using: .eoFill)
             return true
         }
         image.isTemplate = true
         return image
-    }()
+    }
 }
 
 @MainActor

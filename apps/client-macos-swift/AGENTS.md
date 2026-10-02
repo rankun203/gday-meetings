@@ -67,6 +67,7 @@ Read the relevant documents before changing the app:
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 - [Streaming Opus recording](../../docs/worklogs/2026-10-01-streaming-opus.md): speech encoding, DTX, bounded capture writes, and validation.
 - [Recording menu icon](../../docs/worklogs/2026-10-01-recording-menu-icon.md): square stop symbol while recording.
+- [Koala menu icon](../../docs/worklogs/2026-10-02-koala-menu-icon.md): distinctive template artwork and recording-state square.
 - [Recording source mute](../../docs/worklogs/2026-09-29-recording-source-mute.md): independent source controls, saved and live silence, and validation.
 - [Recording meter animation](../../docs/worklogs/2026-10-02-meter-animation.md): layer interpolation, unchanged meter publication rate, accessibility, and measured performance limits.
 - [Notes controls layout](../../docs/worklogs/2026-09-29-notes-controls-layout.md): recording header alignment, fixed source icon slots, and floating Markdown copy controls.
