@@ -264,7 +264,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     }
 
     static func read(at directory: URL, meetingID: UUID) throws -> Self? {
-        let journal = directory.appendingPathComponent("live-transcript-events.jsonl")
+        let journal = directory.appendingPathComponent("live-transcript-events.csv")
         let file = directory.appendingPathComponent("live-transcript.json")
         if FileManager.default.fileExists(atPath: journal.path) {
             if let data = try? Data(contentsOf: file),
@@ -275,7 +275,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
             {
                 return committed
             }
-            let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.read(from: journal)
+            let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.readEvents(from: journal)
             if let recovered = LiveTranscriptJournalRecord.replay(records), recovered.meetingID == meetingID {
                 return recovered
             }

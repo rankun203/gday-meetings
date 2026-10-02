@@ -161,7 +161,7 @@ final class LiveTranscriptController: ObservableObject {
         checkpointIssue = nil
         checkpointWriter = LiveTranscriptCheckpointWriter()
         checkpointGeneration = UUID()
-        eventJournal = LiveTranscriptJournal(url: directory.appendingPathComponent("live-transcript-events.jsonl"))
+        eventJournal = .events(at: directory.appendingPathComponent("live-transcript-events.csv"))
         stream.reset(labeling: speakerLabelsEnabled, sources: sources)
         publishStream()
         journalIssue = nil
@@ -790,10 +790,10 @@ final class LiveTranscriptController: ObservableObject {
                     recovered.complete = false
                     recovered.speakerLabelsComplete = false
                 }
-                let journal = directory.appendingPathComponent("live-transcript-events.jsonl")
+                let journal = directory.appendingPathComponent("live-transcript-events.csv")
                 recovered.committedJournalDigest = try? LiveTranscriptDraft.journalDigest(at: journal)
                 try recovered.save(at: directory)
-                let archive = directory.appendingPathComponent("live-transcript-events.saved.jsonl")
+                let archive = directory.appendingPathComponent("live-transcript-events.saved.csv")
                 if FileManager.default.fileExists(atPath: journal.path) {
                     try FileManager.default.moveItem(at: journal, to: archive)
                 }

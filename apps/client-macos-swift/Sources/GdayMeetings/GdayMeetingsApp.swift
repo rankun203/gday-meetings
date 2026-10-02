@@ -102,7 +102,7 @@ struct GdayMeetingsApp: App {
     }
 }
 
-private enum MenuBarArtwork {
+enum MenuBarArtwork {
     static let normal = image(recording: false)
     static let recording = image(recording: true)
 

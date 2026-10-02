@@ -200,7 +200,18 @@ struct LibraryView: View {
                     .keyboardShortcut("s", modifiers: [.command, .control])
                 }
                 ToolbarItem(placement: .navigation) {
-                    Text(destinationTitle).font(.headline)
+                    HStack(spacing: 6) {
+                        if destination == .meetings {
+                            Image(nsImage: MenuBarArtwork.normal)
+                                .accessibilityHidden(true)
+                            Text("Gday Meetings")
+                        }
+                        else {
+                            Text(destinationTitle)
+                        }
+                    }
+                    .font(.headline)
+                    .accessibilityElement(children: .combine)
                 }
                 ToolbarItemGroup {
                     Spacer()

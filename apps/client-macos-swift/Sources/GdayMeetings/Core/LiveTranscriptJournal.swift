@@ -2,7 +2,7 @@ import Foundation
 
 /// Ordered, bounded delivery of transcript changes to an append-only file.
 /// Encoding and file access run on the utility queue, never on the caller.
-final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendable {
+final class LiveTranscriptJournal<Record: Sendable>: @unchecked Sendable {
     enum Failure: Error, LocalizedError {
         case full
         case corrupt
@@ -22,10 +22,13 @@ final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendab
     private let url: URL
     private let limit: Int
     private let maximumRecordBytes: Int
-    private struct Header: Codable {
-        let format: String
-        let version: Int
+    struct Format {
+        var header: Data
+        var encode: (Record) throws -> Data
+        /// Restores encoder state as well as decoding the committed prefix.
+        var restore: (Data) throws -> (records: [Record], committedBytes: Int)
     }
+    private let format: Format
     private let queue = DispatchQueue(label: "meetings.live-transcript-journal", qos: .utility)
     private let lock = NSLock()
     // Protected by lock; enqueueing also happens under lock to preserve order.
@@ -35,10 +38,11 @@ final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendab
     private var handle: FileHandle?
     private var writeFailure: Error?
 
-    init(url: URL, limit: Int = 256, maximumRecordBytes: Int = 4 * 1024 * 1024) {
+    init(url: URL, limit: Int = 256, maximumRecordBytes: Int = 4 * 1024 * 1024, format: Format) {
         self.url = url
         self.limit = max(1, limit)
         self.maximumRecordBytes = max(1, maximumRecordBytes)
+        self.format = format
     }
 
     /// False means this record was not accepted. The error is retained by flush;
@@ -56,10 +60,10 @@ final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendab
         queue.async { [self] in
             do {
                 if let writeFailure { throw writeFailure }
-                var data = try JSONEncoder().encode(record)
+                let handle = try open()
+                let data = try format.encode(record)
                 guard data.count <= maximumRecordBytes else { throw Failure.oversized }
-                data.append(0x0A)
-                try open().write(contentsOf: data)
+                try handle.write(contentsOf: data)
             }
             catch {
                 writeFailure = error
@@ -108,18 +112,15 @@ final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendab
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         if !FileManager.default.fileExists(atPath: url.path) {
-            var header = try JSONEncoder().encode(Header(format: "gday-live-transcript", version: 1))
-            header.append(0x0A)
             guard
                 FileManager.default.createFile(
-                    atPath: url.path, contents: header, attributes: [.posixPermissions: 0o600])
+                    atPath: url.path, contents: format.header, attributes: [.posixPermissions: 0o600])
             else { throw Failure.create }
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         let data = try Data(contentsOf: url)
         // Validate before appending. Only an interrupted final write is repairable.
-        _ = try Self.decode(data)
-        let committedBytes = data.lastIndex(of: 0x0A).map { data.distance(from: data.startIndex, to: $0) + 1 } ?? 0
+        let committedBytes = try format.restore(data).committedBytes
         let opened = try FileHandle(forWritingTo: url)
         do {
             if committedBytes < data.count { try opened.truncate(atOffset: UInt64(committedBytes)) }
@@ -131,29 +132,6 @@ final class LiveTranscriptJournal<Record: Codable & Sendable>: @unchecked Sendab
             try? opened.close()
             throw error
         }
-    }
-
-    /// A newline commits one record. An unterminated tail is an interrupted
-    /// append; malformed committed records fail instead of hiding missing data.
-    static func read(from url: URL) throws -> [Record] {
-        try decode(Data(contentsOf: url))
-    }
-
-    private static func decode(_ data: Data) throws -> [Record] {
-        let decoder = JSONDecoder()
-        var records: [Record] = []
-        guard let headerEnd = data.firstIndex(of: 0x0A),
-            let header = try? decoder.decode(Header.self, from: data[..<headerEnd]),
-            header.format == "gday-live-transcript", header.version == 1
-        else { throw Failure.corrupt }
-        var start = data.index(after: headerEnd)
-        while start < data.endIndex, let end = data[start...].firstIndex(of: 0x0A) {
-            guard end > start else { throw Failure.corrupt }
-            do { records.append(try decoder.decode(Record.self, from: data[start..<end])) }
-            catch { throw Failure.corrupt }
-            start = data.index(after: end)
-        }
-        return records
     }
 
     deinit { try? handle?.close() }

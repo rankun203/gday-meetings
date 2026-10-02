@@ -17,6 +17,8 @@ struct AgentGuideTests {
         #expect(guide.contains("This Swift library has no `recordings/index.md`"))
         #expect(guide.contains("transcript-revisions.json"))
         #expect(guide.contains("live-transcript.json"))
+        #expect(guide.contains("live-transcript-events.csv"))
+        #expect(guide.contains("SHA-256"))
         #expect(guide.contains("Keep the last line for each event ID"))
         #expect(guide.contains("separate task stores"))
         #expect(guide.contains("speakerID"))
@@ -115,7 +117,8 @@ struct AgentGuideTests {
         let custom = "---\ntitle: Existing guide\n---\n\nPreserve this guide.\n"
         try Data(custom.utf8).write(to: root)
         _ = MeetingStore(dataDirectory: folder)
-        #expect(try AgentGuides.read(directory: folder) == custom)
+        #expect(try AgentGuides.read(directory: folder) == custom + "\n\n" + AgentGuides.liveTranscriptFormat + "\n")
+        #expect(try !AgentGuides.ensure(directory: folder))
     }
 
     private func temporaryDirectory() -> URL {

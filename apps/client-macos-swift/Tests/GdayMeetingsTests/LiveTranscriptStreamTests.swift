@@ -220,10 +220,10 @@ struct LiveTranscriptStreamTests {
         await controller.finish()
         #expect(
             !FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent("live-transcript-events.jsonl").path))
+                atPath: directory.appendingPathComponent("live-transcript-events.csv").path))
         #expect(
             FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent("live-transcript-events.saved.jsonl").path))
+                atPath: directory.appendingPathComponent("live-transcript-events.saved.csv").path))
         var saved = try #require(try LiveTranscriptDraft.read(at: directory, meetingID: session))
         saved.updateText("Saved correction", for: try #require(saved.resolvedRows().finalized.first))
         try saved.save(at: directory)
@@ -273,7 +273,7 @@ struct LiveTranscriptStreamTests {
                 await controller.flushCheckpoint()
                 do {
                     let file = try FileHandle(
-                        forWritingTo: directory.appendingPathComponent("live-transcript-events.jsonl"))
+                        forWritingTo: directory.appendingPathComponent("live-transcript-events.csv"))
                     try file.seekToEnd()
                     try file.write(contentsOf: Data("corrupt committed record\n".utf8))
                     try file.close()
@@ -321,11 +321,13 @@ struct LiveTranscriptStreamTests {
         #expect(stream.snapshot.rawPhrases.first?.personID == nil)
     }
 
-    @Test func committedSnapshotWinsIfJournalRetirementWasInterrupted() async throws {
+    @Test func committedSnapshotWinsIfJournalRetirementWasInterrupted()
+        async throws
+    {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journalURL = directory.appendingPathComponent("live-transcript-events.jsonl")
-        let journal = LiveTranscriptJournal<LiveTranscriptJournalRecord>(url: journalURL)
+        let journalURL = directory.appendingPathComponent("live-transcript-events.csv")
+        let journal = LiveTranscriptJournal<LiveTranscriptJournalRecord>.events(at: journalURL)
         journal.append(.begin(.init(meetingID: session, locale: "en"), labeling: false))
         journal.append(.phrase(phrase(0, ["Written"]), final: true))
         try await journal.flush()
