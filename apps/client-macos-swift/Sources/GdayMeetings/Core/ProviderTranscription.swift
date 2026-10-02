@@ -45,6 +45,10 @@ extension MeetingStore {
         var attempt =
             meeting.transcriptionAttempt
             ?? ProviderTranscriptionAttempt(provider: provider, meeting: meeting)
+        if meeting.transcriptionAttempt == nil {
+            attempt.diarize =
+                provider.supports(.diarization) && settings.shouldLabelDuringTranscription(providerID: provider.id)
+        }
         guard attempt.providerID == provider.id, attempt.kind == provider.kind, attempt.endpoint == provider.endpoint
         else {
             throw ServiceError("Resume the pending transcription with its original provider and address.")
@@ -367,6 +371,7 @@ extension MeetingStore {
         latest.transcriptionAttempt = nil
         if updateMeeting(latest) {
             reconcileManagedTaskCompletion(for: latest, kind: .transcription)
+            scheduleAutomaticSpeakerLabeling(id: meetingID)
             scheduleAutomaticSummary(id: meetingID)
         }
     }

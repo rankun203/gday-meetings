@@ -137,7 +137,7 @@ private final class QueueProviderState: @unchecked Sendable {
         let id = store.createMeeting(title: "Missing provider")
         await store.transcribe(id: id)
         #expect(store.managedTasks.last?.state == .failed)
-        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → Defaults.")
+        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → General.")
         #expect(store.errorMessage == nil)
         var meeting = try #require(store.meetings.first)
         var attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: meeting)

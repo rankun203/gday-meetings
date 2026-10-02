@@ -120,6 +120,17 @@ final class LocalModelManager: ObservableObject {
             .appendingPathComponent(descriptor(id).revision, isDirectory: true)
     }
 
+    /// Inspect receipt and file metadata without hashing files or loading Core ML.
+    func health(for id: LocalModelID) async -> ProviderHealth {
+        guard storageAvailable, !storageSuspended else { return .notReady("The data folder is unavailable.") }
+        let state = state(for: id)
+        if [.downloading, .verifying, .preparing].contains(state.phase) {
+            return .notReady(state.phase.settingsTitle)
+        }
+        if state.phase == .failed { return .notReady(state.message ?? "Model setup failed.") }
+        return await worker.health(descriptor(id), directory: modelDirectory(for: id))
+    }
+
     func refresh() async {
         storageOperations += 1
         defer { storageOperations -= 1 }
@@ -541,6 +552,23 @@ actor LocalModelFiles {
             if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
             try fm.linkItem(at: object, to: target)
         }
+    }
+
+    func health(_ descriptor: LocalModelDescriptor, directory: URL) -> ProviderHealth {
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return .notReady("Required model files are missing.")
+        }
+        for asset in descriptor.assets {
+            guard let url = try? safeURL(asset, directory: directory),
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                attributes[.type] as? FileAttributeType == .typeRegular,
+                (attributes[.size] as? NSNumber)?.int64Value == asset.bytes
+            else { return .notReady("Required model files are missing or incomplete.") }
+        }
+        guard hasPreparationReceipt(descriptor, directory: directory) else {
+            return .notReady("Verify the model in provider settings.")
+        }
+        return .ready
     }
 
     func hasPreparationReceipt(_ descriptor: LocalModelDescriptor, directory: URL) -> Bool {

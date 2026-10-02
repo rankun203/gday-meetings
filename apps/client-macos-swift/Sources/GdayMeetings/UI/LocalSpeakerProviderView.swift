@@ -4,6 +4,8 @@ import SwiftUI
 /// Local capabilities share the provider form, but have no remote connection fields.
 struct LocalSpeakerProviderView: View {
     @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var health = ProviderHealthStore.shared
+    @ObservedObject private var localModels = LocalModelManager.shared
     @ViewState private var draft: ServiceProvider
     @ViewState private var failure: String?
 
@@ -24,7 +26,7 @@ struct LocalSpeakerProviderView: View {
                     .font(.title2.weight(.semibold))
                 TextField("Name", text: $draft.name)
                 Toggle("Enable This Provider", isOn: $draft.isEnabled)
-                Text("Audio and voice matching stay on this Mac. Model downloads connect to Hugging Face.")
+                Text("Audio and speaker association stay on this Mac. Model downloads connect to Hugging Face.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Capabilities") {
@@ -45,9 +47,16 @@ struct LocalSpeakerProviderView: View {
                 Text(
                     draft.kind == .nemotron
                         ? "Adds speaker labels during recording independently of live transcription."
-                        : "Labels speakers in saved audio without transcribing again. Speaker Recognition uses compatible voice samples from People."
+                        : "Labels speakers in saved audio without transcribing again. Speaker Association uses compatible voice samples from the People Library."
                 )
                 .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Readiness") {
+                ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
+                    let result = health.state(providerID: draft.id, capability: capability)
+                    LabeledContent(capability.title, value: result.title)
+                    if let reason = result.reason { Text(reason).font(.caption).foregroundStyle(.orange) }
+                }
             }
             Section("Model") {
                 Picker("Preset", selection: $draft.model) {
@@ -73,10 +82,12 @@ struct LocalSpeakerProviderView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if draft.kind == .nemotron || draft.enabledCapabilities.contains(.speakerRecognition) {
-                Section("Voice Matching Model") {
+                Section("Speaker Association Model") {
                     LocalModelDownloadView(modelID: .voiceEmbedding)
-                    Text("Matches voices to People. Speaker labels work without this model.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text(
+                        "Associates speakers with people in the People Library. Speaker labels work without this model."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section {
@@ -84,6 +95,10 @@ struct LocalSpeakerProviderView: View {
                 Button("Save") { save() }.disabled(
                     !changed || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+        }
+        .task { await store.refreshProviderHealth(providerID: draft.id) }
+        .onReceive(localModels.$states) { _ in
+            Task { await store.refreshProviderHealth(providerID: draft.id) }
         }
     }
     private func save() {
@@ -97,6 +112,7 @@ struct LocalSpeakerProviderView: View {
         }
         else {
             failure = nil
+            Task { await store.refreshProviderHealth(providerID: draft.id) }
         }
     }
 }
@@ -105,13 +121,14 @@ struct LocalModelDownloadView: View {
     @ObservedObject private var models = LocalModelManager.shared
     let modelID: LocalModelID
     @ViewState private var failure: String?
+    @ViewState private var readiness: ProviderHealth = .checking
 
     var body: some View {
         let state = models.state(for: modelID)
         let descriptor = LocalModelRegistry.descriptor(modelID)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(state.phase.settingsTitle)
+                Text(state.phase == .missing ? readiness.title : state.phase.settingsTitle)
                 Spacer()
                 Text(
                     "Model files: \(ByteCountFormatter.string(fromByteCount: descriptor.downloadBytes, countStyle: .file))"
@@ -119,7 +136,21 @@ struct LocalModelDownloadView: View {
                 .foregroundStyle(.secondary)
                 switch state.phase {
                 case .missing:
-                    Button("Download") { models.download(modelID) }.disabled(state.inUse > 0)
+                    if readiness.isReady {
+                        Button("Verify…") { models.verify(modelID) }.disabled(state.inUse > 0)
+                        Button("Remove Download", role: .destructive) {
+                            Task {
+                                do {
+                                    try await models.remove(modelID)
+                                    failure = nil
+                                }
+                                catch { failure = error.localizedDescription }
+                            }
+                        }.disabled(state.inUse > 0)
+                    }
+                    else if readiness != .checking {
+                        Button("Download") { models.download(modelID) }.disabled(state.inUse > 0)
+                    }
                 case .unverified:
                     Button("Verify…") { models.verify(modelID) }.disabled(state.inUse > 0)
                 case .failed, .cancelled:
@@ -162,6 +193,9 @@ struct LocalModelDownloadView: View {
                 Text("In use. Stop the current work before removing this model.").font(.caption).foregroundStyle(
                     .secondary)
             }
+            if state.phase == .missing, let reason = readiness.reason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
             if let message = failure ?? state.message {
                 Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
@@ -190,6 +224,8 @@ struct LocalModelDownloadView: View {
             }
             .disclosureGroupStyle(AppDisclosureStyle())
         }
+        .task { readiness = await models.health(for: modelID) }
+        .onReceive(models.$states) { _ in Task { readiness = await models.health(for: modelID) } }
     }
     private func openFolder() {
         Task {

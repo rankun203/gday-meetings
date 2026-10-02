@@ -27,10 +27,10 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .transcription: return "Transcription"
         case .liveTranscription: return "Live Transcription"
-        case .liveDiarization: return "Live Speaker Labels"
-        case .speakerRecognition: return "Speaker Recognition"
-        case .diarization: return "Speaker Labels"
-        case .summarization: return "Summaries"
+        case .liveDiarization: return "Live Speaker Labeling"
+        case .speakerRecognition: return "Speaker Association"
+        case .diarization: return "Speaker Labeling"
+        case .summarization: return "Summarization"
         case .search: return "Search"
         case .playback: return "Playback"
         case .fileTransfer: return "File Transfer"
@@ -47,8 +47,8 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
         case .gdayWebsite: return "Gday Meetings Website"
-        case .nemotron: return "Live Diarization (Nemotron)"
-        case .community1: return "Diarization (Community-1)"
+        case .nemotron: return "Live Speaker Labeling (Nemotron)"
+        case .community1: return "Speaker Labeling (Community-1)"
         }
     }
     var capabilities: Set<ProviderCapability> {
@@ -203,7 +203,7 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
             throw ServiceError("Enable Transcription for this RunPod provider before submitting audio.")
         }
         guard !diarize || provider.supports(.diarization) else {
-            throw ServiceError("Enable Speaker Labels for this provider before requesting them.")
+            throw ServiceError("Enable Speaker Labeling for this provider before requesting them.")
         }
         guard !provider.apiKey.isEmpty else { throw ServiceError("Enter the RunPod API key.") }
         guard !tracks.isEmpty else { throw ServiceError("Add an audio recording before transcribing.") }
@@ -339,7 +339,7 @@ struct OpenAISummaryProvider: SummarizationProvider {
         ) {
 
             guard provider.kind == .openAICompatible, provider.supports(.summarization) else {
-                throw ServiceError("Enable Summaries for this provider before sending meeting text.")
+                throw ServiceError("Enable Summarization for this provider before sending meeting text.")
             }
             _ = try ProviderEndpoint.base(provider.endpoint)
             guard !provider.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

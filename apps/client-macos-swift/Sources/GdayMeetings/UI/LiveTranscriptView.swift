@@ -20,10 +20,9 @@ struct LiveTranscriptView: View {
             LiveTranscriptHeader(
                 enabled: Binding(get: { controller.enabled }, set: controller.setEnabled),
                 recognizesSpeakers: Binding(
-                    get: { controller.speakerLabelsEnabled || controller.speakerRecognitionEnabled },
+                    get: { controller.speakerLabelsEnabled },
                     set: { enabled in
                         controller.setSpeakerLabelsEnabled(enabled)
-                        controller.setSpeakerRecognitionEnabled(enabled)
                     }),
                 followsLive: followsLive, hasRows: !displayRows.isEmpty,
                 issues: headerIssues, showsProviderSettings: controller.canOpenProviderSettings,
@@ -35,12 +34,13 @@ struct LiveTranscriptView: View {
             if displayRows.isEmpty {
                 ContentUnavailableView {
                     Label(
-                        controller.enabled ? "No Live Text Yet" : "Live Transcript Is Off", systemImage: "text.bubble")
+                        controller.enabled ? "No Live Text Yet" : "Live Transcription Is Off",
+                        systemImage: "text.bubble")
                 } description: {
                     Text(
                         controller.enabled
                             ? "Recording continues. You can transcribe the saved audio after recording."
-                            : "Turn on Live Transcript to see text here. You can also transcribe the saved audio after recording."
+                            : "Turn on Transcribe to see text here. You can also transcribe the saved audio after recording."
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -189,12 +189,10 @@ struct LiveTranscriptHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Toggle("Live Transcript", isOn: $enabled)
+            Toggle("Transcribe", isOn: $enabled)
                 .toggleStyle(.switch).controlSize(.small).fixedSize()
-            if enabled {
-                Toggle("Speaker Recognition", isOn: $recognizesSpeakers)
-                    .toggleStyle(.switch).controlSize(.small).fixedSize()
-            }
+            Toggle("Label Speakers", isOn: $recognizesSpeakers)
+                .toggleStyle(.switch).controlSize(.small).fixedSize()
             if !issues.isEmpty {
                 Button {
                     showsIssues.toggle()

@@ -1,0 +1,330 @@
+import SwiftUI
+
+/// Behavior and provider choices share one scrolling surface.
+struct GeneralSettingsView: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var health = ProviderHealthStore.shared
+    @AppStorage("settingsTab") private var settingsTab = "general"
+    @ViewState private var previewScenario = UIPreview.generalScenario ?? 1
+
+    private var audioSettingsLocked: Bool {
+        store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
+    }
+
+    private func setting<T>(_ path: WritableKeyPath<AppSettings, T>) -> Binding<T> {
+        Binding(
+            get: { store.settings[keyPath: path] },
+            set: {
+                store.settings[keyPath: path] = $0
+                if let boolPath = path as? WritableKeyPath<AppSettings, Bool>, let enabled = $0 as? Bool {
+                    store.settings.recordExplicitFeatureChoice(boolPath, enabled: enabled)
+                }
+                store.saveSettings()
+            })
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if UIPreview.enabled, UIPreview.generalScenario != nil {
+                    Picker("Preview Scenario", selection: $previewScenario) {
+                        ForEach(1...10, id: \.self) { Text("Scenario \($0)").tag($0) }
+                    }
+                    .onChange(of: previewScenario) { _, value in
+                        UIPreview.configureGeneralScenario(store, scenario: value)
+                    }
+                    .padding(.horizontal, 20)
+                }
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 20) {
+                        group("Record") {
+                            switchRow("Microphone", enabled: setting(\.captureMicrophone))
+                            switchRow("System Audio", enabled: setting(\.captureSystemAudio))
+                            Picker("Audio Format", selection: setting(\.recordingFormat)) {
+                                Text("Opus").tag(RecordingFormat.opus)
+                                Text("M4A (AAC)").tag(RecordingFormat.m4a)
+                                Text("WAV").tag(RecordingFormat.wav)
+                            }
+                            switchRow(
+                                "Automatically Process Microphone Audio", enabled: setting(\.automaticVoiceProcessing))
+                            Text("Reduces echo and background noise when needed. May lower other apps’ volume.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.disabled(audioSettingsLocked)
+                        group("Recording") {
+                            feature(
+                                "Automatically Transcribe", enabled: setting(\.showLiveTranscript),
+                                capability: .liveTranscription, provider: store.settings.liveTranscriptionProviderID)
+                            feature(
+                                "Automatically Label Speakers", enabled: setting(\.showLiveSpeakerLabels),
+                                capability: .liveDiarization, provider: store.settings.liveDiarizationProviderID)
+                            feature(
+                                "Automatically Associate Speakers with People",
+                                enabled: setting(\.recognizeLiveSpeakers),
+                                capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
+                                prerequisite: liveAssociationPrerequisite)
+                        }
+                        group("After Recording") {
+                            feature(
+                                "Automatically Transcribe", enabled: setting(\.autoTranscribe),
+                                capability: .transcription, provider: store.settings.transcriptionProviderID)
+                            if store.settings.autoTranscribe {
+                                switchRow(
+                                    "Automatically Replace Live Transcripts",
+                                    enabled: setting(\.autoTranscribeEvenWithLiveTranscript)
+                                )
+                                .font(.callout).padding(.leading, 16)
+                            }
+                            feature(
+                                "Automatically Label Speakers", enabled: setting(\.labelRecordedSpeakers),
+                                capability: .diarization, provider: store.settings.diarizationProviderID,
+                                prerequisite: recordedLabelingPrerequisite)
+                            feature(
+                                "Automatically Associate Speakers with People", enabled: setting(\.recognizeSpeakers),
+                                capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
+                                prerequisite: recordedAssociationPrerequisite)
+                            feature(
+                                "Automatically Summarize", enabled: setting(\.autoSummarize),
+                                capability: .summarization, provider: store.settings.summaryProviderID)
+                            feature(
+                                "Automatically Extract To-Dos", enabled: setting(\.autoExtractTodos),
+                                capability: .summarization, provider: store.settings.summaryProviderID,
+                                prerequisite: store.settings.autoSummarize ? nil : "Turn on Automatically Summarize.")
+                            Text("Extracts to-dos from completed summaries.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 20) {
+                        group("Capability Providers") {
+                            provider(
+                                "Live Transcription", capability: .liveTranscription,
+                                selected: store.settings.liveTranscriptionProviderID)
+                            provider(
+                                "Live Speaker Labeling", capability: .liveDiarization,
+                                selected: store.settings.liveDiarizationProviderID)
+                            provider(
+                                "Speaker Association", capability: .speakerRecognition,
+                                selected: store.settings.speakerRecognitionProviderID)
+                            provider(
+                                "Recorded Transcription", capability: .transcription,
+                                selected: store.settings.transcriptionProviderID)
+                            provider(
+                                "Recorded Speaker Labeling", capability: .diarization,
+                                selected: store.settings.diarizationProviderID)
+                            provider(
+                                "Summarization", capability: .summarization, selected: store.settings.summaryProviderID)
+                            Button("Configure Capability Providers →") { settingsTab = "providers" }
+                                .buttonStyle(.link).font(.callout)
+                        }
+                        group("Transcription Language") {
+                            MeetingLanguagePicker(title: "Language", selection: setting(\.defaultLanguage))
+                        }
+                        Text(
+                            "Speaker labeling distinguishes voices. Speaker association matches them to the People Library."
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .topLeading)
+                }.toggleStyle(.switch).padding(20)
+            }
+        }
+        .task(id: healthFingerprint) { await health.checkSelected(settings: store.settings) }
+        .background(
+            ProviderPanelWindowObserver {
+                Task { await health.checkSelected(settings: store.settings) }
+            })
+    }
+
+    private var liveAssociationPrerequisite: String? {
+        guard store.settings.showLiveSpeakerLabels else { return "Turn on Automatically Label Speakers." }
+        guard let id = store.settings.liveDiarizationProviderID,
+            health.state(providerID: id, capability: .liveDiarization).isReady
+        else { return "Live Speaker Labeling must be ready." }
+        return nil
+    }
+
+    private var recordedLabelingPrerequisite: String? {
+        guard
+            let provider = store.settings.serviceProviders.first(where: {
+                $0.id == store.settings.diarizationProviderID
+            }),
+            provider.kind == .runpod || provider.kind == .gdayWebsite
+        else { return nil }
+        guard store.settings.autoTranscribe else { return "Turn on Automatically Transcribe." }
+        guard store.settings.transcriptionProviderID == provider.id else {
+            return "Choose the same provider for Recorded Transcription and Recorded Speaker Labeling."
+        }
+        return nil
+    }
+
+    private var recordedAssociationPrerequisite: String? {
+        store.settings.recordedAssociationPrerequisite(
+            liveLabelingReady: store.settings.liveDiarizationProviderID.map {
+                health.state(providerID: $0, capability: .liveDiarization).isReady
+            } ?? false,
+            liveAssociationReady: store.settings.speakerRecognitionProviderID.map {
+                health.state(providerID: $0, capability: .speakerRecognition).isReady
+            } ?? false,
+            recordedLabelingReady: store.settings.diarizationProviderID.map {
+                health.state(providerID: $0, capability: .diarization).isReady
+            } ?? false)
+    }
+
+    private struct HealthIdentity: Equatable {
+        let configuration: ProviderHealthStore.Configuration
+        let selections: [UUID?]
+    }
+
+    private var healthFingerprint: HealthIdentity {
+        HealthIdentity(
+            configuration: .init(store.settings),
+            selections: [
+                store.settings.liveTranscriptionProviderID, store.settings.liveDiarizationProviderID,
+                store.settings.speakerRecognitionProviderID, store.settings.transcriptionProviderID,
+                store.settings.diarizationProviderID, store.settings.summaryProviderID,
+            ])
+    }
+
+    private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 12, content: content)
+                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+
+    private func feature(
+        _ title: String, enabled: Binding<Bool>, capability: ProviderCapability,
+        provider: UUID?, prerequisite: String? = nil
+    ) -> some View {
+        let status: ProviderHealth =
+            provider.map { health.state(providerID: $0, capability: capability) }
+            ?? .notReady("Choose a provider.")
+        let reason = prerequisite ?? status.reason
+        let ready = prerequisite == nil && status.isReady
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).fixedSize(horizontal: false, vertical: true)
+                if enabled.wrappedValue {
+                    Label(
+                        prerequisite == nil ? status.title : "Not Ready",
+                        systemImage: ready
+                            ? "checkmark.circle.fill" : reason == nil ? "clock" : "exclamationmark.circle"
+                    )
+                    .font(.caption).foregroundStyle(
+                        ready ? Color.green : reason == nil ? Color.secondary : Color.orange
+                    )
+                    .fixedSize()
+                }
+                else {
+                    Text("Off").font(.caption).foregroundStyle(.secondary).fixedSize()
+                }
+                Spacer(minLength: 0)
+                Toggle(title, isOn: enabled).labelsHidden()
+                    .accessibilityLabel(title)
+                    .accessibilityHint(enabled.wrappedValue ? (reason ?? status.title) : "Off")
+            }
+            if enabled.wrappedValue, let reason {
+                Text(reason).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func switchRow(_ title: String, enabled: Binding<Bool>) -> some View {
+        HStack {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Toggle(title, isOn: enabled).labelsHidden().accessibilityLabel(title)
+        }
+    }
+
+    private func provider(_ title: String, capability: ProviderCapability, selected: UUID?) -> some View {
+        GeneralProviderPicker(
+            title: title, capability: capability,
+            selection: Binding(
+                get: { selected },
+                set: {
+                    store.settings.selectProvider($0, for: capability)
+                    store.saveSettings()
+                }))
+    }
+}
+
+/// A dropdown checks all candidates only while open and shows each result as it arrives.
+private struct GeneralProviderPicker: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var health = ProviderHealthStore.shared
+    @AppStorage("settingsTab") private var settingsTab = "general"
+    @Binding var selection: UUID?
+    @ViewState private var isOpen = false
+    let title: String
+    let capability: ProviderCapability
+
+    init(title: String, capability: ProviderCapability, selection: Binding<UUID?>) {
+        self.title = title
+        self.capability = capability
+        _selection = selection
+    }
+
+    private var candidates: [(id: UUID, name: String)] {
+        var result = store.settings.serviceProviders.filter { $0.kind.capabilities.contains(capability) }
+            .map { (id: $0.id, name: $0.name) }
+        if ThisMacProvider.capabilities.contains(capability) { result.insert((ThisMacProvider.id, "This Mac"), at: 0) }
+        return result
+    }
+    private var selectedName: String {
+        guard let selection else { return "None" }
+        return candidates.first { $0.id == selection }?.name ?? "Provider Unavailable"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.callout)
+            Button {
+                isOpen.toggle()
+            } label: {
+                HStack {
+                    Text(selectedName).lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                }.frame(maxWidth: .infinity)
+            }
+            .accessibilityLabel(title).accessibilityValue(selectedName)
+            .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    candidate(id: nil, name: "None", state: .ready)
+                    ForEach(candidates, id: \.id) { candidate in
+                        self.candidate(
+                            id: candidate.id, name: candidate.name,
+                            state: health.state(providerID: candidate.id, capability: capability))
+                    }
+                }.padding(8).frame(minWidth: 290)
+                    .task { await health.checkEligible(capability: capability, settings: store.settings) }
+            }
+            if let selection {
+                let status = health.state(providerID: selection, capability: capability)
+                if let reason = status.reason {
+                    Text(reason).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    Button("Open \(selectedName) Settings →") {
+                        health.settingsProviderID = selection
+                        settingsTab = "providers"
+                    }.buttonStyle(.link).font(.caption)
+                }
+            }
+        }
+    }
+
+    private func candidate(id: UUID?, name: String, state: ProviderHealth) -> some View {
+        Button {
+            selection = id
+            isOpen = false
+        } label: {
+            HStack(alignment: .firstTextBaseline) {
+                Image(systemName: selection == id ? "checkmark" : "circle").opacity(selection == id ? 1 : 0)
+                Text(state.isReady ? name : "\(name) (\(state.reason ?? state.title))")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }.padding(5).contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(!state.isReady)
+    }
+}

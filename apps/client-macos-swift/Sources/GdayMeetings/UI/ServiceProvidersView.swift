@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ServiceProvidersView: View {
     @EnvironmentObject private var store: MeetingStore
-    @ViewState private var activeRecognitionEnabled = false
+    @ObservedObject private var health = ProviderHealthStore.shared
     @ViewState private var selection: UUID?
     @ViewState private var confirmsRemoval = false
     @ViewState private var saveError: String?
@@ -22,9 +22,6 @@ struct ServiceProvidersView: View {
                     ForEach(store.settings.serviceProviders) { provider in
                         ProviderReadinessRow(
                             provider: provider,
-                            liveRecognitionEnabled: store.settings.liveSpeakerRecognitionEnabled
-                                || (store.recordingID != nil && activeRecognitionEnabled
-                                    && store.liveTranscript.draft?.meetingID == store.recordingID),
                             selectProvider: { selection = provider.id }
                         )
                         .tag(provider.id)
@@ -54,7 +51,7 @@ struct ServiceProvidersView: View {
                     .accessibilityLabel("Remove Provider").help("Remove Provider")
                     Spacer()
                 }.padding(12)
-            }.frame(width: 205)
+            }.frame(width: 300)
             Divider()
             if selection == ThisMacProvider.id {
                 ThisMacProviderView()
@@ -82,11 +79,8 @@ struct ServiceProvidersView: View {
                 ProgressView("Removing Provider…").padding()
             }
         }
-        .onAppear { if selection == nil { selection = ThisMacProvider.id } }
-        .task { await LocalModelManager.shared.refresh() }
-        .onReceive(store.liveTranscript.$speakerRecognitionEnabled.removeDuplicates()) {
-            activeRecognitionEnabled = $0
-        }
+        .onAppear { selection = health.settingsProviderID ?? selection ?? ThisMacProvider.id }
+        .onChange(of: health.settingsProviderID) { _, id in if let id { selection = id } }
         .alert(
             "Couldn’t Update Providers",
             isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
@@ -557,19 +551,15 @@ private struct ServiceProviderPanel: View {
         }
         isChecking = true
         checkTask = Task {
-            do {
-                let detail = try await ProviderConnectionChecker.check(provider, server: server).value
-                guard !Task.isCancelled, checkID == token else { return }
-                status = detail
-                statusIcon = "checkmark.circle.fill"
-                statusColor = .green
+            await store.refreshProviderHealth(providerID: provider.id)
+            guard !Task.isCancelled, checkID == token else { return }
+            let states = provider.enabledCapabilities.map {
+                ProviderHealthStore.shared.state(providerID: provider.id, capability: $0)
             }
-            catch {
-                guard !Task.isCancelled, checkID == token else { return }
-                status = error.localizedDescription
-                statusIcon = "exclamationmark.circle.fill"
-                statusColor = .orange
-            }
+            let issue = states.first { !$0.isReady }
+            status = issue?.reason ?? issue?.title ?? "Ready"
+            statusIcon = issue == nil ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+            statusColor = issue == nil ? .green : .orange
             if provider.kind == .runpod {
                 await checkUploadProvider(for: provider, token: token)
             }
@@ -588,19 +578,11 @@ private struct ServiceProviderPanel: View {
             uploadStatusColor = .orange
             return
         }
-        do {
-            let detail = try await ProviderConnectionChecker.check(upload, server: server).value
-            guard !Task.isCancelled, checkID == token else { return }
-            uploadStatus = detail
-            uploadStatusIcon = "checkmark.circle.fill"
-            uploadStatusColor = .green
-        }
-        catch {
-            guard !Task.isCancelled, checkID == token else { return }
-            uploadStatus = "\(upload.name): \(error.localizedDescription)"
-            uploadStatusIcon = "exclamationmark.circle.fill"
-            uploadStatusColor = .orange
-        }
+        let result = ProviderHealthStore.shared.state(providerID: upload.id, capability: .fileTransfer)
+        guard !Task.isCancelled, checkID == token else { return }
+        uploadStatus = result.reason ?? result.title
+        uploadStatusIcon = result.isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+        uploadStatusColor = result.isReady ? .green : .orange
     }
 
     private func signIn() {
@@ -632,7 +614,7 @@ private struct ServiceProviderPanel: View {
 
 /// Settings windows can keep their SwiftUI view alive while closed. Observe the
 /// containing window so reopening it also refreshes the selected provider.
-private struct ProviderPanelWindowObserver: NSViewRepresentable {
+struct ProviderPanelWindowObserver: NSViewRepresentable {
     let onBecomeKey: () -> Void
 
     func makeNSView(context: Context) -> ProviderPanelWindowView {
@@ -651,7 +633,7 @@ private struct ProviderPanelWindowObserver: NSViewRepresentable {
     }
 }
 
-private final class ProviderPanelWindowView: NSView {
+final class ProviderPanelWindowView: NSView {
     var onBecomeKey: (() -> Void)?
 
     override func viewDidMoveToWindow() {

@@ -262,6 +262,7 @@ enum UIPreview {
             }
         }
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
+        configureGeneralScenario(store)
         return store
     }
 

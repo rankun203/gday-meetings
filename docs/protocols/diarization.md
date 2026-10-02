@@ -9,7 +9,7 @@ scope: capability-contract
 
 ## Purpose
 
-Diarization assigns speaker labels to audio time ranges. The UI calls this capability **Speaker Labels**. A label identifies a voice within the result; it does not establish a person's identity.
+Diarization assigns speaker labels to audio time ranges. The UI calls this capability **Speaker Labeling**. A label identifies a voice within the result; it does not establish a person's identity.
 
 ## Contract
 
@@ -42,9 +42,9 @@ Standalone diarization without transcription is not implemented by the RunPod ad
 
 ## Local adapters
 
-Community-1 runs an independent saved-audio job under **Speaker Labels**. It prepares each local source, clusters the complete source, and saves a private speaker-range result. Applying the result preserves text and existing person assignments. Untimed phrases receive a label only when one source has a clear dominant speaker; overlapping or ambiguous phrases retain their existing attribution. The previous transcript remains available through history. Cancellation leaves the active transcript unchanged.
+Community-1 runs an independent saved-audio job under **Speaker Labeling**. It prepares each local source, clusters the complete source, and saves a private speaker-range result. Applying the result preserves text and existing person assignments. Untimed phrases receive a label only when one source has a clear dominant speaker; overlapping or ambiguous phrases retain their existing attribution. The previous transcript remains available through history. Cancellation leaves the active transcript unchanged.
 
-Nemotron supplies **Live Speaker Labels** through a separate capability. The app supports seven pinned presets through the same Swift adapter, with independent state and identity generations per source. Each session has eight output slots. A restart creates new identities and records a coverage gap. The app's versioned activity filter uses 0.55/0.45 hysteresis with 50 ms onset and 100 ms release runs; the earlier benchmark used a raw 0.5 threshold. Its DER and first-output measurements therefore do not validate this app policy.
+Nemotron supplies **Live Speaker Labeling** through a separate capability. The app supports seven pinned presets through the same Swift adapter, with independent state and identity generations per source. Each session has eight output slots. A restart creates new identities and records a coverage gap. The app's versioned activity filter uses 0.55/0.45 hysteresis with 50 ms onset and 100 ms release runs; the earlier benchmark used a raw 0.5 threshold. Its DER and first-output measurements therefore do not validate this app policy.
 
 Both adapters acquire verified local models from the shared manager. A copied folder remains unavailable until pinned file verification and runtime preparation succeed. Model leases prevent removal during use; independent jobs receive separate Core ML instances. Installation and synthetic runtime checks do not establish combined transcription/labeling/recognition capacity, energy use, device placement, or representative name-matching accuracy. Final integrated validation is ongoing.
 

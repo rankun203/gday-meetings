@@ -1,54 +1,15 @@
 import SwiftUI
 
-/// Readiness is independent of the selected sidebar row and never starts a download.
-enum ProviderModelReadiness {
-    static func issues(
-        provider: ServiceProvider, liveRecognitionEnabled: Bool, states: [LocalModelID: LocalModelState]
-    ) -> [String] {
-        guard provider.isEnabled, provider.kind.isLocal else { return [] }
-        var models: [LocalModelID] = []
-        var messages: [String] = []
-        if provider.kind == .nemotron, provider.enabledCapabilities.contains(.liveDiarization) {
-            if let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil {
-                models.append(model)
-            }
-            else {
-                messages.append("The selected live diarization preset is unavailable. Choose a supported preset.")
-            }
-            if liveRecognitionEnabled { models.append(.voiceEmbedding) }
-        }
-        if provider.kind == .community1 {
-            if provider.enabledCapabilities.contains(.diarization) {
-                if provider.model == LocalModelID.community1.rawValue {
-                    models.append(.community1)
-                }
-                else {
-                    messages.append("The selected diarization model is unavailable. Choose Community-1.")
-                }
-            }
-            if provider.enabledCapabilities.contains(.speakerRecognition) { models.append(.voiceEmbedding) }
-        }
-        for model in models {
-            let state = states[model] ?? LocalModelState()
-            guard state.phase != .ready else { continue }
-            let title = model == .voiceEmbedding ? "Voice Matching Model" : LocalModelRegistry.descriptor(model).title
-            messages.append("\(title): \(state.phase.settingsTitle)")
-            if let message = state.message, !message.isEmpty { messages.append(message) }
-        }
-        return messages
-    }
-}
-
 struct ProviderReadinessRow: View {
-    @ObservedObject private var models = LocalModelManager.shared
+    @ObservedObject private var health = ProviderHealthStore.shared
     let provider: ServiceProvider
-    let liveRecognitionEnabled: Bool
     let selectProvider: () -> Void
     @ViewState private var showsIssues = false
 
     private var issues: [String] {
-        ProviderModelReadiness.issues(
-            provider: provider, liveRecognitionEnabled: liveRecognitionEnabled, states: models.states)
+        provider.enabledCapabilities.compactMap { capability in
+            health.state(providerID: provider.id, capability: capability).reason
+        }
     }
 
     var body: some View {
@@ -77,8 +38,8 @@ struct ProviderReadinessRow: View {
                         .frame(width: 28, height: 28).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Show model readiness for \(provider.name)")
-                .accessibilityLabel("Model readiness for \(provider.name)")
+                .help("Show provider readiness for \(provider.name)")
+                .accessibilityLabel("Provider readiness for \(provider.name)")
                 .popover(isPresented: $showsIssues) {
                     ProviderReadinessDetails(issues: issues) {
                         selectProvider()
@@ -98,11 +59,11 @@ struct ProviderReadinessDetails: View {
     let showModels: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Model Readiness").font(.headline)
+            Text("Provider Readiness").font(.headline)
             ForEach(Array(issues.enumerated()), id: \.offset) { _, message in
                 Text(message).fixedSize(horizontal: false, vertical: true)
             }
-            Button("Show Model Controls", action: showModels)
+            Button("Open Provider Settings", action: showModels)
         }
         .padding(16).frame(width: 320, alignment: .leading)
     }

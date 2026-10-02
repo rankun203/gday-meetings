@@ -132,7 +132,7 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(store.beginJob(.transcription, .meeting(first), progress: "Transcribing…"))
         await store.summarize(id: second)
         #expect(store.errorMessage == nil)
-        #expect(store.managedTasks.last?.errorMessage == "Choose and enable a summary provider in Settings → Defaults.")
+        #expect(store.managedTasks.last?.errorMessage == "Choose and enable a summary provider in Settings → General.")
         #expect(!store.isJobRunning(.summary, .meeting(second)))
         #expect(store.isJobRunning(.transcription, .meeting(first)))
         #expect(store.canStartRecording)
@@ -153,7 +153,7 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(store.errorMessage == nil)
         await store.transcribe(id: second)
         #expect(store.errorMessage == nil)
-        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → Defaults.")
+        #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → General.")
         store.endJob(.importAudio, .meeting(first))
         #expect(!store.isImportingAudio)
     }

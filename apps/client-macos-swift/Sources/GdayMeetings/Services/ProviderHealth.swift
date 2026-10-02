@@ -1,0 +1,230 @@
+import Combine
+import Foundation
+import Speech
+
+enum ProviderHealth: Equatable, Sendable {
+    case checking, ready
+    case notReady(String)
+    case unknown(String)
+    var isReady: Bool { self == .ready }
+    var title: String {
+        switch self {
+        case .checking: "Checking…"
+        case .ready: "Ready"
+        case .notReady: "Not Ready"
+        case .unknown: "Couldn’t Check"
+        }
+    }
+    var reason: String? {
+        switch self {
+        case .notReady(let reason), .unknown(let reason): reason
+        default: nil
+        }
+    }
+}
+
+extension ServiceProvider {
+    /// A readiness estimate; never opens a model or starts billable work.
+    @MainActor func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
+        guard kind.capabilities.contains(capability) else { return .notReady("Capability unavailable.") }
+        guard isEnabled else { return .notReady("Provider is turned off.") }
+        guard enabledCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
+        if kind.isLocal {
+            let id: LocalModelID?
+            if capability == .speakerRecognition {
+                id = .voiceEmbedding
+            }
+            else {
+                id = LocalModelID(rawValue: model)
+            }
+            guard let id, kind != .nemotron || id.nemotronPreset != nil,
+                kind != .community1 || capability == .speakerRecognition || id == .community1
+            else { return .notReady("Choose a supported model.") }
+            return await LocalModelManager.shared.health(for: id)
+        }
+        do {
+            // Check the requested capability independently of other enabled capabilities.
+            var scoped = self
+            scoped.enabledCapabilities = [capability]
+            _ = try await ProviderConnectionChecker.check(scoped)
+            if kind == .runpod {
+                guard let upload = settings.serviceProviders.first(where: { $0.id == uploadProviderID }),
+                    upload.kind == .filedrop, upload.supports(.fileTransfer)
+                else { return .notReady("Choose an audio upload provider.") }
+                let result = await ProviderHealthStore.shared.checkDependency(
+                    providerID: upload.id, capability: .fileTransfer, settings: settings)
+                guard result.isReady else {
+                    return .notReady("Audio upload provider: \(result.reason ?? result.title)")
+                }
+            }
+            return .ready
+        }
+        catch is CancellationError { return .unknown("Check cancelled.") }
+        catch let error as URLError { return .unknown(error.localizedDescription) }
+        catch { return .notReady(error.localizedDescription) }
+    }
+}
+
+extension ThisMacProvider {
+    @MainActor static func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
+        guard capability == .liveTranscription else { return .notReady("Capability unavailable.") }
+        guard settings.thisMacCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
+        guard #available(macOS 26.0, *) else { return .notReady("Requires macOS 26 or later.") }
+        guard SpeechTranscriber.isAvailable else { return .notReady("Transcription is unavailable on this Mac.") }
+        let locales = await SpeechTranscriber.supportedLocales
+        guard let locale = AppleSpeechLanguageMapping.locale(for: settings.defaultLanguage, supported: locales) else {
+            return .notReady("Choose a supported transcription language.")
+        }
+        let status = await AssetInventory.status(forModules: [SpeechTranscriber(locale: locale, preset: .transcription)]
+        )
+        switch status {
+        case .installed: return .ready
+        case .downloading: return .notReady("Speech model is downloading.")
+        case .supported: return .notReady("Download the speech model in provider settings.")
+        default: return .notReady("Speech model is unavailable.")
+        }
+    }
+}
+
+@MainActor final class ProviderHealthStore: ObservableObject {
+    static let shared = ProviderHealthStore()
+    struct Key: Hashable {
+        let providerID: UUID
+        let capability: ProviderCapability
+    }
+    @Published private(set) var results: [Key: ProviderHealth] = [:]
+    @Published var settingsProviderID: UUID?
+    private var seeded: Set<Key> = []
+    func seed(providerID: UUID, capability: ProviderCapability, health: ProviderHealth) {
+        let key = Key(providerID: providerID, capability: capability)
+        seeded.insert(key)
+        results[key] = health
+    }
+    struct Configuration: Equatable {
+        let providers: [ServiceProvider]
+        let language: String
+        let localCapabilities: Set<ProviderCapability>
+        init(_ settings: AppSettings) {
+            providers = settings.serviceProviders
+            language = settings.defaultLanguage
+            localCapabilities = settings.thisMacCapabilities
+        }
+    }
+    typealias Checker = @MainActor (UUID, ProviderCapability, AppSettings) async -> ProviderHealth
+    private let checker: Checker?
+    init(checker: Checker? = nil) { self.checker = checker }
+    private var configuration: Configuration?
+    private var fingerprints: [Key: Configuration] = [:]
+    func invalidateChangedConfiguration(settings: AppSettings) {
+        let next = Configuration(settings)
+        guard configuration != next else { return }
+        configuration = next
+        requests.removeAll()
+        inFlight.removeAll()
+        fingerprints.removeAll()
+        results = results.filter { seeded.contains($0.key) }
+    }
+    private var requests: [Key: UUID] = [:]
+    private var inFlight: [Key: Task<ProviderHealth, Never>] = [:]
+
+    func state(providerID: UUID, capability: ProviderCapability) -> ProviderHealth {
+        results[Key(providerID: providerID, capability: capability)] ?? .checking
+    }
+
+    @discardableResult func check(
+        providerID: UUID, capability: ProviderCapability, settings: AppSettings, force: Bool = false
+    ) async -> ProviderHealth {
+        let key = Key(providerID: providerID, capability: capability)
+        if seeded.contains(key), let result = results[key] { return result }
+        let provider = settings.serviceProviders.first { $0.id == providerID }
+        invalidateChangedConfiguration(settings: settings)
+        let fingerprint = Configuration(settings)
+        if !force, fingerprints[key] == fingerprint, let result = results[key], result != .checking { return result }
+        if fingerprints[key] == fingerprint, let task = inFlight[key] { return await task.value }
+        let request = UUID()
+        requests[key] = request
+        fingerprints[key] = fingerprint
+        results[key] = .checking
+        let task = Task { @MainActor in
+            if let checker = self.checker { return await checker(providerID, capability, settings) }
+            if providerID == ThisMacProvider.id {
+                return await ThisMacProvider.health(for: capability, settings: settings)
+            }
+            if let provider { return await provider.health(for: capability, settings: settings) }
+            return ProviderHealth.notReady("Provider is unavailable.")
+        }
+        inFlight[key] = task
+        let result = await task.value
+        guard requests[key] == request else { return result }
+        inFlight[key] = nil
+        results[key] = result
+        return result
+    }
+
+    /// A suspended provider check cannot restore an earlier configuration when
+    /// it proceeds to check an upload dependency after settings have changed.
+    func checkDependency(
+        providerID: UUID, capability: ProviderCapability, settings: AppSettings
+    ) async -> ProviderHealth {
+        guard configuration == Configuration(settings) else {
+            return .unknown("Provider settings changed. Check again.")
+        }
+        return await check(providerID: providerID, capability: capability, settings: settings, force: true)
+    }
+
+    func checkEligible(capability: ProviderCapability, settings: AppSettings) async {
+        var ids = settings.serviceProviders.filter { $0.kind.capabilities.contains(capability) }.map(\.id)
+        if ThisMacProvider.capabilities.contains(capability) { ids.insert(ThisMacProvider.id, at: 0) }
+        await withTaskGroup(of: Void.self) { group in
+            for id in ids {
+                group.addTask {
+                    _ = await self.check(providerID: id, capability: capability, settings: settings, force: true)
+                }
+            }
+        }
+    }
+
+    func checkSelected(settings: AppSettings) async {
+        let pairs: [(ProviderCapability, UUID?)] = [
+            (.liveTranscription, settings.liveTranscriptionProviderID),
+            (.transcription, settings.transcriptionProviderID),
+            (.liveDiarization, settings.liveDiarizationProviderID), (.diarization, settings.diarizationProviderID),
+            (.speakerRecognition, settings.speakerRecognitionProviderID), (.summarization, settings.summaryProviderID),
+        ]
+        await withTaskGroup(of: Void.self) { group in
+            for (capability, id) in pairs {
+                guard let id else { continue }
+                group.addTask {
+                    _ = await self.check(providerID: id, capability: capability, settings: settings, force: true)
+                }
+            }
+        }
+    }
+
+    func checkProvider(providerID: UUID, settings: AppSettings) async -> [ProviderCapability: ProviderHealth] {
+        let capabilities =
+            providerID == ThisMacProvider.id
+            ? ThisMacProvider.capabilities
+            : settings.serviceProviders.first(where: { $0.id == providerID })?.kind.capabilities ?? []
+        invalidateChangedConfiguration(settings: settings)
+        var result: [ProviderCapability: ProviderHealth] = [:]
+        for capability in capabilities {
+            result[capability] = await checkDependency(
+                providerID: providerID, capability: capability, settings: settings)
+        }
+        return result
+    }
+}
+
+extension MeetingStore {
+    @MainActor func refreshProviderHealth(providerID: UUID) async {
+        let snapshot = settings
+        let results = await ProviderHealthStore.shared.checkProvider(providerID: providerID, settings: snapshot)
+        guard settings.serviceProviders == snapshot.serviceProviders,
+            settings.thisMacCapabilities == snapshot.thisMacCapabilities,
+            settings.defaultLanguage == snapshot.defaultLanguage
+        else { return }
+        let ready = Set(results.filter { $0.value.isReady }.map(\.key))
+        if settings.assignInitiallyHealthyProvider(providerID, capabilities: ready) { saveSettings() }
+    }
+}

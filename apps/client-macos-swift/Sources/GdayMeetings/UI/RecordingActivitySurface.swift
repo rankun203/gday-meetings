@@ -154,6 +154,7 @@ struct RecordingLiveActivitySurface: NSViewRepresentable {
 }
 
 struct RecordingLiveLevelSurface: NSViewRepresentable {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let meter: RecordingMeterState
     let microphone: Bool
     let saving: Bool
@@ -169,11 +170,12 @@ struct RecordingLiveLevelSurface: NSViewRepresentable {
         context.coordinator.subscription = meter.$levels.sink { [weak view] levels in
             view?.configure(
                 source: microphone ? levels.microphone : levels.system, saving: saving,
-                tint: NSColor(tint), title: title)
+                tint: NSColor(tint), title: title, reduceMotion: reduceMotion)
         }
     }
     static func dismantleNSView(_ view: RecordingLevelView, coordinator: Coordinator) {
         coordinator.subscription = nil
+        view.stop()
     }
 }
 
@@ -184,10 +186,12 @@ final class RecordingLevelView: NSView {
     private var source = RecordingSourceLevel()
     private var saving = false
     private var tint = NSColor.controlAccentColor
+    private static let animationKey = "recordingLevel"
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        signal.anchorPoint = .zero
         layer?.addSublayer(track)
         layer?.addSublayer(signal)
         setAccessibilityElement(true)
@@ -198,7 +202,8 @@ final class RecordingLevelView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(source: RecordingSourceLevel, saving: Bool, tint: NSColor, title: String) {
+    func configure(source: RecordingSourceLevel, saving: Bool, tint: NSColor, title: String, reduceMotion: Bool = false)
+    {
         self.source = source
         self.saving = saving
         self.tint = tint
@@ -209,7 +214,7 @@ final class RecordingLevelView: NSView {
         setAccessibilityValue(receiving ? source.rmsDB : -120)
         setAccessibilityValueDescription(receiving ? "\(status), \(Int(source.rmsDB)) decibels" : status)
         toolTip = status
-        updateLayers()
+        updateLayers(animate: receiving && !reduceMotion)
     }
     override func layout() {
         super.layout()
@@ -219,11 +224,27 @@ final class RecordingLevelView: NSView {
         super.viewDidChangeEffectiveAppearance()
         updateLayers()
     }
-    private func updateLayers() {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateLayers()
+    }
+    func stop() {
+        signal.removeAnimation(forKey: Self.animationKey)
+    }
+    private func updateLayers(animate: Bool = false) {
+        let width = bounds.width * (saving ? 0 : source.level)
+        let changed = signal.bounds.width != width
+        let visible =
+            window?.isVisible == true && window?.occlusionState.contains(.visible) == true
+            && !isHiddenOrHasHiddenAncestor
+        let shouldAnimate = animate && visible && changed
+        let displayedWidth = signal.presentation()?.bounds.width ?? signal.bounds.width
+        if !animate || !visible { stop() }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         track.frame = bounds
-        signal.frame = CGRect(x: 0, y: 0, width: bounds.width * (saving ? 0 : source.level), height: bounds.height)
+        signal.position = .zero
+        signal.bounds = CGRect(x: 0, y: 0, width: width, height: bounds.height)
         track.cornerRadius = bounds.height / 2
         signal.cornerRadius = bounds.height / 2
         effectiveAppearance.performAsCurrentDrawingAppearance {
@@ -231,5 +252,15 @@ final class RecordingLevelView: NSView {
             signal.backgroundColor = (source.peakDB > -1 ? NSColor.systemOrange : tint).cgColor
         }
         CATransaction.commit()
+        if shouldAnimate {
+            // Retarget from the displayed width, including an interrupted transition.
+            // Core Animation supplies display frames between the existing 10 Hz samples.
+            let animation = CABasicAnimation(keyPath: "bounds.size.width")
+            animation.fromValue = displayedWidth
+            animation.toValue = width
+            animation.duration = 0.1
+            animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            signal.add(animation, forKey: Self.animationKey)
+        }
     }
 }

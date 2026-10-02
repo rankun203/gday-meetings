@@ -133,6 +133,17 @@ enum LocalDiarizationAssignment {
     /// split safely, so only assign a clear majority of one source's activity.
     static func applying(_ result: LocalDiarizationResult, to meeting: Meeting, fileCount: Int) -> Meeting {
         var updated = meeting
+        if meeting.transcript.isEmpty {
+            let assigned = meeting.speakers.filter { $0.personID != nil }
+            var speakers = result.speakers.map { candidate in
+                assigned.first { $0.id == candidate.id } ?? candidate
+            }
+            for speaker in assigned where !speakers.contains(where: { $0.id == speaker.id }) {
+                speakers.append(speaker)
+            }
+            updated.replaceSpeakers(speakers)
+            return updated
+        }
         var speakers = meeting.speakers
         let oldByID = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0) })
         for index in updated.transcript.indices {
@@ -176,15 +187,36 @@ enum LocalDiarizationAssignment {
 }
 
 extension MeetingStore {
+    func scheduleAutomaticSpeakerLabeling(id: UUID) {
+        if settings.recognizeSpeakers,
+            settings.serviceProviders.contains(where: {
+                $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
+            }), var meeting = meeting(id: id)
+        {
+            var speakers = meeting.speakers
+            SpeakerRecognition.match(&speakers, people: people)
+            if speakers != meeting.speakers {
+                meeting.replaceSpeakers(speakers)
+                _ = updateMeeting(meeting)
+            }
+        }
+        guard settings.labelRecordedSpeakers,
+            settings.serviceProviders.contains(where: {
+                $0.id == settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+            })
+        else { return }
+        Task { await diarizeLocally(id: id) }
+    }
+
     func diarizeLocally(id: UUID) async {
         guard libraryWritable, recordingID != id, localDiarizationTasks[id] == nil,
-            let meeting = meeting(id: id), !meeting.transcript.isEmpty,
+            let meeting = meeting(id: id),
             meeting.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(id)),
             let providerID = settings.diarizationProviderID,
             let provider = settings.serviceProviders.first(where: { $0.id == providerID }),
             provider.kind == .community1, provider.supports(.diarization)
         else {
-            errorMessage = "Choose Community-1 for Speaker Labels in Settings before labeling a saved transcript."
+            errorMessage = "Choose Community-1 for Speaker Labeling in Settings before labeling a saved transcript."
             return
         }
         let files = audioURLs(for: meeting)
@@ -223,7 +255,7 @@ extension MeetingStore {
                             ? ["Saved audio", "Speaker activity", "Typed voice embeddings"]
                             : ["Saved audio", "Speaker activity"],
                         filePaths: meeting.audioFiles,
-                        purpose: recognize ? "Saved speaker labels and recognition" : "Saved speaker labels"))
+                        purpose: recognize ? "Saved speaker labeling and association" : "Saved speaker labels"))
                 try DataEventJournal.append(event, directory: journalDirectory)
                 defer {
                     event.dataFlow.endedAt = Date()
@@ -252,7 +284,7 @@ extension MeetingStore {
                 guard self.preserveTranscript(current) else { return }
                 var updated = LocalDiarizationAssignment.applying(result, to: current, fileCount: files.count)
                 updated.transcriptSource = .init(
-                    id: result.id, providerName: "Community-1 Speaker Labels", generatedAt: result.generatedAt)
+                    id: result.id, providerName: "Community-1 Speaker Labeling", generatedAt: result.generatedAt)
                 _ = self.updateMeeting(updated)
             }
             catch is CancellationError {

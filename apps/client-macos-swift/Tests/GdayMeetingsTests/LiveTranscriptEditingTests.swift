@@ -196,7 +196,7 @@ extension LiveTranscriptEditingTests {
 }
 
 extension LiveTranscriptEditingTests {
-    @Test @MainActor func recognitionWithoutLabelDisplayReportsMissingAnalysisDependency() async throws {
+    @Test @MainActor func associationDoesNotStartSpeakerAnalysisWhenLabelingIsOff() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -207,13 +207,16 @@ extension LiveTranscriptEditingTests {
             speakerLabelsEnabled: false, speakerRecognitionEnabled: true)
         #expect(controller.speakerRecognitionEnabled)
         #expect(!controller.speakerLabelsEnabled)
-        #expect(controller.speakerRecognitionStatus.contains("Choose a Nemotron provider"))
+        #expect(controller.speakerRecognitionStatus == "Speaker association is waiting for speaker labeling.")
+        controller.setSpeakerLabelsEnabled(true)
+        #expect(controller.speakerLabelsEnabled)
+        #expect(controller.speakerLabelStatus.contains("Choose a Nemotron provider"))
         controller.setSpeakerLabelsEnabled(false)
         #expect(controller.speakerRecognitionEnabled)
-        #expect(controller.speakerLabelStatus.contains("Choose a Nemotron provider"))
+        #expect(controller.speakerLabelStatus == "Live speaker labels are off.")
         controller.setSpeakerRecognitionEnabled(false)
         #expect(controller.speakerLabelStatus == "Live speaker labels are off.")
-        #expect(controller.speakerRecognitionStatus == "Speaker recognition is off.")
+        #expect(controller.speakerRecognitionStatus == "Speaker association is off.")
         await controller.finish()
     }
 }
@@ -222,9 +225,9 @@ extension LiveTranscriptEditingTests {
     @Test func missingVoiceModelDiagnosticDistinguishesWorkingSpeakerLabels() {
         let message = LiveSpeakerModelDiagnostics.voiceFailure(
             phase: .missing, error: LocalModelError.unavailable, labelsAvailable: true)
-        #expect(message.contains("Voice matching needs a separate model"))
-        #expect(message.contains("Nemotron in Settings → Service Providers"))
-        #expect(message.contains("Voice Matching Model"))
+        #expect(message.contains("Speaker association needs a separate model"))
+        #expect(message.contains("speaker association provider in Settings → Service Providers"))
+        #expect(message.contains("Speaker Association Model"))
         #expect(message.contains("Anonymous speaker labels continue"))
         let unavailableLabels = LiveSpeakerModelDiagnostics.voiceFailure(
             phase: .unverified, error: LocalModelError.unavailable, labelsAvailable: false)

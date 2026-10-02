@@ -49,7 +49,7 @@ Summary input includes the meeting title, start time, duration, notes, participa
 
 ## Automatic summaries in Swift
 
-**Automatically Summarize** in Defaults starts off. When enabled, a successfully saved live transcript at recording stop or an applied provider transcription triggers a summary through the selected summary provider. A later provider transcript can generate another summary after the live transcript. If a summary is already running for the meeting, the newest pending transcript waits for it to finish. Turning the setting on does not process existing meetings.
+**Automatically Summarize** is in General → After Recording. Configuring the first healthy summarization provider enables it; an explicit off choice is preserved. When enabled, a successfully saved live transcript at recording stop or an applied provider transcription triggers a summary through the selected summary provider. A later provider transcript can generate another summary after the live transcript. If a summary is already running for the meeting, the newest pending transcript waits for it to finish. Turning the setting on does not process existing meetings.
 
 The Tasks queue runs one summary at a time, independently of transcription. A queued summary reads the latest saved transcript when it starts, so changes received before it starts are combined into that request. Turning off Automatically Summarize prevents queued automatic summaries from starting. Tasks and their outcomes are saved locally in `tasks.jsonl`. A queued, unsent summary can recover automatically; an interrupted request requires an explicit retry because the provider may already have processed it.
 

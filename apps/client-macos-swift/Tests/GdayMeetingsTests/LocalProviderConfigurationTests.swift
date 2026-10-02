@@ -4,39 +4,6 @@ import Testing
 @testable import GdayMeetings
 
 struct LocalProviderConfigurationTests {
-    @Test func readinessUsesEnabledCapabilitiesAndRequiredVoiceAssets() {
-        var live = ServiceProvider(kind: .nemotron)
-        let ready: [LocalModelID: LocalModelState] = [.nemotronLow: .init(phase: .ready)]
-        #expect(ProviderModelReadiness.issues(provider: live, liveRecognitionEnabled: false, states: ready).isEmpty)
-        #expect(!ProviderModelReadiness.issues(provider: live, liveRecognitionEnabled: true, states: ready).isEmpty)
-        for phase in [LocalModelPhase.missing, .unverified, .downloading, .verifying, .preparing, .cancelled, .failed] {
-            let states: [LocalModelID: LocalModelState] = [.nemotronLow: .init(phase: phase)]
-            #expect(
-                !ProviderModelReadiness.issues(provider: live, liveRecognitionEnabled: false, states: states).isEmpty)
-        }
-        live.model = "unsupported"
-        #expect(!ProviderModelReadiness.issues(provider: live, liveRecognitionEnabled: false, states: ready).isEmpty)
-        live.isEnabled = false
-        #expect(ProviderModelReadiness.issues(provider: live, liveRecognitionEnabled: true, states: [:]).isEmpty)
-        var saved = ServiceProvider(kind: .community1)
-        saved.enabledCapabilities = [.speakerRecognition]
-        #expect(
-            ProviderModelReadiness.issues(
-                provider: saved, liveRecognitionEnabled: false,
-                states: [.voiceEmbedding: .init(phase: .ready)]
-            ).isEmpty)
-        saved.enabledCapabilities = [.diarization]
-        #expect(
-            !ProviderModelReadiness.issues(
-                provider: saved, liveRecognitionEnabled: false,
-                states: [.voiceEmbedding: .init(phase: .ready)]
-            ).isEmpty)
-        #expect(
-            ProviderModelReadiness.issues(
-                provider: ServiceProvider(kind: .runpod), liveRecognitionEnabled: true, states: [:]
-            ).isEmpty)
-    }
-
     @Test func localSpeakerProvidersDoNotRequireTranscriptionOrNetworkCredentials() {
         let live = ServiceProvider(kind: .nemotron)
         let saved = ServiceProvider(kind: .community1)

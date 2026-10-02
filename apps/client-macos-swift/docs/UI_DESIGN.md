@@ -110,7 +110,11 @@ Render generated bold CJK labels such as `**结论：**正文` as a bold label f
 
 New service providers start with all capabilities that their app adapter supports enabled. Saving an edited provider preserves capabilities the user turned off. Do not display capabilities without an implementation.
 
-This Mac uses the same Capabilities section pattern, with a Live Transcription toggle. Its speech model downloads appear in a separate Speech Models section. Defaults presents a Provider picker for Live Transcription, with None and enabled eligible providers; This Mac is the only supported live provider today. A saved disabled provider appears as Provider Unavailable until enabled or replaced. Show Live Transcript is a separate recording preference.
+General uses two columns inside one scroll view. Record, Recording, and After Recording switches on the left express desired behavior. Capability provider choices stay visible on the right. Neither column has an independent scroll area. Ready, Not Ready, Checking…, and Couldn’t Check describe provider health separately from the feature’s on/off preference. Use text and symbols as well as color.
+
+Each provider supplies its own capability health and explanation. General lists every added provider that supports the capability, disables unhealthy choices with a short reason, and keeps an unhealthy saved choice visible. Opening a dropdown checks its candidates concurrently and updates each result as it arrives. Otherwise General checks selected providers. Warnings link directly to the selected provider’s settings; downloads, verification, and repairs remain there.
+
+A newly configured healthy provider fills a capability that has never had a provider and enables its related features. Explicit selections, clearing a provider, and turning features off are retained. Health refreshes and provider recovery do not reset those choices. Speaker Labeling distinguishes voices; Speaker Association matches voices with the People Library. Their preferences are independent across Recording and After Recording. The active recording’s Transcribe and Label Speakers switches override processing for that recording only.
 
 ## Reading-mode copy and task geometry
 

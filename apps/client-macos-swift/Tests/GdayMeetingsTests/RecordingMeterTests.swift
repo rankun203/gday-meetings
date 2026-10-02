@@ -2,11 +2,55 @@ import AVFoundation
 import AppKit
 import Combine
 import Foundation
+import QuartzCore
 import Testing
 
 @testable import GdayMeetings
 
 struct RecordingMeterTests {
+    @MainActor
+    @Test func unavailableMeterCancelsAnimationAndClearsBar() throws {
+        let view = RecordingLevelView(frame: NSRect(x: 0, y: 0, width: 200, height: 8))
+        let signal = try #require(view.layer?.sublayers?.last)
+        let healthy = RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -20)
+        for state in 0..<6 {
+            view.configure(source: healthy, saving: false, tint: .systemBlue, title: "Microphone")
+            #expect(signal.bounds.width > 0)
+            let animation = CABasicAnimation(keyPath: "bounds.size.width")
+            animation.duration = 1
+            signal.add(animation, forKey: "recordingLevel")
+            var unavailable = healthy
+            switch state {
+            case 0: unavailable.muted = true
+            case 1: unavailable.enabled = false
+            case 2: unavailable.hasSamples = false
+            case 3: unavailable.stale = true
+            case 4: unavailable.reconnecting = true
+            default: break
+            }
+            view.configure(source: unavailable, saving: state == 5, tint: .systemBlue, title: "Microphone")
+            #expect(signal.bounds.width == 0)
+            #expect(signal.animationKeys()?.isEmpty ?? true)
+        }
+    }
+
+    @MainActor
+    @Test func reducedMotionAndTeardownRemoveMeterAnimation() throws {
+        let view = RecordingLevelView(frame: NSRect(x: 0, y: 0, width: 200, height: 8))
+        let signal = try #require(view.layer?.sublayers?.last)
+        let animation = CABasicAnimation(keyPath: "bounds.size.width")
+        animation.duration = 1
+        signal.add(animation, forKey: "recordingLevel")
+        view.configure(
+            source: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30),
+            saving: false, tint: .systemBlue, title: "Microphone", reduceMotion: true)
+        #expect(signal.bounds.width == 100)
+        #expect(signal.animationKeys()?.isEmpty ?? true)
+        signal.add(animation, forKey: "recordingLevel")
+        view.stop()
+        #expect(signal.animationKeys()?.isEmpty ?? true)
+    }
+
     @MainActor
     @Test func mutePublishesSemanticStatusAndSuppressesLevel() {
         let meter = RecordingMeterState()

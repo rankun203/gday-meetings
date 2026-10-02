@@ -118,7 +118,7 @@ struct MeetingTranscriptView: View {
     }
     @ViewBuilder private var speakerLabelAction: some View {
         if store.isJobRunning(.diarization, .meeting(meetingID)) {
-            Button("Cancel Speaker Labels") { store.cancelLocalDiarization(id: meetingID) }
+            Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
         }
         else if store.settings.serviceProviders.contains(where: {
             $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)

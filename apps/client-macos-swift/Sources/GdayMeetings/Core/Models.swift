@@ -89,6 +89,9 @@ struct AppSettings: Codable, Equatable {
     var diarizationProviderID: UUID?
     var speakerRecognitionProviderID: UUID?
     var showLiveSpeakerLabels = false
+    var labelRecordedSpeakers = false
+    var explicitlyDisabledFeatures: Set<String> = []
+    var initializedProviderCapabilities: Set<ProviderCapability> = []
     var recognizeSpeakers = false
     var recognizeLiveSpeakers = false
     var liveSpeakerRecognitionEnabled: Bool {
@@ -121,7 +124,8 @@ struct AppSettings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID,
             liveDiarizationProviderID, diarizationProviderID, speakerRecognitionProviderID,
-            showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers,
+            showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers, labelRecordedSpeakers,
+            initializedProviderCapabilities, explicitlyDisabledFeatures,
             defaultLanguage, autoTranscribe, autoSummarize, autoExtractTodos,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
             captureSystemAudio,
@@ -249,6 +253,12 @@ extension AppSettings {
         showLiveSpeakerLabels = try values.decodeIfPresent(Bool.self, forKey: .showLiveSpeakerLabels) ?? false
         recognizeSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeSpeakers) ?? false
         recognizeLiveSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeLiveSpeakers) ?? false
+        labelRecordedSpeakers =
+            try values.decodeIfPresent(Bool.self, forKey: .labelRecordedSpeakers) ?? recognizeSpeakers
+        explicitlyDisabledFeatures =
+            try values.decodeIfPresent(Set<String>.self, forKey: .explicitlyDisabledFeatures) ?? []
+        initializedProviderCapabilities =
+            try values.decodeIfPresent(Set<ProviderCapability>.self, forKey: .initializedProviderCapabilities) ?? []
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoSummarize = try values.decodeIfPresent(Bool.self, forKey: .autoSummarize) ?? false
         autoExtractTodos = try values.decodeIfPresent(Bool.self, forKey: .autoExtractTodos) ?? true
@@ -265,6 +275,28 @@ extension AppSettings {
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
         automaticVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .automaticVoiceProcessing) ?? true
         microphoneDevice = try? values.decodeIfPresent(MicrophoneDeviceChoice.self, forKey: .microphoneDevice)
+        if !values.contains(.explicitlyDisabledFeatures) {
+            let legacyFeatures: [(CodingKeys, WritableKeyPath<AppSettings, Bool>)] = [
+                (.showLiveTranscript, \.showLiveTranscript),
+                (.showLiveSpeakerLabels, \.showLiveSpeakerLabels),
+                (.recognizeLiveSpeakers, \.recognizeLiveSpeakers),
+                (.recognizeSpeakers, \.recognizeSpeakers),
+                (.autoTranscribe, \.autoTranscribe),
+                (.autoSummarize, \.autoSummarize),
+                (.autoExtractTodos, \.autoExtractTodos),
+            ]
+            for (key, path) in legacyFeatures where values.contains(key) && !self[keyPath: path] {
+                recordExplicitFeatureChoice(path, enabled: false)
+            }
+            if values.contains(.recognizeSpeakers), !labelRecordedSpeakers {
+                recordExplicitFeatureChoice(\.labelRecordedSpeakers, enabled: false)
+            }
+        }
+        if !values.contains(.initializedProviderCapabilities) {
+            for capability in ProviderCapability.allCases where selectedProvider(for: capability) != nil {
+                initializedProviderCapabilities.insert(capability)
+            }
+        }
 
     }
 }

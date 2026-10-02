@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ThisMacProviderView: View {
     @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var health = ProviderHealthStore.shared
     @ViewState private var models: [SpeechModelOption] = []
     @ViewState private var message = "Checking speech models…"
     var body: some View {
@@ -28,8 +29,14 @@ struct ThisMacProviderView: View {
                                 store.settings.thisMacCapabilities.remove(.liveTranscription)
                             }
                             store.saveSettings()
+                            Task { await store.refreshProviderHealth(providerID: ThisMacProvider.id) }
                         }))
                 Text("Transcribes audio during recording.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Readiness") {
+                let result = health.state(providerID: ThisMacProvider.id, capability: .liveTranscription)
+                LabeledContent("Live Transcription", value: result.title)
+                if let reason = result.reason { Text(reason).font(.caption).foregroundStyle(.orange) }
             }
             Section("Speech Models") {
                 if models.isEmpty { Text(message).foregroundStyle(.secondary) }
@@ -44,12 +51,13 @@ struct ThisMacProviderView: View {
         }
         .formStyle(.grouped)
         .task {
+            await store.refreshProviderHealth(providerID: ThisMacProvider.id)
             guard #available(macOS 26.0, *) else {
-                message = "Live transcript requires macOS 26 or later."
+                message = "Live transcription requires macOS 26 or later."
                 return
             }
             guard SpeechTranscriber.isAvailable else {
-                message = "Live transcript isn’t available on this Mac."
+                message = "Live transcription isn’t available on this Mac."
                 return
             }
             await refreshModels()
@@ -79,6 +87,7 @@ struct ThisMacProviderView: View {
         }
         guard !Task.isCancelled else { return }
         models = SpeechModelOrdering.sorted(snapshot)
+        await store.refreshProviderHealth(providerID: ThisMacProvider.id)
     }
 }
 

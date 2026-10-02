@@ -534,6 +534,7 @@ final class MeetingStore: ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+        ProviderHealthStore.shared.invalidateChangedConfiguration(settings: settings)
         return true
     }
     func insertImportedMeeting(_ meeting: Meeting) throws {
@@ -788,8 +789,11 @@ final class MeetingStore: ObservableObject {
                 diarizationProvider: settings.serviceProviders.first {
                     $0.id == settings.liveDiarizationProviderID && $0.supports(.liveDiarization)
                 },
-                speakerLabelsEnabled: settings.liveSpeakerRecognitionEnabled,
-                speakerRecognitionEnabled: settings.liveSpeakerRecognitionEnabled,
+                speakerLabelsEnabled: settings.showLiveSpeakerLabels,
+                speakerRecognitionEnabled: settings.recognizeLiveSpeakers
+                    && settings.serviceProviders.contains {
+                        $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
+                    },
                 people: { [weak self] in self?.people ?? [] },
                 enrollVoice: { [weak self] personID, speakerID, embedding in
                     self?.enrollLiveVoice(
@@ -894,6 +898,9 @@ final class MeetingStore: ObservableObject {
                 hasUsableFinalizedLiveTranscript: finalizedLive?.hasUsableText == true)
         {
             Task { await transcribe(id: id) }
+        }
+        else if !stopFailed {
+            scheduleAutomaticSpeakerLabeling(id: id)
         }
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {

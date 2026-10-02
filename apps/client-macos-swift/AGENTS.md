@@ -45,6 +45,7 @@ Read the relevant documents before changing the app:
 - [Meeting title header](../../docs/worklogs/2026-09-28-meeting-title-header.md): compact playback control and deliberate title editing.
 - [Meeting header folder](../../docs/worklogs/2026-09-28-meeting-header-folder.md): Command-click opens the displayed meeting's folder.
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
+- [General settings and provider health](../../docs/worklogs/2026-10-02-general-settings.md): stage behavior, shared scrolling, capability readiness, and initial provider selection.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Shared live transcript editing](../../docs/worklogs/2026-10-01-live-transcript-unification.md): shared native rows, provisional text, manual edits, person assignment, and explicit live following.
@@ -65,6 +66,7 @@ Read the relevant documents before changing the app:
 - [Streaming Opus recording](../../docs/worklogs/2026-10-01-streaming-opus.md): speech encoding, DTX, bounded capture writes, and validation.
 - [Recording menu icon](../../docs/worklogs/2026-10-01-recording-menu-icon.md): square stop symbol while recording.
 - [Recording source mute](../../docs/worklogs/2026-09-29-recording-source-mute.md): independent source controls, saved and live silence, and validation.
+- [Recording meter animation](../../docs/worklogs/2026-10-02-meter-animation.md): layer interpolation, unchanged meter publication rate, accessibility, and measured performance limits.
 - [Notes controls layout](../../docs/worklogs/2026-09-29-notes-controls-layout.md): recording header alignment, fixed source icon slots, and floating Markdown copy controls.
 
 Keep this index complete: whenever app documentation is added, moved, or renamed, update its link here in the same change. Every document under `docs/` must have a direct link from this file.

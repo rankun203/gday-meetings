@@ -49,7 +49,7 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     var speakerStatusMessages: [String] {
-        guard speakerLabelsEnabled || speakerRecognitionEnabled else { return [] }
+        guard speakerLabelsEnabled else { return [] }
         let messages =
             speakerAnalysisReady
             ? [speakerLabelStatus, speakerRecognitionStatus] : [speakerLabelStatus]
@@ -144,7 +144,7 @@ final class LiveTranscriptController: ObservableObject {
         modelObservation = LocalModelManager.shared.$states.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.sink != nil else { return }
-                if self.waitingForSpeakerModel, self.speakerLabelsEnabled || self.speakerRecognitionEnabled,
+                if self.waitingForSpeakerModel, self.speakerLabelsEnabled,
                     let raw = self.diarizationProvider?.model, let model = LocalModelID(rawValue: raw),
                     LocalModelManager.shared.state(for: model).phase == .ready
                 {
@@ -168,14 +168,15 @@ final class LiveTranscriptController: ObservableObject {
         self.sink = sink
         draft = LiveTranscriptDraft(meetingID: meetingID, locale: language)
         setEnabled(enabled)
-        self.speakerRecognitionEnabled = speakerRecognitionEnabled
+        self.speakerRecognitionEnabled = false
         setSpeakerLabelsEnabled(speakerLabelsEnabled)
         setSpeakerRecognitionEnabled(speakerRecognitionEnabled)
     }
 
     func setSpeakerLabelsEnabled(_ value: Bool) {
         speakerLabelsEnabled = value
-        guard value || speakerRecognitionEnabled else {
+        defer { if speakerRecognitionEnabled { setSpeakerRecognitionEnabled(true) } }
+        guard value else {
             waitingForSpeakerModel = false
             detachSpeakerSession()
             speakerAnalysisIssue = nil
@@ -301,8 +302,8 @@ final class LiveTranscriptController: ObservableObject {
         guard voiceWorker != nil else { return }
         speakerRecognitionStatus =
             speakerAnalysisReady
-            ? "Speaker recognition is ready. Waiting for clear speech."
-            : "Speaker recognition is waiting for Nemotron speaker analysis. Check its provider and model in Settings."
+            ? "Speaker association is ready. Waiting for clear speech."
+            : "Speaker association is waiting for Nemotron speaker analysis. Check its provider and model in Settings."
     }
 
     func setSpeakerRecognitionEnabled(_ value: Bool) {
@@ -317,24 +318,27 @@ final class LiveTranscriptController: ObservableObject {
         if let worker = voiceWorker { Task { await worker.cancel() } }
         voiceWorker = nil
         speakerRecognitionEnabled = value
-        setSpeakerLabelsEnabled(speakerLabelsEnabled)
         guard value else {
-            speakerRecognitionStatus = "Speaker recognition is off."
+            speakerRecognitionStatus = "Speaker association is off."
+            return
+        }
+        guard speakerLabelsEnabled else {
+            speakerRecognitionStatus = "Speaker association is waiting for speaker labeling."
             return
         }
         guard !UIPreview.enabled else {
-            speakerRecognitionStatus = "Synthetic people · No voice matching is running."
+            speakerRecognitionStatus = "Synthetic people · No speaker association is running."
             return
         }
         guard let provider = diarizationProvider, provider.supports(.liveDiarization),
             let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil
         else {
-            speakerRecognitionStatus = "Choose a Nemotron provider in Settings for live speaker recognition."
+            speakerRecognitionStatus = "Choose a Nemotron provider in Settings for live speaker association."
             return
         }
         let token = voiceGeneration
         let worker = LiveVoiceEmbeddingWorker()
-        speakerRecognitionStatus = "Preparing speaker recognition…"
+        speakerRecognitionStatus = "Preparing speaker association…"
         voiceStartup = Task {
             do {
                 try await worker.prepare()
@@ -346,7 +350,7 @@ final class LiveTranscriptController: ObservableObject {
                 refreshVoiceReadyStatus()
                 openLocalDataEvent(
                     token, targetID: ThisMacProvider.id, targetName: "This Mac",
-                    purpose: "Live speaker recognition", bodies: ["Clear speech excerpts", "Typed voice embeddings"])
+                    purpose: "Live speaker association", bodies: ["Clear speech excerpts", "Typed voice embeddings"])
             }
             catch {
                 await worker.cancel()
@@ -363,7 +367,7 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     private func receiveVoiceSample(_ sample: LiveSpeakerAudioSample, token: UUID) {
-        guard acceptedSpeakerGenerations.contains(token), speakerRecognitionEnabled,
+        guard acceptedSpeakerGenerations.contains(token), speakerLabelsEnabled, speakerRecognitionEnabled,
             let worker = voiceWorker, voiceWork == nil
         else { return }
         let voiceToken = voiceGeneration
@@ -393,7 +397,7 @@ final class LiveTranscriptController: ObservableObject {
                 voiceCandidates[speaker.id] = (match.personID, count)
                 if count >= 3 {
                     draft?.speakerTimeline?.assign(match.personID, to: speaker.id, manual: false)
-                    speakerRecognitionStatus = "Speaker recognition updated a matching voice."
+                    speakerRecognitionStatus = "Speaker association updated a matching voice."
                     checkpoint()
                 }
             }
@@ -708,18 +712,18 @@ enum LiveSpeakerModelDiagnostics {
     static func voiceFailure(phase: LocalModelPhase, error: Error, labelsAvailable: Bool) -> String {
         let continued = labelsAvailable ? " Anonymous speaker labels continue." : ""
         guard let modelError = error as? LocalModelError, case .unavailable = modelError else {
-            return "Voice matching is unavailable. \(error.localizedDescription)" + continued
+            return "Speaker association is unavailable. \(error.localizedDescription)" + continued
         }
         let action: String
         switch phase {
         case .downloading, .verifying, .preparing:
-            action = "Voice matching is waiting for the Voice Matching Model to finish setup."
+            action = "Speaker association is waiting for the Speaker Association Model to finish setup."
         case .failed:
             action =
-                "The Voice Matching Model couldn’t be prepared. Open Nemotron in Settings → Service Providers and choose Retry or Verify under Voice Matching Model."
+                "The Speaker Association Model couldn’t be prepared. Open the speaker association provider in Settings → Service Providers and choose Retry or Verify under Speaker Association Model."
         case .missing, .unverified, .cancelled, .ready:
             action =
-                "Voice matching needs a separate model. Open Nemotron in Settings → Service Providers and download or verify Voice Matching Model."
+                "Speaker association needs a separate model. Open the speaker association provider in Settings → Service Providers and download or verify Speaker Association Model."
         }
         return action + continued
     }

@@ -64,7 +64,7 @@ actor LocalLiveDiarization {
         sample: @escaping @Sendable (LiveSpeakerAudioSample) async -> Void
     ) async throws {
         guard let preset = model.nemotronPreset, let config = Nemotron3Config.preset(named: preset) else {
-            throw MeetingError.message("Choose an installed Nemotron preset for Live Speaker Labels.")
+            throw MeetingError.message("Choose an installed Nemotron preset for Live Speaker Labeling.")
         }
         let manager: LocalModelManager
         if let suppliedManager {

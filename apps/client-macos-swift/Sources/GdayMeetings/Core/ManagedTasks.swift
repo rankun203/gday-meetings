@@ -179,6 +179,7 @@ extension MeetingStore {
             }
             try Task.checkCancellation()
             finishManagedTask(id, state: .completed, recovery: .none)
+            if task.kind == .transcription { scheduleAutomaticSpeakerLabeling(id: task.meetingID) }
         }
         catch {
             if Task.isCancelled || error is CancellationError {

@@ -51,6 +51,12 @@ Every provider implements the same connection-check operation. Check an enabled 
 
 Show a status icon with text. Do not communicate status through color alone.
 
+The Swift app exposes capability-specific `health()` results through a shared coordinator. General checks selected providers, and opening a capability dropdown checks all of its candidates concurrently. Each result appears when it completes. Configuration changes invalidate prior results; late checks cannot restore readiness for an old configuration. Unhealthy providers remain visible but cannot be selected. A saved unhealthy selection is retained with its explanation and a direct link to Service Providers.
+
+Health is a lightweight readiness estimate. Local checks inspect required file metadata and a preparation receipt without loading models or hashing their contents. Runtime acquisition still verifies and prepares models. Remote checks use the adapter's existing free metadata operations; a successful response does not establish inference quality or every worker dependency. Unknown network results are distinguished from confirmed setup failures. General does not offer repair controls.
+
+When provider setup succeeds for a capability that has never had a provider, the app assigns it and enables its related features. Explicit provider choices, clearing a choice, and feature-off preferences persist and prevent later checks from undoing those decisions. Adding, saving, or checking a provider never processes existing meetings.
+
 | State | Meaning |
 | --- | --- |
 | Not Checked | No result exists for the saved configuration. |
