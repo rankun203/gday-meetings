@@ -42,6 +42,6 @@ Before/after isolated previews verified compact rows, blank leading attribution,
 
 # Release handoff
 
-Feature commit `170a050` is pushed to `master`. [macOS CI run 36983011439](https://github.com/rankun203/meeting-notes/actions/runs/36983011439) has started all three release jobs: macOS 15 with Xcode 26.0.1, macOS 26, and macOS 27 preview. All runners were available; results are pending at handoff.
+Feature commit `170a050` is pushed to `master`. [macOS CI run 36983011439](https://github.com/rankun203/meeting-notes/actions/runs/36983011439) has started all three release jobs: macOS 15 with Xcode 26.0.1, macOS 26, and macOS 27 preview. All three jobs passed; no runner was unavailable.
 
 The validated release is installed at `/Applications/Gday Meetings.app`. Installation verified the signature and exact executable hash against the isolated release build. The previous application bundle is retained at `/private/tmp/Gday Meetings.before-live-continuity.app`. The user will open the installed app, clear permissions, and start recording before real-audio profiling. Free disk space at handoff was 172 GiB. No sustained recording or active summary performance claim is made yet.
