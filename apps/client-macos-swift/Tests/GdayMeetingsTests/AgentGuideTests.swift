@@ -18,6 +18,8 @@ struct AgentGuideTests {
         #expect(guide.contains("transcript-revisions.json"))
         #expect(guide.contains("live-transcript.json"))
         #expect(guide.contains("live-transcript-events.csv"))
+        #expect(guide.contains("live-transcript-segments.jsonl"))
+        #expect(guide.contains("ordinary viewing must not replay event journals"))
         #expect(guide.contains("SHA-256"))
         #expect(guide.contains("Keep the last line for each event ID"))
         #expect(guide.contains("separate task stores"))
@@ -43,6 +45,20 @@ struct AgentGuideTests {
         try Data(edited.utf8).write(to: file)
         #expect(try AgentGuides.read(directory: folder) == edited)
         #expect(try Data(contentsOf: file) == Data(edited.utf8))
+    }
+
+    @Test func savedRowGuidanceExtendsExistingGuideOnce() throws {
+        let folder = temporaryDirectory()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let existing =
+            "---\ntitle: Custom library guide\n---\n\nKeep this instruction.\n" + AgentGuides.liveTranscriptFormat
+        try Data(existing.utf8).write(to: folder.appendingPathComponent("AGENTS.md"))
+        #expect(try AgentGuides.ensure(directory: folder))
+        let updated = try AgentGuides.read(directory: folder)
+        #expect(updated.hasPrefix(existing))
+        #expect(updated.contains(AgentGuides.savedTranscriptFormat))
+        #expect(try !AgentGuides.ensure(directory: folder))
     }
 
     @Test func existingGuideSymlinkIsPreservedAndDirectoryIsRejected() throws {
@@ -117,7 +133,10 @@ struct AgentGuideTests {
         let custom = "---\ntitle: Existing guide\n---\n\nPreserve this guide.\n"
         try Data(custom.utf8).write(to: root)
         _ = MeetingStore(dataDirectory: folder)
-        #expect(try AgentGuides.read(directory: folder) == custom + "\n\n" + AgentGuides.liveTranscriptFormat + "\n")
+        #expect(
+            try AgentGuides.read(directory: folder)
+                == custom + "\n\n" + AgentGuides.liveTranscriptFormat + "\n\n\n" + AgentGuides.savedTranscriptFormat
+                + "\n")
         #expect(try !AgentGuides.ensure(directory: folder))
     }
 

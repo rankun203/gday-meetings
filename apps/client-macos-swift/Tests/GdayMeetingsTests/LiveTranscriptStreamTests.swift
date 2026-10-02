@@ -220,6 +220,12 @@ struct LiveTranscriptStreamTests {
         await controller.finish()
         #expect(
             !FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("live-transcript.json").path))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent(LiveTranscriptProjection.checkpointName).path))
+        #expect(
+            !FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent("live-transcript-events.csv").path))
         #expect(
             FileManager.default.fileExists(
@@ -336,13 +342,13 @@ struct LiveTranscriptStreamTests {
         recovered.committedJournalDigest = try LiveTranscriptDraft.journalDigest(at: journalURL)
         try recovered.save(at: directory)
         #expect(
-            try LiveTranscriptDraft.read(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
+            try LiveTranscriptDraft.recover(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
                 == ["Written", "Salvaged"])
         // A new journal event changes the digest and makes replay authoritative again.
         journal.append(.phrase(phrase(2, ["New event"]), final: true))
         try await journal.flush()
         #expect(
-            try LiveTranscriptDraft.read(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
+            try LiveTranscriptDraft.recover(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
                 == ["Written", "New event"])
     }
 

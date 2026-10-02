@@ -264,24 +264,12 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         return edge >= anchor.end
     }
 
+    /// Ordinary viewing reads the saved projection and never opens recovery events.
     static func read(at directory: URL, meetingID: UUID) throws -> Self? {
-        let journal = directory.appendingPathComponent("live-transcript-events.csv")
         let file = directory.appendingPathComponent("live-transcript.json")
-        if FileManager.default.fileExists(atPath: journal.path) {
-            if let data = try? Data(contentsOf: file),
-                let committed = try? JSONDecoder().decode(Self.self, from: data),
-                committed.version == 1, committed.meetingID == meetingID,
-                let digest = committed.committedJournalDigest,
-                digest == (try? journalDigest(at: journal))
-            {
-                return committed
-            }
-            let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.readEvents(from: journal)
-            if let recovered = LiveTranscriptJournalRecord.replay(records), recovered.meetingID == meetingID {
-                return recovered
-            }
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return try LiveTranscriptProjection.read(at: directory, meetingID: meetingID)
         }
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         let value = try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
         guard value.version == 1, value.meetingID == meetingID else {
             throw MeetingError.message("This live transcript uses an unsupported format.")
@@ -289,8 +277,57 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         return value
     }
 
+    /// Only interrupted-recording recovery may reconstruct an unsaved projection.
+    static func recover(at directory: URL, meetingID: UUID) throws -> Self? {
+        if let projection = try? LiveTranscriptProjection.read(at: directory, meetingID: meetingID) {
+            // A later edited snapshot wins over the recording's projection.
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent("live-transcript.json").path) {
+                return (try? read(at: directory, meetingID: meetingID)) ?? projection
+            }
+            return projection
+        }
+        let journal = directory.appendingPathComponent("live-transcript-events.csv")
+        guard FileManager.default.fileExists(atPath: journal.path) else {
+            return try read(at: directory, meetingID: meetingID)
+        }
+        if let committed = try? read(at: directory, meetingID: meetingID),
+            let digest = committed.committedJournalDigest,
+            digest == (try? journalDigest(at: journal))
+        {
+            return committed
+        }
+        let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.readEvents(from: journal)
+        guard let recovered = LiveTranscriptJournalRecord.replay(records), recovered.meetingID == meetingID else {
+            throw MeetingError.message("This recovery journal does not match the meeting.")
+        }
+        return recovered
+    }
+
     static func journalDigest(at url: URL) throws -> String {
-        SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let bytes = try handle.read(upToCount: 64 * 1024), !bytes.isEmpty {
+            hash.update(data: bytes)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Publish the snapshot before retiring recovery data. A digest preserves
+    /// snapshot authority if the process stops between these two operations.
+    @discardableResult
+    func saveRetiringJournal(at directory: URL) throws -> Self {
+        let journal = directory.appendingPathComponent("live-transcript-events.csv")
+        var saved = self
+        if FileManager.default.fileExists(atPath: journal.path) {
+            saved.committedJournalDigest = try Self.journalDigest(at: journal)
+        }
+        try saved.save(at: directory)
+        if FileManager.default.fileExists(atPath: journal.path) {
+            try FileManager.default.moveItem(
+                at: journal, to: directory.appendingPathComponent("live-transcript-events.saved.csv"))
+        }
+        return saved
     }
 
     func save(at directory: URL) throws {

@@ -26,11 +26,12 @@ extension MeetingStore {
 
     func recoverUnadoptedLiveTranscript(_ meeting: Meeting) {
         recoverLiveSourcePlaceholders(meeting)
-        guard libraryWritable, !meeting.liveTranscriptAdopted, meeting.transcript.isEmpty,
+        guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted, meeting.transcript.isEmpty,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
         else { return }
         do {
-            if let draft = try LiveTranscriptDraft.read(at: directory(for: meeting.id), meetingID: meeting.id) {
+            if let draft = try LiveTranscriptDraft.recover(at: directory(for: meeting.id), meetingID: meeting.id) {
+                try draft.saveRetiringJournal(at: directory(for: meeting.id))
                 _ = adoptLiveTranscript(draft)
             }
         }

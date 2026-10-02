@@ -150,12 +150,12 @@ struct LiveTranscriptCSVTests {
         let bytes = Data("Unsupported old event file.\n".utf8)
         try bytes.write(to: old)
         let meetingID = UUID()
-        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID) == nil)
+        #expect(try LiveTranscriptDraft.recover(at: directory, meetingID: meetingID) == nil)
         let writer = LiveTranscriptJournal<LiveTranscriptJournalRecord>.events(
             at: directory.appendingPathComponent("live-transcript-events.csv"))
         writer.append(.begin(.init(meetingID: meetingID, locale: "en"), labeling: false))
         try await writer.flush()
-        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID)?.meetingID == meetingID)
+        #expect(try LiveTranscriptDraft.recover(at: directory, meetingID: meetingID)?.meetingID == meetingID)
         #expect(try Data(contentsOf: old) == bytes)
     }
 
