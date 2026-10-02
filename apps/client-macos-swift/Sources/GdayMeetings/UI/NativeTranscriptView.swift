@@ -960,10 +960,10 @@ enum TranscriptSpeakerPalette {
     }
 }
 
-/// The preceding word is lighter red in both light and dark appearances.
+/// Preserve the original live trail's public SwiftUI color mix in native text.
 enum TranscriptLiveWordColor {
     static var trailing: NSColor {
-        if #available(macOS 15, *) { return NSColor(Color.red.mix(with: .white, by: 0.5)) }
-        return NSColor.systemRed.blended(withFraction: 0.5, of: .white) ?? .systemRed
+        if #available(macOS 15, *) { return NSColor(Color.red.mix(with: .primary, by: 0.5)) }
+        return NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed
     }
 }
