@@ -464,7 +464,7 @@ enum UIPreview {
 struct PreviewContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @EnvironmentObject private var store: MeetingStore
-    @ViewState private var appearance = 0
+    @EnvironmentObject private var appearance: AppearanceSettings
     @ViewState private var previewVoiceProcessing = false
     private static func recordingLevel(at time: Double, offset: Double, reconnects: Bool = false)
         -> RecordingSourceLevel
@@ -501,10 +501,8 @@ struct PreviewContainer<Content: View>: View {
                         Button("Start Synthetic Recording") { UIPreview.startSyntheticRecording(store) }
                             .disabled(store.recordingID != nil)
                     }
-                    Picker("Appearance", selection: $appearance) {
-                        Text("System").tag(0)
-                        Text("Light").tag(1)
-                        Text("Dark").tag(2)
+                    Picker("Appearance", selection: $appearance.selection) {
+                        ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.fixedSize()
                 }.font(.caption).padding(8).background(.quaternary)
             }
@@ -552,16 +550,6 @@ struct PreviewContainer<Content: View>: View {
                     .padding(.horizontal, 12).padding(.vertical, 6)
             }
             content()
-        }
-        .onChange(of: appearance) { _, selection in
-            guard UIPreview.enabled else { return }
-            // Use one AppKit appearance source for native controls and SwiftUI.
-            // Removing preferredColorScheme left stale dark foregrounds until
-            // window activation; nil here restores live system inheritance.
-            NSApp.appearance =
-                selection == 1
-                ? NSAppearance(named: .aqua)
-                : selection == 2 ? NSAppearance(named: .darkAqua) : nil
         }
     }
 }

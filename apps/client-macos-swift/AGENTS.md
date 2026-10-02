@@ -46,6 +46,7 @@ Read the relevant documents before changing the app:
 - [Meeting header folder](../../docs/worklogs/2026-09-28-meeting-header-folder.md): Command-click opens the displayed meeting's folder.
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
 - [General settings and provider health](../../docs/worklogs/2026-10-02-general-settings.md): stage behavior, shared scrolling, capability readiness, and initial provider selection.
+- [General appearance preference](../../docs/worklogs/2026-10-02-appearance-settings.md): persisted System, Light, and Dark appearance across app windows.
 - [Speaker association health](../../docs/worklogs/2026-10-02-speaker-association-health.md): Nemotron capability migration and automatic local model verification.
 - [Provider icons](../../docs/worklogs/2026-10-02-provider-header-icon.md): shared symbols in provider rows, headers, and the Add menu.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.

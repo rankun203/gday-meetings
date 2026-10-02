@@ -3,6 +3,7 @@ import SwiftUI
 /// Behavior and provider choices share one scrolling surface.
 struct GeneralSettingsView: View {
     @EnvironmentObject private var store: MeetingStore
+    @EnvironmentObject private var appearance: AppearanceSettings
     @ObservedObject private var health = ProviderHealthStore.shared
     @ObservedObject private var models = LocalModelManager.shared
     @AppStorage("settingsTab") private var settingsTab = "general"
@@ -91,6 +92,12 @@ struct GeneralSettingsView: View {
                                 capability: .summarization, provider: store.settings.summaryProviderID,
                                 prerequisite: store.settings.autoSummarize ? nil : "Turn on Automatically Summarize.")
                             Text("Extracts to-dos from completed summaries.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        group("General") {
+                            Picker("Appearance", selection: $appearance.selection) {
+                                ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            .pickerStyle(.menu)
                         }
                     }.frame(maxWidth: .infinity, alignment: .topLeading)
                     VStack(alignment: .leading, spacing: 20) {

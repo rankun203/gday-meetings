@@ -8,10 +8,12 @@ struct GdayMeetingsApp: App {
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
     @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
+    @StateObject private var appearance = AppearanceSettings()
 
     var body: some Scene {
         Window("Meetings", id: "main") {
             PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
+                .environmentObject(appearance)
                 .disabled(store.isChangingLibrary)
                 .onAppear {
                     delegate.store = store
@@ -88,7 +90,9 @@ struct GdayMeetingsApp: App {
         }
         // HIG: app-specific preferences live in a separate standard Settings window.
         // https://developer.apple.com/design/human-interface-guidelines/settings
-        Settings { SettingsView().environmentObject(store).environmentObject(playback) }
+        Settings {
+            SettingsView().environmentObject(store).environmentObject(playback).environmentObject(appearance)
+        }
         MenuBarExtra {
             RecordingMenuView().environmentObject(store).environmentObject(playback)
         } label: {
