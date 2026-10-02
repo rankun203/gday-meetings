@@ -51,6 +51,13 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .community1: return "Speaker Labeling (Community-1)"
         }
     }
+    var systemImage: String {
+        switch self {
+        case .nemotron, .community1: "person.wave.2"
+        case .gdayWebsite: "globe"
+        case .runpod, .openAICompatible, .filedrop: "server.rack"
+        }
+    }
     var capabilities: Set<ProviderCapability> {
         switch self {
         case .runpod: return [.transcription, .diarization]

@@ -22,7 +22,7 @@ struct LocalSpeakerProviderView: View {
     var body: some View {
         Form {
             Section {
-                Label(draft.kind.title, systemImage: "waveform.badge.person.crop")
+                Label(draft.kind.title, systemImage: draft.kind.systemImage)
                     .font(.title2.weight(.semibold))
                 TextField("Name", text: $draft.name)
                 Toggle("Enable This Provider", isOn: $draft.isEnabled)

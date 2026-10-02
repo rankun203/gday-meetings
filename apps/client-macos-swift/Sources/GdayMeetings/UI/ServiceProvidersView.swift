@@ -32,10 +32,14 @@ struct ServiceProvidersView: View {
                 HStack {
                     Menu {
                         ForEach(ServiceProviderKind.allCases, id: \.self) { kind in
-                            Button(kind.title) { add(kind) }
-                                .disabled(
-                                    kind == .gdayWebsite
-                                        && store.settings.serviceProviders.contains { $0.kind == .gdayWebsite })
+                            Button {
+                                add(kind)
+                            } label: {
+                                Label(kind.title, systemImage: kind.systemImage)
+                            }
+                            .disabled(
+                                kind == .gdayWebsite
+                                    && store.settings.serviceProviders.contains { $0.kind == .gdayWebsite })
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -183,7 +187,8 @@ private struct ServiceProviderPanel: View {
     var body: some View {
         Form {
             Section {
-                Text(draft.kind.title).font(.title2.weight(.semibold))
+                Label(draft.kind.title, systemImage: draft.kind.systemImage)
+                    .font(.title2.weight(.semibold))
                 TextField("Name", text: $draft.name)
                 Toggle("Enable This Provider", isOn: $draft.isEnabled)
             }

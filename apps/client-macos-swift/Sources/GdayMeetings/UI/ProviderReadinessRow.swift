@@ -17,8 +17,7 @@ struct ProviderReadinessRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Label(
                     provider.name,
-                    systemImage: provider.kind.isLocal
-                        ? "desktopcomputer" : provider.kind == .gdayWebsite ? "globe" : "server.rack"
+                    systemImage: provider.kind.systemImage
                 )
                 .fixedSize(horizontal: false, vertical: true)
                 if !provider.isEnabled || provider.name != provider.kind.title {
