@@ -143,7 +143,7 @@ actor LocalLiveDiarization {
             session.queue.consumed(packet)
             guard !cancelled, !Task.isCancelled else { break }
             do {
-                if packet.start - session.previousEnd > 1.0 / 16_000 + 0.000_001 {
+                if LiveAudioInputTimeline.hasGap(from: session.previousEnd, to: packet.start) {
                     try await flush(session)
                     await gap?(
                         .init(

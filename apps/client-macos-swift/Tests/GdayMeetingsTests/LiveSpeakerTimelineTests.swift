@@ -542,3 +542,98 @@ extension LiveSpeakerTimelineTests {
         #expect(timeline.attributing(untimed).map(\.text) == [phrase.text])
     }
 }
+
+extension LiveSpeakerTimelineTests {
+    private func ownershipFixture(duration: Double = 1) -> (
+        LiveSpeakerTimeline, LiveTranscriptPhrase, LiveSpeakerIdentity
+    ) {
+        let speaker = identity(.system, UUID(), 0)
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [speaker]
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .system, start: 0, end: duration,
+            text: "Example", words: [.init(text: "Example", start: 0, end: duration)])
+        return (timeline, phrase, speaker)
+    }
+
+    @Test func exclusiveWordActivityCanIdentifySpeechDespiteUnlabeledTime() {
+        let (base, phrase, speaker) = ownershipFixture()
+        var timeline = base
+        timeline.intervals = [.init(speakerID: speaker.id, start: 0.3, end: 0.7)]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
+        var untimed = phrase
+        untimed.words = []
+        #expect(timeline.attributing(untimed).first?.speakerIdentity == nil)
+        timeline.intervals = []
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+    }
+
+    @Test func soleVoiceOnBothSidesOfInternalSilenceOwnsTimedWord() {
+        let (base, phrase, speaker) = ownershipFixture(duration: 1.4)
+        var timeline = base
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0, end: 0.29),
+            .init(speakerID: speaker.id, start: 1.07, end: 1.4),
+        ]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
+        timeline.intervals.removeLast()
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        timeline.intervals = [.init(speakerID: speaker.id, start: 1.28, end: 1.4)]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+    }
+
+    @Test func duplicateIntervalsDoNotManufactureEnoughSpeakerEvidence() {
+        let (base, phrase, speaker) = ownershipFixture()
+        var timeline = base
+        timeline.intervals = Array(repeating: .init(speakerID: speaker.id, start: 0.45, end: 0.5), count: 5)
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        var untimed = phrase
+        untimed.words = []
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0.2, end: 0.55),
+            .init(speakerID: speaker.id, start: 0.3, end: 0.65),
+        ]
+        #expect(timeline.attributing(untimed).first?.speakerIdentity == nil)
+    }
+
+    @Test func competingActivityRejectsEvenStrongCoverageAndSequentialTurns() {
+        let (base, phrase, speaker) = ownershipFixture()
+        let other = identity(.system, speaker.generation, 1)
+        var timeline = base
+        timeline.speakers.append(other)
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0, end: 1),
+            .init(speakerID: other.id, start: 0.4, end: 0.43),
+        ]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        timeline.intervals = [
+            .init(speakerID: speaker.id, start: 0, end: 0.8),
+            .init(speakerID: other.id, start: 0.8, end: 1),
+        ]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+    }
+
+    @Test func directOwnershipRejectsAudioGapsAndUnprocessedFuture() {
+        let (base, phrase, speaker) = ownershipFixture()
+        var timeline = base
+        timeline.intervals = [.init(speakerID: speaker.id, start: 0, end: 1)]
+        timeline.gaps = [.init(source: .system, start: 0.4, end: 0.5, reason: "Synthetic gap")]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        timeline.gaps[0].source = .microphone
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
+        timeline.cursors = [.init(source: .system, generation: speaker.generation, sequence: 1, end: 0.8, final: false)]
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == nil)
+        timeline.cursors[0].end = 1
+        #expect(timeline.attributing(phrase).first?.speakerIdentity == speaker.id)
+    }
+
+    @Test func contextualBridgeCannotCrossProcessedWatermark() {
+        let (base, phrase, _) = boundaryFixture()
+        var timeline = base
+        timeline.intervals = [.init(speakerID: timeline.speakers[0].id, start: 0, end: 1.1)]
+        timeline.cursors[0].end = 1.1
+        let rows = timeline.attributing(phrase)
+        #expect(rows.last?.speakerIdentity == nil)
+        #expect(rows.map(\.text).joined() == phrase.text)
+    }
+}

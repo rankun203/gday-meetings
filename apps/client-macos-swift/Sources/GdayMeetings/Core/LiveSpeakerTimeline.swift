@@ -106,22 +106,67 @@ struct LiveSpeakerTimeline: Codable, Equatable {
         speakers[index].manuallyAssigned = manual
     }
 
-    /// Keep overlap unresolved. A name requires one identity covering most of a
-    /// timed word; missing timing never invents a new word boundary.
+    /// Timed words use exclusive observed speaker activity. Untimed phrases
+    /// require majority coverage and never invent a new word boundary.
     func attributing(_ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil) -> [LiveTranscriptPhrase] {
         let ids = Set(speakers.filter { $0.source == phrase.source }.map(\.id))
         let sourceIntervals = intervals.filter { ids.contains($0.speakerID) }
         let relevant = sourceIntervals.filter { $0.start < phrase.end && $0.end > phrase.start }
-        func identity(_ start: Double, _ end: Double, activity: [LiveSpeakerInterval]) -> LiveSpeakerIdentity? {
+        func identity(
+            _ start: Double, _ end: Double, activity: [LiveSpeakerInterval], timedWord: Bool = false
+        ) -> LiveSpeakerIdentity? {
             let duration = end - start
-            guard duration > 0 else { return nil }
-            var coverage: [UUID: Double] = [:]
+            let tolerance = 0.000_001
+            guard duration > 0,
+                !gaps.contains(where: { $0.source == phrase.source && $0.start < end && $0.end > start }),
+                cursors.first(where: { $0.source == phrase.source }).map({ end <= $0.end + tolerance }) ?? true
+            else { return nil }
+            var clipped: [UUID: [(Double, Double)]] = [:]
             for interval in activity {
-                coverage[interval.speakerID, default: 0] += max(0, min(end, interval.end) - max(start, interval.start))
+                let lower = max(start, interval.start)
+                let upper = min(end, interval.end)
+                if upper > lower { clipped[interval.speakerID, default: []].append((lower, upper)) }
             }
-            let active = coverage.filter { $0.value > duration * 0.1 }
-            guard active.count == 1, let winner = active.first, winner.value >= duration * 0.6 else { return nil }
-            return speakers.first { $0.id == winner.key }
+            var unions: [UUID: [(Double, Double)]] = [:]
+            for (speaker, spans) in clipped {
+                var merged: [(Double, Double)] = []
+                for span in spans.sorted(by: { $0.0 < $1.0 }) {
+                    if let last = merged.last, span.0 <= last.1 {
+                        merged[merged.count - 1].1 = max(last.1, span.1)
+                    }
+                    else {
+                        merged.append(span)
+                    }
+                }
+                if merged.reduce(0, { $0 + $1.1 - $1.0 }) > tolerance { unions[speaker] = merged }
+            }
+            // Unlabeled time is not a vote for another identity. Competing
+            // observed identities remain unresolved, including sequential turns.
+            guard unions.count == 1, let (speaker, spans) = unions.first else { return nil }
+            let observed = spans.reduce(0) { $0 + $1.1 - $1.0 }
+            let minimum = timedWord ? min(0.1, duration * 0.6) : duration * 0.6
+            guard observed + tolerance >= minimum else { return nil }
+            if timedWord, observed + tolerance < duration * 0.6 {
+                // A lone head/tail from an adjacent turn cannot claim a long
+                // ASR range. Support on both sides can bracket internal silence.
+                let centralStart = start + duration * 0.25
+                let centralEnd = end - duration * 0.25
+                let central = spans.reduce(0) {
+                    $0 + max(0, min($1.1, centralEnd) - max($1.0, centralStart))
+                }
+                let leading = spans.reduce(0) {
+                    $0 + max(0, min($1.1, centralStart) - max($1.0, start))
+                }
+                let trailing = spans.reduce(0) {
+                    $0 + max(0, min($1.1, end) - max($1.0, centralEnd))
+                }
+                let supportMinimum = min(0.01, minimum)
+                guard
+                    central + tolerance >= supportMinimum
+                        || (leading + tolerance >= supportMinimum && trailing + tolerance >= supportMinimum)
+                else { return nil }
+            }
+            return speakers.first { $0.id == speaker }
         }
         func apply(_ identity: LiveSpeakerIdentity?, to row: LiveTranscriptPhrase) -> LiveTranscriptPhrase {
             var row = row
@@ -153,7 +198,9 @@ struct LiveSpeakerTimeline: Codable, Equatable {
             }
             // Use observed word attribution, not a previously inferred bridge.
             for word in preceding.words.reversed() {
-                guard let speaker = identity(word.start, word.end, activity: precedingActivity) else { break }
+                guard let speaker = identity(word.start, word.end, activity: precedingActivity, timedWord: true) else {
+                    break
+                }
                 if let current = precedingEvidence {
                     guard current.2?.id == speaker.id else { break }
                     precedingEvidence?.0 = word.start
@@ -165,7 +212,7 @@ struct LiveSpeakerTimeline: Codable, Equatable {
         }
         var groups: [(Double, Double, LiveSpeakerIdentity?)] = []
         for word in phrase.words {
-            let speaker = identity(word.start, word.end, activity: relevant)
+            let speaker = identity(word.start, word.end, activity: relevant, timedWord: true)
             if let last = groups.last, last.2?.id == speaker?.id {
                 groups[groups.count - 1].1 = word.end
             }
@@ -178,6 +225,8 @@ struct LiveSpeakerTimeline: Codable, Equatable {
         let originalGroups = groups
         for index in groups.indices where originalGroups[index].2 == nil {
             let run = originalGroups[index]
+            guard cursors.first(where: { $0.source == phrase.source }).map({ run.1 <= $0.end + 0.000_001 }) ?? true
+            else { continue }
             guard
                 !gaps.contains(where: {
                     $0.source == phrase.source && $0.start < run.1 && $0.end > run.0

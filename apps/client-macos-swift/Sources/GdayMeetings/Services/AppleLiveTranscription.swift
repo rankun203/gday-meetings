@@ -124,28 +124,29 @@ actor AppleLiveTranscription {
             }
             let feed = Task {
                 let converter = LivePCMConverter(output: format)
-                var previousEnd = boundaries[source] ?? 0
-                var outputFrame: Int64?
+                var timeline = LiveAudioInputTimeline(boundary: boundaries[source] ?? 0)
                 for await packet in queue.stream {
                     queue.consumed(packet)
                     if Task.isCancelled { break }
                     do {
-                        if packet.start - previousEnd >= 0.1 {
+                        let previousEnd = timeline.previousEnd
+                        if timeline.receive(start: packet.start, duration: packet.duration) {
                             await gap(
                                 .init(
                                     source: source, start: previousEnd, end: packet.start,
                                     reason: "Audio was not processed for live transcription."))
                             converter.reset()
-                            outputFrame = nil
                         }
                         if let buffer = try converter.convert(packet.buffer) {
                             // Resampling can hold or release samples across callback boundaries.
                             // Timestamp converted frames on one cursor, not each source packet's start.
-                            let start = outputFrame ?? Int64((packet.start * format.sampleRate).rounded())
+                            guard
+                                let start = timeline.convertedStart(
+                                    frameCount: Int(buffer.frameLength), sampleRate: format.sampleRate)
+                            else { throw MeetingError.message("Couldn’t align live transcription audio.") }
                             let value = AnalyzerInput(
                                 buffer: buffer,
                                 bufferStartTime: CMTime(value: start, timescale: Int32(format.sampleRate)))
-                            outputFrame = start + Int64(buffer.frameLength)
                             switch input.continuation.yield(value) {
                             case .dropped:
                                 await gap(
@@ -155,7 +156,6 @@ actor AppleLiveTranscription {
                             default: break
                             }
                         }
-                        previousEnd = packet.start + packet.duration
                     }
                     catch {
                         self.markFailed()
