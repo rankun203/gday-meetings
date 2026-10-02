@@ -28,7 +28,7 @@ Record commit, release configuration, macOS/Xcode version, hardware, display ref
 | History scaling | Seed 5, 60, and 180 minutes; replay the same next 60 seconds | Does update cost stay independent of frozen history? |
 | Speaker continuity | One Chinese speaker; frequent turns; two simultaneous sources; short silence and uncertain activity | Are carried labels stable, with no unresolved-badge fragmentation? Are real speaker changes preserved? |
 | Delayed processing | Delay diarization; stop its output; flush at stop; reset after an audio gap | Is active work bounded? Does the cutoff persist the same effective labels on reopen? |
-| Live interaction | Follow Live; scroll into history; select/edit a passage; open speaker picker; switch tabs | Do background updates preserve scroll, selection, and input responsiveness? |
+| Live interaction | Follow Live; scroll into history; select/edit a passage; open speaker picker; switch tabs; return after another app covers the window | Do background updates preserve scroll, selection, and input responsiveness? |
 | Recording pipeline | Capture only; transcription; labeling; both; association; window hidden | Separate UI overhead from audio, ASR, inference, and embedding work. |
 | Summary generation | Short/long transcript inputs; short/long streamed outputs; English/Chinese; citation-heavy, list, and table content | Locate CPU cost in input preparation, stream decoding, publication, Markdown parsing/layout, citations, persistence, or indexing. |
 | Summary visibility | Summary visible; another tab visible; another meeting selected; window hidden | Does invisible summary output still trigger expensive rendering or library-wide updates? |
@@ -77,7 +77,7 @@ Apple's [responsiveness guidance](https://developer.apple.com/documentation/xcod
 
 # First installed-app measurements
 
-The user authorized replay from an existing local playback page after clearing app permissions. A separate evaluation recording captures system audio only, with Chinese live transcription, speaker labeling, and existing speaker association enabled. A separate notes-only meeting contains synthetic text for summary evaluation. No existing summary was replaced. Meeting content, names, library identifiers, and raw traces are excluded from this repository.
+The user authorized replay from an existing local playback page after clearing app permissions. A separate evaluation recording captures system audio only, with live transcription, speaker labeling, and existing speaker association enabled. A separate notes-only meeting contains synthetic text for summary evaluation. No existing summary was replaced. Meeting content, names, library identifiers, and raw traces are excluded from this repository.
 
 Environment: MacBookPro18,4 with 64 GiB memory, macOS 26.6.2, validated release containing feature commit `170a050`. All three release CI jobs passed (macOS 15, 26, and 27 preview). The installed source snapshot also contains the concurrent provider-icon edits tested in the same isolated build; those changes were excluded from the transcript feature commit. Raw profiling artifacts are in `/private/tmp/gday-performance-20261002`.
 
@@ -104,6 +104,8 @@ The SwiftUI capture reports 404 hitch events for the app in 30 seconds: 333 at a
 Scrolling into history paused Follow Live, and selecting Follow Live returned to the bottom while recording continued. At the end of this initial profiling pass, playback and the evaluation recording remain running; all Instruments captures are stopped. No unattended multi-hour monitor has been started.
 
 ## Next controlled work
+
+A user-reported blank live transcript after returning from another app is documented in the [endurance results](2026-10-02-recording-endurance.md). Reproduce foregrounding with 5, 60, and 120 minutes of synthetic history, both at the live edge and while reading older rows. Start the UI/hang capture before covering the window, then return after 30 seconds and after several minutes. Compare ordinary app switching, minimization, and meeting switching; record time to visible content, main-thread stalls, frame hitches, and view invalidation. Keep pointer and accessibility inspection out of the quiet interval. A low ten-second CPU average cannot rule out a brief blank frame or stalled main thread.
 
 1. Isolate hosting-size invalidation and adaptive fitting in a synthetic recording preview. Compare the existing layout with one targeted change at a time; preserve window resizing and narrow-window behavior. Do not infer the exact responsible view instance from opaque framework stacks.
 2. Cache recent-word highlight ranges when recognition text/timing are unchanged, then measure tokenizer and native update cost again.

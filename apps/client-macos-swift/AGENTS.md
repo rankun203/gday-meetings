@@ -59,6 +59,7 @@ Read the relevant documents before changing the app:
 - [Live speaker continuity](../../docs/worklogs/2026-10-02-live-speaker-continuity.md): carried speaker labels, immutable history, recovery journals, and bounded live updates.
 - [Long recording performance](../../docs/worklogs/2026-10-02-live-recording-performance.md): incremental attribution, bounded delivery, checkpoint persistence, and device-change continuity.
 - [Performance evaluation plan](../../docs/worklogs/2026-10-02-performance-evaluation-plan.md): recording history scaling, summary-generation CPU, Instruments workloads, and acceptance criteria.
+- [Recording endurance](../../docs/worklogs/2026-10-02-recording-endurance.md): dual-source recording phases, periodic Instruments captures, resource growth, and measurement limits.
 - [Local speaker providers](../../docs/worklogs/2026-10-01-local-speaker-providers.md): independent speaker capabilities, model installation controls, live attribution, and saved-audio labeling.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
 - [Window activation](../../docs/worklogs/2026-10-01-window-activation.md): restore a usable window on app activation and Dock reopening.
