@@ -148,12 +148,16 @@ enum UIPreview {
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
+                    || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
                 {
                     // Simulate a new recording, not a live stream on top of the
                     // saved batch fixture. Stop can then exercise live adoption.
                     if var recording = store.meetings.first(where: { $0.id == conversation.id }) {
                         recording.transcript = []
+                        if ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers") {
+                            recording.language = "zh-Hans"
+                        }
                         recording.replaceSpeakers([])
                         store.updateMeeting(recording)
                     }
@@ -170,10 +174,16 @@ enum UIPreview {
                                 microphoneStatus: RecordingMicrophoneStatus(voiceProcessing: true, canSwitch: true)),
                             at: previewTime - 10 + Double(tick) / 5)
                     }
-                    store.liveTranscript.seedPreview(
-                        meetingID: conversation.id, directory: store.directory(for: conversation.id))
-                    if let row = store.liveTranscript.presentedFinalized.first {
-                        store.liveTranscript.assignPerson(rowID: row.id, personID: person)
+                    if ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers") {
+                        LiveTranscriptPreviewReplay.start(
+                            store: store, meetingID: conversation.id, directory: store.directory(for: conversation.id))
+                    }
+                    else {
+                        store.liveTranscript.seedPreview(
+                            meetingID: conversation.id, directory: store.directory(for: conversation.id))
+                        if let row = store.liveTranscript.presentedFinalized.first {
+                            store.liveTranscript.assignPerson(rowID: row.id, personID: person)
+                        }
                     }
                 }
             }

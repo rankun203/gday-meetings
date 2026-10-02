@@ -111,7 +111,12 @@ struct LiveTranscriptDeliveryTests {
         let writer = LiveTranscriptCheckpointWriter { try gate.save($0, $1) }
         var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "en")
         writer.submit(draft, at: directory) { _ in }
-        await Task.detached { gate.started.wait() }.value
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                gate.started.wait()
+                continuation.resume()
+            }
+        }
         for index in 0..<100 {
             draft.phrases.append(
                 .init(

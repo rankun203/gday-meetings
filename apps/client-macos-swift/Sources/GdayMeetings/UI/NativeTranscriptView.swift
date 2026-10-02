@@ -27,6 +27,8 @@ struct NativeTranscriptView: NSViewRepresentable {
     var playback: MeetingPlayback? = nil
     var meetingID: UUID? = nil
     var transcriptSourceID: UUID? = nil
+    var liveRows: LiveTranscriptStreamDisplayCache? = nil
+    var captureSave: ((UUID) -> (String) -> Void)? = nil
     /// nil retains saved-transcript playback following.
     var followsLive: Bool? = nil
     var pauseLiveFollowing: (() -> Void)? = nil
@@ -111,6 +113,8 @@ struct NativeTranscriptView: NSViewRepresentable {
         private let editSession = TranscriptEditSession()
         private var deferredLiveUpdate: NativeTranscriptView?
         private var liveFollowPaused = false
+        private var liveFrozenCount = 0
+        private var liveResetRevision: Int?
 
         init(_ parent: NativeTranscriptView) { self.parent = parent }
         func update(_ value: NativeTranscriptView) {
@@ -120,7 +124,9 @@ struct NativeTranscriptView: NSViewRepresentable {
             let presentationChanged =
                 parent.showsSpeakers != value.showsSpeakers
                 || parent.editable != value.editable || parent.canPlay != value.canPlay
-            let changed = sourceChanged || presentationChanged || rows != value.rows
+            let changed =
+                sourceChanged || presentationChanged
+                || (value.liveRows != nil ? generation != value.generation : rows != value.rows)
             let followChanged = parent.followsLive != value.followsLive
             if followChanged, value.followsLive == true { liveFollowPaused = false }
             if !sourceChanged, value.followsLive != nil, editedID != nil || popover?.isShown == true {
@@ -144,24 +150,43 @@ struct NativeTranscriptView: NSViewRepresentable {
                 popover?.close()
             }
             pendingClick?.cancel()
-            let selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+            let selectedIndex = table.selectedRow
+            let selection = rows.indices.contains(selectedIndex) ? rows[selectedIndex].id : nil
             finishEdit()
             // Unchanged cells survive a partial reload. Clear the previous
             // highlight while its index still refers to the old row set.
             updatePlayback(meetingID: nil, time: 0, follows: false)
-            let previousRows = rows
-            rows = value.rows
-            playbackOrder = rows.enumerated().filter { $0.element.start.isFinite }.map { ($0.element.start, $0.offset) }
+            let update: TranscriptRowUpdate
+            var selectionBoundary = 0
+            let liveReset = value.liveRows.map { liveResetRevision != $0.resetRevision } ?? false
+            if let live = value.liveRows {
+                let boundary = sourceChanged || presentationChanged || liveReset ? 0 : min(liveFrozenCount, rows.count)
+                selectionBoundary = boundary
+                let previousTail = Array(rows[boundary...])
+                let nextTail = live.rows(from: boundary)
+                update = TranscriptRowUpdate(previous: previousTail, current: nextTail, offset: boundary)
+                for row in previousTail { heights.remove(id: row.id) }
+                rows.replaceSubrange(boundary..., with: nextTail)
+                liveFrozenCount = live.frozenCount
+                liveResetRevision = live.resetRevision
+                playbackOrder.removeAll(keepingCapacity: true)
+            }
+            else {
+                update = TranscriptRowUpdate(previous: rows, current: value.rows)
+                rows = value.rows
+                playbackOrder = rows.enumerated().filter { $0.element.start.isFinite }.map {
+                    ($0.element.start, $0.offset)
+                }
                 .sorted { $0.start == $1.start ? $0.row < $1.row : $0.start < $1.start }
+                heights.removeMissingIDs(Set(rows.map(\.id)))
+            }
             generation = value.generation
-            heights.removeMissingIDs(Set(rows.map(\.id)))
             activeRow = nil
             withoutLayoutAnimation {
-                if sourceChanged || presentationChanged {
+                if sourceChanged || presentationChanged || liveReset {
                     table.reloadData()
                 }
                 else {
-                    let update = TranscriptRowUpdate(previous: previousRows, current: rows)
                     table.beginUpdates()
                     if !update.removed.isEmpty { table.removeRows(at: update.removed, withAnimation: []) }
                     if !update.inserted.isEmpty { table.insertRows(at: update.inserted, withAnimation: []) }
@@ -177,8 +202,11 @@ struct NativeTranscriptView: NSViewRepresentable {
             observePlayback()
             refreshPlayback()
             scheduleLayout()
-            if let selection, let index = rows.firstIndex(where: { $0.id == selection }) {
-                table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            if let selection {
+                let index =
+                    rows.indices.contains(selectedIndex) && rows[selectedIndex].id == selection
+                    ? selectedIndex : rows[selectionBoundary...].firstIndex(where: { $0.id == selection })
+                if let index { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
             }
         }
         private func observePlayback() {
@@ -471,7 +499,15 @@ struct NativeTranscriptView: NSViewRepresentable {
             editedID = value.id
             editedCell = cell
             let save = parent.save
-            editSession.begin(text: value.text) { save(value.id, $0) }
+            let capturedSave = parent.captureSave?(value.id)
+            editSession.begin(text: value.text) { text in
+                if let capturedSave {
+                    capturedSave(text)
+                }
+                else {
+                    save(value.id, text)
+                }
+            }
             cell.body.isEditable = true
             cell.body.isSelectable = true
             cell.body.stringValue = editSession.draft
@@ -550,6 +586,7 @@ struct NativeTranscriptView: NSViewRepresentable {
         values[row.id] = Entry(text: row.text, speaker: speaker, width: textWidth, height: result)
         return result
     }
+    func remove(id: UUID) { values.removeValue(forKey: id) }
     func removeMissingIDs(_ ids: Set<UUID>) { values = values.filter { ids.contains($0.key) } }
     private static func measure(_ text: String, width: CGFloat, font: NSFont) -> CGFloat {
         ceil(
@@ -880,7 +917,7 @@ enum TranscriptSpeakerPalette {
             body.attributedStringValue = text
             body.setAccessibilityHelp(row.accessibilityHelp ?? (row.isProvisional ? "Transcription may change." : nil))
         }
-        badge.isHidden = !showsSpeakers
+        badge.isHidden = !showsSpeakers || row.speaker.isEmpty
         badge.needsDisplay = true
         needsLayout = true
     }
@@ -972,12 +1009,12 @@ struct TranscriptRowUpdate {
     let inserted: IndexSet
     let changed: IndexSet
 
-    init(previous: [TranscriptDisplayRow], current: [TranscriptDisplayRow]) {
+    init(previous: [TranscriptDisplayRow], current: [TranscriptDisplayRow], offset: Int = 0) {
         var prefix = 0
         let common = min(previous.count, current.count)
         while prefix < common, previous[prefix].id == current[prefix].id { prefix += 1 }
-        removed = IndexSet(prefix..<previous.count)
-        inserted = IndexSet(prefix..<current.count)
-        changed = IndexSet((0..<prefix).filter { previous[$0] != current[$0] })
+        removed = IndexSet((offset + prefix)..<(offset + previous.count))
+        inserted = IndexSet((offset + prefix)..<(offset + current.count))
+        changed = IndexSet((0..<prefix).filter { previous[$0] != current[$0] }.map { offset + $0 })
     }
 }

@@ -8,14 +8,11 @@ struct LiveTranscriptView: View {
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var followsLive = true
-    @ViewState private var displayCache = LiveTranscriptDisplayCache()
-    @ViewState private var displayRows: [TranscriptDisplayRow] = []
+    @ViewState private var displayCache = LiveTranscriptStreamDisplayCache()
     @ViewState private var displayGeneration = 0
     @ViewState private var hasUnresolvedTiming = false
-    @ViewState private var displayedPhrases: [UUID: LiveTranscriptPhrase] = [:]
 
     var body: some View {
-        let phrases = displayedPhrases
         let displayedMeetingID = controller.draft?.meetingID
         VStack(alignment: .leading, spacing: 8) {
             LiveTranscriptHeader(
@@ -25,14 +22,14 @@ struct LiveTranscriptView: View {
                     set: { enabled in
                         controller.setSpeakerLabelsEnabled(enabled)
                     }),
-                followsLive: followsLive, hasRows: !displayRows.isEmpty,
+                followsLive: followsLive, hasRows: displayCache.count > 0,
                 issues: headerIssues, showsProviderSettings: controller.canOpenProviderSettings,
                 follow: { followsLive = true },
                 openProviders: {
                     settingsTab = "providers"
                     openSettings()
                 })
-            if displayRows.isEmpty {
+            if displayCache.count == 0 {
                 ContentUnavailableView {
                     Label(
                         controller.enabled ? "No Live Text Yet" : "Live Transcription Is Off",
@@ -48,19 +45,29 @@ struct LiveTranscriptView: View {
             }
             else {
                 NativeTranscriptView(
-                    rows: displayRows, generation: displayGeneration, showsSpeakers: true,
+                    rows: [], generation: displayGeneration, showsSpeakers: true,
                     editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
-                    followsLive: followsLive, pauseLiveFollowing: { followsLive = false }, play: { _ in },
+                    liveRows: displayCache,
+                    captureSave: { id in
+                        let phrase = displayCache.phrase(id: id)
+                        return { text in
+                            guard store.libraryWritable, controller.draft?.meetingID == displayedMeetingID,
+                                let phrase
+                            else { return }
+                            followsLive = false
+                            controller.updateText(phrase: phrase, text: text)
+                        }
+                    }, followsLive: followsLive, pauseLiveFollowing: { followsLive = false }, play: { _ in },
                     save: { id, text in
                         guard store.libraryWritable, controller.draft?.meetingID == displayedMeetingID,
-                            let phrase = phrases[id]
+                            let phrase = displayCache.phrase(id: id)
                         else { return }
                         followsLive = false
                         controller.updateText(phrase: phrase, text: text)
                     },
                     speakerPicker: { id, completed in
                         if let meetingID = controller.draft?.meetingID,
-                            let phrase = phrases[id]
+                            let phrase = displayCache.phrase(id: id)
                         {
                             return AnyView(
                                 TranscriptSpeakerPicker(
@@ -95,8 +102,7 @@ struct LiveTranscriptView: View {
             }
         }
         .onAppear { refreshRows() }
-        .onChange(of: controller.draft) { _, _ in refreshRows() }
-        .onChange(of: controller.partials) { _, _ in refreshRows() }
+        .onChange(of: controller.streamRevision) { _, _ in refreshRows() }
         .onChange(of: controller.enabled) { _, _ in refreshRows() }
         .onChange(of: controller.speakerLabelsEnabled) { _, _ in refreshRows() }
         .onChange(of: store.people.map { PersonDisplayIdentity(id: $0.id, name: $0.name) }) { _, _ in refreshRows() }
@@ -109,20 +115,11 @@ struct LiveTranscriptView: View {
     }
 
     private func refreshRows() {
-        let presented = controller.presentedRows
-        let finalized = presented.finalized
-        let partials = presented.partials
-        hasUnresolvedTiming = (finalized + partials).contains(where: \.hasUnresolvedTiming)
-        let snapshot = displayCache.snapshot(
-            meetingID: controller.draft?.meetingID,
-            finalized: finalized, partials: partials, people: store.people, recognitionEnabled: controller.enabled,
-            overrides: controller.draft?.overrides ?? [])
-        displayedPhrases = snapshot.phrases
-        let updated = snapshot.rows
-        if updated != displayRows {
-            displayRows = updated
-            displayGeneration += 1
-        }
+        displayCache.update(
+            controller.presentedStream, people: store.people,
+            enabled: controller.speakerLabelsEnabled, recognitionEnabled: controller.enabled)
+        hasUnresolvedTiming = displayCache.hasUnresolvedTiming
+        displayGeneration = displayCache.revision
     }
 }
 

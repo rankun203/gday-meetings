@@ -14,6 +14,12 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     var overrides: [LiveTranscriptOverride]?
     var speakerTimeline: LiveSpeakerTimeline?
     var speakerLabelsComplete: Bool?
+    var liveSources: [LiveAudioSource]?
+    /// Effective streaming assignments are persisted independently of raw recognition.
+    var effectivePhrases: [LiveTranscriptPhrase]?
+    var rawSpeakerPhrases: [LiveTranscriptPhrase]?
+    /// Makes the completed snapshot authoritative even if retiring the journal was interrupted.
+    var committedJournalDigest: String?
 
     private var finalizedParagraphs: [LiveTranscriptPhrase] {
         LiveTranscriptParagraphs.groups(
@@ -91,6 +97,21 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     func resolvedRows(partials: [LiveTranscriptPhrase] = [], cache: LiveTranscriptResolutionCache? = nil) -> (
         finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]
     ) {
+        if let effectivePhrases {
+            var effective = self
+            let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
+            effective.phrases = effectivePhrases.map { original in
+                var row = original
+                if let identity = row.speakerIdentity, let speaker = speakers[identity] {
+                    row.personID = speaker.personID
+                    row.voiceEmbedding = speaker.voiceEmbedding
+                }
+                return row
+            }
+            effective.effectivePhrases = nil
+            effective.speakerTimeline = nil
+            return effective.resolvedRows(partials: partials, cache: cache)
+        }
         let cache = cache ?? LiveTranscriptResolutionCache()
         cache.begin(meetingID: meetingID, timeline: speakerTimeline)
         defer { cache.finish() }
@@ -148,6 +169,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
             let matching = raw.filter { $0.0.overlaps(change.anchor) }
             guard change.text != nil || change.anchor.recognitionIsFinal || !matching.isEmpty else { continue }
             var row = change.anchor
+            row.keepsParagraphBoundary = true
             if speakerTimeline != nil {
                 row.speakerIdentity = nil
                 row.diarizationLabel = nil
@@ -242,7 +264,22 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     }
 
     static func read(at directory: URL, meetingID: UUID) throws -> Self? {
+        let journal = directory.appendingPathComponent("live-transcript-events.jsonl")
         let file = directory.appendingPathComponent("live-transcript.json")
+        if FileManager.default.fileExists(atPath: journal.path) {
+            if let data = try? Data(contentsOf: file),
+                let committed = try? JSONDecoder().decode(Self.self, from: data),
+                committed.version == 1, committed.meetingID == meetingID,
+                let digest = committed.committedJournalDigest,
+                digest == (try? journalDigest(at: journal))
+            {
+                return committed
+            }
+            let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.read(from: journal)
+            if let recovered = LiveTranscriptJournalRecord.replay(records), recovered.meetingID == meetingID {
+                return recovered
+            }
+        }
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         let value = try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
         guard value.version == 1, value.meetingID == meetingID else {
@@ -251,7 +288,16 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         return value
     }
 
+    static func journalDigest(at url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+    }
+
     func save(at directory: URL) throws {
+        if let rawSpeakerPhrases {
+            let evidence = LiveTranscriptWordEvidence(meetingID: meetingID, phrases: rawSpeakerPhrases)
+            try PrivateTranscriptFile.write(
+                try JSONEncoder().encode(evidence), name: "live-transcript-word-speakers.json", at: directory)
+        }
         try PrivateTranscriptFile.write(try JSONEncoder().encode(self), name: "live-transcript.json", at: directory)
     }
 }
@@ -274,6 +320,7 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var userEdited: Bool?
     var recognizedFinal: Bool?
     var unresolvedTiming: Bool?
+    var keepsParagraphBoundary: Bool?
     var speakerIdentity: UUID?
     var diarizationLabel: String?
     var voiceEmbedding: TypedVoiceEmbedding?

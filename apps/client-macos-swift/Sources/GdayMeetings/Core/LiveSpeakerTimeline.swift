@@ -20,7 +20,7 @@ struct LiveSpeakerInterval: Codable, Equatable, Sendable {
     var end: Double
 }
 
-struct LiveSpeakerEvent: Sendable {
+struct LiveSpeakerEvent: Codable, Sendable {
     var source: LiveAudioSource
     var generation: UUID
     var sequence: Int
@@ -108,7 +108,9 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
 
     /// Timed words use exclusive observed speaker activity. Untimed phrases
     /// require majority coverage and never invent a new word boundary.
-    func attributing(_ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil) -> [LiveTranscriptPhrase] {
+    func attributing(
+        _ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil, bridgeUnknownWords: Bool = true
+    ) -> [LiveTranscriptPhrase] {
         let ids = Set(speakers.filter { $0.source == phrase.source }.map(\.id))
         let sourceIntervals = intervals.filter { ids.contains($0.speakerID) }
         let relevant = sourceIntervals.filter { $0.start < phrase.end && $0.end > phrase.start }
@@ -223,7 +225,7 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
         // Short unassigned boundary words may reflect an activity threshold gap.
         // Never bridge overlap, a known different speaker, or an audio gap.
         let originalGroups = groups
-        for index in groups.indices where originalGroups[index].2 == nil {
+        for index in groups.indices where bridgeUnknownWords && originalGroups[index].2 == nil {
             let run = originalGroups[index]
             guard cursors.first(where: { $0.source == phrase.source }).map({ run.1 <= $0.end + 0.000_001 }) ?? true
             else { continue }

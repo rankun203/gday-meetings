@@ -5,6 +5,108 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct LiveNativeTranscriptTests {
+    @Test func streamUpdatesKeepFrozenNativeRowsAndViewport() {
+        let stream = LiveTranscriptStream()
+        stream.reset(labeling: false)
+        let session = UUID()
+        for index in 0..<1000 {
+            stream.accept(
+                .init(
+                    session: session, source: .system, start: Double(index * 2),
+                    end: Double(index * 2) + 1, text: "Sample sentence."), final: true)
+        }
+        let cache = LiveTranscriptStreamDisplayCache()
+        cache.update(stream, people: [], enabled: false, recognitionEnabled: true)
+        var view = NativeTranscriptView(
+            rows: [], generation: cache.revision, showsSpeakers: true, editable: true, canPlay: false,
+            liveRows: cache, followsLive: false, play: { _ in }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        let table = ReloadTrackingTranscriptTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        table.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
+        let reloads = table.fullReloads
+        let frozen = cache.frozenCount
+        let first = coordinator.rows[0]
+        for tick in 0..<10 {
+            stream.accept(
+                .init(
+                    session: session, source: .system, start: 2000,
+                    end: 2001, text: "Current words \(tick)"), final: false)
+            cache.update(stream, people: [], enabled: false, recognitionEnabled: true)
+            view.generation = cache.revision
+            coordinator.update(view)
+            coordinator.settleLayout()
+            #expect(table.fullReloads == reloads)
+            #expect(table.changedRows.allSatisfy { $0 >= frozen })
+            #expect(table.selectedRow == 2)
+            #expect(scroll.contentView.bounds.minY == 0)
+            #expect(coordinator.rows[0] == first)
+        }
+        coordinator.tearDown()
+    }
+
+    @Test func streamingEditorCommitsCapturedScopeAfterTailGrows() async throws {
+        let stream = LiveTranscriptStream()
+        stream.reset(labeling: false)
+        var phrase = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "Original words")
+        stream.accept(phrase, final: false)
+        let cache = LiveTranscriptStreamDisplayCache()
+        cache.update(stream, people: [], enabled: false, recognitionEnabled: true)
+        var capturedEnd: Double?
+        var savedText: String?
+        var view = NativeTranscriptView(
+            rows: [], generation: cache.revision, showsSpeakers: true, editable: true, canPlay: false,
+            liveRows: cache,
+            captureSave: { id in
+                let end = cache.phrase(id: id)?.end
+                return { text in
+                    capturedEnd = end
+                    savedText = text
+                }
+            }, followsLive: false, play: { _ in }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let table = TranscriptNativeTable()
+        coordinator.table = table
+        coordinator.update(view)
+        let cell = TranscriptNativeCell()
+        coordinator.configure(cell, for: coordinator.rows[0])
+        coordinator.beginEdit(cell, value: coordinator.rows[0])
+        cell.body.stringValue = "Manual correction"
+        let editingRevision = coordinator.generation
+        phrase.end = 3
+        phrase.text = "Original words with later words"
+        stream.accept(phrase, final: false)
+        cache.update(stream, people: [], enabled: false, recognitionEnabled: true)
+        view.generation = cache.revision
+        coordinator.update(view)
+        #expect(coordinator.generation == editingRevision)
+        #expect(cell.body.stringValue == "Manual correction")
+        coordinator.finishEdit()
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(capturedEnd == 1)
+        #expect(savedText == "Manual correction")
+        #expect(coordinator.generation == cache.revision)
+        coordinator.tearDown()
+    }
+
+    @Test func unidentifiedBeginningKeepsTextWithoutAnEmptyBadge() {
+        let cell = TranscriptNativeCell()
+        cell.configure(
+            TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "Opening words"),
+            showsSpeakers: true)
+        #expect(cell.badge.isHidden)
+        #expect(cell.body.stringValue == "Opening words")
+    }
+
     @Test func liveRowsUseNativeBadgesAndIndependentAssignmentTargets() {
         let person = Person(name: "Alex")
         var final = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 2, text: "Final text")

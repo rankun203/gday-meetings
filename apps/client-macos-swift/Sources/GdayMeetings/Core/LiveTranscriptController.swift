@@ -38,6 +38,18 @@ final class LiveTranscriptController: ObservableObject {
     private var checkpointWriter = LiveTranscriptCheckpointWriter()
     private var checkpointGeneration = UUID()
     private let resolutionCache = LiveTranscriptResolutionCache()
+    let stream = LiveTranscriptStream()
+    @Published private(set) var streamRevision = 0
+    private var eventJournal: LiveTranscriptJournal<LiveTranscriptJournalRecord>?
+    var presentedStream: LiveTranscriptStream { stream }
+
+    private func publishStream() { streamRevision = stream.revision }
+
+    private func appendEvent(_ event: LiveTranscriptJournalRecord) {
+        if eventJournal?.append(event) == false {
+            checkpointIssue = "Couldn’t save the live draft. Recording continues. Check available storage."
+        }
+    }
     private let speakerDisplayCache = LiveTranscriptSpeakerDisplayCache()
 
     var liveTranscriptIssues: [String] {
@@ -79,8 +91,11 @@ final class LiveTranscriptController: ObservableObject {
 
     var presentedRows: (finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) {
         let people = Set(peopleProvider().map(\.id))
+        var presentation = draft
+        presentation?.effectivePhrases = stream.snapshot.phrases
         let resolved =
-            draft?.resolvedRows(partials: partials, cache: resolutionCache) ?? (finalized: [], partials: partials)
+            presentation?.resolvedRows(partials: stream.hotPartials, cache: resolutionCache)
+            ?? (finalized: [], partials: partials)
         return (
             finalized: speakerDisplayCache.rows(
                 resolved.finalized, meetingID: draft?.meetingID, enabled: speakerLabelsEnabled, people: people),
@@ -101,6 +116,7 @@ final class LiveTranscriptController: ObservableObject {
     func updateText(phrase: LiveTranscriptPhrase, text: String) {
         guard knownRecognitionSessions.contains(phrase.session) else { return }
         draft?.updateText(text, for: phrase)
+        refreshEdits()
         checkpoint()
     }
 
@@ -117,13 +133,20 @@ final class LiveTranscriptController: ObservableObject {
             draft?.speakerTimeline?.assign(personID, to: identity, manual: true)
             enrollVoice?(personID, identity, voiceEmbeddings[identity] ?? phrase.voiceEmbedding)
         }
+        refreshEdits()
         checkpoint()
     }
 
     func assignPersonToLine(phrase: LiveTranscriptPhrase, personID: UUID?) {
         guard knownRecognitionSessions.contains(phrase.session) else { return }
         draft?.assignPerson(personID, for: phrase)
+        refreshEdits()
         checkpoint()
+    }
+
+    private func refreshEdits() {
+        stream.updateEdits(draft?.overrides ?? [], speakers: draft?.speakerTimeline?.speakers ?? [])
+        publishStream()
     }
 
     func begin(
@@ -138,6 +161,9 @@ final class LiveTranscriptController: ObservableObject {
         checkpointIssue = nil
         checkpointWriter = LiveTranscriptCheckpointWriter()
         checkpointGeneration = UUID()
+        eventJournal = LiveTranscriptJournal(url: directory.appendingPathComponent("live-transcript-events.jsonl"))
+        stream.reset(labeling: speakerLabelsEnabled, sources: sources)
+        publishStream()
         journalIssue = nil
         speakerAnalysisIssue = nil
         voiceMatchingIssue = nil
@@ -175,6 +201,8 @@ final class LiveTranscriptController: ObservableObject {
         self.sources = sources
         self.sink = sink
         draft = LiveTranscriptDraft(meetingID: meetingID, locale: language)
+        draft?.liveSources = sources
+        appendEvent(.begin(draft!, labeling: speakerLabelsEnabled))
         setEnabled(enabled)
         self.speakerRecognitionEnabled = false
         setSpeakerLabelsEnabled(speakerLabelsEnabled)
@@ -183,6 +211,9 @@ final class LiveTranscriptController: ObservableObject {
 
     func setSpeakerLabelsEnabled(_ value: Bool) {
         speakerLabelsEnabled = value
+        stream.setLabeling(value)
+        publishStream()
+        checkpoint()
         defer { if speakerRecognitionEnabled { setSpeakerRecognitionEnabled(true) } }
         guard value else {
             waitingForSpeakerModel = false
@@ -276,6 +307,10 @@ final class LiveTranscriptController: ObservableObject {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
         guard draft?.speakerTimeline?.accept(event) == true else { return }
+        appendEvent(.speaker(event))
+        stream.accept(event)
+        publishStream()
+        draft?.speakerTimeline?.intervals.removeAll { $0.end < event.end - LiveTranscriptStream.maximumLabelWait }
         if event.final || Date().timeIntervalSince(lastSpeakerCheckpoint) >= 2 {
             checkpoint()
             lastSpeakerCheckpoint = Date()
@@ -286,6 +321,12 @@ final class LiveTranscriptController: ObservableObject {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
         draft?.speakerTimeline?.gaps.append(gap)
+        if let count = draft?.speakerTimeline?.gaps.count, count > 64 {
+            draft?.speakerTimeline?.gaps.removeFirst(count - 64)
+        }
+        appendEvent(.gap(gap, speaker: true))
+        stream.accept(gap)
+        publishStream()
         checkpoint()
     }
 
@@ -403,8 +444,9 @@ final class LiveTranscriptController: ObservableObject {
                 let previous = voiceCandidates[speaker.id]
                 let count = previous?.person == match.personID ? (previous?.count ?? 0) + 1 : 1
                 voiceCandidates[speaker.id] = (match.personID, count)
-                if count >= 3 {
+                if count >= 3, speaker.personID != match.personID {
                     draft?.speakerTimeline?.assign(match.personID, to: speaker.id, manual: false)
+                    refreshEdits()
                     speakerRecognitionStatus = "Speaker association updated a matching voice."
                     checkpoint()
                 }
@@ -426,14 +468,16 @@ final class LiveTranscriptController: ObservableObject {
         knownRecognitionSessions.formUnion([microphoneSession, systemSession])
         for index in 0..<18 {
             let source: LiveAudioSource = index.isMultiple(of: 2) ? .system : .microphone
-            draft?.accept(
-                .init(
-                    session: source == .system ? systemSession : microphoneSession,
-                    source: source, start: Double(index * 5 + 1), end: Double(index * 5 + 4),
-                    text: index == 8
-                        ? "The draft includes the schedule, open questions, and the next review. We can check each section together and record any changes before sharing it."
-                        : (index.isMultiple(of: 2) ? "Let’s review the next item." : "I’ll add that to the draft."),
-                    locale: "en-AU"))
+            let phrase = LiveTranscriptPhrase(
+                session: source == .system ? systemSession : microphoneSession,
+                source: source, start: Double(index * 5 + 1), end: Double(index * 5 + 4),
+                text: index == 8
+                    ? "The draft includes the schedule, open questions, and the next review. We can check each section together and record any changes before sharing it."
+                    : (index.isMultiple(of: 2) ? "Let’s review the next item." : "I’ll add that to the draft."),
+                locale: "en-AU")
+            draft?.accept(phrase)
+            appendEvent(.phrase(phrase, final: true))
+            stream.accept(phrase, final: true)
         }
         partials = [
             .init(
@@ -443,6 +487,11 @@ final class LiveTranscriptController: ObservableObject {
                 session: microphoneSession, source: .microphone, start: 94, end: 97,
                 text: "I’ll update the schedule…", locale: "en-AU", recognizedFinal: false),
         ]
+        for phrase in partials {
+            appendEvent(.phrase(phrase, final: false))
+            stream.accept(phrase, final: false)
+        }
+        publishStream()
         checkpoint()
     }
 
@@ -474,6 +523,9 @@ final class LiveTranscriptController: ObservableObject {
         stopProvider = nil
         cancelProvider = nil
         partials = []
+        stream.discardPartials()
+        appendEvent(.discardPartials)
+        publishStream()
         enabled = value
         guard value, let draft, let sink else {
             status = "Live transcript is off."
@@ -597,8 +649,12 @@ final class LiveTranscriptController: ObservableObject {
         closeDataEvent(generation)
         generation = UUID()
         partials = []
+        stream.finish()
+        publishStream()
         checkpoint()
+        appendEvent(.finish)
         await flushCheckpoint()
+        await materializeFinishedDraft()
         stopProvider = nil
         cancelProvider = nil
         sink = nil
@@ -610,10 +666,14 @@ final class LiveTranscriptController: ObservableObject {
             let start = boundaries[source] ?? 0
             let end = positions[source] ?? start
             if end > start {
-                draft?.gaps.append(
-                    .init(
-                        source: source, start: start, end: end,
-                        reason: "Live transcription was not running."))
+                let gap = LiveTranscriptGap(
+                    source: source, start: start, end: end,
+                    reason: "Live transcription was not running.")
+                draft?.gaps.append(gap)
+                if let count = draft?.gaps.count, count > 64 { draft?.gaps.removeFirst(count - 64) }
+                appendEvent(.gap(gap, speaker: false))
+                stream.accept(gap)
+                publishStream()
             }
         }
     }
@@ -631,24 +691,57 @@ final class LiveTranscriptController: ObservableObject {
     private func recordGap(_ value: LiveTranscriptGap, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }
         draft?.gaps.append(value)
+        if let count = draft?.gaps.count, count > 64 { draft?.gaps.removeFirst(count - 64) }
+        appendEvent(.gap(value, speaker: false))
+        stream.accept(value)
+        publishStream()
         checkpoint()
     }
     func receive(_ value: LiveTranscriptPhrase, final: Bool, token: UUID) {
-        guard acceptedGenerations.contains(token) else { return }
+        guard acceptedGenerations.contains(token), value.isAdmissible else { return }
         knownRecognitionSessions.insert(value.session)
         var value = value
         value.text = value.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        value = value.preservingIdentity(from: (draft?.phrases ?? []) + partials)
+        value = value.preservingIdentity(from: partials + (draft?.phrases ?? []))
         value.recognizedFinal = final
+        guard let prepared = stream.prepare(value) else { return }
+        value = prepared
         partials = LiveTranscriptPhrase.replacingPartials(
             partials, with: value, final: final || token != generation)
+        appendEvent(.phrase(value, final: final))
+        stream.accept(value, final: final)
+        publishStream()
         if final {
+            draft?.phrases.removeAll { $0.end < value.end - LiveTranscriptStream.maximumLabelWait }
             draft?.accept(value)
             checkpoint()
         }
     }
+    func receivePreview(_ phrase: LiveTranscriptPhrase, final: Bool) {
+        guard UIPreview.enabled else { return }
+        receive(phrase, final: final, token: generation)
+    }
+
+    func receivePreviewSpeaker(_ event: LiveSpeakerEvent) {
+        guard UIPreview.enabled else { return }
+        if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
+        guard draft?.speakerTimeline?.accept(event) == true else { return }
+        appendEvent(.speaker(event))
+        stream.accept(event)
+        publishStream()
+        draft?.speakerTimeline?.intervals.removeAll { $0.end < event.end - LiveTranscriptStream.maximumLabelWait }
+    }
+
     private func checkpoint() {
-        guard let draft, let directory else { return }
+        guard var draft, let directory else { return }
+        if eventJournal != nil {
+            draft.phrases = []
+            draft.gaps = []
+            draft.speakerTimeline?.intervals = []
+            draft.speakerTimeline?.gaps = []
+            appendEvent(.state(draft, labeling: speakerLabelsEnabled))
+            return
+        }
         let meetingID = draft.meetingID
         let checkpointGeneration = self.checkpointGeneration
         checkpointWriter.submit(draft, at: directory) { [weak self] issue in
@@ -661,7 +754,61 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     /// Waits for the latest accepted snapshot, including its storage error report.
-    func flushCheckpoint() async { await checkpointWriter.flush() }
+    func flushCheckpoint() async {
+        if let eventJournal {
+            do { try await eventJournal.flush() }
+            catch { checkpointIssue = "Couldn’t save the live draft. Recording continues. Check available storage." }
+        }
+        else {
+            await checkpointWriter.flush()
+        }
+    }
+
+    private func materializeFinishedDraft() async {
+        guard let directory, let meetingID = draft?.meetingID else { return }
+        let snapshot = stream.snapshot
+        let metadata = draft!
+        let journalFailed = checkpointIssue != nil
+        do {
+            let recovered = try await Task.detached(priority: .utility) {
+                let loaded = try? LiveTranscriptDraft.read(at: directory, meetingID: meetingID)
+                var recovered = loaded ?? metadata
+                recovered.locale = metadata.locale
+                recovered.overrides = metadata.overrides
+                recovered.complete = metadata.complete
+                recovered.speakerLabelsComplete = metadata.speakerLabelsComplete
+                if let speakers = metadata.speakerTimeline?.speakers {
+                    if recovered.speakerTimeline == nil { recovered.speakerTimeline = LiveSpeakerTimeline() }
+                    recovered.speakerTimeline?.speakers = speakers
+                }
+                // The in-memory immutable blocks also retain accepted text if storage
+                // failed. Never replace them with a successfully written journal prefix.
+                recovered.effectivePhrases = snapshot.phrases
+                recovered.rawSpeakerPhrases = snapshot.rawPhrases
+                if journalFailed || loaded == nil {
+                    recovered.phrases = snapshot.rawPhrases
+                    recovered.complete = false
+                    recovered.speakerLabelsComplete = false
+                }
+                let journal = directory.appendingPathComponent("live-transcript-events.jsonl")
+                recovered.committedJournalDigest = try? LiveTranscriptDraft.journalDigest(at: journal)
+                try recovered.save(at: directory)
+                let archive = directory.appendingPathComponent("live-transcript-events.saved.jsonl")
+                if FileManager.default.fileExists(atPath: journal.path) {
+                    try FileManager.default.moveItem(at: journal, to: archive)
+                }
+                return recovered
+            }.value
+            draft = recovered
+            eventJournal = nil
+        }
+        catch {
+            draft?.effectivePhrases = snapshot.phrases
+            draft?.rawSpeakerPhrases = snapshot.rawPhrases
+            draft?.complete = false
+            checkpointIssue = "Couldn’t save the live draft. The recovery journal was kept."
+        }
+    }
     private func openLocalDataEvent(
         _ token: UUID, targetID: UUID, targetName: String,
         purpose: String, bodies: [String]

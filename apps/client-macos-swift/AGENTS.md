@@ -51,7 +51,9 @@ Read the relevant documents before changing the app:
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
 - [Shared live transcript editing](../../docs/worklogs/2026-10-01-live-transcript-unification.md): shared native rows, provisional text, manual edits, person assignment, and explicit live following.
 - [Continuous transcript paragraphs](../../docs/worklogs/2026-10-02-live-transcript-paragraphs.md): recognition chunk grouping, captured edit ranges, saved adoption, and partial text styling.
+- [Live speaker continuity](../../docs/worklogs/2026-10-02-live-speaker-continuity.md): carried speaker labels, immutable history, recovery journals, and bounded live updates.
 - [Long recording performance](../../docs/worklogs/2026-10-02-live-recording-performance.md): incremental attribution, bounded delivery, checkpoint persistence, and device-change continuity.
+- [Performance evaluation plan](../../docs/worklogs/2026-10-02-performance-evaluation-plan.md): recording history scaling, summary-generation CPU, Instruments workloads, and acceptance criteria.
 - [Local speaker providers](../../docs/worklogs/2026-10-01-local-speaker-providers.md): independent speaker capabilities, model installation controls, live attribution, and saved-audio labeling.
 - [Single main window](../../docs/worklogs/2026-09-28-single-main-window.md): Show App and window reuse.
 - [Window activation](../../docs/worklogs/2026-10-01-window-activation.md): restore a usable window on app activation and Dock reopening.

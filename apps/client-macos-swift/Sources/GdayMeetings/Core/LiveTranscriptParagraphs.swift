@@ -19,7 +19,7 @@ enum LiveTranscriptParagraphs {
         let rows = LiveTranscriptPresentation.rows(finalized: finalized, partials: partials)
         var result: [Paragraph] = []
         func protected(_ phrase: LiveTranscriptPhrase) -> Bool {
-            phrase.isUserEdited || phrase.hasUnresolvedTiming
+            phrase.isUserEdited || phrase.hasUnresolvedTiming || phrase.keepsParagraphBoundary == true
                 || overrides.contains { $0.anchor.overlaps(phrase) }
         }
         for row in rows {
@@ -33,6 +33,7 @@ enum LiveTranscriptParagraphs {
                 previous.phrase.personID == phrase.personID,
                 phrase.start >= previous.phrase.end, phrase.start - previous.phrase.end <= 0.8,
                 phrase.end - previous.phrase.start <= 30,
+                previous.phrase.text.utf16.count + phrase.text.utf16.count <= 2000,
                 !endsSentence(previous.phrase.text)
             {
                 let separator = separator(previous.phrase.text, phrase.text)
