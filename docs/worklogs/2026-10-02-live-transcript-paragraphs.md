@@ -36,3 +36,9 @@ Capture validation used isolated native components; a new live recording and int
 ## Technical debt
 
 Sentence boundaries use terminal punctuation, not linguistic sentence parsing; abbreviations can end a group. The 0.8-second gap and 30-second maximum are explicit presentation policies rather than accuracy claims. If listening review shows poor paragraph boundaries, adjust these policies with regression fixtures. Historical saved segments are intentionally not migrated; a future explicit reflow operation would need to preserve manual edits and transcript history.
+
+## Lighter word trail follow-up
+
+The supplied light-appearance screenshot showed the preceding word in dark red. History at `bc9813a` and the September 27 word-trail worklog describe a lighter preceding word, but the implementation mixed red with the primary text color. That darkens red in light appearance. The native renderer now mixes toward white in both appearances; the newest word remains red. This preserves the intended lighter trail rather than copying the historical light-appearance defect. Word selection, underlining, and finalization are unchanged. No new technical debt is introduced.
+
+Isolated light and dark captures compare the exact historical SwiftUI implementation, the previous native color, and the corrected white blend. The historical and previous native paths both darken the preceding word in light appearance; the corrected paths agree visually and stay lighter in both appearances. Captures are under `tmp/live-word-color-audit/`. All 71 focused transcript tests passed, as did formatting and lint. The isolated release build passed in 163.75 seconds, and strict signature verification passed. All 280 application source files match the validated snapshot. The same documented toolchain search-path warnings remain. Hosted CI is checked after pushing.
