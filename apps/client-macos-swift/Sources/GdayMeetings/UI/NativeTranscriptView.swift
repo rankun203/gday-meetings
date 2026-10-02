@@ -14,6 +14,8 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var provisionalTextRanges: [NSRange]? = nil
     var recentWordRanges: [NSRange] = []
     var accessibilityHelp: String? = nil
+    var isSourcePlaceholder = false
+    var canAssignPerson: Bool { speakerID != nil && !isSourcePlaceholder }
 }
 
 /// One selected transcript, reusable native rows, and the window's shared field
@@ -364,10 +366,12 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell.play = parent.canPlay ? { [weak self] in self?.parent.play(value.start) } : nil
             cell.editText = { [weak self] in self?.edit(id: value.id) }
             cell.userInteracted = { [weak self] in self?.userSelected() }
-            cell.assignSpeaker = { [weak self, weak cell] in
-                guard let self, let cell else { return }
-                self.showSpeaker(value, cell: cell)
-            }
+            cell.assignSpeaker =
+                parent.editable && value.canAssignPerson
+                ? { [weak self, weak cell] in
+                    guard let self, let cell else { return }
+                    self.showSpeaker(value, cell: cell)
+                } : nil
         }
         func widthChanged() {
             cancelFollow()
@@ -463,7 +467,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             }
         }
         func showSpeaker(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell) {
-            guard parent.editable, let speakerID = row.speakerID else { return }
+            guard parent.editable, row.canAssignPerson, let speakerID = row.speakerID else { return }
             pauseLiveFollow()
             finishEdit()
             cancelFollow()
@@ -828,7 +832,17 @@ enum TranscriptSpeakerPalette {
     let body = NSTextField()
     var rowID: UUID?
     var editText: (() -> Void)?
-    var assignSpeaker: (() -> Void)?
+    var assignSpeaker: (() -> Void)? {
+        didSet {
+            speaker.setAccessibilityCustomActions(
+                assignSpeaker == nil
+                    ? []
+                    : [
+                        NSAccessibilityCustomAction(
+                            name: "Assign Person", target: self, selector: #selector(accessibilityAssign))
+                    ])
+        }
+    }
     var play: (() -> Void)? {
         didSet { updatePlaybackAccessibility() }
     }
@@ -871,9 +885,6 @@ enum TranscriptSpeakerPalette {
         body.setAccessibilityCustomActions([
             NSAccessibilityCustomAction(name: "Edit Transcript", target: self, selector: #selector(accessibilityEdit))
         ])
-        speaker.setAccessibilityCustomActions([
-            NSAccessibilityCustomAction(name: "Assign Person", target: self, selector: #selector(accessibilityAssign))
-        ])
     }
     required init?(coder: NSCoder) { nil }
     func configure(_ row: TranscriptDisplayRow, showsSpeakers: Bool) {
@@ -886,7 +897,7 @@ enum TranscriptSpeakerPalette {
         speakerWidth = min(100, ceil((row.speaker as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
         let colorKey = row.personID?.uuidString ?? row.speakerID?.uuidString ?? row.speaker
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey, index: row.speakerColorIndex)
-        badge.unresolved = row.personID == nil
+        badge.unresolved = row.personID == nil && !row.isSourcePlaceholder
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
         if !body.isEditable {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
@@ -955,7 +966,7 @@ enum TranscriptSpeakerPalette {
             let edit = NSMenuItem(title: "Edit Transcript", action: #selector(accessibilityEdit), keyEquivalent: "")
             edit.target = self
             menu.addItem(edit)
-            if showsSpeakers {
+            if showsSpeakers && assignSpeaker != nil {
                 let assign = NSMenuItem(
                     title: "Assign Person", action: #selector(accessibilityAssign), keyEquivalent: "")
                 assign.target = self
@@ -990,7 +1001,7 @@ enum TranscriptSpeakerPalette {
     }
     @objc private func accessibilityAssign() -> Bool {
         assignSpeaker?()
-        return true
+        return assignSpeaker != nil
     }
 }
 

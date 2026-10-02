@@ -92,7 +92,8 @@ struct MeetingTranscriptView: View {
                             return AnyView(Text("Speaker is unavailable."))
                         }
                     ).id(meetingID)
-                    if !usesCheckpoint && !meeting.speakers.isEmpty {
+                    if !usesCheckpoint && meeting.speakers.contains(where: { $0.canAssignPerson || $0.personID != nil })
+                    {
                         DisclosureGroup("Speakers") {
                             ScrollView { MeetingSpeakersView(meetingID: meetingID) }.frame(maxHeight: 240)
                         }
@@ -194,9 +195,10 @@ struct MeetingTranscriptView: View {
         let speakers = usesCheckpoint ? draft?.speakers ?? [] : meeting.speakers
         let speakerTracks = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.track) })
         let assignedPeople = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.personID) })
+        let sourceIDs = Set(speakers.filter { !$0.canAssignPerson }.map(\.id))
         let names = Dictionary(
             uniqueKeysWithValues: speakers.map { speaker in
-                (speaker.id, speaker.personID.flatMap { people[$0] } ?? SpeakerLabelPresentation.display(speaker.label))
+                (speaker.id, speaker.personID.flatMap { people[$0] } ?? speaker.displayLabel)
             })
         let source = segments
         let checkpoint = usesCheckpoint
@@ -219,7 +221,8 @@ struct MeetingTranscriptView: View {
                 speakerID: segment.speakerID,
                 text: String(segment.text.drop(while: { $0.isWhitespace })),
                 personID: segment.speakerID.flatMap { assignedPeople[$0] ?? nil },
-                speakerColorIndex: colorIndices[colorKey(segment)])
+                speakerColorIndex: colorIndices[colorKey(segment)],
+                isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false)
         }
         displayGeneration += 1
     }

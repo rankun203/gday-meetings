@@ -1,8 +1,9 @@
+import Combine
 import Foundation
 
 /// Append-only completed paragraphs and a replaceable, bounded live tail.
 /// Consumers keep their own cursor instead of comparing historical arrays.
-final class LiveTranscriptStreamDisplayCache {
+final class LiveTranscriptStreamDisplayCache: ObservableObject {
     private var frozen: [TranscriptDisplayRow] = []
     private var frozenPhrases: [UUID: LiveTranscriptPhrase] = [:]
     private var hot: [TranscriptDisplayRow] = []
@@ -16,7 +17,7 @@ final class LiveTranscriptStreamDisplayCache {
     private var recognitionEnabled = true
     private var unresolvedFrozen = false
     private(set) var resetRevision = 0
-    private(set) var revision = 0
+    @Published private(set) var revision = 0
     private(set) var rebuiltParagraphCount = 0
     var frozenCount: Int { frozen.count }
     var count: Int { frozen.count + hot.count }

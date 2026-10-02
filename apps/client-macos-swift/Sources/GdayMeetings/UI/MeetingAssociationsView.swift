@@ -89,6 +89,7 @@ struct MeetingSpeakersView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Speakers").font(.headline)
             if let meeting {
+                let speakers = meeting.speakers.filter { $0.canAssignPerson || $0.personID != nil }
                 if meeting.speakers.contains(where: {
                     $0.embedding != nil && ($0.voiceScope?.hasPrefix("runpod:") ?? false)
                 }) {
@@ -97,10 +98,10 @@ struct MeetingSpeakersView: View {
                     )
                     .font(.callout).foregroundStyle(.secondary)
                 }
-                ForEach(Array(Set(meeting.speakers.map(\.providerName))).sorted(), id: \.self) { provider in
+                ForEach(Array(Set(speakers.map(\.providerName))).sorted(), id: \.self) { provider in
                     VStack(alignment: .leading, spacing: 10) {
                         Text(provider).font(.subheadline).foregroundStyle(.secondary)
-                        ForEach(meeting.speakers.filter { $0.providerName == provider }) { speaker in
+                        ForEach(speakers.filter { $0.providerName == provider }) { speaker in
                             speakerRow(speaker)
                         }
                     }
@@ -127,7 +128,7 @@ struct MeetingSpeakersView: View {
     private func speakerRow(_ speaker: MeetingSpeaker) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(SpeakerLabelPresentation.display(speaker.label)).font(.callout.monospaced())
+                Text(speaker.displayLabel).font(.callout.monospaced())
                 if !speaker.track.isEmpty { Text(speaker.track).font(.caption).foregroundStyle(.secondary) }
             }
             ViewThatFits(in: .horizontal) {
@@ -155,26 +156,33 @@ struct MeetingSpeakersView: View {
     }
 
     @ViewBuilder private func actions(_ speaker: MeetingSpeaker) -> some View {
-        HStack(spacing: 8) {
-            Menu(speaker.personID == nil ? "Assign Person" : "Reassign") {
-                ForEach(store.people) { person in
-                    Button(person.name) {
-                        store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: person.id)
-                    }
-                }
-                Divider()
-                Button("New Person…") {
-                    personName = ""
-                    newPersonSpeaker = speaker
-                }
-                if speaker.personID != nil {
-                    Button("Remove Assignment") {
-                        store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
-                    }
-                }
+        if !speaker.canAssignPerson {
+            Button("Remove Assignment") {
+                store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
             }
-            .fixedSize()
-            .accessibilityLabel("Assign \(SpeakerLabelPresentation.display(speaker.label)) to a person")
+        }
+        else {
+            HStack(spacing: 8) {
+                Menu(speaker.personID == nil ? "Assign Person" : "Reassign") {
+                    ForEach(store.people) { person in
+                        Button(person.name) {
+                            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: person.id)
+                        }
+                    }
+                    Divider()
+                    Button("New Person…") {
+                        personName = ""
+                        newPersonSpeaker = speaker
+                    }
+                    if speaker.personID != nil {
+                        Button("Remove Assignment") {
+                            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
+                        }
+                    }
+                }
+                .fixedSize()
+                .accessibilityLabel("Assign \(SpeakerLabelPresentation.display(speaker.label)) to a person")
+            }
         }
     }
 

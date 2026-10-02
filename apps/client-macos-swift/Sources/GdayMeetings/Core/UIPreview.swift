@@ -180,10 +180,8 @@ enum UIPreview {
                     }
                     else {
                         store.liveTranscript.seedPreview(
-                            meetingID: conversation.id, directory: store.directory(for: conversation.id))
-                        if let row = store.liveTranscript.presentedFinalized.first {
-                            store.liveTranscript.assignPerson(rowID: row.id, personID: person)
-                        }
+                            meetingID: conversation.id, directory: store.directory(for: conversation.id),
+                            previouslyAssignedPersonID: person)
                     }
                 }
             }

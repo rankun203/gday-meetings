@@ -8,8 +8,7 @@ struct LiveTranscriptView: View {
     @Environment(\.openSettings) private var openSettings
     @AppStorage("settingsTab") private var settingsTab = "defaults"
     @ViewState private var followsLive = true
-    @ViewState private var displayCache = LiveTranscriptStreamDisplayCache()
-    @ViewState private var displayGeneration = 0
+    @StateObject private var displayCache = LiveTranscriptStreamDisplayCache()
     @ViewState private var hasUnresolvedTiming = false
 
     var body: some View {
@@ -45,7 +44,7 @@ struct LiveTranscriptView: View {
             }
             else {
                 NativeTranscriptView(
-                    rows: [], generation: displayGeneration, showsSpeakers: true,
+                    rows: [], generation: displayCache.revision, showsSpeakers: true,
                     editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
                     liveRows: displayCache,
                     captureSave: { id in
@@ -119,7 +118,6 @@ struct LiveTranscriptView: View {
             controller.presentedStream, people: store.people,
             enabled: controller.speakerLabelsEnabled, recognitionEnabled: controller.enabled)
         hasUnresolvedTiming = displayCache.hasUnresolvedTiming
-        displayGeneration = displayCache.revision
     }
 }
 
@@ -169,7 +167,8 @@ enum LiveTranscriptDisplay {
                 personID: personID, speakerColorIndex: TranscriptSpeakerPalette.index(for: key),
                 isProvisional: !provisionalRanges.isEmpty, provisionalTextRanges: provisionalRanges,
                 recentWordRanges: recentRanges,
-                accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil)
+                accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil,
+                isSourcePlaceholder: !phrase.hasSpeakerIdentity)
         }
         return (rows, Dictionary(uniqueKeysWithValues: groups.map { ($0.phrase.id, $0.phrase) }))
     }

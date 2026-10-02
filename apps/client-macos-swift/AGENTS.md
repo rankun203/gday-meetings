@@ -50,6 +50,7 @@ Read the relevant documents before changing the app:
 - [Provider icons](../../docs/worklogs/2026-10-02-provider-header-icon.md): shared symbols in provider rows, headers, and the Add menu.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.
+- [Transcript source badges](../../docs/worklogs/2026-10-02-transcript-source-badges.md): source-only labels, person assignment guards, and checkpoint recovery.
 - [Shared live transcript editing](../../docs/worklogs/2026-10-01-live-transcript-unification.md): shared native rows, provisional text, manual edits, person assignment, and explicit live following.
 - [Continuous transcript paragraphs](../../docs/worklogs/2026-10-02-live-transcript-paragraphs.md): recognition chunk grouping, captured edit ranges, saved adoption, and partial text styling.
 - [Compact live journal](../../docs/worklogs/2026-10-02-compact-live-journal.md): CSV transactions, dictionary references, guide migration, and Meetings branding.

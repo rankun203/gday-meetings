@@ -14,6 +14,13 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable {
     var confidence: Double?
     /// Legacy library key retained for older clients. Assignment is determined by personID.
     var confirmed = false
+    /// Present only when this entry represents an audio source, not a detected voice.
+    var sourcePlaceholder: LiveAudioSource?
+
+    var canAssignPerson: Bool { sourcePlaceholder == nil }
+    var displayLabel: String {
+        label.isEmpty ? "" : sourcePlaceholder?.shortLabel ?? SpeakerLabelPresentation.display(label)
+    }
 
     var resolvedVoiceEmbedding: TypedVoiceEmbedding? {
         voiceEmbedding
@@ -171,10 +178,11 @@ extension Meeting {
         for segment: TranscriptSegment, people: [Person],
         compactProviderLabel: Bool = false
     ) -> String {
-        guard let speaker = speakers.first(where: { $0.id == segment.speakerID }),
-            let person = people.first(where: { $0.id == speaker.personID })
-        else { return compactProviderLabel ? SpeakerLabelPresentation.display(segment.speaker) : segment.speaker }
-        return person.name
+        if let speaker = speakers.first(where: { $0.id == segment.speakerID }) {
+            if let person = people.first(where: { $0.id == speaker.personID }) { return person.name }
+            if speaker.sourcePlaceholder != nil { return speaker.displayLabel }
+        }
+        return compactProviderLabel ? SpeakerLabelPresentation.display(segment.speaker) : segment.speaker
     }
 
     mutating func replaceSpeakers(_ replacement: [MeetingSpeaker]) {
@@ -194,6 +202,7 @@ extension MeetingStore {
     func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) {
         guard libraryWritable, var meeting = self.meeting(id: meetingID),
             let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }),
+            meeting.speakers[index].canAssignPerson || personID == nil,
             personID == nil || people.contains(where: { $0.id == personID })
         else { return }
         var replacement = meeting.speakers

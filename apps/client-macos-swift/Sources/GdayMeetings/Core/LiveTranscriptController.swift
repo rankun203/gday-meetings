@@ -127,7 +127,9 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func assignPerson(phrase: LiveTranscriptPhrase, personID: UUID?) {
-        guard knownRecognitionSessions.contains(phrase.session) else { return }
+        guard knownRecognitionSessions.contains(phrase.session), phrase.hasSpeakerIdentity || personID == nil else {
+            return
+        }
         draft?.assignPerson(personID, for: phrase, speakerIdentity: phrase.speakerIdentity)
         if let identity = phrase.speakerIdentity {
             draft?.speakerTimeline?.assign(personID, to: identity, manual: true)
@@ -138,7 +140,9 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func assignPersonToLine(phrase: LiveTranscriptPhrase, personID: UUID?) {
-        guard knownRecognitionSessions.contains(phrase.session) else { return }
+        guard knownRecognitionSessions.contains(phrase.session), phrase.hasSpeakerIdentity || personID == nil else {
+            return
+        }
         draft?.assignPerson(personID, for: phrase)
         refreshEdits()
         checkpoint()
@@ -459,7 +463,7 @@ final class LiveTranscriptController: ObservableObject {
         }
     }
 
-    func seedPreview(meetingID: UUID, directory: URL) {
+    func seedPreview(meetingID: UUID, directory: URL, previouslyAssignedPersonID: UUID? = nil) {
         begin(
             meetingID: meetingID, language: "en", directory: directory,
             sources: [.microphone, .system], sink: LiveAudioSink(), enabled: true)
@@ -474,7 +478,7 @@ final class LiveTranscriptController: ObservableObject {
                 text: index == 8
                     ? "The draft includes the schedule, open questions, and the next review. We can check each section together and record any changes before sharing it."
                     : (index.isMultiple(of: 2) ? "Let’s review the next item." : "I’ll add that to the draft."),
-                locale: "en-AU")
+                locale: "en-AU", personID: index == 0 ? previouslyAssignedPersonID : nil)
             draft?.accept(phrase)
             appendEvent(.phrase(phrase, final: true))
             stream.accept(phrase, final: true)

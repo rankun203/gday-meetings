@@ -25,6 +25,7 @@ extension MeetingStore {
     }
 
     func recoverUnadoptedLiveTranscript(_ meeting: Meeting) {
+        recoverLiveSourcePlaceholders(meeting)
         guard libraryWritable, !meeting.liveTranscriptAdopted, meeting.transcript.isEmpty,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
         else { return }
@@ -36,6 +37,28 @@ extension MeetingStore {
         catch {
             errorMessage = "Couldn’t recover the live transcript for \(meeting.title). The saved file was kept."
         }
+    }
+
+    /// Old source labels overlap real detected labels. Recover their meaning only
+    /// from the original checkpoint's matching identities, never from spelling.
+    private func recoverLiveSourcePlaceholders(_ meeting: Meeting) {
+        guard libraryWritable, meeting.liveTranscriptAdopted,
+            meeting.speakers.contains(where: { $0.sourcePlaceholder == nil }),
+            let draft = try? LiveTranscriptDraft.read(at: directory(for: meeting.id), meetingID: meeting.id),
+            meeting.transcriptSource?.id == liveTranscriptSource(draft, meeting: meeting).id
+        else { return }
+        let sources = Dictionary(
+            uniqueKeysWithValues: draft.speakers.compactMap { speaker in
+                speaker.sourcePlaceholder.map { (speaker.id, $0) }
+            })
+        var updated = meeting
+        for index in updated.speakers.indices {
+            let speaker = updated.speakers[index]
+            if speaker.sourcePlaceholder == nil, let source = sources[speaker.id] {
+                updated.speakers[index].sourcePlaceholder = source
+            }
+        }
+        if updated.speakers != meeting.speakers { _ = updateMeeting(updated) }
     }
 
     /// Finalized live text joins the normal editable transcript. The checkpoint

@@ -259,7 +259,7 @@ extension LiveSpeakerTimelineTests {
         row.speakerIdentity = UUID()
         row.diarizationLabel = "sys_04"
         let hidden = row.displayingSpeakerLabels(false)
-        #expect(hidden.speakerLabel == "sys_01")
+        #expect(hidden.speakerLabel == "sys")
         #expect(hidden.speakerIdentity == nil)
         #expect(row.speakerIdentity != nil && row.diarizationLabel == "sys_04")
         #expect(row.displayingSpeakerLabels(true) == row)
@@ -280,7 +280,7 @@ extension LiveSpeakerTimelineTests {
         row.diarizationLabel = "sys_04"
         let removed = row.displayingSpeakerLabels(false, knownPeople: [])
         #expect(removed.personID == nil && removed.speakerIdentity == nil)
-        #expect(removed.speakerLabel == "sys_01")
+        #expect(removed.speakerLabel == "sys")
         #expect(row.personID == person && row.speakerIdentity == speaker)
         #expect(row.displayingSpeakerLabels(false, knownPeople: [person]) == row)
         let shown = row.displayingSpeakerLabels(true, knownPeople: [])
@@ -500,7 +500,7 @@ extension LiveSpeakerTimelineTests {
             session: UUID(), source: .microphone, start: 0, end: 1,
             text: "Example", words: [.init(text: "Example", start: 0, end: 1)])
         var timeline = LiveSpeakerTimeline()
-        #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_01")
+        #expect(timeline.attributing(phrase).first?.speakerLabel == "mic")
         let speaker = identity(.microphone, UUID(), 0)
         timeline.speakers = [speaker]
         #expect(timeline.attributing(phrase).first?.speakerLabel == "mic_?")

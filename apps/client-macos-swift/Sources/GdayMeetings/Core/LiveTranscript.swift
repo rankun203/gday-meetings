@@ -40,14 +40,15 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         var seen = Set<UUID>()
         return finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .compactMap {
-                // A source badge is not a voice identity. Each editable row has its own
-                // assignment, even when several rows have the same source badge.
+                // Keep source rows separate so existing manual passage assignments
+                // survive adoption without turning the source into a voice identity.
                 let identity = $0.speakerIdentity ?? $0.id
                 guard seen.insert(identity).inserted else { return nil }
                 return MeetingSpeaker(
                     id: identity, label: $0.speakerLabel, track: $0.source.rawValue,
                     providerName: provider, voiceEmbedding: $0.voiceEmbedding,
-                    personID: $0.personID, confirmed: $0.personID != nil)
+                    personID: $0.personID, confirmed: $0.personID != nil,
+                    sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source)
             }
     }
 
@@ -305,6 +306,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
 enum LiveAudioSource: String, Codable, CaseIterable, Sendable {
     case microphone, system
     var title: String { self == .microphone ? "Microphone" : "System Audio" }
+    var shortLabel: String { self == .microphone ? "mic" : "sys" }
 }
 
 struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
@@ -324,7 +326,8 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var speakerIdentity: UUID?
     var diarizationLabel: String?
     var voiceEmbedding: TypedVoiceEmbedding?
-    var speakerLabel: String { diarizationLabel ?? (source == .microphone ? "mic_01" : "sys_01") }
+    var speakerLabel: String { diarizationLabel ?? source.shortLabel }
+    var hasSpeakerIdentity: Bool { speakerIdentity != nil }
     var isUserEdited: Bool { userEdited == true }
     var recognitionIsFinal: Bool { recognizedFinal ?? true }
     var hasUnresolvedTiming: Bool { unresolvedTiming == true }

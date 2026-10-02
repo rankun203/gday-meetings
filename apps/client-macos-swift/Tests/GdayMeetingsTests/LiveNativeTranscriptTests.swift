@@ -114,7 +114,7 @@ import Testing
         let pending = LiveTranscriptPhrase(
             session: UUID(), source: .microphone, start: 3, end: 5, text: "Changing text")
         let rows = LiveTranscriptDisplay.rows(finalized: [final], partials: [pending], people: [person])
-        #expect(rows.map(\.speaker) == ["Alex", "mic_01"])
+        #expect(rows.map(\.speaker) == ["Alex", "mic"])
         #expect(rows.map(\.speakerID) == [final.id, pending.id])
         #expect(!rows[0].isProvisional)
         #expect(rows[1].isProvisional)
@@ -125,7 +125,7 @@ import Testing
         #expect(!manual[0].isProvisional)
         #expect(manual[0].accessibilityHelp == "Edited text.")
         let deleted = LiveTranscriptDisplay.rows(finalized: [final], partials: [], people: [])
-        #expect(deleted[0].speaker == "sys_01")
+        #expect(deleted[0].speaker == "sys")
         #expect(deleted[0].personID == nil)
     }
 
