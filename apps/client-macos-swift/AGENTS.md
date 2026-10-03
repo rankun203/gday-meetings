@@ -22,6 +22,8 @@ Read the relevant documents before changing the app:
 - [Service provider protocols](../../docs/protocols/README.md): connection checks and shared capability rules.
 - [Transcription](../../docs/protocols/transcription.md), [Speaker Labels](../../docs/protocols/diarization.md), [Summaries](../../docs/protocols/summarization.md), [Search](../../docs/protocols/search.md), and [Playback](../../docs/protocols/playback.md): capability contracts and adapter limits.
 - [Audio dependencies](ThirdParty/README.md): pinned offline source builds, licenses, and dependency upgrades.
+- [Transcript JSONL migration](scripts/migrations/README.md): explicit backed-up conversion of legacy saved arrays.
+- [Library migration validation](../../docs/worklogs/2026-10-03-transcript-library-migration.md): preservation checks and migration limits.
 - [Large-library storage design](../../docs/design/2026-09-27-large-library-storage.md): file authority, disposable indexing, folder discovery, and scale validation.
 - [Meeting list scrolling](../../docs/worklogs/2026-09-27-meeting-scroll-prefetch.md): viewport anchoring, anticipatory paging, and full-app validation.
 - [New recording list reveal](../../docs/worklogs/2026-09-29-recording-list-reveal.md): recording creation events, viewport anchoring, and synthetic insertion validation.
