@@ -13,6 +13,7 @@ struct LibraryView: View {
     }
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
+    @AppStorage("displaySummaryTitleOnMeetings") private var displaySummaryTitleOnMeetings = true
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
     @ViewState private var selectedMeeting: UUID?
@@ -68,6 +69,7 @@ struct LibraryView: View {
             recordingID: store.recordingID, isFinalizing: store.isFinalizingRecording,
             playingID: playback.meetingID, isPlaying: playback.isPlaying, canPlay: !recordingActive,
             archiveStatuses: store.archiveStatuses,
+            displaySummaryTitle: displaySummaryTitleOnMeetings,
             viewportChanged: { store.prefetchMeetings($0) },
             play: { id in
                 guard !recordingActive, let meeting = store.meeting(id: id) else { return }

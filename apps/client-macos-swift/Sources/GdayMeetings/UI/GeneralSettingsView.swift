@@ -7,6 +7,7 @@ struct GeneralSettingsView: View {
     @ObservedObject private var health = ProviderHealthStore.shared
     @ObservedObject private var models = LocalModelManager.shared
     @AppStorage("settingsTab") private var settingsTab = "general"
+    @AppStorage("displaySummaryTitleOnMeetings") private var displaySummaryTitleOnMeetings = true
     @ViewState private var previewScenario = UIPreview.generalScenario ?? 1
 
     private var audioSettingsLocked: Bool {
@@ -98,6 +99,8 @@ struct GeneralSettingsView: View {
                                 ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
                             }
                             .pickerStyle(.menu)
+                            switchRow(
+                                "Display summary title on meetings", enabled: $displaySummaryTitleOnMeetings)
                         }
                     }.frame(maxWidth: .infinity, alignment: .topLeading)
                     VStack(alignment: .leading, spacing: 20) {

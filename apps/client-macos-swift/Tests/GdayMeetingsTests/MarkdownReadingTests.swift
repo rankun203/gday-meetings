@@ -316,11 +316,16 @@ import Testing
         let range = (text.string as NSString).range(of: "\u{fffc}")
         #expect(text.attribute(.markdownTaskLine, at: range.location, effectiveRange: nil) as? Int == 4)
     }
-    @Test func summaryPreviewDoesNotReserveBlankLines() {
+    @Test func summaryPreviewShowsOnlyFirstLineWithoutHeadingPrefix() {
         #expect(MeetingSummaryPreview.text("  Title  \n\n  \n") == "Title")
-        #expect(MeetingSummaryPreview.rowHeight("Title\n\n", width: 300) < 76)
-        #expect(MeetingSummaryPreview.rowHeight(" \n ", width: 300) == 48)
-        #expect(MeetingSummaryPreview.text("Title\n\nBody") == "Title\nBody")
+        #expect(MeetingSummaryPreview.rowHeight("Title\n\n") == 62)
+        #expect(MeetingSummaryPreview.rowHeight(" \n ") == 48)
+        #expect(MeetingSummaryPreview.text("Title\n\nBody") == "Title")
+        #expect(MeetingSummaryPreview.text(" \t###  Summary title\r\nBody") == "Summary title")
+        #expect(MeetingSummaryPreview.text("# Topic #2\nBody") == "Topic #2")
+        #expect(MeetingSummaryPreview.text("\n# Later heading").isEmpty)
+        #expect(MeetingSummaryPreview.rowHeight("###  \nBody") == 48)
+        #expect(MeetingSummaryPreview.rowHeight("# Title\nBody", enabled: false) == 48)
     }
     @Test func wrappedTaskTargetsRespectLinksAndTextSelection() {
         let row = MarkdownReadingTextView.TaskRegion(

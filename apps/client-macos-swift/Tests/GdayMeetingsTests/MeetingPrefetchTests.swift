@@ -125,6 +125,22 @@ struct MeetingPrefetchTests {
         let backwards = anchor(table: table, scroll: scroll, rows: coordinator.rows)
         #expect(backwards.0 == original.0)
         #expect(abs(backwards.1 - original.1) < 0.5)
+        list.entries = list.entries.map { entry in
+            var entry = entry
+            entry.summary = "# Summary title\nSummary body"
+            return entry
+        }
+        coordinator.update(list)
+        #expect(table.rect(ofRow: 720).height == 62)
+        list.displaySummaryTitle = false
+        coordinator.update(list)
+        let hidden = anchor(table: table, scroll: scroll, rows: coordinator.rows)
+        #expect(table.rect(ofRow: 720).height == 48)
+        #expect(hidden.0 == original.0)
+        #expect(abs(hidden.1 - original.1) < 0.5)
+        list.displaySummaryTitle = true
+        coordinator.update(list)
+        #expect(table.rect(ofRow: 720).height == 62)
     }
 
     @Test func prefetchStartsBeforeBoundaryAndTraversesWindowInBothDirections() async throws {

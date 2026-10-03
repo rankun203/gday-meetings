@@ -37,6 +37,10 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 - Command-click the title to open that meeting's folder in Finder. Provide **Open Meeting Folder** through the context menu and accessibility action. Keep ordinary clicks and the title layout unchanged.
 - Normal reading must not expand header height for long titles. Date, language, and tags remain below the title row.
 
+## Meeting list
+
+General settings includes “Display summary title on meetings,” enabled by default. When enabled, meeting rows show only the summary's first line, with leading `#` characters and whitespace removed, on one truncating line. When disabled or the first line is blank, omit that line and its extra row space. Keep the saved summary unchanged and preserve list selection and viewport when toggling.
+
 ## Meeting keyboard and Finder actions
 
 - **New Recording…** in the File menu uses Command-N and opens the recording setup sheet. Cancel leaves the library unchanged; the command must not create empty meeting notes.
