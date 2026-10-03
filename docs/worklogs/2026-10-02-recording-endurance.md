@@ -10,7 +10,8 @@ scope: swift-app-performance
 ![CPU, physical memory, app GPU, system GPU, and Neural Engine activity across the recording phases. Blank intervals are unmeasured.](assets/2026-10-02-recording-endurance/resource-comparison.svg)
 
 - **Ordinary app CPU was about 47% with speakers, 41% with transcription only, and 30% recording only.** These sequential runs have different source material and caches; they are not controlled feature-cost estimates.
-- **Rendering remains the main unresolved issue.** The user saw a brief blank transcript after returning from another app. Nearby CPU samples show no large spike, but no Instruments trace overlaps the event. Quiet main-thread CPU is lower with fewer live processing features; that does not establish frame or input latency.
+- **Summary and Notes now have complete task CPU captures.** Summary reaches one core on the main thread, dominated by view-graph/layout work; Notes input averages 93.1% main CPU with substantial image/change handling. See the complete-task comparison below.
+- **The blank transcript remains unresolved.** The user saw a brief blank transcript after returning from another app. Nearby CPU samples show no large spike, but no Instruments trace overlaps the event. Quiet main-thread CPU is lower with fewer live processing features; that does not establish frame or input latency.
 - **Saving differed sharply between runs.** The first speaker-enabled save reached **1,494 MiB** of physical footprint. Transcription-only reached **382 MiB**, recording-only stayed near **345 MiB**, and the repeated speaker-enabled save reached about **1,015 MiB**. Only the recording-only trace captured finalization; the final repeat’s intended save trace ended before Stop was clicked.
 - **Accelerator work changes with processing mode.** The initial speaker-enabled probe recorded Nemotron GPU work and 16.6% Neural Engine active wall time. Transcription-only probes recorded no app GPU work and 1.8–2.0% Neural Engine activity. All twelve recording-only probes recorded neither. Ten regular probes in the final repeat recorded 0.78–0.84% app GPU and 15.7–17.0% system Neural Engine active wall time. The last two regular probes were skipped while manual workloads held the capture lock.
 
@@ -27,7 +28,33 @@ CPU uses one core as 100%. Memory means physical footprint, not RSS. GPU and Neu
 
 All recordings use microphone and system audio, voice processing, Opus, and the same installed release. The user confirmed that journal growth was fixed separately; it is not an open finding here, and the app was deliberately not upgraded during this comparison.
 
-![CPU and memory during Notes, save, and navigation, with discrete accelerator measurements and capture gaps.](assets/2026-10-02-recording-endurance/workload-detail.svg)
+## CPU cost of complete tasks
+
+![One-second app and main-thread CPU across complete Summary, Notes typing, and navigation task windows, aligned to task start.](assets/2026-10-02-recording-endurance/task-cpu-comparison.svg)
+
+**Summary generation saturates the local main thread through repeated view-graph updates and layout.** The longer recording reached **99.9% main-thread CPU** in a captured second without accessibility inspection. Hiding Summary and showing Notes did not remove the saturation: the late request window averaged **99.0% main-thread CPU with no Markdown-render samples**. This identifies UI update/layout work as the main measured cost; it does not identify one exact view or prove a specific source fix.
+
+| Task window | Elapsed seconds | App CPU-seconds | Main CPU-seconds | Mean main CPU, % of one core |
+| --- | ---: | ---: | ---: | ---: |
+| Summary visible, shorter recording | 29.795 | 17.218 | 16.839 | 56.5% |
+| Summary hidden, Notes visible | 22.961 | 20.768 | 20.462 | 89.1% |
+| Summary visible, longer recording | 27.458 | 18.537 | 18.288 | 66.6% |
+| Saved Notes: 12 paragraphs, about 2,200 characters | 21.564 | 20.713 | 20.071 | 93.1% |
+| Six tab changes and two meeting changes, including pauses | 28.110 | 8.599 | 8.576 | 30.5% |
+
+Summary windows come from persisted managed-task start/finish logs and fit completely inside 90- or 150-second CPU traces. Provider-request windows were checked separately; response completion is not the same as task completion. Notes and navigation windows use automation action timestamps, **not keystroke-to-paint or click-to-render latency**. CPU-seconds are sampled CPU weights, not elapsed time. No first-token timestamp was available.
+
+For the longer Summary task, inclusive main-thread samples include **13.841 CPU-seconds of view-graph updates**, **6.361 of size fitting**, **3.192 of hosting minimum-size work**, and **1.298 of Markdown rendering**, with only **8 ms of accessibility work**. These categories overlap and must not be added. Markdown/regular-expression work is present but is much smaller than the broader view/layout cost. After task completion, main CPU returned near idle: 0.98% for the shorter visible run and 0.43% for the longer run over their measured settling windows.
+
+The complete Notes input window includes **5.426 CPU-seconds in change handling**, **5.347 in image handling**, **3.331 in size fitting**, and only **11 ms of accessibility work**. This is substantial main-thread work during input, unlike the earlier partial typing capture. Navigation is more confounded: **3.646 of its 8.576 main CPU-seconds** include accessibility inspection. Tab actions alone used 5.286 main CPU-seconds over 8.719 seconds; meeting actions used 1.801 over 2.242 seconds. These are automated workload costs, not measured user-visible delays.
+
+The longer recording has **1,860 timed rows / 39,995 transcript characters**, without Notes or images. The shorter one has **584 rows / 13,772 transcript characters**, plus **14,172 Notes characters and four images**. The longer Summary contained **3,669 characters**, versus **2,186** for the latest shorter result—about 68% more output. That shorter result is from the hidden run; the visible run’s output was replaced, so these output sizes are not a matched pair for the CPU comparison. Separately, the longer visible task used 7.7% more app CPU (18.537 versus 17.218 CPU-seconds). Inputs, generated output, and request duration differ; this is not a controlled scaling result.
+
+These full-task traces measure **CPU only**. A long CPU+ANE+Core ML attempt failed during finalization; its timing samples survive but its stacks do not. Earlier short all-device probes remain separate evidence and cannot supply missing GPU/ANE measurements for these exact task windows. The installed build was unchanged. Current source includes the newer `dcc4679` canonical-transcript and `8fd4a75` saved-row changes, but these do not validate a repair for Summary publication/layout or Notes image work. Repeat the same tasks on the proposed fix using the [performance runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md).
+
+The proposed Summary repair moves transient draft state out of the broadly published meeting store into a stable object observed only by the Summary document. It preserves the 100 ms delivery cadence, layout, task ownership, and completion/cancellation behavior. The isolated proposal on `dcc4679` passed 21 focused tests, formatting/lint checks, and `make build-macos`, including signing verification. It has not been installed, visually validated after the change, or measured, so no CPU improvement is claimed. Notes image/change handling remains a separate measured cost.
+
+Prototype validation retained toolchain warnings for missing Command Line Tools framework/library search paths and an obsolete linker option in bundled autotools configuration probes. No application API deprecation was reported. These warnings did not prevent the tests or release build; follow up by checking Xcode selection and regenerating the dependency probes before describing the build as warning-free. The proposal adds no duplicate draft storage or compatibility bridge; broader Markdown rebuilding remains unchanged pending a measured comparison.
 
 ## Rendering and saving
 
@@ -48,9 +75,14 @@ These sampled peaks are lower bounds on instantaneous peaks. The recording-only 
 
 The repeated speaker-enabled hour had ordinary app CPU median **47.0%** (p95 **51.6%**, 197 samples), readable speech-service median **6.5%**, and main-thread trace median **22.5%**. Layout represented 48.8% of sampled main-thread CPU. Its footprint fell from a startup high around 495 MiB to about 268 MiB, remained around 269–279 MiB during minutes 20–40, then rose during Notes and instrumentation workloads. That is not evidence of a steady leak.
 
+<details>
+<summary>Earlier partial interaction captures and accelerator probes</summary>
+
+![CPU and memory during Notes, save, and navigation, with discrete accelerator measurements and capture gaps.](assets/2026-10-02-recording-endurance/workload-detail.svg)
+
 ## Notes and navigation workloads
 
-Notes testing added 40 synthetic paragraphs and four image attachments: two images pasted twice. A later saved-Notes workload added six more typing bursts, about 815 characters each. Forty typing calls took about 60 seconds. The first 90-second all-device capture exceeded the artifact cap while finalizing and could not be recovered. Its CPU/memory samples remain, but there are no usable stack or accelerator measurements for rapid typing.
+Notes testing added 40 synthetic paragraphs and four image attachments: two images pasted twice. A later saved-Notes workload added six more typing bursts, about 815 characters each. Forty typing calls took about 60 seconds. The first 90-second all-device capture exceeded the artifact cap while finalizing and could not be recovered. Its CPU/memory samples remain, but that initial typing attempt has no usable stacks or accelerator measurements. The complete-task follow-up above later captured the full input window.
 
 The first image paste fell after its capture ended. A repeated paste at 14:58:52.041 was covered by the 14:58:36.622–57.774 trace: app/main CPU averaged **42.1% / 12.3%** of one core. Sampled Notes image handling was 11 ms and paste handling 3 ms; layout was 700 ms and accessibility work 318 ms. Inclusive categories overlap and do not measure input latency. These observations do not reproduce a sustained Notes rendering freeze.
 
@@ -66,7 +98,7 @@ A later capture labeled Summary-visible did **not** run Summary generation: auto
 
 On October 3, after approval for the configured OpenRouter provider, Summary generation reproduced local app CPU near one core: ten-second samples reached **93.3%** on the first request and **100.6%** on the second. CPU returned below 0.1% after the third run. This reproduces temporary high local CPU, not continuous one-core use throughout generation. Physical footprint peaked at **537.5 MiB** during the follow-up.
 
-The strongest CPU spikes fell outside the short Instruments windows. Startup traces also contain substantial accessibility inspection: 2.261 and 2.155 seconds of sampled main-thread work. The later capture avoided UI polling and recorded 193 ms of Markdown rendering, 204 ms of Markdown update work, 995 ms of layout, and 11 ms of accessibility work over 20.967 seconds. These inclusive categories overlap. They show rendering activity but do not establish the cause of the one-core spikes.
+In these initial short probes, the strongest CPU spikes fell outside the Instruments windows. The complete-task follow-up above subsequently captured and attributed the main-thread spikes. Startup traces also contain substantial accessibility inspection: 2.261 and 2.155 seconds of sampled main-thread work. The later capture avoided UI polling and recorded 193 ms of Markdown rendering, 204 ms of Markdown update work, 995 ms of layout, and 11 ms of accessibility work over 20.967 seconds. These inclusive categories overlap. Those initial probes alone did not establish the cause; the later full-task evidence above identifies dominant view-graph/layout work.
 
 All three captures observed **zero app GPU and system Neural Engine activity**, with valid empty Core ML tables. System GPU active wall time was 0.20–2.47%. The provider performs generation remotely; these measurements describe local client processing and rendering, not server inference.
 
@@ -79,6 +111,9 @@ All three captures observed **zero app GPU and system Neural Engine activity**, 
 Notes and Summary tabs were changed during the second request, but after its trace ended. Saved meetings were switched after generation completed. Those interactions therefore lack overlapping stack captures; no measured input-latency or navigation-during-streaming conclusion is claimed. Use the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) to align a short CPU/hang capture with incoming output and measure visible-versus-hidden Summary at fixed output sizes and chunk cadence. Keep heavyweight GPU tracing separate if it prevents covering the relevant UI interval.
 
 The final Summary was verified in the app and persisted in `summary.md` (4,027 bytes). The three new raw traces were removed after aggregate verification; numeric results, TOCs, export hashes, and private provenance remain. This follow-up supersedes the earlier pending-approval status; the earlier blocked attempt remains an idle observation.
+
+
+</details>
 
 ## Recording integrity
 
@@ -221,6 +256,6 @@ No application code changed. This experiment retains measurement limitations:
 - **Sequential workloads and caches:** repeat fixed synthetic material in fresh processes, with no competing builds, for controlled mode comparisons.
 - **Sparse first-phase accelerators:** the final repeat improves coverage; it cannot reconstruct missing historical device activity.
 - **Rolling trace retention:** intermediate detailed stacks are discarded after numeric verification to bound disk usage. Re-capture anomalies that need deeper stack/allocation analysis.
-- **Summary generation:** temporary one-core CPU was reproduced, but the strongest spikes lack overlapping stacks. Align output arrival with a CPU/hang capture before attributing the cause. See the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
+- **Summary generation and Notes:** complete-task profiles identify main-thread view/layout and Notes image/change costs. Validate the proposed repair with the same task windows and measure input latency separately. See the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
 
 SVG text is embedded as vector outlines to avoid viewer font substitution. The exported SVG is rasterized only for visual checking; the worklog uses the SVG.

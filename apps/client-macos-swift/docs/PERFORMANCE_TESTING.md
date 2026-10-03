@@ -51,6 +51,10 @@ Use an **8 GiB artifact interruption threshold** and **20 GiB free-space floor**
 
 Focus the editor or locate controls before capture. Compare action timestamps with actual trace bounds. For Summary, capture active output as well as request startup; short captures can miss the CPU peak. Use separate UI/hang or allocation profiling when CPU samples cannot explain a stall or memory spike.
 
+For Summary diagnosis, add a separate **90–150-second CPU-only Time Profiler capture** covering the whole request and settling period. Keep device probes short; combining all instruments for a long capture previously failed during finalization. Compare Summary visible, Summary hidden behind Notes, and a longer recording. Avoid accessibility polling during at least one request, and label automation overhead in interaction captures.
+
+Align CPU samples with `data-events.jsonl` provider receipt times (milliseconds since 1970) and `tasks.jsonl` task times (seconds since 2001). Provider elapsed time includes network waiting; managed-task time also includes local preparation and saving. Neither measures UI completion or CPU execution time. Report sampled CPU-seconds separately, use complete one-second bins for peaks, and do not infer first-token time when logs lack it. Keep identifiers and content out of exported results.
+
 ## Provider availability and reporting
 
 Use the configured, authorized Summary provider. If unavailable, unconfigured, or awaiting data-sharing approval, complete local Notes/navigation tests and mark Summary **not run**, with the reason. Retry separately; do not silently substitute a provider or count an idle request as generated output.
