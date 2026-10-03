@@ -21,6 +21,7 @@ Read the relevant documents before changing the app:
 - [File transfer](../../docs/protocols/file-transfer.md): temporary audio uploads for URL-based workers.
 - [Service provider protocols](../../docs/protocols/README.md): connection checks and shared capability rules.
 - [Transcription](../../docs/protocols/transcription.md), [Speaker Labels](../../docs/protocols/diarization.md), [Summaries](../../docs/protocols/summarization.md), [Search](../../docs/protocols/search.md), and [Playback](../../docs/protocols/playback.md): capability contracts and adapter limits.
+- [Build dependency parallelism](../../docs/worklogs/2026-10-03-build-dependency-parallelism.md): dependency order, native job budgeting, build measurements, and failure validation.
 - [Audio dependencies](ThirdParty/README.md): pinned offline source builds, licenses, and dependency upgrades.
 - [Transcript JSONL migration](scripts/migrations/README.md): explicit backed-up conversion of legacy saved arrays.
 - [Library migration validation](../../docs/worklogs/2026-10-03-transcript-library-migration.md): preservation checks and migration limits.
