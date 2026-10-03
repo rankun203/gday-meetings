@@ -81,9 +81,9 @@ final class LiveTranscriptController: ObservableObject {
     private var voiceWork: Task<Void, Never>?
     private var voiceGeneration = UUID()
     private var voiceEmbeddings: [UUID: TypedVoiceEmbedding] = [:]
-    private var voiceCandidates: [UUID: (person: UUID, count: Int)] = [:]
     private var peopleProvider: () -> [Person] = { [] }
     private var enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)?
+    private var recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) -> Void)?
     private var modelObservation: AnyCancellable?
     private var waitingForSpeakerModel = false
     private var waitingForVoiceModel = false
@@ -158,7 +158,8 @@ final class LiveTranscriptController: ObservableObject {
         sink: LiveAudioSink, enabled: Bool, diarizationProvider: ServiceProvider? = nil,
         speakerLabelsEnabled: Bool = false, speakerRecognitionEnabled: Bool = false,
         people: @escaping () -> [Person] = { [] },
-        enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil
+        enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil,
+        recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) -> Void)? = nil
     ) {
         transcriptionIssue = nil
         transcriptionFailures = []
@@ -178,6 +179,7 @@ final class LiveTranscriptController: ObservableObject {
         self.diarizationProvider = diarizationProvider
         peopleProvider = people
         self.enrollVoice = enrollVoice
+        self.recordVoice = recordVoice
         modelObservation = LocalModelManager.shared.$states.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.sink != nil else { return }
@@ -195,7 +197,6 @@ final class LiveTranscriptController: ObservableObject {
             }
         }
         voiceEmbeddings = [:]
-        voiceCandidates = [:]
         pendingFinalizations = [:]
         finalizationFailed = false
         boundaries = [:]
@@ -427,27 +428,11 @@ final class LiveTranscriptController: ObservableObject {
                 voiceMatchingIssue = nil
                 voiceEmbeddings[sample.speakerID] = embedding
                 draft?.speakerTimeline?.retainEmbedding(embedding, for: sample.speakerID)
+                recordVoice?(sample, embedding)
                 checkpoint()
-                guard let speaker = draft?.speakerTimeline?.speakers.first(where: { $0.id == sample.speakerID }) else {
-                    return
-                }
-                if speaker.manuallyAssigned {
-                    if let personID = speaker.personID { enrollVoice?(personID, speaker.id, embedding) }
-                    return
-                }
-                guard let match = SpeakerRecognition.match(embedding: embedding, people: peopleProvider()) else {
-                    voiceCandidates.removeValue(forKey: speaker.id)
-                    return
-                }
-                let previous = voiceCandidates[speaker.id]
-                let count = previous?.person == match.personID ? (previous?.count ?? 0) + 1 : 1
-                voiceCandidates[speaker.id] = (match.personID, count)
-                if count >= 3, speaker.personID != match.personID {
-                    draft?.speakerTimeline?.assign(match.personID, to: speaker.id, manual: false)
-                    refreshEdits()
-                    speakerRecognitionStatus = "Speaker association updated a matching voice."
-                    checkpoint()
-                }
+                // Until voice matching is calibrated against unknown speakers,
+                // model matches are review suggestions, never transcript names.
+                speakerRecognitionStatus = "Voice samples are available for review in People."
             }
             catch {
                 guard voiceGeneration == voiceToken, !Task.isCancelled else { return }

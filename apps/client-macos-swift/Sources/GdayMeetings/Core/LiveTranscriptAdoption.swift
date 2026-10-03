@@ -95,6 +95,10 @@ extension MeetingStore {
         meeting.transcriptSource = source
         meeting.liveTranscriptAdopted = true
         meeting.replaceSpeakers(speakers)
+        _ = voiceLibrary.ingest(
+            meeting: meeting, directory: directory(for: meeting.id),
+            finalizeLive: recordingID == meeting.id && isFinalizingRecording)
+        meeting = voiceLibrary.applyingDecisions(to: meeting)
         return updateMeeting(meeting)
     }
 }

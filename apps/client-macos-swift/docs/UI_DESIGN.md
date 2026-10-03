@@ -112,6 +112,8 @@ Render generated bold CJK labels such as `**结论：**正文` as a bold label f
 
 ## Provider capabilities
 
+People voice review follows the [voice library design](../../../docs/design/2026-10-03-people-voice-library.md). Reviewed audio examples retain their recording and exact source range independently of provider embeddings. Keep automatic suggestions distinct from human confirmation, make exclusions and identity corrections reversible, and use the persistent player for bounded excerpts. Grouping examples does not confirm their identities. Provider preparation must not upload audio merely by opening People or choosing a provider.
+
 New service providers start with all capabilities that their app adapter supports enabled. Saving an edited provider preserves capabilities the user turned off. Do not display capabilities without an implementation.
 
 General uses two columns inside one scroll view. Record, Recording, and After Recording switches on the left express desired behavior. Capability provider choices stay visible on the right. Neither column has an independent scroll area. Ready, Not Ready, Checking…, and Couldn’t Check describe provider health separately from the feature’s on/off preference. Use text and symbols as well as color.

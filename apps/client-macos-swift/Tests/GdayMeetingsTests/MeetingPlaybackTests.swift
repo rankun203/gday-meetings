@@ -35,6 +35,34 @@ private actor PlaybackAttemptCounter {
 
 @MainActor
 struct MeetingPlaybackTests {
+    @Test func excerptSelectsSourceAndRecordingBlocksReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mic = directory.appendingPathComponent("microphone.wav")
+        let system = directory.appendingPathComponent("system.wav")
+        try makeSilence(mic, seconds: 2)
+        try makeSilence(system, seconds: 2)
+        let meeting = Meeting(title: "Example conversation", audioFiles: ["microphone.wav", "system.wav"])
+        let playback = MeetingPlayback()
+        defer { playback.clear() }
+        playback.playExcerpt(meeting: meeting, directory: directory, audioFile: "system.wav", start: 0.5, end: 1)
+        playback.pause()
+        await playback.waitForPreparation()
+        #expect(playback.selectedTrack == 1)
+        #expect(playback.excerptRange == 0.5..<1)
+        #expect(playback.currentTime == 0.5)
+        playback.setRecordingActive(true)
+        playback.playExcerpt(meeting: meeting, directory: directory, audioFile: "microphone.wav", start: 0, end: 0.2)
+        #expect(playback.selectedTrack == 1)
+        #expect(playback.excerptRange == 0.5..<1)
+        playback.setRecordingActive(false)
+        playback.seek(to: 1.5)
+        #expect(playback.excerptRange == nil)
+        playback.clear()
+        #expect(playback.excerptRange == nil)
+    }
+
     @Test func animationUsesRateAndStopsOnPauseScrubAndStalledSamples() {
         let progress = PlaybackProgress()
         progress.update(10, at: 100)

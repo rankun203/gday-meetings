@@ -6,8 +6,12 @@ struct PeopleView: View {
     @ViewState private var name = ""
     @ViewState private var deleting: Person?
     @ViewState private var showExcluded = false
+    @ViewState private var reviewingVoices = false
     var body: some View {
         VStack(alignment: .leading) {
+            Button("Review Voices…", systemImage: "waveform") { reviewingVoices = true }
+                .buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal).padding(.top)
             HStack {
                 TextField("New person", text: $name).onSubmit(add)
                 Button("Add", systemImage: "plus", action: add).help("Add").labelStyle(.iconOnly).disabled(
@@ -29,6 +33,9 @@ struct PeopleView: View {
             }
             Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox).padding(.horizontal).padding(.bottom)
         }.navigationTitle("People")
+            .sheet(isPresented: $reviewingVoices) {
+                VoiceLibraryView(library: store.voiceLibrary)
+            }
             .focusedValue(\.directoryControlFocus, true)
             .confirmationDialog(
                 "Delete \(deleting?.name ?? "person")?",

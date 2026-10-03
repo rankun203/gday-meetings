@@ -243,6 +243,8 @@ import Testing
         #expect(store.people[0].voiceSamples.isEmpty)
         #expect(store.meetings[0].speakers[0].personID == nil)
         #expect(store.meetings[0].personIDs.isEmpty)
+        #expect(store.voiceLibrary.decisions.isEmpty)
+        #expect(VoiceLibraryStore(directory: root).decisions.isEmpty)
     }
 
     @Test func oldSavedResultRestoresSpeakerIdentitiesOnBothApplyPaths() throws {

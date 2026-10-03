@@ -64,6 +64,9 @@ actor CommunityDiarizationWorker {
         var output = LocalDiarizationResult(modelRevision: lease.revision, ranges: [], speakers: [])
         for (index, file) in files.enumerated() {
             try Task.checkCancellation()
+            guard let sourceRevision = VoiceLibraryStore.revision(url: file) else {
+                throw ServiceError("The source audio is unavailable. Restore it before labeling speakers.")
+            }
             let preparedAudio = try await AudioPlaybackPreparation.prepare(file)
             defer { if preparedAudio.temporary { try? FileManager.default.removeItem(at: preparedAudio.url) } }
             let (source, loadSeconds) = try AudioSourceFactory().makeDiskBackedSource(
@@ -118,10 +121,17 @@ actor CommunityDiarizationWorker {
                     if let vector = try? await extractor.extract(samples: samples) {
                         speaker.voiceEmbedding = TypedVoiceEmbedding.normalizing(
                             type: .community1, values: vector, provenance: "Community-1 selected speech")
+                        speaker.voiceSampleRange = .init(
+                            audioFile: file.lastPathComponent, source: sourceName,
+                            start: Double(offset) / 16000, end: Double(offset + count) / 16000)
+                        speaker.voiceSampleRevision = sourceRevision
                     }
                     try Task.checkCancellation()
                 }
                 output.speakers.append(speaker)
+            }
+            guard VoiceLibraryStore.revision(url: file) == sourceRevision else {
+                throw ServiceError("The source audio changed during analysis. Run speaker labeling again.")
             }
         }
         return output
@@ -134,7 +144,7 @@ enum LocalDiarizationAssignment {
     static func applying(_ result: LocalDiarizationResult, to meeting: Meeting, fileCount: Int) -> Meeting {
         var updated = meeting
         if meeting.transcript.isEmpty {
-            let assigned = meeting.speakers.filter { $0.personID != nil }
+            let assigned = meeting.speakers.filter { $0.personID != nil || $0.manuallyAssigned == true }
             var speakers = result.speakers.map { candidate in
                 assigned.first { $0.id == candidate.id } ?? candidate
             }
@@ -149,7 +159,7 @@ enum LocalDiarizationAssignment {
         for index in updated.transcript.indices {
             let row = updated.transcript[index]
             let old = row.speakerID.flatMap { oldByID[$0] }
-            if old?.personID != nil { continue }
+            if old?.personID != nil || old?.manuallyAssigned == true { continue }
             let track: String?
             if let value = old?.track, value.hasPrefix("track") {
                 track = value
@@ -191,14 +201,10 @@ extension MeetingStore {
         if settings.recognizeSpeakers,
             settings.serviceProviders.contains(where: {
                 $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
-            }), var meeting = meeting(id: id)
+            }), let meeting = meeting(id: id)
         {
-            var speakers = meeting.speakers
-            SpeakerRecognition.match(&speakers, people: people)
-            if speakers != meeting.speakers {
-                meeting.replaceSpeakers(speakers)
-                _ = updateMeeting(meeting)
-            }
+            _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: id))
+            voiceLibrary.suggestReviewedPeople(from: people)
         }
         guard settings.labelRecordedSpeakers,
             settings.serviceProviders.contains(where: {
@@ -262,7 +268,7 @@ extension MeetingStore {
                     do { try DataEventJournal.append(event, directory: journalDirectory) }
                     catch { self.errorMessage = "Couldn’t save the speaker processing data event." }
                 }
-                var result = try await CommunityDiarizationWorker().run(
+                let result = try await CommunityDiarizationWorker().run(
                     files: files, lease: lease, recognize: recognize)
                 try Task.checkCancellation()
                 guard !result.ranges.isEmpty else {
@@ -275,14 +281,14 @@ extension MeetingStore {
                         "The meeting changed while speaker labeling was running. Run it again for the current transcript."
                     )
                 }
-                if recognize {
-                    SpeakerRecognition.match(&result.speakers, people: self.people)
-                }
                 try PrivateTranscriptFile.write(
                     try JSONEncoder().encode(result), name: "speaker-labels-\(result.id).json",
                     at: self.directory(for: id))
                 guard self.preserveTranscript(current) else { return }
                 var updated = LocalDiarizationAssignment.applying(result, to: current, fileCount: files.count)
+                _ = self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id))
+                if recognize { self.voiceLibrary.suggestReviewedPeople(from: self.people) }
+                updated = self.voiceLibrary.applyingDecisions(to: updated)
                 updated.transcriptSource = .init(
                     id: result.id, providerName: "Community-1 Speaker Labeling", generatedAt: result.generatedAt)
                 _ = self.updateMeeting(updated)

@@ -133,7 +133,11 @@ extension MeetingStore {
     }
     func meeting(id: UUID) -> Meeting? {
         guard ensureMeetingLoaded(id: id) else { return nil }
-        return meetings.first { $0.id == id }
+        guard let value = meetings.first(where: { $0.id == id }) else { return nil }
+        guard recordingID != id else { return value }
+        let resolved = voiceLibrary.applyingDecisions(to: value)
+        if resolved != value, libraryWritable { _ = updateMeeting(resolved) }
+        return resolved
     }
     func resetMeetingPages(evictLoaded: Bool = false) {
         meetingPrefetch.reset()

@@ -16,6 +16,12 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable {
     var confirmed = false
     /// Present only when this entry represents an audio source, not a detected voice.
     var sourcePlaceholder: LiveAudioSource?
+    var voiceSampleRange: VoiceSampleRange?
+    var voiceSampleRevision: String?
+    /// Optional for older libraries; nil does not prove human review.
+    var manuallyAssigned: Bool?
+    var voiceReviewOrigin: VoiceProjectionOrigin?
+    var voiceReviewExampleID: UUID?
 
     var canAssignPerson: Bool { sourcePlaceholder == nil }
     var displayLabel: String {
@@ -105,6 +111,7 @@ enum SpeakerRecognition {
     static func match(_ speakers: inout [MeetingSpeaker], people: [Person]) {
         var scores: [(speaker: Int, person: UUID, score: Double)] = []
         for (index, speaker) in speakers.enumerated() {
+            guard speaker.manuallyAssigned != true else { continue }
             guard let embedding = speaker.resolvedVoiceEmbedding else { continue }
             if let match = match(embedding: embedding, people: people) {
                 scores.append((index, match.personID, match.score))
@@ -154,7 +161,8 @@ enum SpeakerRecognition {
                 speaker: segment.speaker ?? "",
                 text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines), speakerID: speakerID)
         }
-        match(&speakers, people: people)
+        // Provider labels are retained without turning a similarity guess into
+        // a person's name. Playable evidence is reviewed in the voice library.
         return (result, speakers)
     }
 }
@@ -209,6 +217,17 @@ extension MeetingStore {
         replacement[index].personID = personID
         replacement[index].confidence = nil
         replacement[index].confirmed = personID != nil
+        replacement[index].manuallyAssigned = true
+        _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: meetingID))
+        guard
+            voiceLibrary.assign(
+                meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true,
+                previousPersonID: meeting.speakers[index].personID,
+                exampleID: meeting.speakers[index].voiceReviewExampleID)
+        else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
         for i in people.indices {
             people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
         }

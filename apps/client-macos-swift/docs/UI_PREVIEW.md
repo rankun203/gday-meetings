@@ -28,6 +28,14 @@ The synthetic conversation includes overlapping microphone and system passages f
 
 The synthetic conversation includes multiple tags and manually assigned, automatically matched, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignment, reassignment, removal, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, Tags, and Tasks; providers are configured in Settings.
 
+## People voice review
+
+The ordinary preview seeds synthetic confirmed, suggested, unnamed, and excluded voice examples. Open **People → Review Voices**. Check the Review, Unnamed, Named, and All filters; play an excerpt; open its recording at the timestamp; confirm or reject a suggestion; assign selected examples; separate or combine groups; and undo a correction. Grouping must not confirm unselected examples. A legacy example has no playable range and must stay visibly unavailable.
+
+Person details show voice samples above contact fields. Confirm that samples remain accessible while browsing associated meetings. Preview playback remains silent and uses the same source selection and excerpt boundary as production. During synthetic recording, playback and preparation controls must be disabled.
+
+Expand **Speaker Association** to inspect supported providers and preparation progress. Preparation and discovery are real local operations when explicitly started; synthetic fixture audio does not establish model accuracy. Missing models and unavailable audio must produce actionable errors. No remote upload starts from opening this view.
+
 ## Task queue
 
 Launch the Preview executable with `--synthetic-tasks`, or set its `GdaySyntheticTasks` bundle flag, to add two running tasks, one queued transcription, a summary needing attention, an expired transcription, and one completed summary. These rows are synthetic and never submit provider work. The bottom status shows **2 Tasks Need Attention**, running and queued counts, and **Review 2 Tasks**. Choose that button or **Tasks** in the sidebar to open the full-width queue panel.

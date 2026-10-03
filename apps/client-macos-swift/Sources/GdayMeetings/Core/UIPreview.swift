@@ -140,6 +140,7 @@ enum UIPreview {
                 conversation.transcriptSource = TranscriptSource(
                     id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
                 store.updateMeeting(conversation)
+                seedVoiceExamples(store: store, meeting: conversation, firstPerson: person, secondPerson: matched)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 // The checkpoint shares the canonical segment store with the
                 // saved transcript, so retain the conversation's timed rows.
@@ -271,6 +272,43 @@ enum UIPreview {
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         configureGeneralScenario(store)
         return store
+    }
+
+    @MainActor private static func seedVoiceExamples(
+        store: MeetingStore, meeting: Meeting, firstPerson: UUID, secondPerson: UUID
+    ) {
+        guard meeting.speakers.count >= 3 else { return }
+        let reviewGroup = UUID()
+        let unnamedGroup = UUID()
+        var examples = [
+            VoiceExample(
+                meetingID: meeting.id, speakerID: meeting.speakers[0].id, source: "system",
+                audioFile: "system.wav", start: 1, end: 5, suggestedPersonID: firstPerson,
+                review: .suggested, groupID: reviewGroup),
+            VoiceExample(
+                meetingID: meeting.id, speakerID: meeting.speakers[0].id, source: "system",
+                audioFile: "system.wav", start: 16, end: 21, suggestedPersonID: firstPerson,
+                review: .suggested, groupID: reviewGroup),
+            VoiceExample(
+                meetingID: meeting.id, speakerID: meeting.speakers[1].id, source: "system",
+                audioFile: "system.wav", start: 6, end: 10, personID: secondPerson, review: .confirmed),
+            VoiceExample(
+                meetingID: meeting.id, speakerID: meeting.speakers[2].id, source: "microphone",
+                audioFile: "microphone.wav", start: 8, end: 15, groupID: unnamedGroup),
+            VoiceExample(
+                meetingID: meeting.id, speakerID: meeting.speakers[2].id, source: "microphone",
+                audioFile: "microphone.wav", start: 24, end: 30, groupID: unnamedGroup),
+            VoiceExample(
+                meetingID: meeting.id, speakerID: UUID(), source: "unknown",
+                suggestedPersonID: firstPerson, review: .suggested, excluded: true, createdAt: .distantPast),
+        ]
+        for index in examples.indices {
+            if let file = examples[index].audioFile {
+                examples[index].audioRevision = VoiceLibraryStore.revision(
+                    url: store.directory(for: meeting.id).appendingPathComponent(file))
+            }
+        }
+        store.voiceLibrary.upsert(examples)
     }
 
     /// A visible draft fixture uses no provider, credentials, or network request.

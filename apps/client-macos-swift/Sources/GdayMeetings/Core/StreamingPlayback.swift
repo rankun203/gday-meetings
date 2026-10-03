@@ -41,6 +41,7 @@ final class StreamingPlayback: @unchecked Sendable {
     private var origin: Int64 = 0
     private var produced: Int64 = 0
     private var totalFrames: Int64 = 0
+    private var endFrame: Int64 = 0
     private var revision = UUID()
     private var drainStarted: TimeInterval?
     private let silent: Bool
@@ -73,6 +74,7 @@ final class StreamingPlayback: @unchecked Sendable {
             guard !closed, !files.isEmpty else { throw CancellationError() }
             readers = try files.map { try StreamingAudioReader.open($0) }
             totalFrames = readers.map(\.totalFrames).max() ?? 0
+            endFrame = totalFrames
             guard totalFrames > 0 else { throw ServiceError("This recording is empty.") }
             let ring = try PlaybackRing(tracks: readers.count)
             self.ring = ring
@@ -133,15 +135,20 @@ final class StreamingPlayback: @unchecked Sendable {
         }
     }
 
-    func seek(to seconds: Double, revision: UUID) async throws {
+    func seek(to seconds: Double, revision: UUID, end: Double? = nil) async throws {
         try await perform { [self] in
             guard !closed, let ring, let engine else { throw CancellationError() }
+            guard seconds.isFinite, end == nil || end!.isFinite else {
+                throw ServiceError("The audio range is invalid.")
+            }
             playing = false
             timer?.cancel()
             timer = nil
             engine.stop()
             engine.reset()
-            origin = min(totalFrames, max(0, Int64((seconds * 48000).rounded())))
+            let duration = Double(totalFrames) / 48000
+            endFrame = Int64((min(duration, max(0, end ?? duration)) * 48000).rounded())
+            origin = min(endFrame, Int64((min(duration, max(0, seconds)) * 48000).rounded()))
             produced = origin
             self.revision = revision
             drainStarted = nil
@@ -231,8 +238,8 @@ final class StreamingPlayback: @unchecked Sendable {
 
     private func fill() throws {
         guard let ring else { return }
-        while produced < totalFrames, gday_playback_free(ring.pointer) >= Self.blockSize {
-            let count = UInt32(min(Int64(Self.blockSize), totalFrames - produced))
+        while produced < endFrame, gday_playback_free(ring.pointer) >= Self.blockSize {
+            let count = UInt32(min(Int64(Self.blockSize), endFrame - produced))
             for (index, reader) in readers.enumerated() {
                 let buffer = buffers[index]
                 let channels = buffer.floatChannelData!
@@ -248,11 +255,11 @@ final class StreamingPlayback: @unchecked Sendable {
     }
     private var position: Double {
         min(
-            Double(totalFrames) / 48000,
+            Double(endFrame) / 48000,
             Double(origin + Int64(ring.map { gday_playback_consumed($0.pointer) } ?? 0)) / 48000)
     }
     private func updateEnd() {
-        guard let ring, produced >= totalFrames, gday_playback_available(ring.pointer) == 0 else { return }
+        guard let ring, produced >= endFrame, gday_playback_available(ring.pointer) == 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if drainStarted == nil { drainStarted = now }
         // Let time-pitch/output latency drain instead of truncating the last block.
@@ -268,7 +275,7 @@ final class StreamingPlayback: @unchecked Sendable {
         onUpdate?(
             Snapshot(
                 time: position, playing: playing,
-                ended: !playing && produced >= totalFrames && position >= Double(totalFrames) / 48000,
+                ended: !playing && produced >= endFrame && position >= Double(endFrame) / 48000,
                 revision: revision, error: error, requiresReload: requiresReload))
     }
     private func fail(_ message: String) {

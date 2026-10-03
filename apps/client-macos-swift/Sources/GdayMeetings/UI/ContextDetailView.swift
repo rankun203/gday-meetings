@@ -14,11 +14,13 @@ struct ContextDetailView: View {
     @ViewState private var page = AssociatedMeetingPage()
     @ViewState private var loading = false
     @ViewState private var pageError: String?
+    @ViewState private var reviewingVoices = false
     private var meetings: [MeetingListEntry] { page.entries }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.largeTitle)
             if let personID, let person = store.people.first(where: { $0.id == personID }) {
+                PersonVoiceSamplesView(library: store.voiceLibrary, personID: personID) { reviewingVoices = true }
                 Form {
                     TextField("Name", text: personBinding(person, \.name))
                     TextField("Email", text: personBinding(person, \.email))
@@ -95,6 +97,9 @@ struct ContextDetailView: View {
         }.padding(20).navigationTitle(title)
             .focusedValue(\.directoryControlFocus, true)
             .task { await load() }
+            .sheet(isPresented: $reviewingVoices) {
+                VoiceLibraryView(library: store.voiceLibrary, personID: personID)
+            }
             .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
                 if let selectedMeeting {
                     VStack {

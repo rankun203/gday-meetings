@@ -87,6 +87,31 @@ final class MeetingStore: ObservableObject {
             && !managedTasks.contains(where: { $0.state.isActive })
     }
     lazy var notesStorage = NotesStorage(directory: dataDirectory)
+    lazy var voiceLibrary: VoiceLibraryStore = {
+        let library = VoiceLibraryStore(
+            directory: dataDirectory, legacyPeople: people,
+            canWrite: { [weak self] in self?.libraryWritable == true })
+        library.didChange = { [weak self] ids in self?.refreshVoiceAssignments(meetingIDs: ids) }
+        voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
+            guard let self else { return }
+            let kind = BackgroundJob.Kind(rawValue: "voiceLibrary")
+            if let job = jobs.first(where: { $0.state == .running || $0.state == .queued }) {
+                if self.isJobRunning(kind, .library) {
+                    self.setJobProgress(kind, .library, job.progress)
+                }
+                else {
+                    _ = self.beginJob(kind, .library, progress: job.progress)
+                }
+            }
+            else {
+                self.endJob(kind, .library)
+            }
+        }
+        return library
+    }()
+    private var voiceJobObservation: AnyCancellable?
+    lazy var voicePreparation = VoiceLibraryPreparation(
+        library: voiceLibrary, people: { [weak self] in self?.people ?? [] })
     private var recorder: AudioCapture?
     private var captureTransition = false
     private var activeRecordingFormat: RecordingFormat = .opus
@@ -290,6 +315,7 @@ final class MeetingStore: ObservableObject {
         }
         var transaction = LibraryFileTransaction(root: dataDirectory)
         do {
+            try voiceLibrary.writePending(transaction: &transaction)
             let changed = meetings.filter { meeting in
                 lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting
             }
@@ -373,6 +399,7 @@ final class MeetingStore: ObservableObject {
                     to: dataDirectory.appendingPathComponent("context-chats.json"), options: .atomic)
             }
             try transaction.commit()
+            voiceLibrary.completePending(committed: true)
             for meeting in changed {
                 do {
                     let folder = directory(for: meeting.id)
@@ -408,6 +435,7 @@ final class MeetingStore: ObservableObject {
         }
         catch {
             try? transaction.restore()
+            voiceLibrary.completePending(committed: false)
             meetings = lastSavedLibrary.meetings.map { old in
                 var value = old
                 value.notes = notesStorage.pending[old.id] ?? notesStorage.saved[old.id] ?? old.notes
@@ -576,6 +604,18 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func deleteMeeting(id: UUID) -> Bool {
         guard canSave else { return false }
+        guard
+            !voiceLibrary.jobs.contains(where: { job in
+                (job.state == .running || job.state == .queued)
+                    && (job.discoveryInputs.contains { $0.meetingID == id }
+                        || job.exampleIDs.contains(where: { sampleID in
+                            voiceLibrary.examples.contains { $0.id == sampleID && $0.meetingID == id }
+                        }))
+            })
+        else {
+            errorMessage = "Pause voice preparation before deleting this meeting."
+            return false
+        }
         guard recordingID != id else {
             errorMessage = "Stop recording before deleting this meeting."
             return false
@@ -627,6 +667,10 @@ final class MeetingStore: ObservableObject {
     }
     func deletePerson(id: UUID) {
         guard canSave, removeRelationships(personID: id) else { return }
+        guard voiceLibrary.removePerson(id: id, staged: true) else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
         people.removeAll { $0.id == id }
         contextualChats.removeValue(forKey: Self.contextChatKey(personID: id))
         save()
@@ -810,6 +854,9 @@ final class MeetingStore: ObservableObject {
                     self?.enrollLiveVoice(
                         meetingID: meeting.id, personID: personID,
                         speakerID: speakerID, embedding: embedding)
+                },
+                recordVoice: { [weak self] sample, embedding in
+                    self?.recordVoiceExample(meetingID: meeting.id, sample: sample, embedding: embedding)
                 })
             captureHealth = [
                 microphone
@@ -1104,6 +1151,11 @@ final class MeetingStore: ObservableObject {
             meeting.speakers[index].embedding = nil
             meeting.speakers[index].voiceEmbedding = nil
             meeting.speakers[index].voiceScope = nil
+            meeting.speakers[index].voiceSampleRange = nil
+            meeting.speakers[index].voiceSampleRevision = nil
+            meeting.speakers[index].manuallyAssigned = nil
+            meeting.speakers[index].voiceReviewOrigin = nil
+            meeting.speakers[index].voiceReviewExampleID = nil
         }
         meeting.restoreSpeakerIdentities()
         let importedDirectory = try MeetingFolderLocation.newFolder(
@@ -1138,6 +1190,10 @@ extension MeetingStore {
         guard libraryWritable, recordingID == meetingID,
             personID == nil || people.contains(where: { $0.id == personID })
         else { return }
+        guard voiceLibrary.assign(meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true) else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
         let previous = people
         for personIndex in people.indices {
             let isAssignedPerson = people[personIndex].id == personID
@@ -1154,5 +1210,37 @@ extension MeetingStore {
                 .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
         }
         if !save() { people = previous }
+    }
+
+    func recordVoiceExample(meetingID: UUID, sample: LiveSpeakerAudioSample, embedding: TypedVoiceEmbedding) {
+        guard libraryWritable, let meeting = meeting(id: meetingID) else { return }
+        guard
+            voiceLibrary.examples.filter({
+                $0.meetingID == meetingID && $0.speakerID == sample.speakerID && $0.isPlayable
+            }).count < 3
+        else { return }
+        let candidates = meeting.audioFiles.filter {
+            LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == sample.source.rawValue
+        }
+        guard candidates.count == 1 else { return }
+        let match = SpeakerRecognition.match(embedding: embedding, people: voiceLibrary.matchingPeople(from: people))
+        if !voiceLibrary.recordSample(
+            meetingID: meetingID, speakerID: sample.speakerID,
+            range: .init(
+                audioFile: candidates[0], source: sample.source.rawValue,
+                start: sample.start, end: sample.end),
+            embedding: embedding, suggestion: match?.personID)
+        {
+            errorMessage = voiceLibrary.errorMessage
+        }
+    }
+
+    func refreshVoiceAssignments(meetingIDs: Set<UUID>) {
+        for id in meetingIDs where id != recordingID {
+            guard let meeting = meeting(id: id) else { continue }
+            let updated = voiceLibrary.applyingDecisions(to: meeting)
+            if updated != meeting { _ = updateMeeting(updated) }
+        }
+        voiceLibrary.suggestReviewedPeople(from: people)
     }
 }

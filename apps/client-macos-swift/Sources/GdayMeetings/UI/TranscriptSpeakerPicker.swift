@@ -39,8 +39,6 @@ struct TranscriptSpeakerPicker: View {
             if lineAssignment != nil {
                 Toggle("Apply to This Speaker", isOn: $appliesToSpeaker)
                     .toggleStyle(.checkbox)
-                Text(appliesToSpeaker ? "Updates this speaker’s linked passages." : "Updates only this passage.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             TextField("Search people", text: $query).focused($focused)
                 .onSubmit { if let person = matches.first { assign(person.id) } }

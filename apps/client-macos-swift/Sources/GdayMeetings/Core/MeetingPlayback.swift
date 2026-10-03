@@ -36,6 +36,7 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var waveforms: [AudioWaveform?] = []
     @Published private(set) var isLoadingWaveforms = false
     @Published private(set) var mutedTracks: Set<Int> = []
+    @Published private(set) var excerptRange: Range<Double>?
     var hasSelection: Bool { meetingID != nil }
 
     /// Original library file, independent of the currently browsed meeting or decoder temporaries.
@@ -97,6 +98,7 @@ final class MeetingPlayback: ObservableObject {
 
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {
         guard !isPlaybackBlocked else { return }
+        excerptRange = nil
         if meetingID == meeting.id, sourceFiles == files, errorMessage == nil, !transportNeedsReload {
             title = meeting.title
             sourceMeeting = meeting
@@ -108,18 +110,43 @@ final class MeetingPlayback: ObservableObject {
         progress.seek(to: currentTime)
     }
 
+    /// Review an exact source excerpt through the shared player. The transport
+    /// bounds decoding so speech beyond the excerpt never enters its audio ring.
+    func playExcerpt(meeting: Meeting, directory: URL, audioFile: String, start: Double, end: Double) {
+        guard !isPlaybackBlocked else { return }
+        guard start.isFinite, end.isFinite, start >= 0, end > start,
+            meeting.audioFiles.contains(audioFile), URL(fileURLWithPath: audioFile).lastPathComponent == audioFile,
+            audioFile != ".", audioFile != ".."
+        else {
+            errorMessage = "This voice example has no playable audio range."
+            return
+        }
+        let files = meeting.audioFiles.filter {
+            URL(fileURLWithPath: $0).lastPathComponent == $0 && $0 != "." && $0 != ".."
+        }.map { directory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard let track = files.firstIndex(where: { $0.lastPathComponent == audioFile }) else {
+            errorMessage = "The audio for this voice example is unavailable."
+            return
+        }
+        load(meeting: meeting, files: files, track: track, position: start, autoplay: true)
+        excerptRange = start..<end
+        progress.seek(to: start)
+    }
+
     func play() {
         guard hasSelection, !isPlaybackBlocked else { return }
         if errorMessage != nil || transportNeedsReload {
             guard let meeting = sourceMeeting else { return }
+            let range = excerptRange
             load(meeting: meeting, files: sourceFiles, track: selectedTrack, position: currentTime, autoplay: true)
+            excerptRange = range
             return
         }
         wantsPlayback = true
         if isLoading { return }
         guard transport != nil else { return }
         if hasEnded || (duration > 0 && currentTime >= duration) {
-            seek(to: 0)
+            seek(to: excerptRange?.lowerBound ?? 0)
         }
         else {
             startPlayback()
@@ -144,6 +171,9 @@ final class MeetingPlayback: ObservableObject {
 
     func seek(to seconds: Double) {
         guard hasSelection, seconds.isFinite else { return }
+        if let range = excerptRange, seconds < range.lowerBound || seconds > range.upperBound {
+            excerptRange = nil
+        }
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
         pendingPosition = target
         progress.seek(to: target)
@@ -155,11 +185,12 @@ final class MeetingPlayback: ObservableObject {
         let operation = UUID()
         seekGeneration = operation
         let currentGeneration = generation
+        let end = excerptRange?.upperBound
         isSeeking = true
         isPlaying = false
         seekTask = Task { [weak self] in
             do {
-                try await transport.seek(to: target, revision: operation)
+                try await transport.seek(to: target, revision: operation, end: end)
                 guard let self, !Task.isCancelled, self.generation == currentGeneration,
                     self.seekGeneration == operation
                 else { return }
@@ -258,6 +289,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func clear() {
+        excerptRange = nil
         progress.scrub(to: nil)
         generation = UUID()
         seekGeneration = UUID()
@@ -301,6 +333,7 @@ final class MeetingPlayback: ObservableObject {
     private static func validTrack(_ track: Int, count: Int) -> Int { track >= 0 && track < count ? track : -1 }
 
     private func load(meeting: Meeting, files: [URL], track: Int, position: Double, autoplay: Bool) {
+        excerptRange = nil
         progress.scrub(to: nil)
         generation = UUID()
         let operation = generation

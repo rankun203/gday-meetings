@@ -56,7 +56,8 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                     id: identity, label: $0.speakerLabel, track: $0.source.rawValue,
                     providerName: provider, voiceEmbedding: $0.voiceEmbedding,
                     personID: $0.personID, confirmed: $0.personID != nil,
-                    sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source)
+                    sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source,
+                    manuallyAssigned: speakerTimeline?.speakers.first(where: { $0.id == identity })?.manuallyAssigned)
             }
     }
 

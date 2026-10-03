@@ -6,6 +6,41 @@ import Testing
 @testable import GdayMeetings
 
 struct StreamingPlaybackTests {
+    @Test func excerptNeverRendersSpeechBeyondItsEndAndNormalSeekRestoresFullAudio() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = StreamingAudioReader.format
+        let audio = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48000))
+        audio.frameLength = 48000
+        for channel in 0..<2 {
+            for frame in 0..<48000 {
+                audio.floatChannelData![channel][frame] =
+                    frame < 12000 ? 0 : Float(sin(Double(frame) * 2 * .pi * 440 / 48000)) * 0.3
+            }
+        }
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: audio)
+        }
+        let player = StreamingPlayback(manualRendering: true)
+        defer { player.close() }
+        _ = try await player.prepare(files: [url])
+        try await player.seek(to: 0, revision: UUID(), end: 0.25)
+        try await player.play(rate: 1)
+        for _ in 0..<16 {
+            let rendered = try await player.renderOffline(frames: 4096)
+            #expect((0..<Int(rendered.frameLength)).allSatisfy { abs(rendered.floatChannelData![0][$0]) < 0.00001 })
+        }
+        try await player.seek(to: 0.25, revision: UUID())
+        try await player.play(rate: 1)
+        var energy: Float = 0
+        for _ in 0..<8 {
+            let rendered = try await player.renderOffline(frames: 4096)
+            for frame in 0..<Int(rendered.frameLength) { energy += abs(rendered.floatChannelData![0][frame]) }
+        }
+        #expect(energy > 100)
+    }
+
     @Test(arguments: [false, true])
     func routeChangeOnlyReportsInterruptedPlayback(wasPlaying: Bool) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
