@@ -86,25 +86,11 @@ struct MeetingSpeakersView: View {
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Speakers").font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
             if let meeting {
                 let speakers = meeting.speakers.filter { $0.canAssignPerson || $0.personID != nil }
-                if meeting.speakers.contains(where: {
-                    $0.embedding != nil && ($0.voiceScope?.hasPrefix("runpod:") ?? false)
-                }) {
-                    Text(
-                        "Assign a person to recognize their voice in future transcripts from this provider."
-                    )
-                    .font(.callout).foregroundStyle(.secondary)
-                }
-                ForEach(Array(Set(speakers.map(\.providerName))).sorted(), id: \.self) { provider in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(provider).font(.subheadline).foregroundStyle(.secondary)
-                        ForEach(speakers.filter { $0.providerName == provider }) { speaker in
-                            speakerRow(speaker)
-                        }
-                    }
+                ForEach(speakers) { speaker in
+                    speakerRow(speaker)
                 }
             }
         }
@@ -126,33 +112,22 @@ struct MeetingSpeakersView: View {
     }
 
     private func speakerRow(_ speaker: MeetingSpeaker) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(speaker.displayLabel).font(.callout.monospaced())
-                if !speaker.track.isEmpty { Text(speaker.track).font(.caption).foregroundStyle(.secondary) }
+        HStack(spacing: 12) {
+            Text(speaker.displayLabel.isEmpty ? "Unlabeled" : speaker.displayLabel)
+                .font(.callout.monospaced())
+                .lineLimit(1)
+                .help([speaker.providerName, speaker.track].filter { !$0.isEmpty }.joined(separator: " · "))
+            Spacer(minLength: 8)
+            if !speaker.canAssignPerson {
+                Text(personName(for: speaker) ?? "Unassigned").lineLimit(1)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    identity(speaker)
-                    Spacer()
-                    actions(speaker)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    identity(speaker)
-                    actions(speaker)
-                }
-            }
-            Divider()
+            actions(speaker)
         }
+        .frame(minHeight: 28)
     }
 
-    @ViewBuilder private func identity(_ speaker: MeetingSpeaker) -> some View {
-        if let person = store.people.first(where: { $0.id == speaker.personID }) {
-            Text(person.name)
-        }
-        else {
-            Text("Unassigned").foregroundStyle(.secondary)
-        }
+    private func personName(for speaker: MeetingSpeaker) -> String? {
+        store.people.first(where: { $0.id == speaker.personID })?.name
     }
 
     @ViewBuilder private func actions(_ speaker: MeetingSpeaker) -> some View {
@@ -163,7 +138,7 @@ struct MeetingSpeakersView: View {
         }
         else {
             HStack(spacing: 8) {
-                Menu(speaker.personID == nil ? "Assign Person" : "Reassign") {
+                Menu(personName(for: speaker) ?? "Assign Person") {
                     ForEach(store.people) { person in
                         Button(person.name) {
                             store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: person.id)
@@ -180,8 +155,15 @@ struct MeetingSpeakersView: View {
                         }
                     }
                 }
-                .fixedSize()
-                .accessibilityLabel("Assign \(SpeakerLabelPresentation.display(speaker.label)) to a person")
+                .lineLimit(1)
+                .frame(maxWidth: 240, alignment: .trailing)
+                .accessibilityLabel(
+                    "Assign \(speaker.displayLabel.isEmpty ? "unlabeled speaker" : speaker.displayLabel) to a person"
+                )
+                .accessibilityValue(personName(for: speaker) ?? "Unassigned")
+                .help(
+                    "Assign a person to this speaker. Assignments with a saved voice sample can recognize them in future transcripts from this provider."
+                )
             }
         }
     }
