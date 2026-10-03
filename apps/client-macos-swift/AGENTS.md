@@ -53,6 +53,7 @@ Read the relevant documents before changing the app:
 - [Provider capability defaults](../../docs/worklogs/2026-09-28-provider-capability-defaults.md): enabled capabilities and live transcription selection.
 - [General settings and provider health](../../docs/worklogs/2026-10-02-general-settings.md): stage behavior, shared scrolling, capability readiness, and initial provider selection.
 - [General appearance preference](../../docs/worklogs/2026-10-02-appearance-settings.md): persisted System, Light, and Dark appearance across app windows.
+- [People association label](../../docs/worklogs/2026-10-03-associate-people-label.md): concise automatic association labels in both recording stages.
 - [Speaker association health](../../docs/worklogs/2026-10-02-speaker-association-health.md): Nemotron capability migration and automatic local model verification.
 - [Model download health](../../docs/worklogs/2026-10-03-model-download-health.md): readiness updates by model phase without repeated checks on download progress.
 - [Provider icons](../../docs/worklogs/2026-10-02-provider-header-icon.md): shared symbols in provider rows, headers, and the Add menu.

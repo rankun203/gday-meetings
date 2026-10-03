@@ -60,7 +60,7 @@ struct GeneralSettingsView: View {
                                 "Automatically Label Speakers", enabled: setting(\.showLiveSpeakerLabels),
                                 capability: .liveDiarization, provider: store.settings.liveDiarizationProviderID)
                             feature(
-                                "Automatically Associate Speakers with People",
+                                "Automatically Associate People",
                                 enabled: setting(\.recognizeLiveSpeakers),
                                 capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
                                 prerequisite: liveAssociationPrerequisite)
@@ -81,7 +81,7 @@ struct GeneralSettingsView: View {
                                 capability: .diarization, provider: store.settings.diarizationProviderID,
                                 prerequisite: recordedLabelingPrerequisite)
                             feature(
-                                "Automatically Associate Speakers with People", enabled: setting(\.recognizeSpeakers),
+                                "Automatically Associate People", enabled: setting(\.recognizeSpeakers),
                                 capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
                                 prerequisite: recordedAssociationPrerequisite)
                             feature(
