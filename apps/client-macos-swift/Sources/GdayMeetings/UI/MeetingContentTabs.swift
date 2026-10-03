@@ -14,7 +14,6 @@ struct MeetingContentTabs: View {
             ForEach(titles.indices, id: \.self) { index in
                 Button {
                     selection = index
-                    focusedTab = index
                 } label: {
                     Text(titles[index])
                         .font(.callout.weight(selection == index ? .semibold : .regular))
@@ -27,6 +26,10 @@ struct MeetingContentTabs: View {
                     if selection == index { Capsule().fill(.quaternary) }
                 }
                 .focused($focusedTab, equals: index)
+                .focusedValue(\.directoryControlFocus, true)
+                // Pointer selection should also clear focus left by keyboard navigation.
+                // Keep the Button action separate so keyboard activation retains focus.
+                .simultaneousGesture(TapGesture().onEnded { focusedTab = nil })
                 .accessibilityAddTraits(selection == index ? .isSelected : [])
                 .onKeyPress(.leftArrow) { move(from: index, by: -1) }
                 .onKeyPress(.rightArrow) { move(from: index, by: 1) }
