@@ -205,6 +205,7 @@ struct LibraryView: View {
                     HStack(spacing: 6) {
                         if destination == .meetings {
                             Image(nsImage: MenuBarArtwork.normal)
+                                .renderingMode(.template)
                                 .accessibilityHidden(true)
                             Text("Gday Meetings")
                         }
@@ -213,6 +214,7 @@ struct LibraryView: View {
                         }
                     }
                     .font(.headline)
+                    .modifier(LibraryToolbarTitleForeground())
                     .accessibilityElement(children: .combine)
                 }
                 ToolbarItemGroup {
@@ -536,6 +538,14 @@ enum MeetingPanels {
                 store.errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+private struct LibraryToolbarTitleForeground: ViewModifier {
+    @Environment(\.appearsActive) private var appearsActive
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(Color(nsColor: appearsActive ? .labelColor : .disabledControlTextColor))
     }
 }
 
