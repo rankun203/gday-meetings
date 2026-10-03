@@ -56,7 +56,7 @@ struct DataEventGroupingTests {
     }
 
     @Test func multipleBodiesRetainWholeReceiptWithoutDuplicateOccurrences() {
-        var shared = event(targetID: firstTarget, bodies: ["notes.md", "transcript.json", "notes.md"], time: 1)
+        var shared = event(targetID: firstTarget, bodies: ["notes.md", "transcript.jsonl", "notes.md"], time: 1)
         shared.dataFlow.requestBytes = 100
         let groups = DataEventGroup.groups([shared, shared])
         #expect(groups.count == 2)
@@ -83,13 +83,13 @@ struct DataEventGroupingTests {
     }
 
     @Test func sortingAndGroupIDsAreDeterministicAcrossInputOrder() {
-        let first = event(targetID: firstTarget, bodies: ["notes.md", "transcript.json"], time: 1)
+        let first = event(targetID: firstTarget, bodies: ["notes.md", "transcript.jsonl"], time: 1)
         let newer = event(targetID: firstTarget, bodies: ["notes.md"], time: 3)
         let equalTime = event(targetID: secondTarget, bodies: ["summary.md"], time: 3)
         let input = [first, newer, equalTime]
         let groups = DataEventGroup.groups(input)
         #expect(groups == DataEventGroup.groups(input.reversed()))
-        #expect(groups.last?.file == "transcript.json")
+        #expect(groups.last?.file == "transcript.jsonl")
         #expect(groups.first(where: { $0.file == "notes.md" })?.events.map(\.id) == [newer.id, first.id])
     }
 

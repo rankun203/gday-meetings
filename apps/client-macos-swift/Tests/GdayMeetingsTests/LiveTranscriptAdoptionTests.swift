@@ -61,14 +61,13 @@ import Testing
         meeting.transcript = [.init(speaker: "Editor", text: "Keep my edit")]
         store.updateMeeting(meeting)
         let live = draft(id)
-        try live.save(at: store.directory(for: id))
         #expect(!store.adoptLiveTranscript(live))
         #expect(store.meetings.first?.transcript == meeting.transcript)
         #expect(store.adoptLiveTranscript(live, replacing: true))
         #expect(store.meetings.first?.transcript == live.segments)
         #expect(
             try TranscriptRevisions.read(at: store.directory(for: id)).revisions.first?.segments == meeting.transcript)
-        #expect(try LiveTranscriptDraft.read(at: store.directory(for: id), meetingID: id) == live)
+        #expect(try TranscriptStorage.read(at: store.directory(for: id)) == live.segments)
     }
     @Test func emptyForeignAndPendingDraftsDoNotChangeTranscript() throws {
         let root = directory()
@@ -84,11 +83,11 @@ import Testing
         #expect(store.meetings.first?.transcriptionAttempt != nil)
         #expect(store.meetings.first?.transcript.isEmpty == true)
     }
-    @Test func legacyRecoveryMakesTextUsableAndDoesNotUndoALaterClear() throws {
+    @Test func checkpointRecoveryMakesTextUsableAndDoesNotUndoALaterClear() throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Legacy live only")
+        let id = store.createMeeting(title: "Interrupted recording")
         let live = draft(id)
         try live.save(at: store.directory(for: id))
         let reopened = MeetingStore(dataDirectory: root)
@@ -100,7 +99,8 @@ import Testing
         let cleared = MeetingStore(dataDirectory: root)
         #expect(cleared.meeting(id: id)?.transcript.isEmpty == true)
         #expect(cleared.meeting(id: id)?.liveTranscriptAdopted == true)
-        #expect(try LiveTranscriptDraft.read(at: store.directory(for: id), meetingID: id) == live)
+        #expect(try TranscriptStorage.read(at: store.directory(for: id)).isEmpty)
+        #expect(try LiveTranscriptDraft.read(at: store.directory(for: id), meetingID: id) == nil)
         #expect(try JSONDecoder().decode(Meeting.self, from: Data("{}".utf8)).liveTranscriptAdopted == false)
     }
     @Test func failedMetadataSaveKeepsOriginalAndRecoverableLiveFile() throws {
@@ -115,7 +115,7 @@ import Testing
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
         #expect(!store.adoptLiveTranscript(live))
         #expect(store.meetings.first?.transcript.isEmpty == true)
-        #expect(try LiveTranscriptDraft.read(at: store.directory(for: id), meetingID: id) == live)
+        #expect(try TranscriptStorage.read(at: store.directory(for: id)) == live.segments)
     }
     @Test func explicitProviderChoiceDoesNotChangeDefaultOrPendingDestination() async throws {
         let root = directory()

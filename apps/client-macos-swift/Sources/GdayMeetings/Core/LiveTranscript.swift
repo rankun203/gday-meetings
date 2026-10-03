@@ -1,8 +1,9 @@
 import CryptoKit
 import Foundation
 
-/// The live draft is independent of the editable/batch transcript. Replacing one never deletes the other.
+/// In-memory live processing state and compact recording checkpoint metadata.
 struct LiveTranscriptDraft: Codable, Equatable, Sendable {
+    var savedSegments: [TranscriptSegment]?
     var version = 1
     var meetingID: UUID
     var provider = "This Mac"
@@ -17,22 +18,29 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     var liveSources: [LiveAudioSource]?
     /// Effective streaming assignments are persisted independently of raw recognition.
     var effectivePhrases: [LiveTranscriptPhrase]?
-    var rawSpeakerPhrases: [LiveTranscriptPhrase]?
-    /// Makes the completed snapshot authoritative even if retiring the journal was interrupted.
-    var committedJournalDigest: String?
 
     private var finalizedParagraphs: [LiveTranscriptPhrase] {
-        LiveTranscriptParagraphs.groups(
+        if let savedSegments {
+            let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
+            return savedSegments.map { segment in
+                var row = segment.livePhrase(meetingID: meetingID)
+                if let id = row.speakerIdentity, let speaker = speakers[id] {
+                    row.personID = speaker.personID
+                    row.voiceEmbedding = speaker.voiceEmbedding
+                }
+                return row
+            }
+        }
+        return LiveTranscriptParagraphs.groups(
             finalized: resolvedRows().finalized.sorted(by: LiveTranscriptPhrase.ordered), partials: [],
             overrides: overrides ?? []
         ).map(\.phrase)
     }
 
     var segments: [TranscriptSegment] {
-        finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map {
-            TranscriptSegment(
-                id: $0.id, start: $0.start, end: $0.end, speaker: $0.speakerLabel, text: $0.text,
-                speakerID: $0.speakerIdentity ?? $0.id)
+        if let savedSegments { return savedSegments }
+        return finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map {
+            TranscriptSegment(live: $0)
         }
     }
 
@@ -66,10 +74,12 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     }
 
     mutating func updateText(_ text: String, for phrase: LiveTranscriptPhrase) {
+        savedSegments = nil
         changeOverride(for: phrase) { $0.text = text }
     }
 
     mutating func assignPerson(_ personID: UUID?, for phrase: LiveTranscriptPhrase, speakerIdentity: UUID? = nil) {
+        savedSegments = nil
         changeOverride(for: phrase) {
             $0.personID = personID
             $0.personWasAssigned = true
@@ -264,80 +274,46 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         return edge >= anchor.end
     }
 
-    /// Ordinary viewing reads the saved projection and never opens recovery events.
+    /// Current transcript reads never replay recognition events or prefer old snapshots.
     static func read(at directory: URL, meetingID: UUID) throws -> Self? {
-        let file = directory.appendingPathComponent("live-transcript.json")
-        guard FileManager.default.fileExists(atPath: file.path) else {
-            return try LiveTranscriptProjection.read(at: directory, meetingID: meetingID)
-        }
-        let value = try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
-        guard value.version == 1, value.meetingID == meetingID else {
-            throw MeetingError.message("This live transcript uses an unsupported format.")
-        }
-        return value
+        if let saved = try LiveTranscriptProjection.read(at: directory, meetingID: meetingID) { return saved }
+        _ = try TranscriptStorage.read(at: directory)
+        return nil
     }
 
-    /// Only interrupted-recording recovery may reconstruct an unsaved projection.
     static func recover(at directory: URL, meetingID: UUID) throws -> Self? {
-        if let projection = try? LiveTranscriptProjection.read(at: directory, meetingID: meetingID) {
-            // A later edited snapshot wins over the recording's projection.
-            if FileManager.default.fileExists(atPath: directory.appendingPathComponent("live-transcript.json").path) {
-                return (try? read(at: directory, meetingID: meetingID)) ?? projection
-            }
-            return projection
-        }
-        let journal = directory.appendingPathComponent("live-transcript-events.csv")
-        guard FileManager.default.fileExists(atPath: journal.path) else {
-            return try read(at: directory, meetingID: meetingID)
-        }
-        if let committed = try? read(at: directory, meetingID: meetingID),
-            let digest = committed.committedJournalDigest,
-            digest == (try? journalDigest(at: journal))
-        {
-            return committed
-        }
-        let records = try LiveTranscriptJournal<LiveTranscriptJournalRecord>.readEvents(from: journal)
-        guard let recovered = LiveTranscriptJournalRecord.replay(records), recovered.meetingID == meetingID else {
-            throw MeetingError.message("This recovery journal does not match the meeting.")
-        }
-        return recovered
-    }
-
-    static func journalDigest(at url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hash = SHA256()
-        while let bytes = try handle.read(upToCount: 64 * 1024), !bytes.isEmpty {
-            hash.update(data: bytes)
-        }
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Publish the snapshot before retiring recovery data. A digest preserves
-    /// snapshot authority if the process stops between these two operations.
-    @discardableResult
-    func saveRetiringJournal(at directory: URL) throws -> Self {
-        let journal = directory.appendingPathComponent("live-transcript-events.csv")
-        var saved = self
-        if FileManager.default.fileExists(atPath: journal.path) {
-            saved.committedJournalDigest = try Self.journalDigest(at: journal)
-        }
-        try saved.save(at: directory)
-        if FileManager.default.fileExists(atPath: journal.path) {
-            try FileManager.default.moveItem(
-                at: journal, to: directory.appendingPathComponent("live-transcript-events.saved.csv"))
-        }
-        return saved
+        try read(at: directory, meetingID: meetingID)
     }
 
     func save(at directory: URL) throws {
-        if let rawSpeakerPhrases {
-            let evidence = LiveTranscriptWordEvidence(meetingID: meetingID, phrases: rawSpeakerPhrases)
-            try PrivateTranscriptFile.write(
-                try JSONEncoder().encode(evidence), name: "live-transcript-word-speakers.json", at: directory)
+        try TranscriptStorage.coordinated(at: directory) {
+            let rows = segments
+            let data = try TranscriptStorage.encoded(rows)
+            var transaction = LibraryFileTransaction(root: directory)
+            do {
+                try transaction.remember(directory.appendingPathComponent(TranscriptStorage.filename))
+                try transaction.remember(directory.appendingPathComponent(LiveTranscriptProjection.checkpointName))
+                try PrivateTranscriptFile.write(data, name: TranscriptStorage.filename, at: directory)
+                var metadata = self
+                metadata.phrases = []
+                metadata.effectivePhrases = nil
+                metadata.savedSegments = nil
+                metadata.overrides = nil
+                metadata.speakerTimeline?.intervals = []
+                let checkpoint = LiveTranscriptProjection.Checkpoint(
+                    bytes: UInt64(data.count), rows: rows.count,
+                    draft: metadata, segments: [], finished: true)
+                try PrivateTranscriptFile.write(
+                    try JSONEncoder().encode(checkpoint), name: LiveTranscriptProjection.checkpointName, at: directory)
+                try transaction.commit()
+            }
+            catch {
+                try transaction.restore()
+                throw error
+            }
         }
-        try PrivateTranscriptFile.write(try JSONEncoder().encode(self), name: "live-transcript.json", at: directory)
     }
+
 }
 
 enum LiveAudioSource: String, Codable, CaseIterable, Sendable {

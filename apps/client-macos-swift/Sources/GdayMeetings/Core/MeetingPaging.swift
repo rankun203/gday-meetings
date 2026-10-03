@@ -57,10 +57,12 @@ enum MeetingFolderStorage {
         meeting.audioFiles = entry.audioFiles
         meeting.personIDs = entry.personIDs
         meeting.tagIDs = entry.tagIDs
-        let transcript = folder.appendingPathComponent("transcript.json")
-        if FileManager.default.fileExists(atPath: transcript.path) {
-            meeting.transcript = try JSONDecoder().decode([TranscriptSegment].self, from: Data(contentsOf: transcript))
+        if !meeting.transcript.isEmpty
+            && !FileManager.default.fileExists(atPath: folder.appendingPathComponent(TranscriptStorage.filename).path)
+        {
+            throw MeetingError.message("This transcript needs migration to transcript.jsonl before it can be opened.")
         }
+        meeting.transcript = try TranscriptStorage.read(at: folder)
         for (name, key) in [("summary.md", \Meeting.summary), ("notes.md", \Meeting.notes)] {
             let url = folder.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: url.path) {
@@ -78,15 +80,10 @@ enum MeetingFolderStorage {
                 text += try String(contentsOf: file, encoding: .utf8) + " "
             }
         }
-        let file = folder.appendingPathComponent("transcript.json")
-        if FileManager.default.fileExists(atPath: file.path) {
-            struct SearchSegment: Decodable { let text: String }
-            text += try JSONDecoder().decode([SearchSegment].self, from: Data(contentsOf: file)).map(\.text).joined(
-                separator: " ")
-        }
+        text += try TranscriptStorage.read(at: folder).map(\.text).joined(separator: " ")
         return text
     }
-    static func write(_ meeting: Meeting, directory: URL) throws {
+    static func write(_ meeting: Meeting, directory: URL, writeTranscript: Bool = true) throws {
         let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: directory, date: meeting.createdAt)
         MeetingFolderLocation.remember(folder, id: meeting.id, directory: directory)
         try FileManager.default.createDirectory(
@@ -98,8 +95,7 @@ enum MeetingFolderStorage {
         content.notes = ""
         content.summary = ""
         try encoder.encode(content).write(to: folder.appendingPathComponent("content.json"), options: .atomic)
-        try encoder.encode(meeting.transcript).write(
-            to: folder.appendingPathComponent("transcript.json"), options: .atomic)
+        if writeTranscript { try TranscriptStorage.write(meeting.transcript, at: folder) }
         try Data(meeting.summary.utf8).write(to: folder.appendingPathComponent("summary.md"), options: .atomic)
         try encoder.encode(MeetingListEntry(meeting)).write(
             to: folder.appendingPathComponent("metadata.json"), options: .atomic)

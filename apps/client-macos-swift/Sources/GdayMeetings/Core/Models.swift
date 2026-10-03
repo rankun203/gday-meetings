@@ -7,7 +7,13 @@ struct TranscriptSegment: Codable, Identifiable, Equatable {
     var speaker = "Speaker"
     var text = ""
     var speakerID: UUID?
-    enum CodingKeys: String, CodingKey { case id, start, end, speaker, text, speakerID }
+    var source: LiveAudioSource?
+    var session: UUID?
+    var sourcePlaceholder: Bool?
+    var personID: UUID?
+    enum CodingKeys: String, CodingKey {
+        case id, start, end, speaker, text, speakerID, source, session, sourcePlaceholder, personID
+    }
 
 }
 struct MeetingTodo: Codable, Identifiable, Equatable {
@@ -159,6 +165,10 @@ extension TranscriptSegment {
         speaker = try values.decodeIfPresent(String.self, forKey: .speaker) ?? "Speaker"
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
         speakerID = try values.decodeIfPresent(UUID.self, forKey: .speakerID)
+        source = try values.decodeIfPresent(LiveAudioSource.self, forKey: .source)
+        session = try values.decodeIfPresent(UUID.self, forKey: .session)
+        sourcePlaceholder = try values.decodeIfPresent(Bool.self, forKey: .sourcePlaceholder)
+        personID = try values.decodeIfPresent(UUID.self, forKey: .personID)
     }
 }
 

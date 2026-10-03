@@ -20,7 +20,8 @@ com.gdaymeetings.macos/
   meetings/YYYYMMDD_<base36-id>/
     metadata.json
     content.json
-    transcript.json
+    transcript.jsonl
+    transcript-checkpoint.json  # live committed boundary and recent rows
     summary.md
     notes.md
     audio and attachments

@@ -27,18 +27,14 @@ struct LiveTranscriptStreamTests {
             speakers: speakers, intervals: intervals, start: start, end: end)
     }
 
-    @Test func carriesUnknownWordsButRetainsRawEvidence() throws {
+    @Test func carriesUnknownWordsUsingTheMostRecentSpeaker() throws {
         let stream = LiveTranscriptStream()
         stream.reset(labeling: true)
         let voice = speaker()
         stream.accept(event([voice], [.init(speakerID: voice.id, start: 0, end: 1)], end: 3))
         stream.accept(phrase(0, ["One", "two", "three"]), final: true)
         #expect(stream.snapshot.phrases.map(\.speakerIdentity).allSatisfy { $0 == voice.id })
-        let raw = LiveTranscriptWordEvidence(meetingID: UUID(), phrases: stream.snapshot.rawPhrases)
-        #expect(raw.words.count == 3)
-        #expect(raw.words[0].speakerID == voice.id)
-        #expect(raw.words[1].speakerID == nil)
-        #expect(raw.words[2].speakerID == nil)
+        #expect(stream.snapshot.phrases.flatMap(\.words).map(\.text) == ["One", "two", "three"])
     }
 
     @Test func catchUpSplitsHotWordsAndLeavesFrozenPrefixUntouched() {
@@ -113,7 +109,7 @@ struct LiveTranscriptStreamTests {
         stream.accept(phrase(0, (0..<120).map { "word\($0)" }), final: true)
         stream.finish()
         #expect(stream.snapshot.phrases.flatMap(\.words).map(\.text) == (0..<120).map { "word\($0)" })
-        #expect(stream.snapshot.rawPhrases.contains { !$0.recognitionIsFinal })
+        #expect(stream.snapshot.phrases.allSatisfy { $0.recognitionIsFinal })
     }
 
     @Test func untimedLongPartialPreservesText() {
@@ -128,27 +124,26 @@ struct LiveTranscriptStreamTests {
         #expect(stream.snapshot.phrases.first?.text == text)
     }
 
-    @Test func savedEffectiveLabelsAndRawWordArtifactSurviveReopenAndEdit() throws {
+    @Test func savedEffectiveLabelsSurviveReopenAndEdit() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let voice = speaker()
-        let records: [LiveTranscriptJournalRecord] = [
-            .begin(.init(meetingID: session, locale: "en"), labeling: true),
-            .speaker(event([voice], [.init(speakerID: voice.id, start: 0, end: 1)], end: 3)),
-            .phrase(phrase(0, ["One", "two", "three"]), final: true), .finish,
-        ]
-        var draft = try #require(LiveTranscriptJournalRecord.replay(records))
+        let stream = LiveTranscriptStream()
+        stream.reset(labeling: true)
+        stream.accept(event([voice], [.init(speakerID: voice.id, start: 0, end: 1)], end: 3))
+        stream.accept(phrase(0, ["One", "two", "three"]), final: true)
+        stream.finish()
+        var draft = LiveTranscriptDraft(meetingID: session, locale: "en")
+        draft.effectivePhrases = stream.snapshot.phrases
+        draft.speakerTimeline = LiveSpeakerTimeline(speakers: [voice])
         try draft.save(at: directory)
-        let read = try #require(try LiveTranscriptDraft.read(at: directory, meetingID: session))
+        var read = try #require(try LiveTranscriptDraft.read(at: directory, meetingID: session))
         #expect(read.segments.allSatisfy { $0.speaker == voice.label })
-        let evidence = try JSONDecoder().decode(
-            LiveTranscriptWordEvidence.self,
-            from: Data(contentsOf: directory.appendingPathComponent("live-transcript-word-speakers.json")))
-        #expect(evidence.words.filter { $0.speakerID == nil }.count == 2)
-        draft.updateText("Edited text", for: try #require(read.resolvedRows().finalized.first))
-        try draft.save(at: directory)
+        read.updateText("Edited text", for: try #require(read.resolvedRows().finalized.first))
+        try read.save(at: directory)
         #expect(try LiveTranscriptDraft.read(at: directory, meetingID: session)?.segments.first?.text == "Edited text")
     }
+
     @Test func selectedSourcesWaitForOrderingAndLateDeliveryRetainsText() {
         let stream = LiveTranscriptStream()
         stream.reset(labeling: false, sources: [.microphone, .system])
@@ -203,7 +198,7 @@ struct LiveTranscriptStreamTests {
         #expect(stream.snapshot.phrases.map(\.text) == ["valid"])
     }
 
-    @Test @MainActor func controllerJournalRetiresAndSavedEditsRemainAuthoritative() async throws {
+    @Test @MainActor func controllerSavesOnlyCanonicalSegmentsAndEditsRemainAuthoritative() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = LiveTranscriptController()
@@ -228,7 +223,7 @@ struct LiveTranscriptStreamTests {
             !FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent("live-transcript-events.csv").path))
         #expect(
-            FileManager.default.fileExists(
+            !FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent("live-transcript-events.saved.csv").path))
         var saved = try #require(try LiveTranscriptDraft.read(at: directory, meetingID: session))
         saved.updateText("Saved correction", for: try #require(saved.resolvedRows().finalized.first))
@@ -262,7 +257,7 @@ struct LiveTranscriptStreamTests {
         #expect((stream.hotFinalized + stream.hotPartials).filter { $0.id == anchor.id }.count == 1)
     }
 
-    @Test @MainActor func corruptJournalSalvagesFrozenTextAndLatestEdit() async throws {
+    @Test @MainActor func unrelatedRawEventsCannotOverrideFrozenTextAndLatestEdit() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = LiveTranscriptController()
@@ -278,11 +273,8 @@ struct LiveTranscriptStreamTests {
                 controller.updateText(phrase: controller.presentedStream.frozenRow(at: 0), text: "Corrected first")
                 await controller.flushCheckpoint()
                 do {
-                    let file = try FileHandle(
-                        forWritingTo: directory.appendingPathComponent("live-transcript-events.csv"))
-                    try file.seekToEnd()
-                    try file.write(contentsOf: Data("corrupt committed record\n".utf8))
-                    try file.close()
+                    try Data("unrelated raw events".utf8).write(
+                        to: directory.appendingPathComponent("live-transcript-events.csv"))
                 }
                 catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
                 return true
@@ -291,7 +283,6 @@ struct LiveTranscriptStreamTests {
         let saved = try #require(try LiveTranscriptDraft.read(at: directory, meetingID: session))
         #expect(saved.segments.map(\.text) == ["Corrected first", "Last"])
         #expect(saved.complete == false)
-        #expect(saved.rawSpeakerPhrases?.map(\.text) == ["First", "Last"])
     }
 
     @Test func modelRestartDoesNotInheritTheOldVoice() {
@@ -324,32 +315,7 @@ struct LiveTranscriptStreamTests {
         draft.speakerTimeline = LiveSpeakerTimeline(speakers: [voice])
         #expect(draft.resolvedRows().finalized.first?.personID == person)
         #expect(draft.speakers.first?.personID == person)
-        #expect(stream.snapshot.rawPhrases.first?.personID == nil)
-    }
-
-    @Test func committedSnapshotWinsIfJournalRetirementWasInterrupted()
-        async throws
-    {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journalURL = directory.appendingPathComponent("live-transcript-events.csv")
-        let journal = LiveTranscriptJournal<LiveTranscriptJournalRecord>.events(at: journalURL)
-        journal.append(.begin(.init(meetingID: session, locale: "en"), labeling: false))
-        journal.append(.phrase(phrase(0, ["Written"]), final: true))
-        try await journal.flush()
-        var recovered = LiveTranscriptDraft(meetingID: session, locale: "en")
-        recovered.effectivePhrases = [phrase(0, ["Written"]), phrase(1, ["Salvaged"])]
-        recovered.committedJournalDigest = try LiveTranscriptDraft.journalDigest(at: journalURL)
-        try recovered.save(at: directory)
-        #expect(
-            try LiveTranscriptDraft.recover(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
-                == ["Written", "Salvaged"])
-        // A new journal event changes the digest and makes replay authoritative again.
-        journal.append(.phrase(phrase(2, ["New event"]), final: true))
-        try await journal.flush()
-        #expect(
-            try LiveTranscriptDraft.recover(at: directory, meetingID: session)?.resolvedRows().finalized.map(\.text)
-                == ["Written", "New event"])
+        #expect(stream.snapshot.phrases.first?.personID == nil)
     }
 
     @Test func volatileCutoffPreservesWholeWordTiming() {
@@ -360,9 +326,9 @@ struct LiveTranscriptStreamTests {
         value.end += 0.3
         value.recognizedFinal = false
         stream.accept(value, final: false)
-        #expect(stream.snapshot.rawPhrases.allSatisfy { $0.hasCompleteWordTiming })
+        #expect(stream.snapshot.phrases.allSatisfy { $0.hasCompleteWordTiming })
         #expect(stream.hotPartials.allSatisfy { $0.hasCompleteWordTiming })
-        #expect(stream.snapshot.rawPhrases.flatMap(\.words).count + stream.hotPartials.flatMap(\.words).count == 40)
+        #expect(stream.snapshot.phrases.flatMap(\.words).count + stream.hotPartials.flatMap(\.words).count == 40)
     }
 
     @Test func detachedRecognitionSessionCanDeliverAfterNewerSessionFreezes() {

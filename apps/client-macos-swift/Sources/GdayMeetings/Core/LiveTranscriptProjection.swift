@@ -3,142 +3,143 @@ import Foundation
 /// Stable transcript rows, not recognition events. The atomic checkpoint commits
 /// a byte prefix plus the replaceable recent rows and current manual corrections.
 enum LiveTranscriptProjection {
-    static let rowsName = "live-transcript-segments.jsonl"
-    static let rawRowsName = "live-transcript-speaker-evidence.jsonl"
-    static let checkpointName = "live-transcript-segments-checkpoint.json"
+    static let rowsName = TranscriptStorage.filename
+    static let checkpointName = "transcript-checkpoint.json"
 
     struct Checkpoint: Codable {
-        var version = 1
+        var version = 2
         var bytes: UInt64
         var rows: Int
-        var rawBytes: UInt64
-        var rawRows: Int
         var draft: LiveTranscriptDraft
+        var segments: [TranscriptSegment]
         var finished: Bool
     }
 
-    static func read(at directory: URL, meetingID: UUID) throws -> LiveTranscriptDraft? {
-        let checkpointURL = directory.appendingPathComponent(checkpointName)
-        guard FileManager.default.fileExists(atPath: checkpointURL.path) else { return nil }
-        let checkpoint = try JSONDecoder().decode(Checkpoint.self, from: Data(contentsOf: checkpointURL))
-        guard checkpoint.version == 1, checkpoint.draft.meetingID == meetingID else {
-            throw LiveTranscriptJournal<LiveTranscriptJournalRecord>.Failure.corrupt
+    static func checkpoint(at directory: URL) throws -> Checkpoint? {
+        let url = directory.appendingPathComponent(checkpointName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let value = try JSONDecoder().decode(Checkpoint.self, from: Data(contentsOf: url))
+        guard value.version == 2 else {
+            throw MeetingError.message("This transcript checkpoint uses an unsupported format.")
         }
-        let rows = try readRows(
-            directory.appendingPathComponent(rowsName), bytes: checkpoint.bytes, count: checkpoint.rows)
-        let raw = try readRows(
-            directory.appendingPathComponent(rawRowsName), bytes: checkpoint.rawBytes, count: checkpoint.rawRows)
-        var draft = checkpoint.draft
-        draft.effectivePhrases = rows + draft.phrases
-        draft.rawSpeakerPhrases = raw + (draft.rawSpeakerPhrases ?? [])
-        draft.phrases = draft.rawSpeakerPhrases ?? []
-        return draft
+        return value
     }
 
-    private static func readRows(_ url: URL, bytes: UInt64, count: Int) throws -> [LiveTranscriptPhrase] {
-        guard count >= 0 else { throw LiveTranscriptJournal<LiveTranscriptJournalRecord>.Failure.corrupt }
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var remaining = bytes
-        var pending = Data()
-        var rows: [LiveTranscriptPhrase] = []
-        while remaining > 0 {
-            let bytes = try handle.read(upToCount: Int(min(remaining, 64 * 1024))) ?? Data()
-            guard !bytes.isEmpty else { throw LiveTranscriptJournal<LiveTranscriptJournalRecord>.Failure.corrupt }
-            remaining -= UInt64(bytes.count)
-            pending.append(bytes)
-            while let newline = pending.firstIndex(of: 10) {
-                rows.append(try JSONDecoder().decode(LiveTranscriptPhrase.self, from: pending[..<newline]))
-                pending.removeSubrange(...newline)
+    static func read(at directory: URL, meetingID: UUID) throws -> LiveTranscriptDraft? {
+        try TranscriptStorage.coordinated(at: directory) {
+            guard let checkpoint = try checkpoint(at: directory) else { return nil }
+            guard checkpoint.draft.meetingID == meetingID else {
+                throw MeetingError.message("The transcript checkpoint does not match its meeting.")
             }
+            var draft = checkpoint.draft
+            let segments = try TranscriptStorage.read(at: directory)
+            draft.savedSegments = segments
+            draft.effectivePhrases = segments.map { $0.livePhrase(meetingID: meetingID) }
+            draft.phrases = draft.effectivePhrases ?? []
+            // Current speaker metadata is sufficient to display saved rows.
+            // Raw recognition and word attribution are not needed for viewing.
+            draft.overrides = nil
+            return draft
         }
-        guard pending.isEmpty, rows.count == count else {
-            throw LiveTranscriptJournal<LiveTranscriptJournalRecord>.Failure.corrupt
-        }
-        return rows
     }
 }
 
-/// Only this actor touches append handles. A checkpoint is published after its
-/// rows are synchronized; extra bytes from an interrupted write are ignored.
+/// One writer appends completed display paragraphs and atomically checkpoints the
+/// recent tail. Editing sealed text rewrites the small segment document at edit time.
 actor LiveTranscriptProjectionStorage {
-    private struct Channel {
-        var head: LiveTranscriptFrozenBlock?
-        var bytes: UInt64 = 0
-        var rows = 0
-        var handle: FileHandle?
+    private var head: LiveTranscriptFrozenBlock?
+    private var carry: [LiveTranscriptPhrase] = []
+    private var bytes: UInt64 = 0
+    private var rowCount = 0
+    private var initialized = false
+    private var lastOverrides: [LiveTranscriptOverride] = []
 
-        mutating func append(_ newHead: LiveTranscriptFrozenBlock?, to url: URL) throws -> (UInt64, Int) {
-            if handle == nil {
-                guard
-                    FileManager.default.createFile(
-                        atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-                else {
-                    throw LiveTranscriptJournal<LiveTranscriptJournalRecord>.Failure.create
-                }
-                handle = try FileHandle(forWritingTo: url)
-            }
-            let handle = handle!
-            // On retry, discard bytes not referenced by the last published checkpoint.
-            try handle.truncate(atOffset: bytes)
-            try handle.seek(toOffset: bytes)
-            var blocks: [LiveTranscriptFrozenBlock] = []
-            var cursor = newHead
-            while let block = cursor, block !== head {
-                blocks.append(block)
-                cursor = block.previous
-            }
-            var nextBytes = bytes
-            var nextRows = rows
-            let encoder = JSONEncoder()
-            for block in blocks.reversed() {
-                for row in block.rows {
-                    var line = try encoder.encode(row)
-                    line.append(10)
-                    try handle.write(contentsOf: line)
-                    nextBytes += UInt64(line.count)
-                    nextRows += 1
-                }
-            }
-            try handle.synchronize()
-            return (nextBytes, nextRows)
+    private func additions(after previous: LiveTranscriptFrozenBlock?, through next: LiveTranscriptFrozenBlock?)
+        -> [LiveTranscriptPhrase]
+    {
+        var blocks: [LiveTranscriptFrozenBlock] = []
+        var cursor = next
+        while let block = cursor, block !== previous {
+            blocks.append(block)
+            cursor = block.previous
         }
+        return blocks.reversed().flatMap(\.rows)
     }
-    private var effective = Channel()
-    private var raw = Channel()
+
+    private func paragraphs(_ rows: [LiveTranscriptPhrase], metadata: LiveTranscriptDraft) -> [LiveTranscriptPhrase] {
+        var draft = metadata
+        draft.savedSegments = nil
+        draft.effectivePhrases = rows
+        draft.overrides = (metadata.overrides ?? []).filter { change in rows.contains { $0.overlaps(change.anchor) } }
+        return LiveTranscriptParagraphs.groups(
+            finalized: draft.resolvedRows().finalized, partials: [], overrides: draft.overrides ?? []
+        ).map(\.phrase)
+    }
 
     func save(
         _ metadata: LiveTranscriptDraft, snapshot: LiveTranscriptEffectiveSnapshot, at directory: URL,
         finished: Bool = false
     ) throws {
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let (bytes, rows) = try effective.append(
-            snapshot.head, to: directory.appendingPathComponent(LiveTranscriptProjection.rowsName))
-        let (rawBytes, rawRows) = try raw.append(
-            snapshot.rawHead, to: directory.appendingPathComponent(LiveTranscriptProjection.rawRowsName))
-        var draft = metadata
-        draft.phrases = snapshot.tail
-        draft.effectivePhrases = nil
-        draft.rawSpeakerPhrases = snapshot.rawTail
-        draft.speakerTimeline?.intervals = []
-        draft.committedJournalDigest = nil
-        if !finished { draft.complete = false }
-        let checkpoint = LiveTranscriptProjection.Checkpoint(
-            bytes: bytes, rows: rows, rawBytes: rawBytes, rawRows: rawRows, draft: draft, finished: finished)
-        try PrivateTranscriptFile.write(
-            try JSONEncoder().encode(checkpoint), name: LiveTranscriptProjection.checkpointName, at: directory)
-        effective.head = snapshot.head
-        effective.bytes = bytes
-        effective.rows = rows
-        raw.head = snapshot.rawHead
-        raw.bytes = rawBytes
-        raw.rows = rawRows
-    }
-
-    deinit {
-        try? effective.handle?.close()
-        try? raw.handle?.close()
+        try TranscriptStorage.coordinated(at: directory) {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let url = directory.appendingPathComponent(LiveTranscriptProjection.rowsName)
+            let rewriting = initialized && lastOverrides != (metadata.overrides ?? [])
+            let incoming = additions(after: rewriting ? nil : head, through: snapshot.head)
+            var stable = paragraphs((rewriting ? [] : carry) + incoming, metadata: metadata)
+            let nextCarry = stable.isEmpty ? [] : [stable.removeLast()]
+            let recent = paragraphs(nextCarry + snapshot.tail, metadata: metadata)
+            let committed = (stable + (finished ? recent : [])).map { TranscriptSegment(live: $0) }
+            let added = try TranscriptStorage.encoded(committed)
+            var nextBytes = rewriting ? 0 : bytes
+            var nextCount = rewriting ? 0 : rowCount
+            var transaction = LibraryFileTransaction(root: directory)
+            do {
+                if rewriting {
+                    try transaction.remember(url)
+                    try transaction.remember(directory.appendingPathComponent(LiveTranscriptProjection.checkpointName))
+                    try PrivateTranscriptFile.write(added, name: LiveTranscriptProjection.rowsName, at: directory)
+                }
+                else {
+                    if !initialized && !FileManager.default.fileExists(atPath: url.path) {
+                        try PrivateTranscriptFile.write(Data(), name: LiveTranscriptProjection.rowsName, at: directory)
+                    }
+                    let handle = try FileHandle(forWritingTo: url)
+                    defer { try? handle.close() }
+                    // Discard an append whose checkpoint was never committed.
+                    try handle.truncate(atOffset: bytes)
+                    try handle.seek(toOffset: bytes)
+                    try handle.write(contentsOf: added)
+                    try handle.synchronize()
+                }
+                nextBytes += UInt64(added.count)
+                nextCount += committed.count
+                var draft = metadata
+                draft.phrases = []
+                draft.effectivePhrases = nil
+                draft.savedSegments = nil
+                draft.overrides = nil
+                draft.speakerTimeline?.intervals = []
+                if !finished { draft.complete = false }
+                let checkpoint = LiveTranscriptProjection.Checkpoint(
+                    bytes: nextBytes, rows: nextCount,
+                    draft: draft, segments: finished ? [] : recent.map { TranscriptSegment(live: $0) },
+                    finished: finished)
+                try PrivateTranscriptFile.write(
+                    try JSONEncoder().encode(checkpoint), name: LiveTranscriptProjection.checkpointName, at: directory)
+                if rewriting { try transaction.commit() }
+                head = snapshot.head
+                carry = finished ? [] : nextCarry
+                bytes = nextBytes
+                rowCount = nextCount
+                initialized = true
+                lastOverrides = metadata.overrides ?? []
+            }
+            catch {
+                if rewriting { try transaction.restore() }
+                throw error
+            }
+        }
     }
 }
 

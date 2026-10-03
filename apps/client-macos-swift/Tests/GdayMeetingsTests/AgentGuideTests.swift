@@ -8,7 +8,7 @@ struct AgentGuideTests {
         let directory = URL(fileURLWithPath: "/tmp/Synthetic meeting library")
         let guide = AgentGuides.contents(directory: directory)
         #expect(guide.hasPrefix("---\n"))
-        for filename in ["metadata.json", "notes.md", "transcript.json", "summary.md", "content.json"] {
+        for filename in ["metadata.json", "notes.md", "transcript.jsonl", "summary.md", "content.json"] {
             #expect(guide.contains(filename))
         }
         #expect(guide.contains("2001-01-01"))
@@ -16,11 +16,8 @@ struct AgentGuideTests {
         #expect(guide.contains(AgentGuides.command(directory: directory, claude: true)))
         #expect(guide.contains("This Swift library has no `recordings/index.md`"))
         #expect(guide.contains("transcript-revisions.json"))
-        #expect(guide.contains("live-transcript.json"))
-        #expect(guide.contains("live-transcript-events.csv"))
-        #expect(guide.contains("live-transcript-segments.jsonl"))
-        #expect(guide.contains("ordinary viewing must not replay event journals"))
-        #expect(guide.contains("SHA-256"))
+        #expect(guide.contains("without replaying raw event history"))
+        #expect(guide.contains("transcript-checkpoint.json"))
         #expect(guide.contains("Keep the last line for each event ID"))
         #expect(guide.contains("separate task stores"))
         #expect(guide.contains("speakerID"))
@@ -52,12 +49,13 @@ struct AgentGuideTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let existing =
-            "---\ntitle: Custom library guide\n---\n\nKeep this instruction.\n" + AgentGuides.liveTranscriptFormat
+            "---\ntitle: Custom library guide\n---\n\nKeep this instruction.\n"
+            + "<!-- gday:live-transcript-csv-v2 -->\nLegacy custom guidance."
         try Data(existing.utf8).write(to: folder.appendingPathComponent("AGENTS.md"))
         #expect(try AgentGuides.ensure(directory: folder))
         let updated = try AgentGuides.read(directory: folder)
         #expect(updated.hasPrefix(existing))
-        #expect(updated.contains(AgentGuides.savedTranscriptFormat))
+        #expect(updated.contains(AgentGuides.canonicalTranscriptFormat))
         #expect(try !AgentGuides.ensure(directory: folder))
     }
 
@@ -134,9 +132,7 @@ struct AgentGuideTests {
         try Data(custom.utf8).write(to: root)
         _ = MeetingStore(dataDirectory: folder)
         #expect(
-            try AgentGuides.read(directory: folder)
-                == custom + "\n\n" + AgentGuides.liveTranscriptFormat + "\n\n\n" + AgentGuides.savedTranscriptFormat
-                + "\n")
+            try AgentGuides.read(directory: folder) == custom + "\n\n" + AgentGuides.canonicalTranscriptFormat + "\n")
         #expect(try !AgentGuides.ensure(directory: folder))
     }
 

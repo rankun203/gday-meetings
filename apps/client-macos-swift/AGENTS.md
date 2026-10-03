@@ -57,6 +57,7 @@ Read the relevant documents before changing the app:
 - [Continuous transcript paragraphs](../../docs/worklogs/2026-10-02-live-transcript-paragraphs.md): recognition chunk grouping, captured edit ranges, saved adoption, and partial text styling.
 - [Compact live journal](../../docs/worklogs/2026-10-02-compact-live-journal.md): CSV transactions, dictionary references, guide migration, and Meetings branding.
 - [Saved transcript rows](../../docs/worklogs/2026-10-03-saved-transcript-segments.md): append-only timed rows, atomic recent checkpoints, and separate event recovery.
+- [Canonical transcript JSONL](../../docs/worklogs/2026-10-03-canonical-transcript-jsonl.md): one segment store for live capture, display, edits, provider results, and interrupted-recording recovery.
 - [Live speaker continuity](../../docs/worklogs/2026-10-02-live-speaker-continuity.md): carried speaker labels, immutable history, recovery journals, and bounded live updates.
 - [Long recording performance](../../docs/worklogs/2026-10-02-live-recording-performance.md): incremental attribution, bounded delivery, checkpoint persistence, and device-change continuity.
 - [Performance evaluation plan](../../docs/worklogs/2026-10-02-performance-evaluation-plan.md): recording history scaling, summary-generation CPU, Instruments workloads, and acceptance criteria.

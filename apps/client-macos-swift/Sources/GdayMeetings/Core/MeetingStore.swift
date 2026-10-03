@@ -309,6 +309,9 @@ final class MeetingStore: ObservableObject {
                     var disk = try MeetingFolderStorage.read(id: meeting.id, directory: dataDirectory)
                     // NotesStorage independently arbitrates Markdown edits and conflict copies.
                     disk.notes = baseline.notes
+                    // The recording writer owns canonical rows until Stop has
+                    // published its final metadata. Unrelated saves cannot replace them.
+                    if recordingID == meeting.id { disk.transcript = baseline.transcript }
                     var proposed = meeting
                     proposed.notes = baseline.notes
                     var normalizedBaseline = baseline
@@ -320,7 +323,12 @@ final class MeetingStore: ObservableObject {
                     }
                 }
                 let folder = directory(for: meeting.id)
-                for name in ["metadata.json", "content.json", "transcript.json", "summary.md"] {
+                var names = ["metadata.json", "content.json", "summary.md"]
+                let prior = lastSavedLibrary.meetings.first { $0.id == meeting.id }
+                if recordingID != meeting.id && (prior == nil || prior?.transcript != meeting.transcript) {
+                    names += [TranscriptStorage.filename, LiveTranscriptProjection.checkpointName]
+                }
+                for name in names {
                     try transaction.remember(folder.appendingPathComponent(name))
                 }
             }
@@ -351,7 +359,10 @@ final class MeetingStore: ObservableObject {
                 if notesStorage.saved[meeting.id] != meeting.notes {
                     try notesStorage.write(meeting.id, text: meeting.notes)
                 }
-                try MeetingFolderStorage.write(meeting, directory: dataDirectory)
+                let prior = lastSavedLibrary.meetings.first { $0.id == meeting.id }
+                let writeTranscript =
+                    recordingID != meeting.id && (prior == nil || prior?.transcript != meeting.transcript)
+                try MeetingFolderStorage.write(meeting, directory: dataDirectory, writeTranscript: writeTranscript)
 
             }
             try FileEntityStorage.save(

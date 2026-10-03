@@ -246,7 +246,7 @@ extension MeetingStore {
     func summaryDataFilePaths(_ meeting: Meeting, messages: [LLMMessage]) -> [String] {
         var paths = ["metadata.json", "content.json"]
         if !meeting.notes.isEmpty { paths.append("notes.md") }
-        if !meeting.transcript.isEmpty { paths.append("transcript.json") }
+        if !meeting.transcript.isEmpty { paths.append("transcript.jsonl") }
         paths += messages.flatMap { $0.images ?? [] }.map(\.path)
         return paths
     }
@@ -255,14 +255,14 @@ extension MeetingStore {
         // Context chat history belongs to the library, not this meeting folder.
         if !contextual { paths.append("content.json") }
         if !meeting.notes.isEmpty { paths.append("notes.md") }
-        if !meeting.transcript.isEmpty { paths.append("transcript.json") }
+        if !meeting.transcript.isEmpty { paths.append("transcript.jsonl") }
         if !meeting.summary.isEmpty { paths.append("summary.md") }
         return paths
     }
     func summaryDataBodies(_ meeting: Meeting, messages: [LLMMessage]) -> [String] {
         var bodies = ["metadata.json (title, date, duration)", "content.json (language)", "Summary Prompt"]
         if !meeting.notes.isEmpty { bodies.append("notes.md") }
-        if !meeting.transcript.isEmpty { bodies.append("transcript.json") }
+        if !meeting.transcript.isEmpty { bodies.append("transcript.jsonl") }
         if !meeting.personIDs.isEmpty || !meeting.speakers.isEmpty { bodies.append("participant names and notes") }
         bodies += messages.flatMap { $0.images ?? [] }.map { $0.path + " (converted JPEG for summary)" }
         return bodies
@@ -274,7 +274,7 @@ extension MeetingStore {
             "chat instructions",
         ]
         if !meeting.notes.isEmpty { bodies.append("notes.md") }
-        if !meeting.transcript.isEmpty { bodies.append("transcript.json") }
+        if !meeting.transcript.isEmpty { bodies.append("transcript.jsonl") }
         if !meeting.summary.isEmpty { bodies.append("summary.md") }
         if !meeting.speakers.isEmpty { bodies.append("speaker names") }
         return bodies
@@ -284,13 +284,13 @@ extension MeetingStore {
 extension DataEventJournal {
     static func documentSnapshot(directory: URL) -> [String: Data] {
         Dictionary(
-            uniqueKeysWithValues: ["metadata.json", "content.json", "transcript.json", "summary.md"].compactMap {
+            uniqueKeysWithValues: ["metadata.json", "content.json", "transcript.jsonl", "summary.md"].compactMap {
                 name in
                 (try? Data(contentsOf: directory.appendingPathComponent(name))).map { (name, $0) }
             })
     }
     static func recordDocuments(directory: URL, previous: [String: Data]) throws {
-        for name in ["metadata.json", "content.json", "transcript.json", "summary.md"] {
+        for name in ["metadata.json", "content.json", "transcript.jsonl", "summary.md"] {
             try fileChanged(directory.appendingPathComponent(name), previous: previous[name], directory: directory)
         }
     }

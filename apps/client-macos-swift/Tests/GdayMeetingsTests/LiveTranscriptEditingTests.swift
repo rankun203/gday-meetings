@@ -285,7 +285,7 @@ extension LiveTranscriptEditingTests {
                         session: session, source: .system, start: 0, end: 1,
                         text: "First phrase"), final: true, token: token)
                 await controller.flushCheckpoint()
-                #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
+                #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
                 #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
                 do {
                     try FileManager.default.removeItem(at: directory)
@@ -297,16 +297,16 @@ extension LiveTranscriptEditingTests {
                         session: session, source: .system, start: 1, end: 2,
                         text: "Second phrase"), final: true, token: token)
                 await controller.flushCheckpoint()
-                // A journal cannot clear a failed-write warning until a complete snapshot is saved.
-                #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save the live draft") })
+                // A successful canonical checkpoint clears the failed-write warning.
+                #expect(!controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
                 #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
                 controller.receiveTranscriptionFailure("Synthetic system recognition failed.", token: token)
-                #expect(controller.liveTranscriptIssues.count == 3)
+                #expect(controller.liveTranscriptIssues.count == 2)
                 return true
             }, cancel: nil)
         await controller.finish()
-        #expect(controller.liveTranscriptIssues.count == 3)
-        #expect(controller.draft?.effectivePhrases?.map(\.text) == ["First phrase", "Second phrase"])
+        #expect(controller.liveTranscriptIssues.count == 2)
+        #expect(controller.draft?.segments.map(\.text) == ["First phrase Second phrase"])
         controller.begin(
             meetingID: UUID(), language: "en", directory: directory,
             sources: [.microphone], sink: LiveAudioSink(), enabled: false)

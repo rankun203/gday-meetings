@@ -19,8 +19,6 @@ final class LiveTranscriptStream {
     private var speakerMetadata: [UUID: LiveSpeakerIdentity] = [:]
     private var snapshotHead: LiveTranscriptFrozenBlock?
     private var snapshotTail: [LiveTranscriptPhrase] = []
-    private var rawSnapshotHead: LiveTranscriptFrozenBlock?
-    private var rawSnapshotTail: [LiveTranscriptPhrase] = []
     private var pending: [LiveTranscriptPhrase] = []
     private var partials: [LiveTranscriptPhrase] = []
     private var timeline = LiveSpeakerTimeline()
@@ -36,7 +34,6 @@ final class LiveTranscriptStream {
     private var sources: [LiveAudioSource] = [.system]
     private var recognitionEnds: [LiveAudioSource: Double] = [:]
     private var carryReset: [LiveAudioSource: Double] = [:]
-    private var rawHot: [LiveTranscriptPhrase] = []
 
     func frozenRow(at index: Int) -> LiveTranscriptPhrase { displayedFrozen?[index] ?? frozen[index] }
 
@@ -84,8 +81,6 @@ final class LiveTranscriptStream {
         frozenCount = 0
         snapshotHead = nil
         snapshotTail = []
-        rawSnapshotHead = nil
-        rawSnapshotTail = []
         pending = []
         partials = []
         timeline = LiveSpeakerTimeline()
@@ -99,7 +94,6 @@ final class LiveTranscriptStream {
         self.labeling = labeling
         hotFinalized = []
         hotPartials = []
-        rawHot = []
         resetRevision += 1
         revision += 1
     }
@@ -168,18 +162,15 @@ final class LiveTranscriptStream {
     }
 
     var snapshot: LiveTranscriptEffectiveSnapshot {
-        .init(
-            head: snapshotHead, tail: snapshotTail + hotFinalized,
-            rawHead: rawSnapshotHead, rawTail: rawSnapshotTail + rawHot)
+        .init(head: snapshotHead, tail: snapshotTail + hotFinalized)
     }
 
     private func refresh(finishing: Bool = false) {
         attributedPhraseCount = 0
         pending.sort(by: LiveTranscriptPhrase.ordered)
         var carry = previous
-        var ready: [(LiveTranscriptPhrase, [LiveTranscriptPhrase], [LiveTranscriptPhrase])] = []
+        var ready: [(LiveTranscriptPhrase, [LiveTranscriptPhrase])] = []
         var hot: [LiveTranscriptPhrase] = []
-        var raw: [LiveTranscriptPhrase] = []
         var retained: [LiveTranscriptPhrase] = []
         var canSeal = true
         let recognitionCutoff = sources.map { recognitionEnds[$0] ?? 0 }.min() ?? latestTime
@@ -204,16 +195,15 @@ final class LiveTranscriptStream {
                     row.recognizedFinal = true
                     return row
                 }
-                ready.append((phrase, effective, observed))
+                ready.append((phrase, effective))
             }
             else {
                 canSeal = false
                 retained.append(phrase)
                 hot.append(contentsOf: effective)
-                raw.append(contentsOf: observed)
             }
         }
-        for (phrase, effective, observed) in ready {
+        for (phrase, effective) in ready {
             frozen.append(contentsOf: effective)
             if displayedFrozen != nil {
                 let additions = applyEdits(effective, omitFrozenOverrides: true)
@@ -221,7 +211,6 @@ final class LiveTranscriptStream {
                 frozenOverrideIDs.formUnion(Set(additions.map(\.id)).intersection(overrideIDs))
             }
             snapshotTail.append(contentsOf: effective)
-            rawSnapshotTail.append(contentsOf: observed)
             if let last = effective.last { previous[phrase.source] = last }
             sealedThrough[phrase.source] = max(sealedThrough[phrase.source] ?? 0, phrase.end)
             let recognition = RecognitionSource(source: phrase.source, session: phrase.session)
@@ -232,16 +221,11 @@ final class LiveTranscriptStream {
             snapshotHead = LiveTranscriptFrozenBlock(previous: snapshotHead, rows: snapshotTail)
             snapshotTail = []
         }
-        if rawSnapshotTail.count >= 64 {
-            rawSnapshotHead = LiveTranscriptFrozenBlock(previous: rawSnapshotHead, rows: rawSnapshotTail)
-            rawSnapshotTail = []
-        }
         activeOverrides.removeAll { change in
             frozenOverrideIDs.contains(change.id) && change.anchor.end <= (sealedThrough[change.anchor.source] ?? -1)
         }
         pending = retained
         hotFinalized = applyEdits(hot, omitFrozenOverrides: true)
-        rawHot = raw
         hotPartials = partials.sorted(by: LiveTranscriptPhrase.ordered).flatMap { phrase in
             if let reset = carryReset[phrase.source], phrase.end > reset,
                 (carry[phrase.source]?.end ?? 0) <= reset
@@ -262,7 +246,7 @@ final class LiveTranscriptStream {
             }
         }
         // Keep only activity that can still affect the hot window. Frozen labels
-        // and raw word evidence already live in immutable snapshot blocks.
+        // already live in immutable snapshot blocks.
         let oldest = min(
             latestTime - Self.maximumLabelWait,
             min(pending.map(\.start).min() ?? latestTime, partials.map(\.start).min() ?? latestTime))
@@ -324,11 +308,8 @@ final class LiveTranscriptFrozenBlock: Sendable {
 struct LiveTranscriptEffectiveSnapshot: Sendable {
     let head: LiveTranscriptFrozenBlock?
     let tail: [LiveTranscriptPhrase]
-    let rawHead: LiveTranscriptFrozenBlock?
-    let rawTail: [LiveTranscriptPhrase]
 
     var phrases: [LiveTranscriptPhrase] { Self.materialize(head, tail: tail) }
-    var rawPhrases: [LiveTranscriptPhrase] { Self.materialize(rawHead, tail: rawTail) }
 
     private static func materialize(_ head: LiveTranscriptFrozenBlock?, tail: [LiveTranscriptPhrase])
         -> [LiveTranscriptPhrase]

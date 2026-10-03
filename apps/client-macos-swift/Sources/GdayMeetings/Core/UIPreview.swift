@@ -263,7 +263,7 @@ enum UIPreview {
                             dataFlow: DataFlow(
                                 location: .local, targetID: ThisMacProvider.id, targetName: "This Mac",
                                 responseBytes: 1024 + index * 128, startedAt: time, endedAt: time,
-                                bodies: ["live-transcript.json"], filePaths: ["live-transcript.json"],
+                                bodies: ["transcript.jsonl"], filePaths: ["transcript.jsonl"],
                                 purpose: "Saved file"
                             )), directory: folder)
                 }
@@ -572,7 +572,7 @@ extension UIPreview {
                     location: .remote, targetID: UUID(uuidString: "58935856-61B2-4C1F-8A7F-BBD81B7B6743")!,
                     targetName: "Example Provider", domain: "processing.example.invalid",
                     requestBytes: 12288, responseBytes: 4096, startedAt: now.addingTimeInterval(-4), endedAt: now,
-                    bodies: ["notes.md", "transcript.json"], filePaths: ["notes.md", "transcript.json"],
+                    bodies: ["notes.md", "transcript.jsonl"], filePaths: ["notes.md", "transcript.jsonl"],
                     purpose: "Summary (synthetic)")), directory: directory)
     }
 }

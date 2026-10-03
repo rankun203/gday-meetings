@@ -53,7 +53,7 @@ struct LiveTranscriptTests {
                 session: UUID(), source: .microphone, start: 1, end: 3, text: "你好 world",
                 words: [.init(text: "你好", start: 1, end: 2)], locale: "zh-CN"))
         try draft.save(at: directory)
-        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: id) == draft)
+        #expect(try LiveTranscriptDraft.read(at: directory, meetingID: id)?.segments == draft.segments)
         #expect(throws: (any Error).self) { try LiveTranscriptDraft.read(at: directory, meetingID: UUID()) }
         var meeting = Meeting(id: id)
         meeting.transcript = draft.segments
@@ -65,7 +65,7 @@ struct LiveTranscriptTests {
         #expect(revisions[0].speakers == meeting.speakers)
         let mode =
             try FileManager.default.attributesOfItem(
-                atPath: directory.appendingPathComponent("live-transcript.json").path)[.posixPermissions] as? Int
+                atPath: directory.appendingPathComponent(TranscriptStorage.filename).path)[.posixPermissions] as? Int
         #expect(mode == 0o600)
     }
 
@@ -188,7 +188,7 @@ struct LiveTranscriptTests {
         #expect(controller.draft?.phrases.last?.text == "Last  phrase")
         #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID)?.phrases.last?.text == "Last  phrase")
         let phrase = try #require(controller.draft?.phrases.last)
-        #expect(phrase.words == [.init(text: " phrase", start: 1.5, end: 2)])
+        #expect(phrase.words.isEmpty)  // Saved display segments do not retain recognition word events.
         let highlighted = try #require(LiveTranscriptPresentation.newestWordRange(in: phrase))
         #expect(String(phrase.text[highlighted]) == "phrase")
         controller.receive(

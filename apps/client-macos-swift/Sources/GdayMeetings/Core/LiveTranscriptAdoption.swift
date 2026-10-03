@@ -8,15 +8,15 @@ extension LiveTranscriptDraft {
 
 extension MeetingStore {
     func liveTranscriptSource(_ draft: LiveTranscriptDraft, meeting: Meeting) -> TranscriptSource {
-        let file = directory(for: meeting.id).appendingPathComponent("live-transcript.json")
+        let file = directory(for: meeting.id).appendingPathComponent(LiveTranscriptProjection.checkpointName)
         let saved = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         return TranscriptSource(
             id: draft.phrases.sorted(by: LiveTranscriptPhrase.ordered).first?.session ?? meeting.id,
             providerName: draft.provider, generatedAt: saved ?? meeting.createdAt)
     }
 
-    /// Upgrade legacy live-only meetings once, outside view rendering. The marker
-    /// prevents a later deliberate transcript clear from resurrecting the checkpoint.
+    /// Publish speaker and source metadata after an interrupted recording, using
+    /// the same canonical segments that were already loaded from disk.
     func recoverUnadoptedLiveTranscripts() {
         guard libraryWritable else { return }
         for meeting in meetings {
@@ -26,12 +26,11 @@ extension MeetingStore {
 
     func recoverUnadoptedLiveTranscript(_ meeting: Meeting) {
         recoverLiveSourcePlaceholders(meeting)
-        guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted, meeting.transcript.isEmpty,
+        guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
         else { return }
         do {
             if let draft = try LiveTranscriptDraft.recover(at: directory(for: meeting.id), meetingID: meeting.id) {
-                try draft.saveRetiringJournal(at: directory(for: meeting.id))
                 _ = adoptLiveTranscript(draft)
             }
         }
@@ -40,8 +39,8 @@ extension MeetingStore {
         }
     }
 
-    /// Old source labels overlap real detected labels. Recover their meaning only
-    /// from the original checkpoint's matching identities, never from spelling.
+    /// Source labels overlap detected labels. Recover their meaning only from
+    /// the checkpoint's matching identities, never from spelling.
     private func recoverLiveSourcePlaceholders(_ meeting: Meeting) {
         guard libraryWritable, meeting.liveTranscriptAdopted,
             meeting.speakers.contains(where: { $0.sourcePlaceholder == nil }),
@@ -62,10 +61,8 @@ extension MeetingStore {
         if updated.speakers != meeting.speakers { _ = updateMeeting(updated) }
     }
 
-    /// Finalized live text joins the normal editable transcript. The checkpoint
-    /// remains independent, including track sources, words, and coverage gaps.
-    /// Automatic adoption only fills an empty, untouched transcript. Explicit
-    /// recovery may replace it after the UI confirms, preserving the prior revision.
+    /// Publish the recording's source and speaker metadata without copying its
+    /// already saved segments. Explicit replacement preserves a prior revision.
     @discardableResult
     func adoptLiveTranscript(_ draft: LiveTranscriptDraft, replacing: Bool = false) -> Bool {
         guard libraryWritable, draft.hasUsableText,
@@ -84,8 +81,16 @@ extension MeetingStore {
         {
             return true
         }
-        guard replacing || (meeting.transcript.isEmpty && meeting.speakers.isEmpty) else { return false }
-        guard preserveTranscript(meeting) else { return false }
+        guard
+            replacing || (meeting.transcript.isEmpty && meeting.speakers.isEmpty)
+                || meeting.transcript == draft.segments
+        else { return false }
+        if !meeting.transcript.isEmpty
+            && (meeting.transcript != draft.segments
+                || meeting.transcriptSource.map { $0.id != source.id } == true)
+        {
+            guard preserveTranscript(meeting) else { return false }
+        }
         meeting.transcript = draft.segments
         meeting.transcriptSource = source
         meeting.liveTranscriptAdopted = true

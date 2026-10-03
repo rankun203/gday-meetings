@@ -58,8 +58,10 @@ import Testing
         let id = store.createMeeting(title: "Live")
         var draft = LiveTranscriptDraft(meetingID: id, locale: "en")
         draft.accept(.init(session: UUID(), source: .microphone, start: 0, end: 1, text: "Live text"))
+        store.recordingID = id
         try draft.save(at: store.directory(for: id))
         #expect(store.adoptLiveTranscript(draft))
+        store.recordingID = nil
         let source = try #require(store.meeting(id: id)?.transcriptSource)
         #expect(source.providerName == "This Mac")
         #expect(store.adoptLiveTranscript(draft, replacing: true))

@@ -93,8 +93,10 @@ import Testing
                 session: UUID(), source: .system, start: 2, end: 3, text: "Second passage",
                 speakerIdentity: UUID(), diarizationLabel: "sys_01"),
         ]
+        store.recordingID = id
         try draft.save(at: store.directory(for: id))
         #expect(store.adoptLiveTranscript(draft))
+        store.recordingID = nil
         var meeting = try #require(store.meeting(id: id))
         meeting.speakers[0].sourcePlaceholder = nil
         meeting.speakers[0].label = "sys_01"

@@ -1,50 +1,5 @@
 import Foundation
 
-/// One in-flight save and one replacement snapshot keep slow storage off the main actor.
-@MainActor
-final class LiveTranscriptCheckpointWriter {
-    struct Snapshot: Sendable {
-        let draft: LiveTranscriptDraft
-        let directory: URL
-        let report: @MainActor @Sendable (String?) -> Void
-    }
-    private var pending: Snapshot?
-    private var worker: Task<Void, Never>?
-    private let save: @Sendable (LiveTranscriptDraft, URL) throws -> Void
-
-    init(save: @escaping @Sendable (LiveTranscriptDraft, URL) throws -> Void = { try $0.save(at: $1) }) {
-        self.save = save
-    }
-
-    func submit(
-        _ draft: LiveTranscriptDraft, at directory: URL, report: @escaping @MainActor @Sendable (String?) -> Void
-    ) {
-        pending = Snapshot(draft: draft, directory: directory, report: report)
-        guard worker == nil else { return }
-        worker = Task {
-            while let snapshot = pending {
-                pending = nil
-                let save = self.save
-                let issue = await Task.detached(priority: .utility) {
-                    do {
-                        try save(snapshot.draft, snapshot.directory)
-                        return Optional<String>.none
-                    }
-                    catch {
-                        return "Couldn’t save the live draft. Recording continues. Check available storage."
-                    }
-                }.value
-                snapshot.report(issue)
-            }
-            worker = nil
-        }
-    }
-
-    func flush() async {
-        while let worker { await worker.value }
-    }
-}
-
 /// Audio producers never await UI delivery. One worker drains a bounded set of ranges.
 final class LiveTranscriptGapReporter: @unchecked Sendable {
     static let uncertainReason = "Live transcription coverage is uncertain while reporting catches up."

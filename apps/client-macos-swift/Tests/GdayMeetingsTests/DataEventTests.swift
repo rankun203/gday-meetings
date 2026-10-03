@@ -148,6 +148,7 @@ struct DataEventTests {
         var meeting = Meeting(title: "Synthetic meeting")
         meeting.notes = "Synthetic note"
         meeting.summary = "Synthetic summary"
+        meeting.transcript = [.init(speaker: "sys", text: "Synthetic passage")]
         meeting.chat = [.init(role: "user", content: "Synthetic private meeting question")]
         let contextual = store.chatDataBodies(meeting, contextual: true)
         #expect(contextual.contains("context-chats.json (library folder)"))
@@ -157,6 +158,10 @@ struct DataEventTests {
         let direct = store.chatDataBodies(meeting)
         #expect(direct.contains("content.json (chat)"))
         #expect(!direct.contains("context-chats.json (library folder)"))
+        #expect(direct.contains("transcript.jsonl"))
+        #expect(store.chatDataFilePaths(meeting).contains("transcript.jsonl"))
+        #expect(store.summaryDataFilePaths(meeting, messages: []).contains("transcript.jsonl"))
+        #expect(store.summaryDataBodies(meeting, messages: []).contains("transcript.jsonl"))
     }
 
     @MainActor @Test func summaryReceiptReferencesLanguageInContentFile() {

@@ -84,65 +84,6 @@ struct LiveTranscriptDeliveryTests {
         #expect(gaps[2].source == .system && gaps[2].start == 6 && gaps[2].end == 7)
     }
 
-    final class SaveGate: @unchecked Sendable {
-        let started = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        private let lock = NSLock()
-        private(set) var counts: [Int] = []
-        func save(_ draft: LiveTranscriptDraft, _ directory: URL) throws {
-            lock.lock()
-            counts.append(draft.phrases.count)
-            let first = counts.count == 1
-            lock.unlock()
-            if first {
-                started.signal()
-                release.wait()
-            }
-            try draft.save(at: directory)
-        }
-    }
-
-    @MainActor
-    @Test func checkpointCoalescesPendingSnapshotsAndFlushesNewest() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let gate = SaveGate()
-        let writer = LiveTranscriptCheckpointWriter { try gate.save($0, $1) }
-        var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "en")
-        writer.submit(draft, at: directory) { _ in }
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                gate.started.wait()
-                continuation.resume()
-            }
-        }
-        for index in 0..<100 {
-            draft.phrases.append(
-                .init(
-                    session: UUID(), source: .system, start: Double(index), end: Double(index + 1),
-                    text: "Example phrase."))
-            writer.submit(draft, at: directory) { _ in }
-        }
-        gate.release.signal()
-        await writer.flush()
-        let saved = try JSONDecoder().decode(
-            LiveTranscriptDraft.self, from: Data(contentsOf: directory.appendingPathComponent("live-transcript.json")))
-        #expect(saved.phrases.count == 100)
-        #expect(gate.counts == [0, 100])
-    }
-
-    @MainActor
-    @Test func checkpointFailureIsReportedBeforeFlushReturns() async {
-        let writer = LiveTranscriptCheckpointWriter { _, _ in throw CocoaError(.fileWriteNoPermission) }
-        var issue: String?
-        writer.submit(LiveTranscriptDraft(meetingID: UUID(), locale: "en"), at: URL(fileURLWithPath: "/tmp")) {
-            issue = $0
-        }
-        await writer.flush()
-        #expect(issue?.contains("Couldn’t save") == true)
-    }
-
     @Test(arguments: [512, 4800])
     func pullInputUsesDurationBudgetAndContinuesAfterDeviceGap(frames: AVAudioFrameCount) async throws {
         guard #available(macOS 26.0, *) else { return }
