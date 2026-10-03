@@ -7,7 +7,7 @@ scope: macos-performance-runbook
 
 # One-hour recording, Notes, and Summary test
 
-Repeat the final speaker-enabled run using this checklist. Append measurements to the [endurance worklog](2026-10-02-recording-endurance.md); keep real meeting content and raw traces outside the repository.
+Repeat the final speaker-enabled run using this checklist. Append measurements to the [endurance worklog](../../../docs/worklogs/2026-10-02-recording-endurance.md); keep real meeting content and raw traces outside the repository.
 
 ## Prepare
 
@@ -57,7 +57,7 @@ Use the configured, authorized Summary provider. If unavailable, unconfigured, o
 
 Report recording and interaction timelines as separate SVGs with outlined fonts. Keep gaps open. CPU uses one core as 100%; memory means physical footprint. GPU/ANE values are active wall time over actual trace duration, not device-capacity utilization. App GPU is included in system GPU; ANE may be system-wide. Do not add device percentages; empty Core ML tables do not establish absence of model execution.
 
-Prior repeat reference: approximately **47% app CPU**, **22.5% main-thread CPU**, **0.78–0.84% app GPU active time**, and **15.7–17.0% system ANE active time**. These are descriptive, not pass/fail thresholds. Its roughly 1 GiB save footprint was measured on an older build; source fixes need a new measured run. See the [evaluation plan](2026-10-02-performance-evaluation-plan.md) for responsiveness criteria.
+Prior repeat reference: approximately **47% app CPU**, **22.5% main-thread CPU**, **0.78–0.84% app GPU active time**, and **15.7–17.0% system ANE active time**. These are descriptive, not pass/fail thresholds. Its roughly 1 GiB save footprint was measured on an older build; source fixes need a new measured run. See the [evaluation plan](../../../docs/worklogs/2026-10-02-performance-evaluation-plan.md) for responsiveness criteria.
 
 ## Technical debt
 

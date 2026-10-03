@@ -76,7 +76,7 @@ All three captures observed **zero app GPU and system Neural Engine activity**, 
 | Second request startup | 01:08:36.649–57.637 | 20.49 / 20.09 | Request began 01:08:52.859; trace ended before Notes/Summary tab changes and the 100.6% sample |
 | Later output, no UI polling | 01:10:54.420–01:11:15.387 | 14.05 / 13.55 | Request began 01:10:34.160; trace covers later output and return toward idle, not the complete request |
 
-Notes and Summary tabs were changed during the second request, but after its trace ended. Saved meetings were switched after generation completed. Those interactions therefore lack overlapping stack captures; no measured input-latency or navigation-during-streaming conclusion is claimed. Use the [repeat runbook](2026-10-03-speaker-repeat-runbook.md) to align a short CPU/hang capture with incoming output and measure visible-versus-hidden Summary at fixed output sizes and chunk cadence. Keep heavyweight GPU tracing separate if it prevents covering the relevant UI interval.
+Notes and Summary tabs were changed during the second request, but after its trace ended. Saved meetings were switched after generation completed. Those interactions therefore lack overlapping stack captures; no measured input-latency or navigation-during-streaming conclusion is claimed. Use the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) to align a short CPU/hang capture with incoming output and measure visible-versus-hidden Summary at fixed output sizes and chunk cadence. Keep heavyweight GPU tracing separate if it prevents covering the relevant UI interval.
 
 The final Summary was verified in the app and persisted in `summary.md` (4,027 bytes). The three new raw traces were removed after aggregate verification; numeric results, TOCs, export hashes, and private provenance remain. This follow-up supersedes the earlier pending-approval status; the earlier blocked attempt remains an idle observation.
 
@@ -221,6 +221,6 @@ No application code changed. This experiment retains measurement limitations:
 - **Sequential workloads and caches:** repeat fixed synthetic material in fresh processes, with no competing builds, for controlled mode comparisons.
 - **Sparse first-phase accelerators:** the final repeat improves coverage; it cannot reconstruct missing historical device activity.
 - **Rolling trace retention:** intermediate detailed stacks are discarded after numeric verification to bound disk usage. Re-capture anomalies that need deeper stack/allocation analysis.
-- **Summary generation:** temporary one-core CPU was reproduced, but the strongest spikes lack overlapping stacks. Align output arrival with a CPU/hang capture before attributing the cause. See the [repeat runbook](2026-10-03-speaker-repeat-runbook.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
+- **Summary generation:** temporary one-core CPU was reproduced, but the strongest spikes lack overlapping stacks. Align output arrival with a CPU/hang capture before attributing the cause. See the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
 
 SVG text is embedded as vector outlines to avoid viewer font substitution. The exported SVG is rasterized only for visual checking; the worklog uses the SVG.

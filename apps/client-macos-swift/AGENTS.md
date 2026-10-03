@@ -17,6 +17,7 @@ Read the relevant documents before changing the app:
 - [Audio design](docs/AUDIO_DESIGN.md): capture architecture, permissions, encoding, and audio lifecycle.
 - [UI design](docs/UI_DESIGN.md): Liquid Glass defaults, accessibility, interaction, and layout rules.
 - [UI Preview](docs/UI_PREVIEW.md): isolated UI validation, synthetic fixtures, and preview versus full-app behavior.
+- [Performance testing](docs/PERFORMANCE_TESTING.md): repeatable one-hour recording, Notes, Summary, navigation, provider readiness, and resource measurement checklist.
 - [File transfer](../../docs/protocols/file-transfer.md): temporary audio uploads for URL-based workers.
 - [Service provider protocols](../../docs/protocols/README.md): connection checks and shared capability rules.
 - [Transcription](../../docs/protocols/transcription.md), [Speaker Labels](../../docs/protocols/diarization.md), [Summaries](../../docs/protocols/summarization.md), [Search](../../docs/protocols/search.md), and [Playback](../../docs/protocols/playback.md): capability contracts and adapter limits.
