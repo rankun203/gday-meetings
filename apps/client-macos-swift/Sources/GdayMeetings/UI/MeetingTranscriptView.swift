@@ -216,7 +216,7 @@ struct MeetingTranscriptView: View {
         let colorIndices = TranscriptSpeakerPalette.indices(for: source.map(colorKey))
         displayRows = source.map { segment in
             TranscriptDisplayRow(
-                id: segment.id, start: segment.start,
+                id: segment.id, start: segment.start, end: segment.end,
                 speaker: segment.speakerID.flatMap { names[$0] } ?? SpeakerLabelPresentation.display(segment.speaker),
                 speakerID: segment.speakerID,
                 text: String(segment.text.drop(while: { $0.isWhitespace })),

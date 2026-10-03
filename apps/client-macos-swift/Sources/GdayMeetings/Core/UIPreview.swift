@@ -118,7 +118,7 @@ enum UIPreview {
                         start: 6, end: 10, speaker: second.label,
                         text: "The next step is to check the meeting notes.", speakerID: second.id),
                     TranscriptSegment(
-                        start: 11, end: 15, speaker: third.label,
+                        start: 8, end: 15, speaker: third.label,
                         text: "I’ll update the schedule after this call.", speakerID: third.id),
                 ]
                 if ProcessInfo.processInfo.arguments.contains("--transcript-layout")
@@ -141,10 +141,9 @@ enum UIPreview {
                     id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
                 store.updateMeeting(conversation)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
-                live.accept(
-                    .init(
-                        session: UUID(), source: .system, start: 1, end: 4,
-                        text: "Synthetic live draft for reviewing transcript revisions.", locale: "en-AU"))
+                // The checkpoint shares the canonical segment store with the
+                // saved transcript, so retain the conversation's timed rows.
+                live.savedSegments = conversation.transcript
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")

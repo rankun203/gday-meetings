@@ -5,13 +5,14 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct NativeTranscriptTests {
-    @Test func timestampRevisionClearsUntouchedPlaybackCell() throws {
+    @Test func timestampRevisionPreservesUntouchedOverlappingPlaybackCell() throws {
         let playback = MeetingPlayback()
         let meeting = Meeting(title: "Synthetic playback revision")
         playback.select(meeting: meeting, files: [])
         playback.progress.update(5)
-        let first = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "First")
-        let second = TranscriptDisplayRow(id: UUID(), start: 10, speaker: "", speakerID: nil, text: "Second")
+        let first = TranscriptDisplayRow(id: UUID(), start: 0, end: 10, speaker: "", speakerID: nil, text: "First")
+        let second = TranscriptDisplayRow(
+            id: UUID(), start: 10, end: 11, speaker: "", speakerID: nil, text: "Second")
         var view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: false, editable: true, canPlay: true,
             playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
@@ -28,20 +29,27 @@ import Testing
         coordinator.settleLayout()
         let untouched = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? TranscriptNativeCell)
         #expect(untouched.isPlaybackRow)
-        view.rows[1] = TranscriptDisplayRow(id: second.id, start: 3, speaker: "", speakerID: nil, text: "Second")
+        view.rows[1] = TranscriptDisplayRow(
+            id: second.id, start: 3, end: 8, speaker: "", speakerID: nil, text: "Second")
         view.generation += 1
         coordinator.update(view)
         #expect(coordinator.activeRow == 1)
-        #expect(!untouched.isPlaybackRow)
+        #expect(untouched.isPlaybackRow)
         let current = try #require(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? TranscriptNativeCell)
         #expect(current.isPlaybackRow)
+        playback.progress.update(9)
+        #expect(untouched.isPlaybackRow)
+        #expect(!current.isPlaybackRow)
+        playback.progress.update(10)
+        #expect(!untouched.isPlaybackRow)
+        #expect(coordinator.activeRows.isEmpty)
         coordinator.tearDown()
     }
 
     @Test func playbackHighlightFollowsClockSeekAndMeetingWithoutReloadingRows() {
         let meetingID = UUID()
         let rows = [0.0, 2, 5, 14, 18].map {
-            TranscriptDisplayRow(id: UUID(), start: $0, speaker: "Alex", speakerID: nil, text: "At \($0)")
+            TranscriptDisplayRow(id: UUID(), start: $0, end: $0 + 1, speaker: "Alex", speakerID: nil, text: "At \($0)")
         }
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: true, editable: true, canPlay: true,
@@ -71,7 +79,7 @@ import Testing
         let playback = MeetingPlayback()
         let meeting = Meeting(title: "Clock")
         let rows = [0.0, 2, 5].map {
-            TranscriptDisplayRow(id: UUID(), start: $0, speaker: "", speakerID: nil, text: "At \($0)")
+            TranscriptDisplayRow(id: UUID(), start: $0, end: $0 + 1, speaker: "", speakerID: nil, text: "At \($0)")
         }
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
@@ -91,6 +99,68 @@ import Testing
         #expect(coordinator.activeRow == 0)
         playback.progress.scrub(to: nil)
         #expect(coordinator.activeRow == 2)
+    }
+
+    @Test func overlappingPlaybackHighlightsEveryIntervalAndClearsExpiredRows() throws {
+        let playback = MeetingPlayback()
+        let meeting = Meeting(title: "Overlapping sources")
+        // Deliberately unsorted, including equal starts and nested intervals.
+        let intervals: [(Double, Double, String)] = [
+            (4, 6, "System Audio"), (1, 10, "Microphone"), (4, 8, "System Audio"),
+            (12, 14, "Microphone"), (6, 6, "Empty"), (8, 7, "Invalid"),
+            (.nan, 20, "Invalid"), (0, .infinity, "Invalid"),
+        ]
+        let rows = intervals.map {
+            TranscriptDisplayRow(id: UUID(), start: $0.0, end: $0.1, speaker: $0.2, speakerID: nil, text: "Example")
+        }
+        var view = NativeTranscriptView(
+            rows: rows, generation: 1, showsSpeakers: true, editable: true, canPlay: true,
+            playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let table = TranscriptNativeTable()
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.update(view)
+        playback.select(meeting: meeting, files: [])
+        playback.progress.update(4)
+        #expect(coordinator.activeRows == [0, 1, 2])
+        #expect(coordinator.activeRow == 2)
+        for row in 0..<4 {
+            let cell = TranscriptNativeCell()
+            coordinator.configure(cell, for: rows[row])
+            #expect(cell.isPlaybackRow == (row < 3))
+            let nativeRow = try #require(coordinator.tableView(table, rowViewForRow: row) as? TranscriptNativeRowView)
+            #expect(nativeRow.isPlaybackRow == (row < 3))
+        }
+        playback.progress.update(6)
+        #expect(coordinator.activeRows == [1, 2])
+        playback.progress.update(8)
+        #expect(coordinator.activeRows == [1])
+        playback.progress.update(10)
+        #expect(coordinator.activeRows.isEmpty)
+        playback.progress.update(12)
+        #expect(coordinator.activeRows == [3])
+        playback.progress.scrub(to: 5)
+        #expect(coordinator.activeRows == [0, 1, 2])
+        playback.progress.scrub(to: nil)
+        #expect(coordinator.activeRows == [3])
+        playback.progress.update(5)
+        view.rows = [rows[3]]
+        view.generation += 1
+        coordinator.update(view)
+        #expect(coordinator.activeRows.isEmpty)
+        playback.progress.update(12)
+        #expect(coordinator.activeRows == [0])
+        coordinator.updatePlayback(meetingID: UUID(), time: 12)
+        #expect(coordinator.activeRows.isEmpty)
+        coordinator.updatePlayback(meetingID: meeting.id, time: .nan)
+        #expect(coordinator.activeRows.isEmpty)
+        coordinator.updatePlayback(meetingID: meeting.id, time: -1)
+        #expect(coordinator.activeRows.isEmpty)
+        #expect(coordinator.heights.measurements == 0)
+        coordinator.tearDown()
     }
 
     @Test func speakerForegroundContrastsWithTintedChipInLightAndDarkAppearance() {
@@ -128,7 +198,7 @@ import Testing
         playback.progress.update(1_000)
         let rows = (0..<2_000).map {
             TranscriptDisplayRow(
-                id: UUID(), start: Double($0), speaker: "Alex", speakerID: nil,
+                id: UUID(), start: Double($0), end: Double($0) + 1, speaker: "Alex", speakerID: nil,
                 text: String(repeating: "Wrapped transcript content. ", count: $0 % 3 + 1))
         }
         var view = NativeTranscriptView(
@@ -158,7 +228,8 @@ import Testing
         coordinator.update(view)
         coordinator.settleLayout()
         #expect(coordinator.rows.count == 3)
-        #expect(table.rows(in: scroll.contentView.bounds).contains(2))
+        #expect(coordinator.activeRows.isEmpty)
+        #expect(scroll.contentView.bounds.minY == 0)
         view.meetingID = UUID()
         coordinator.update(view)
         coordinator.settleLayout()
@@ -181,9 +252,9 @@ import Testing
     @Test func speakerChipsFollowPersonIdentityAndUnassignedOutline() {
         let person = UUID()
         let first = TranscriptDisplayRow(
-            id: UUID(), start: 0, speaker: "Alex", speakerID: UUID(), text: "", personID: person)
+            id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: UUID(), text: "", personID: person)
         let second = TranscriptDisplayRow(
-            id: UUID(), start: 1, speaker: "Alex", speakerID: UUID(), text: "", personID: person)
+            id: UUID(), start: 1, end: 2, speaker: "Alex", speakerID: UUID(), text: "", personID: person)
         let cell = TranscriptNativeCell(frame: NSRect(x: 0, y: 0, width: 600, height: 28))
         cell.configure(first, showsSpeakers: true)
         cell.layout()
@@ -193,7 +264,7 @@ import Testing
         cell.configure(second, showsSpeakers: true)
         #expect(cell.badge.tint == tint)
         cell.configure(
-            TranscriptDisplayRow(id: UUID(), start: 2, speaker: "mic_00", speakerID: UUID(), text: ""),
+            TranscriptDisplayRow(id: UUID(), start: 2, end: 3, speaker: "mic_00", speakerID: UUID(), text: ""),
             showsSpeakers: true)
         #expect(cell.badge.unresolved)
     }
@@ -201,7 +272,8 @@ import Testing
     @Test func manualScrollCancelsAndTemporarilySuppressesPlaybackFollow() async throws {
         let id = UUID()
         let rows = (0..<100).map {
-            TranscriptDisplayRow(id: UUID(), start: Double($0), speaker: "", speakerID: nil, text: "Line \($0)")
+            TranscriptDisplayRow(
+                id: UUID(), start: Double($0), end: Double($0) + 1, speaker: "", speakerID: nil, text: "Line \($0)")
         }
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
@@ -261,7 +333,7 @@ import Testing
         let cache = TranscriptHeightCache()
         let id = UUID()
         let row = TranscriptDisplayRow(
-            id: id, start: 0, speaker: "Alex", speakerID: nil,
+            id: id, start: 0, end: 1, speaker: "Alex", speakerID: nil,
             text: String(repeating: "Words that wrap across transcript lines. ", count: 8))
         let wide = cache.height(row, width: 800, showsSpeakers: true)
         for _ in 0..<1_000 { #expect(cache.height(row, width: 800, showsSpeakers: true) == wide) }
@@ -269,14 +341,16 @@ import Testing
         let narrow = cache.height(row, width: 350, showsSpeakers: true)
         #expect(narrow > wide)
         #expect(cache.measurements == 2)
-        let changed = TranscriptDisplayRow(id: id, start: 0, speaker: "Alex", speakerID: nil, text: "Short")
+        let changed = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "Short")
         #expect(cache.height(changed, width: 350, showsSpeakers: true) < narrow)
         #expect(cache.measurements == 3)
     }
 
     @Test func recycledCellCommitsToOriginalSegmentBeforeNewBinding() {
-        let first = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "Alex", speakerID: nil, text: "First")
-        let second = TranscriptDisplayRow(id: UUID(), start: 4, speaker: "Sam", speakerID: nil, text: "Second")
+        let first = TranscriptDisplayRow(
+            id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "First")
+        let second = TranscriptDisplayRow(
+            id: UUID(), start: 4, end: 5, speaker: "Sam", speakerID: nil, text: "Second")
         var saved: [(UUID, String)] = []
         let view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: true,
@@ -298,7 +372,8 @@ import Testing
     }
 
     @Test func nativeFieldEditorAcceptsDraftAndCommitsOnce() {
-        let row = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "Alex", speakerID: nil, text: "Original")
+        let row = TranscriptDisplayRow(
+            id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "Original")
         var saved: [String] = []
         let view = NativeTranscriptView(
             rows: [row], generation: 1, showsSpeakers: true,
@@ -330,7 +405,8 @@ import Testing
     }
 
     @Test func cancelledNativeEditRestoresReadingTextWithoutSaving() {
-        let row = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "Alex", speakerID: nil, text: "Original")
+        let row = TranscriptDisplayRow(
+            id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "Original")
         var saved: [String] = []
         let view = NativeTranscriptView(
             rows: [row], generation: 1, showsSpeakers: true,

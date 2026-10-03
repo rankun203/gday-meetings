@@ -5,6 +5,7 @@ import SwiftUI
 struct TranscriptDisplayRow: Identifiable, Equatable {
     let id: UUID
     let start: Double
+    let end: Double
     let speaker: String
     let speakerID: UUID?
     let text: String
@@ -108,7 +109,9 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var followTarget: CGFloat = 0
         private var userScrollUntil: TimeInterval = 0
         private weak var observedPlayback: MeetingPlayback?
-        private var playbackOrder: [(start: Double, row: Int)] = []
+        private var playbackOrder: [(start: Double, end: Double, row: Int)] = []
+        private var playbackMaxEnds: [Double] = []
+        private(set) var activeRows: Set<Int> = []
         private(set) var activeRow: Int?
         private var editedID: UUID?
         private weak var editedCell: TranscriptNativeCell?
@@ -172,18 +175,27 @@ struct NativeTranscriptView: NSViewRepresentable {
                 liveFrozenCount = live.frozenCount
                 liveResetRevision = live.resetRevision
                 playbackOrder.removeAll(keepingCapacity: true)
+                playbackMaxEnds.removeAll(keepingCapacity: true)
             }
             else {
                 update = TranscriptRowUpdate(previous: rows, current: value.rows)
                 rows = value.rows
-                playbackOrder = rows.enumerated().filter { $0.element.start.isFinite }.map {
-                    ($0.element.start, $0.offset)
+                playbackOrder = rows.enumerated().filter {
+                    $0.element.start.isFinite && $0.element.end.isFinite && $0.element.end > $0.element.start
+                }.map {
+                    ($0.element.start, $0.element.end, $0.offset)
                 }
                 .sorted { $0.start == $1.start ? $0.row < $1.row : $0.start < $1.start }
+                var maximumEnd = -Double.infinity
+                playbackMaxEnds = playbackOrder.map { interval in
+                    maximumEnd = max(maximumEnd, interval.end)
+                    return maximumEnd
+                }
                 heights.removeMissingIDs(Set(rows.map(\.id)))
             }
             generation = value.generation
             activeRow = nil
+            activeRows.removeAll(keepingCapacity: true)
             withoutLayoutAnimation {
                 if sourceChanged || presentationChanged || liveReset {
                     table.reloadData()
@@ -234,6 +246,7 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func updatePlayback(meetingID: UUID?, time: Double, follows: Bool = true) {
             var next: Int?
+            var nextRows: Set<Int> = []
             if let meetingID, meetingID == parent.meetingID, time.isFinite {
                 var low = 0
                 var high = playbackOrder.count
@@ -246,18 +259,28 @@ struct NativeTranscriptView: NSViewRepresentable {
                         high = middle
                     }
                 }
-                if low > 0 { next = playbackOrder[low - 1].row }
+                // Earlier intervals can outlast later starts, even within the same
+                // source. Stop only when every preceding interval has ended.
+                while low > 0 && playbackMaxEnds[low - 1] > time {
+                    low -= 1
+                    let interval = playbackOrder[low]
+                    if time < interval.end {
+                        nextRows.insert(interval.row)
+                        if next == nil { next = interval.row }
+                    }
+                }
             }
-            guard next != activeRow else { return }
-            let previous = activeRow
+            guard nextRows != activeRows else { return }
+            let changedRows = activeRows.symmetricDifference(nextRows)
+            activeRows = nextRows
             activeRow = next
             if next == nil { cancelFollow() }
-            for row in [previous, next].compactMap({ $0 }) {
+            for row in changedRows {
                 if let view = table?.rowView(atRow: row, makeIfNecessary: false) as? TranscriptNativeRowView {
-                    view.isPlaybackRow = row == next
+                    view.isPlaybackRow = nextRows.contains(row)
                 }
                 (table?.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptNativeCell)?.isPlaybackRow =
-                    row == next
+                    nextRows.contains(row)
             }
             if follows { followActiveRow(force: false) }
         }
@@ -340,11 +363,11 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let view = TranscriptNativeRowView()
-            view.isPlaybackRow = row == activeRow
+            view.isPlaybackRow = activeRows.contains(row)
             return view
         }
         func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
-            (rowView as? TranscriptNativeRowView)?.isPlaybackRow = row == activeRow
+            (rowView as? TranscriptNativeRowView)?.isPlaybackRow = activeRows.contains(row)
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             let id = NSUserInterfaceItemIdentifier("transcript-cell")
@@ -360,7 +383,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             // reusable cell is rebound to a different row.
             if cell === editedCell && cell.rowID != value.id { finishEdit() }
             cell.configure(value, showsSpeakers: parent.showsSpeakers)
-            cell.isPlaybackRow = activeRow.map { rows[$0].id == value.id } ?? false
+            cell.isPlaybackRow = activeRows.contains { rows[$0].id == value.id }
             cell.allowsEditing = parent.editable
             cell.body.delegate = self
             cell.play = parent.canPlay ? { [weak self] in self?.parent.play(value.start) } : nil

@@ -51,7 +51,7 @@ Use a brief opacity transition when the bar appears or disappears, respecting Re
 
 ## Transcript playback feedback
 
-- Highlight the transcript segment at the current playback position, including after waveform seeking or scrubbing. Keep the position highlight when paused; remove it when another meeting owns playback.
+- Highlight every transcript segment whose interval contains the current playback position, including overlapping sources and waveform seeking or scrubbing. Include the start and exclude the end; show no highlight during gaps. Keep the position highlights when paused; remove them when another meeting owns playback.
 - Use an accent-tinted row for the playback position and a quieter neutral background for pointer hover. Clicking a row must not leave a persistent selection background that looks like the playback position.
 - Use compact rounded speaker chips with a stable color for each person (or speaker label when unassigned). Fit the chip to its name inside the speaker column. Unassigned speakers have a dotted outline; automatically matched people count as assigned. Keep names readable and expose assignment state without relying on color alone. Badge colors do not indicate playback.
 - Opening a meeting or returning to Transcript positions the viewport immediately after layout settles. Width changes preserve the visible passage without animating individual row heights. Only subsequent playback following animates the complete scroll surface.

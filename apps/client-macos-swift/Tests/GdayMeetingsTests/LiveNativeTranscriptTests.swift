@@ -101,7 +101,7 @@ import Testing
     @Test func unidentifiedBeginningKeepsTextWithoutAnEmptyBadge() {
         let cell = TranscriptNativeCell()
         cell.configure(
-            TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "Opening words"),
+            TranscriptDisplayRow(id: UUID(), start: 0, end: 1, speaker: "", speakerID: nil, text: "Opening words"),
             showsSpeakers: true)
         #expect(cell.badge.isHidden)
         #expect(cell.body.stringValue == "Opening words")
@@ -168,7 +168,7 @@ import Testing
 
     @Test func provisionalUnderlineEndsWhenFinalized() {
         var row = TranscriptDisplayRow(
-            id: UUID(), start: 0, speaker: "Speaker 1", speakerID: UUID(), text: "A changing phrase",
+            id: UUID(), start: 0, end: 1, speaker: "Speaker 1", speakerID: UUID(), text: "A changing phrase",
             isProvisional: true, recentWordRanges: [NSRange(location: 2, length: 15)])
         let cell = TranscriptNativeCell()
         cell.configure(row, showsSpeakers: true)
@@ -213,7 +213,7 @@ import Testing
     }
 
     @Test func liveTimestampDoesNotAdvertisePlayback() {
-        let row = TranscriptDisplayRow(id: UUID(), start: 3, speaker: "", speakerID: nil, text: "Example")
+        let row = TranscriptDisplayRow(id: UUID(), start: 3, end: 4, speaker: "", speakerID: nil, text: "Example")
         let cell = TranscriptNativeCell()
         cell.configure(row, showsSpeakers: false)
         #expect(cell.time.accessibilityLabel() == "00:03")
@@ -225,7 +225,7 @@ import Testing
 
     @Test func refreshPreservesActiveEditAndCoalescesRows() async throws {
         let id = UUID()
-        let row = TranscriptDisplayRow(id: id, start: 0, speaker: "", speakerID: nil, text: "Original")
+        let row = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "", speakerID: nil, text: "Original")
         var saves: [(UUID, String)] = []
         var pauses = 0
         var view = NativeTranscriptView(
@@ -242,7 +242,9 @@ import Testing
         cell.body.stringValue = "Manual correction"
         view.generation = 2
         view.followsLive = false
-        view.rows = [TranscriptDisplayRow(id: id, start: 0, speaker: "", speakerID: nil, text: "Automatic revision")]
+        view.rows = [
+            TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "", speakerID: nil, text: "Automatic revision")
+        ]
         coordinator.update(view)
         coordinator.settleLayout()
         #expect(cell.body.isEditable)
@@ -260,8 +262,8 @@ import Testing
     }
 
     @Test func nativeRefreshSkipsUnchangedRowsAndReloadsOnlyRevisedRow() {
-        let first = TranscriptDisplayRow(id: UUID(), start: 0, speaker: "", speakerID: nil, text: "First")
-        let second = TranscriptDisplayRow(id: UUID(), start: 1, speaker: "", speakerID: nil, text: "Second")
+        let first = TranscriptDisplayRow(id: UUID(), start: 0, end: 1, speaker: "", speakerID: nil, text: "First")
+        let second = TranscriptDisplayRow(id: UUID(), start: 1, end: 2, speaker: "", speakerID: nil, text: "Second")
         var view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: false,
             editable: true, canPlay: false, followsLive: false, play: { _ in }, save: { _, _ in },
@@ -277,7 +279,8 @@ import Testing
         coordinator.update(view)
         #expect(table.fullReloads == initialReloads)
         #expect(table.changedRows.isEmpty)
-        view.rows[1] = TranscriptDisplayRow(id: second.id, start: 1, speaker: "", speakerID: nil, text: "Revised")
+        view.rows[1] = TranscriptDisplayRow(
+            id: second.id, start: 1, end: 2, speaker: "", speakerID: nil, text: "Revised")
         view.generation += 1
         coordinator.update(view)
         #expect(table.fullReloads == initialReloads)
@@ -289,7 +292,8 @@ import Testing
         var pauses = 0
         var view = NativeTranscriptView(
             rows: (0..<100).map {
-                TranscriptDisplayRow(id: UUID(), start: Double($0), speaker: "", speakerID: nil, text: "Line \($0)")
+                TranscriptDisplayRow(
+                    id: UUID(), start: Double($0), end: Double($0) + 1, speaker: "", speakerID: nil, text: "Line \($0)")
             }, generation: 1, showsSpeakers: false, editable: true, canPlay: false,
             followsLive: true, pauseLiveFollowing: { pauses += 1 }, play: { _ in }, save: { _, _ in },
             speakerPicker: { _, _ in AnyView(EmptyView()) })

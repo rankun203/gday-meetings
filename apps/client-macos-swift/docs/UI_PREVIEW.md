@@ -24,6 +24,8 @@ This uses the production SwiftUI screens with a clearly marked preview banner, g
 
 The bundle flag `GdayUIPreview` enables this mode; developers can also launch the executable with `--ui-preview`. The separate preview bundle identifier isolates window/preferences state and lets the normal app remain open. Do not use preview results as evidence of real capture, permissions, or speaker output. A provider check validates its documented connection operation; a successful transcription test validates the tested service path. Neither establishes performance or accuracy for other recordings.
 
+The synthetic conversation includes overlapping microphone and system passages from 00:08 to 00:10. Seek to 00:08 and confirm both rows highlight; at 00:10 only the microphone passage remains active, and at 00:15 neither row highlights.
+
 The synthetic conversation includes multiple tags and manually assigned, automatically matched, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignment, reassignment, removal, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, Tags, and Tasks; providers are configured in Settings.
 
 ## Task queue

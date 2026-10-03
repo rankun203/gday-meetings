@@ -161,7 +161,7 @@ enum LiveTranscriptDisplay {
             let key = TranscriptSpeakerPalette.displayKey(
                 personID: personID, track: phrase.source.rawValue, label: phrase.speakerLabel)
             return TranscriptDisplayRow(
-                id: phrase.id, start: phrase.start,
+                id: phrase.id, start: phrase.start, end: phrase.end,
                 speaker: personID.flatMap { names[$0] } ?? phrase.speakerLabel,
                 speakerID: phrase.id, text: phrase.text,
                 personID: personID, speakerColorIndex: TranscriptSpeakerPalette.index(for: key),

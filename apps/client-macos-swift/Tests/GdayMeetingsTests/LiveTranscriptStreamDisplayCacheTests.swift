@@ -55,8 +55,12 @@ import Testing
 
     @Test func suffixDiffUsesAbsoluteIndexes() {
         let id = UUID()
-        let previous = [TranscriptDisplayRow(id: id, start: 1, speaker: "sys_01", speakerID: nil, text: "First")]
-        let current = [TranscriptDisplayRow(id: id, start: 1, speaker: "sys_01", speakerID: nil, text: "Updated")]
+        let previous = [
+            TranscriptDisplayRow(id: id, start: 1, end: 2, speaker: "sys_01", speakerID: nil, text: "First")
+        ]
+        let current = [
+            TranscriptDisplayRow(id: id, start: 1, end: 2, speaker: "sys_01", speakerID: nil, text: "Updated")
+        ]
         let update = TranscriptRowUpdate(previous: previous, current: current, offset: 10000)
         #expect(update.changed == IndexSet(integer: 10000))
         #expect(update.inserted.isEmpty)

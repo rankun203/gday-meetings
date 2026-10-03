@@ -32,6 +32,7 @@ Read the relevant documents before changing the app:
 - [New recording list reveal](../../docs/worklogs/2026-09-29-recording-list-reveal.md): recording creation events, viewport anchoring, and synthetic insertion validation.
 - [File library implementation](../../docs/worklogs/2026-09-27-file-library-index.md): indexed paging, document transactions, and retained scalability limits.
 - [Expandable sections](../../docs/worklogs/2026-09-28-disclosure-rows.md): shared full-row disclosure interaction and validation.
+- [Overlapping transcript playback](../../docs/worklogs/2026-10-03-overlapping-transcript-playback.md): concurrent interval highlights, end boundaries, and validation.
 - [Transcript playback highlight](../../docs/worklogs/2026-09-28-transcript-playback-highlight.md): playback clock, seeking, hover, and speaker badge feedback.
 - [Conditional task status bar](../../docs/worklogs/2026-09-28-conditional-task-bar.md): visibility, layout, and validation.
 - [Task attention](../../docs/worklogs/2026-10-01-task-attention.md): visible review controls and failed-task ordering.
