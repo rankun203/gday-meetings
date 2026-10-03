@@ -25,6 +25,8 @@ Read the relevant documents before changing the app:
 - [Audio dependencies](ThirdParty/README.md): pinned offline source builds, licenses, and dependency upgrades.
 - [Transcript JSONL migration](scripts/migrations/README.md): explicit backed-up conversion of legacy saved arrays.
 - [Library migration validation](../../docs/worklogs/2026-10-03-transcript-library-migration.md): preservation checks and migration limits.
+- [Rust library import](../../docs/worklogs/2026-10-03-rust-library-import.md): meeting migration, source preservation, and RunPod voice-sample provenance.
+- [Index consistency](../../docs/worklogs/2026-10-03-index-consistency.md): atomic updates, grouped file events, and ancestor reconciliation.
 - [Large-library storage design](../../docs/design/2026-09-27-large-library-storage.md): file authority, disposable indexing, folder discovery, and scale validation.
 - [Meeting list scrolling](../../docs/worklogs/2026-09-27-meeting-scroll-prefetch.md): viewport anchoring, anticipatory paging, and full-app validation.
 - [New recording list reveal](../../docs/worklogs/2026-09-29-recording-list-reveal.md): recording creation events, viewport anchoring, and synthetic insertion validation.

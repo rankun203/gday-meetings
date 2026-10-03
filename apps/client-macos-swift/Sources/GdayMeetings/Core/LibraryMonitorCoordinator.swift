@@ -71,7 +71,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
 
     func rebuild() { process(.init(paths: [], requiresScan: true, eventID: 0)) }
 
-    private func process(_ batch: LibraryFileMonitor.Batch) {
+    func process(_ batch: LibraryFileMonitor.Batch) {
         pendingLock.lock()
         guard !stopped else {
             pendingLock.unlock()
@@ -109,7 +109,13 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
 
     private func reconcile(_ incoming: LibraryFileMonitor.Batch) {
         var batch = incoming
-        batch.requiresScan = batch.requiresScan || needsRecoveryScan
+        let meetingsRoot = root.appendingPathComponent("meetings").standardized.path
+        let libraryRoot = root.standardized.path
+        let hasAncestorEvent = batch.paths.contains {
+            let path = $0.standardized.path
+            return path == libraryRoot || path == meetingsRoot
+        }
+        batch.requiresScan = batch.requiresScan || needsRecoveryScan || hasAncestorEvent
         do {
             let index = try LibraryIndex(directory: self.root, indexDirectory: self.indexDirectory)
             batch.requiresScan = batch.requiresScan || index.requiresRebuild

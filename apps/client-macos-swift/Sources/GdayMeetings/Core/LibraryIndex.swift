@@ -126,12 +126,21 @@ final class LibraryIndex: @unchecked Sendable {
     func quarantine(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
-        try remove(id: id)
-        let query = try statement("INSERT INTO meeting_folders VALUES(?,'') ON CONFLICT(id) DO UPDATE SET name=''")
-        defer { release(query) }
-        bind(id.uuidString, 1, query)
-        guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
-        MeetingFolderLocation.block(id: id, directory: directory)
+        try execute("SAVEPOINT quarantine_row")
+        do {
+            try remove(id: id)
+            let query = try statement("INSERT INTO meeting_folders VALUES(?,'') ON CONFLICT(id) DO UPDATE SET name=''")
+            defer { release(query) }
+            bind(id.uuidString, 1, query)
+            guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
+            MeetingFolderLocation.block(id: id, directory: directory)
+            try execute("RELEASE quarantine_row")
+        }
+        catch {
+            try execute("ROLLBACK TO quarantine_row; RELEASE quarantine_row")
+            MeetingFolderLocation.forget(id: id, directory: directory)
+            throw error
+        }
     }
 
     func upsert(_ entry: MeetingListEntry, folder suppliedFolder: URL? = nil, confirmedUnique: Bool = false) throws {
@@ -157,66 +166,85 @@ final class LibraryIndex: @unchecked Sendable {
             try quarantine(id: entry.id)
             throw MeetingFolderLocation.AccessError.duplicate
         }
-        MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
-        let location = try statement(
-            "INSERT INTO meeting_folders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
-        defer { release(location) }
-        bind(entry.id.uuidString, 1, location)
-        bind(folder.lastPathComponent, 2, location)
-        guard sqlite3_step(location) == SQLITE_DONE else { throw failure() }
-        let data = try JSONEncoder().encode(entry)
-        let stmt = try statement(
-            "INSERT INTO meetings(id,created,title,metadata,sortTime) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created=excluded.created,title=excluded.title,metadata=excluded.metadata,sortTime=excluded.sortTime"
-        )
-        defer { release(stmt) }
-        bind(entry.id.uuidString, 1, stmt)
-        sqlite3_bind_double(stmt, 2, entry.createdAt.timeIntervalSince1970)
-        sqlite3_bind_double(stmt, 5, -entry.createdAt.timeIntervalSince1970)
-        bind(entry.title, 3, stmt)
-        _ = data.withUnsafeBytes { sqlite3_bind_blob(stmt, 4, $0.baseAddress, Int32(data.count), transient) }
-        guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
-        let delete = try statement("DELETE FROM relations WHERE meeting=?")
-        bind(entry.id.uuidString, 1, delete)
-        defer { release(delete) }
-        guard sqlite3_step(delete) == SQLITE_DONE else { throw failure() }
-        let searchDelete = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
-        bind(entry.id.uuidString, 1, searchDelete)
-        defer { release(searchDelete) }
-        guard sqlite3_step(searchDelete) == SQLITE_DONE else { throw failure() }
-        let content = try MeetingFolderStorage.searchText(id: entry.id, directory: directory)
-        let searchInsert = try statement(
-            "INSERT INTO search(rowid,id,text) VALUES((SELECT rowid FROM meetings WHERE id=?),?,?)")
-        defer { release(searchInsert) }
-        bind(entry.id.uuidString, 1, searchInsert)
-        bind(entry.id.uuidString, 2, searchInsert)
-        bind(entry.title + " " + entry.summary + " " + content, 3, searchInsert)
-        guard sqlite3_step(searchInsert) == SQLITE_DONE else { throw failure() }
-        let relation = try statement("INSERT OR IGNORE INTO relations VALUES(?,?,?,?)")
-        defer { release(relation) }
-        for (kind, ids) in [("person", entry.personIDs), ("tag", entry.tagIDs)] {
-            for id in ids {
-                sqlite3_reset(relation)
-                bind(entry.id.uuidString, 1, relation)
-                bind(kind, 2, relation)
-                bind(id.uuidString, 3, relation)
-                sqlite3_bind_double(relation, 4, -entry.createdAt.timeIntervalSince1970)
-                guard sqlite3_step(relation) == SQLITE_DONE else { throw failure() }
+        try execute("SAVEPOINT upsert_row")
+        do {
+            MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
+            let content = try MeetingFolderStorage.searchText(id: entry.id, directory: directory)
+            let location = try statement(
+                "INSERT INTO meeting_folders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
+            defer { release(location) }
+            bind(entry.id.uuidString, 1, location)
+            bind(folder.lastPathComponent, 2, location)
+            guard sqlite3_step(location) == SQLITE_DONE else { throw failure() }
+            let data = try JSONEncoder().encode(entry)
+            let stmt = try statement(
+                "INSERT INTO meetings(id,created,title,metadata,sortTime) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created=excluded.created,title=excluded.title,metadata=excluded.metadata,sortTime=excluded.sortTime"
+            )
+            defer { release(stmt) }
+            bind(entry.id.uuidString, 1, stmt)
+            sqlite3_bind_double(stmt, 2, entry.createdAt.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 5, -entry.createdAt.timeIntervalSince1970)
+            bind(entry.title, 3, stmt)
+            _ = data.withUnsafeBytes { sqlite3_bind_blob(stmt, 4, $0.baseAddress, Int32(data.count), transient) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+            let delete = try statement("DELETE FROM relations WHERE meeting=?")
+            bind(entry.id.uuidString, 1, delete)
+            defer { release(delete) }
+            guard sqlite3_step(delete) == SQLITE_DONE else { throw failure() }
+            let searchDelete = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
+            bind(entry.id.uuidString, 1, searchDelete)
+            defer { release(searchDelete) }
+            guard sqlite3_step(searchDelete) == SQLITE_DONE else { throw failure() }
+            let searchInsert = try statement(
+                "INSERT INTO search(rowid,id,text) VALUES((SELECT rowid FROM meetings WHERE id=?),?,?)")
+            defer { release(searchInsert) }
+            bind(entry.id.uuidString, 1, searchInsert)
+            bind(entry.id.uuidString, 2, searchInsert)
+            bind(entry.title + " " + entry.summary + " " + content, 3, searchInsert)
+            guard sqlite3_step(searchInsert) == SQLITE_DONE else { throw failure() }
+            let relation = try statement("INSERT OR IGNORE INTO relations VALUES(?,?,?,?)")
+            defer { release(relation) }
+            for (kind, ids) in [("person", entry.personIDs), ("tag", entry.tagIDs)] {
+                for id in ids {
+                    sqlite3_reset(relation)
+                    bind(entry.id.uuidString, 1, relation)
+                    bind(kind, 2, relation)
+                    bind(id.uuidString, 3, relation)
+                    sqlite3_bind_double(relation, 4, -entry.createdAt.timeIntervalSince1970)
+                    guard sqlite3_step(relation) == SQLITE_DONE else { throw failure() }
+                }
             }
+            try execute("RELEASE upsert_row")
+        }
+        catch {
+            try execute("ROLLBACK TO upsert_row; RELEASE upsert_row")
+            MeetingFolderLocation.forget(id: entry.id, directory: directory)
+            throw error
         }
     }
+
     func remove(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
-        MeetingFolderLocation.forget(id: id, directory: directory)
-        let search = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
-        defer { release(search) }
-        bind(id.uuidString, 1, search)
-        guard sqlite3_step(search) == SQLITE_DONE else { throw failure() }
-        for table in ["meetings", "relations", "meeting_folders"] {
-            let stmt = try statement("DELETE FROM \(table) WHERE \(table == "relations" ? "meeting" : "id")=?")
-            defer { release(stmt) }
-            bind(id.uuidString, 1, stmt)
-            guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+        try execute("SAVEPOINT remove_row")
+        do {
+            MeetingFolderLocation.forget(id: id, directory: directory)
+            let search = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
+            defer { release(search) }
+            bind(id.uuidString, 1, search)
+            guard sqlite3_step(search) == SQLITE_DONE else { throw failure() }
+            for table in ["meetings", "relations", "meeting_folders"] {
+                let stmt = try statement("DELETE FROM \(table) WHERE \(table == "relations" ? "meeting" : "id")=?")
+                defer { release(stmt) }
+                bind(id.uuidString, 1, stmt)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+            }
+            try execute("RELEASE remove_row")
+        }
+        catch {
+            try execute("ROLLBACK TO remove_row; RELEASE remove_row")
+            MeetingFolderLocation.forget(id: id, directory: directory)
+            throw error
         }
     }
     func entry(id: UUID) throws -> MeetingListEntry? {
@@ -446,12 +474,38 @@ final class LibraryIndex: @unchecked Sendable {
         }
     }
     func reconcile(paths: [URL]) throws {
-        for path in paths {
+        lock.lock()
+        defer { lock.unlock() }
+        // File URL standardization rewrites existing /private paths but not deleted paths.
+        // Normalize syntax only so removal events retain the watcher’s physical root spelling.
+        let root = directory.standardized
+        let meetings = root.appendingPathComponent("meetings").standardized
+        let normalized = paths.map(\.standardized)
+        // A coalesced ancestor event may be the only notice of removed meeting folders.
+        if normalized.contains(where: { $0.path == root.path || $0.path == meetings.path }) {
+            try rebuild()
+            return
+        }
+        let indexedFiles: Set<String> = [
+            "metadata.json", "notes.md", "summary.md", TranscriptStorage.filename,
+            LiveTranscriptProjection.checkpointName,
+        ]
+        var affectedFolders: Set<URL> = []
+        for path in normalized where path.path.hasPrefix(meetings.path + "/") {
+            let relative = String(path.path.dropFirst(meetings.path.count + 1)).split(separator: "/")
+            guard let name = relative.first, MeetingFolderLocation.identity(String(name)) != nil else { continue }
+            guard relative.count == 1 || (relative.count == 2 && indexedFiles.contains(String(relative[1]))) else {
+                continue
+            }
+            affectedFolders.insert(meetings.appendingPathComponent(String(name)))
+        }
+        // Keep distinct folders for the same identity so duplicate detection still runs.
+        for path in affectedFolders.sorted(by: { $0.path < $1.path }) {
             var folder = path
-            while folder.path.hasPrefix(directory.path), folder != directory {
+            while folder.path.hasPrefix(root.path + "/"), folder != root {
                 if let id = MeetingFolderLocation.identity(folder.lastPathComponent),
-                    folder.deletingLastPathComponent().standardizedFileURL.path
-                        == directory.appendingPathComponent("meetings").standardizedFileURL.path
+                    folder.deletingLastPathComponent().standardized.path
+                        == meetings.path
                 {
                     try MeetingFolderLocation.validate(folder, directory: directory)
                     if try folderName(id: id) == "" {
