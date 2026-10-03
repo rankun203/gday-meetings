@@ -158,30 +158,48 @@ struct NotesDocument: Equatable {
             location: lines.prefix(index).reduce(0) { $0 + ($1.text + $1.newline).utf16.count },
             length: lines[index].text.utf16.count)
     }
+    /// Resolve all block timestamps in one pass when reading a complete document.
+    var lineTimes: [TimeInterval?] {
+        var scan = TimedBlockScan()
+        return lines.indices.map { lines[scan.line(at: $0, in: lines)].time }
+    }
+
     func timedLine(for line: Int) -> Int {
+        var scan = TimedBlockScan()
+        var result = line
+        for index in 0...min(line, lines.count - 1) {
+            result = scan.line(at: index, in: lines)
+        }
+        return result
+    }
+
+    private struct TimedBlockScan {
         var block: Int?
         var fence: String?
-        for index in 0...min(line, lines.count - 1) {
+
+        mutating func line(at index: Int, in lines: [Line]) -> Int {
             let text = lines[index].text.trimmingCharacters(in: .whitespaces)
             if let token = fence {
-                if index == line { return block ?? line }
-                if Self.closesFence(text, token: token) {
+                // The closing fence still belongs to the block it closes.
+                let result = block ?? index
+                if NotesDocument.closesFence(text, token: token) {
                     fence = nil
                     block = nil
                 }
+                return result
             }
-            else if let token = Self.fenceToken(text) {
+            if let token = NotesDocument.fenceToken(text) {
                 fence = token
                 block = index
             }
-            else if Self.isTableStart(lines, index) {
+            else if NotesDocument.isTableStart(lines, index) {
                 block = index
             }
             else if !text.contains("|") {
                 block = nil
             }
+            return block ?? index
         }
-        return block ?? line
     }
     func time(atLine line: Int) -> TimeInterval? { lines[timedLine(for: line)].time }
     func time(at location: Int) -> TimeInterval? {

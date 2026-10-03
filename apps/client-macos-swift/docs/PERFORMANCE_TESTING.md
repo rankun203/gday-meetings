@@ -63,6 +63,26 @@ Report recording and interaction timelines as separate SVGs with outlined fonts.
 
 Prior repeat reference: approximately **47% app CPU**, **22.5% main-thread CPU**, **0.78–0.84% app GPU active time**, and **15.7–17.0% system ANE active time**. These are descriptive, not pass/fail thresholds. Its roughly 1 GiB save footprint was measured on an older build; source fixes need a new measured run. See the [evaluation plan](../../../docs/worklogs/2026-10-02-performance-evaluation-plan.md) for responsiveness criteria.
 
+## Payload and typing capacity
+
+Use the [saved performance tools](../scripts/performance/README.md) to build, run, profile, analyze, and draw repeatable tests. Run the opt-in `NotesCapacityTests` and `SummaryPerformanceTests.summaryCapacity` in release configuration, in separate fresh processes. Build first and keep compilation outside measurement windows. These fixtures use temporary libraries and synthetic content; they do not require a provider or use the installed library.
+
+| Workload | Environment |
+| --- | --- |
+| Notes | `GDAY_NOTES_CAPACITY=1`, `GDAY_NOTES_CAPACITY_BYTES=102400`, `GDAY_NOTES_CAPACITY_WORKSPACE=component`, `GDAY_NOTES_CAPACITY_MODE=append` |
+| Visible Summary | `GDAY_PERFORMANCE=1`, `GDAY_SUMMARY_CAPACITY=1`, `GDAY_SUMMARY_INITIAL_BYTES=102400`, `GDAY_SUMMARY_MODE=visible` |
+| Hidden Summary control | The Summary settings above with `GDAY_SUMMARY_MODE=hidden` |
+
+Start at 10 KiB and 100 KiB, then try 500 KiB (`512000` bytes) when the smaller runs complete. Keep cadence and inserted fragment size constant within each task. Notes inserts one character at 10 Hz; Summary publishes one fixed paragraph at 10 Hz. Each run grows for 25 seconds and holds for five seconds. Notes also flushes persistence. Compare task costs without implying that one typed character equals one Summary paragraph.
+
+Set `GDAY_PERFORMANCE_RUN_ID`, `GDAY_PERFORMANCE_BUILD_REVISION`, and an absolute `GDAY_PERFORMANCE_METRICS_PATH` for provenance. JSONL metrics include action times, payload sizes, CPU counters, footprint, and disk counters. Collect stdout through a separate process so logging writes are not charged to the measured process. The optional metrics file is flushed after the final sample. Require a successful test result and a final `end` event with phase `finished` or `complete`; exclude partial runs from capacity comparisons.
+
+For synchronized Instruments capture, set `GDAY_PERFORMANCE_START_GATE` to a new, absent temporary path. Wait for its `.ready.json` sidecar, attach Instruments to that PID, and create the gate file only after recording starts. The gate times out after two minutes. For full-window Notes, use `GDAY_NOTES_CAPACITY_WORKSPACE=library` and select **Notes** before opening the gate. Use a normally launched test host when UI automation needs application registration. Remove inherited `PROMPT` and `RPROMPT` variables before launching; terminal escape characters can make the Instruments TOC invalid XML.
+
+Measure unprofiled capacity separately from instrumented diagnosis. Repeat representative runs to distinguish consistent costs from noise. Compare CPU over elapsed time, peak footprint and writes over payload size, and median/p95/maximum edit-and-layout time in one aligned SVG. Keep app GPU, system GPU, and system ANE scopes explicit. Do not fill missing probes with zero.
+
+The Notes action timer covers insertion, a 1 ms run-loop opportunity, and forced layout/drawing. Deferred styling can occur afterward; this is an operation/layout proxy, not key-to-photon latency. Use the 16.7 ms ordinary-edit target to guide investigation, then verify perceived responsiveness in the installed app. Neither a 30-second test nor a single payload establishes a universal content limit or long-session stability.
+
 ## Technical debt
 
-This is a manual runbook, not an installed scheduler. Original private scripts contain machine-specific paths and a PID; do not assume they exist or reuse them unchanged. A reusable harness should discover the process, validate device aggregates, enforce storage limits, and verify scheduled actions.
+Recording control remains manual; the saved monitor records deadlines and resource use but does not stop or save recordings. The reusable tools accept an explicit PID, validate device aggregates, and enforce capture budgets. Their Swift helper path and Instruments XML schemas require validation after toolchain upgrades. Original private scripts are historical evidence, not the rerun interface.

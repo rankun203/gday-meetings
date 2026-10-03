@@ -1,0 +1,14 @@
+{
+  "847b840-image-cache": {
+    "label": "Before scan fixes",
+    "linestyle": "--"
+  },
+  "847b840-style-reader": {
+    "label": "After scan fixes",
+    "linestyle": "-"
+  },
+  "847b840-gutter-index": {
+    "label": "After scan fixes",
+    "linestyle": "-"
+  }
+}

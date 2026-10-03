@@ -99,15 +99,15 @@ extension MeetingStore {
         }
         setJobProgress(.summary, .meeting(id), "Writing summary…")
         let provider = try summaryProvider(providerID: providerID)
-        summaryDrafts[id] = ""
-        defer { summaryDrafts.removeValue(forKey: id) }
+        summaryDrafts.values[id] = ""
+        defer { summaryDrafts.values.removeValue(forKey: id) }
         let messages = try await summaryMessages(provider: provider.provider, meeting: meeting)
         let response = try await provider.complete(
             messages: messages, bodies: summaryDataBodies(meeting, messages: messages),
             filePaths: summaryDataFilePaths(meeting, messages: messages), purpose: "Summary",
             onPartial: { [weak self] text in
                 guard !Task.isCancelled else { return }
-                self?.summaryDrafts[id] = text
+                self?.summaryDrafts.values[id] = text
             })
         recordDataFlow(response.dataFlow, meetingID: id)
         let result = response.value

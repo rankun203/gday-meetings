@@ -24,12 +24,13 @@ struct NotesReadingDocument {
     init(_ markdown: String) {
         let document = NotesDocument(markdown)
         let lines = document.lines
+        let times = document.lineTimes
         var index = 0
         while index < lines.count {
             let text = lines[index].text
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             let start = index
-            let time = document.time(atLine: index)
+            let time = times[index]
             func append(_ content: Content) { blocks.append(.init(id: start, time: time, content: content)) }
             defer { index += 1 }
             if trimmed.isEmpty { continue }

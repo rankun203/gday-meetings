@@ -79,12 +79,12 @@ import Testing
         let id = setup(store, origin: server.origin)
         store.settings.autoExtractTodos = extract
         let taskID = try #require(store.queueSummary(id: id))
-        try await waitUntil { store.summaryDrafts[id]?.contains("### Summary") == true }
+        try await waitUntil { store.summaryDrafts.values[id]?.contains("### Summary") == true }
         #expect(store.meetings[0].summary == "Saved summary")
         #expect(store.meetings[0].todos.isEmpty)
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .completed)
-        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.summaryDrafts.values[id] == nil)
         #expect(store.meetings[0].summary == "### Summary\n\n- [ ] Send résumé 👋")
         #expect(store.meetings[0].todos.count == (extract ? 1 : 0))
         #expect(MeetingStore(dataDirectory: root).meeting(id: id)?.summary == store.meetings[0].summary)
@@ -113,11 +113,11 @@ import Testing
         let store = MeetingStore(dataDirectory: root)
         let id = setup(store, origin: server.origin)
         let taskID = try #require(store.queueSummary(id: id))
-        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         if cancel { store.cancelManagedTask(id: taskID) }
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == (cancel ? .cancelled : .failed))
-        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.summaryDrafts.values[id] == nil)
         #expect(store.meetings[0].summary == "Saved summary")
         #expect(store.meetings[0].todos.isEmpty)
         #expect(try DataEventJournal.read(directory: store.directory(for: id)).allSatisfy { $0.action != .sent })
@@ -136,14 +136,14 @@ import Testing
         let store = MeetingStore(dataDirectory: root)
         let id = setup(store, origin: server.origin)
         let taskID = try #require(store.queueSummary(id: id))
-        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         var changed = store.meetings[0]
         changed.summary = "Changed elsewhere"
         store.updateMeeting(changed)
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
         #expect(store.meetings[0].summary == "Changed elsewhere")
-        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.summaryDrafts.values[id] == nil)
         // The provider completed successfully even though newer local text prevented adoption.
         #expect(try DataEventJournal.read(directory: store.directory(for: id)).filter { $0.action == .sent }.count == 1)
     }
@@ -170,7 +170,7 @@ import Testing
         await store.summarize(id: id)
         #expect(store.managedTasks.last?.state == .failed)
         #expect(store.meeting(id: id)?.summary == "Saved summary")
-        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.summaryDrafts.values[id] == nil)
         #expect(server.requests.count == 1)
     }
 
@@ -187,7 +187,7 @@ import Testing
         let store = MeetingStore(dataDirectory: root)
         let id = setup(store, origin: server.origin)
         let caller = Task { await store.summarize(id: id) }
-        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         let taskID = try #require(store.managedTasks.last?.id)
         caller.cancel()
         let player = StreamingPlayback(manualRendering: true)
@@ -221,7 +221,7 @@ import Testing
         let store = MeetingStore(dataDirectory: root)
         let id = setup(store, origin: server.origin)
         let taskID = try #require(store.queueSummary(id: id))
-        try await waitUntil { store.summaryDrafts[id]?.isEmpty == false }
+        try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         var changed = try #require(store.meeting(id: id))
         if changeTranscript {
             changed.transcript = [.init(text: "A later transcript.")]
@@ -233,6 +233,6 @@ import Testing
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
         #expect(store.meeting(id: id)?.summary == "Saved summary")
-        #expect(store.summaryDrafts[id] == nil)
+        #expect(store.summaryDrafts.values[id] == nil)
     }
 }

@@ -110,9 +110,19 @@ struct MarkdownNotesEditor: NSViewRepresentable {
 
 final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate {
     var editor: MarkdownNotesEditor?
-    var document = NotesDocument("")
+    var document = NotesDocument("") {
+        didSet { cachedLineIndex = nil }
+    }
+    private var cachedLineIndex: NotesEditorLineIndex?
+    var lineLayoutIndex: NotesEditorLineIndex {
+        if let cachedLineIndex { return cachedLineIndex }
+        let index = NotesEditorLineIndex(document)
+        cachedLineIndex = index
+        return index
+    }
     var notesPasteboard = NSPasteboard.general
-    private var styledText: String?
+    private var needsFullStyle = true
+    private var pendingStyleRange: NSRange?
     private var imageLayoutScheduled = false
     lazy var images = NotesImagePresentation(text: self)
     var lastInsertionDate: Date?
@@ -135,8 +145,10 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         normalizedImages.removeAll()
         document = NotesDocument(markdown)
         images.invalidate()
+        textStorage?.delegate = self
+        needsFullStyle = true
+        pendingStyleRange = nil
         string = document.text
-        styledText = nil
         scheduleImageLayout()
         needsLayout = true
     }
@@ -144,7 +156,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         -> Bool
     {
         guard let replacementString else { return true }
-        images.willChange(affectedCharRange, replacementLength: (replacementString as NSString).length)
+        images.willChange(affectedCharRange, replacement: replacementString)
         let previous = document
         let now = Date()
         let phraseClock =
@@ -228,31 +240,52 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             .paragraphStyle: NSParagraphStyle.default,
         ]
     }
-    func prepareImageLayout() {
-        guard let content = textLayoutManager?.textContentManager else { return }
-        content.performEditingTransaction {
-            textStorage?.beginEditing()
-            if styledText != string {
-                let current = string as NSString
-                var range = NSRange(location: 0, length: current.length)
-                if let previous = styledText as NSString? {
-                    var start = 0
-                    while start < min(previous.length, current.length),
-                        previous.character(at: start) == current.character(at: start)
-                    { start += 1 }
-                    var tail = 0
-                    while tail < min(previous.length, current.length) - start,
-                        previous.character(at: previous.length - tail - 1)
-                            == current.character(at: current.length - tail - 1)
-                    { tail += 1 }
-                    range = current.paragraphRange(for: NSRange(location: start, length: current.length - start - tail))
-                }
-                style(range)
-                styledText = string
-            }
-            images.prepare()
-            textStorage?.endEditing()
+    func textStorage(
+        _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+        range editedRange: NSRange, changeInLength delta: Int
+    ) {
+        guard editedMask.contains(.editedCharacters), !needsFullStyle else { return }
+        // NSTextStorage may combine several edits. Treat its range as a
+        // conservative styling boundary, never as an exact replacement.
+        var affected = editedRange
+        if let pending = pendingStyleRange {
+            let oldEnd = NSMaxRange(editedRange) - delta
+            let start =
+                pending.location <= editedRange.location
+                ? pending.location : max(editedRange.location, pending.location + delta)
+            let end =
+                NSMaxRange(pending) >= oldEnd
+                ? NSMaxRange(pending) + delta : max(NSMaxRange(pending), NSMaxRange(editedRange))
+            affected = NSUnionRange(affected, NSRange(location: start, length: max(0, end - start)))
         }
+        pendingStyleRange = affected
+    }
+    func prepareImageLayout() {
+        guard let content = textLayoutManager?.textContentManager, let storage = textStorage else { return }
+        if storage.delegate !== self {
+            storage.delegate = self
+            needsFullStyle = true
+        }
+        if needsFullStyle || pendingStyleRange != nil {
+            let current = storage.string as NSString
+            let dirty = pendingStyleRange ?? NSRange(location: 0, length: current.length)
+            let start = min(dirty.location, current.length)
+            let length = min(dirty.length, current.length - start)
+            let range =
+                needsFullStyle
+                ? NSRange(location: 0, length: current.length)
+                : current.paragraphRange(for: NSRange(location: start, length: length))
+            needsFullStyle = false
+            pendingStyleRange = nil
+            if range.length > 0 {
+                content.performEditingTransaction {
+                    storage.beginEditing()
+                    style(range)
+                    storage.endEditing()
+                }
+            }
+        }
+        images.prepare()
     }
     private func scheduleImageLayout() {
         guard !imageLayoutScheduled else { return }
@@ -274,19 +307,20 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     private func updateGutter() {
         guard let manager = textLayoutManager, let content = manager.textContentManager else { return }
         var labels: [(NSRect, TimeInterval, Int)] = []
+        let lineIndex = lineLayoutIndex
         let visible = visibleRect
         manager.enumerateTextLayoutFragments(
             from: manager.textViewportLayoutController.viewportRange?.location, options: []
         ) { fragment in
             let offset = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-            let lineIndex = self.document.lineIndex(at: offset)
+            let line = lineIndex.line(at: offset)
             let rect = fragment.layoutFragmentFrame.offsetBy(
                 dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
             if rect.minY > visible.maxY { return false }
-            if rect.intersects(visible), let time = self.document.lines[lineIndex].time,
-                offset == self.document.range(of: lineIndex).location
+            if rect.intersects(visible), let time = self.document.lines[line].time,
+                offset == lineIndex.start(of: line)
             {
-                labels.append((NSRect(x: 2, y: rect.minY, width: 46, height: 20), time, lineIndex))
+                labels.append((NSRect(x: 2, y: rect.minY, width: 46, height: 20), time, line))
             }
             return true
         }

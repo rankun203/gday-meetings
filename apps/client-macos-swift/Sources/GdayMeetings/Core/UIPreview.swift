@@ -286,11 +286,11 @@ enum UIPreview {
             guard let store else { return }
             guard store.beginJob(.summary, .meeting(meeting.id), progress: "Writing summary…") else { return }
             defer { store.endJob(.summary, .meeting(meeting.id)) }
-            store.summaryDrafts[meeting.id] = ""
+            store.summaryDrafts.values[meeting.id] = ""
             for fragment in fragments {
                 do { try await Task.sleep(for: .seconds(1)) }
                 catch { return }
-                store.summaryDrafts[meeting.id, default: ""] += fragment
+                store.summaryDrafts.values[meeting.id, default: ""] += fragment
             }
         }
     }

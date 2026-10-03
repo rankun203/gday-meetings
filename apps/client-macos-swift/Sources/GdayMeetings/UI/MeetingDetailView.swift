@@ -148,13 +148,9 @@ struct MeetingDetailView: View {
                         store.isJobRunning(.summary, .meeting(meetingID))
                             || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
                 }
-                MeetingMarkdownReadingView(
-                    meetingID: meetingID, markdown: store.summaryDrafts[meetingID] ?? meeting.summary,
-                    showsTimestamps: false,
-                    emptyMessage: store.summaryDrafts[meetingID] != nil
-                        ? "Writing summary…" : "No summary yet. Choose Generate Summary to create one.",
-                    changed: store.libraryWritable && store.summaryDrafts[meetingID] == nil
-                        ? { value in change { $0.summary = value } } : nil
+                SummaryReadingView(
+                    drafts: store.summaryDrafts, meetingID: meetingID, summary: meeting.summary,
+                    changed: store.libraryWritable ? { value in change { $0.summary = value } } : nil
                 )
                 .accessibilityLabel("Summary")
                 .background(.background, in: RoundedRectangle(cornerRadius: 10))
@@ -167,6 +163,23 @@ struct MeetingDetailView: View {
         }
     }
 
+}
+
+/// Only the document observes partial text; the header and library stay independent.
+private struct SummaryReadingView: View {
+    @ObservedObject var drafts: SummaryDraftState
+    let meetingID: UUID
+    let summary: String
+    var changed: ((String) -> Void)?
+
+    var body: some View {
+        let draft = drafts.values[meetingID]
+        MeetingMarkdownReadingView(
+            meetingID: meetingID, markdown: draft ?? summary, showsTimestamps: false,
+            emptyMessage: draft != nil
+                ? "Writing summary…" : "No summary yet. Choose Generate Summary to create one.",
+            changed: draft == nil ? changed : nil)
+    }
 }
 
 private func formatTime(_ seconds: Double) -> String {

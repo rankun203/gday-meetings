@@ -12,7 +12,7 @@ final class MeetingStore: ObservableObject {
     @Published var isLoadingMeetingPage = false
     @Published var isSearchingMeetings = false
     @Published var meetingPageError: String?
-    @Published var summaryDrafts: [UUID: String] = [:]
+    let summaryDrafts = SummaryDraftState()
     let meetingPrefetch = MeetingPrefetchState()
     var meetingPageHasMore = true
     @Published var meetingPageHasPrevious = false

@@ -2,20 +2,59 @@ import AppKit
 import QuickLookUI
 
 /// Decorations preserve the editor's Markdown and native UTF-16 selection ranges.
-@MainActor final class NotesImagePresentation {
+@MainActor final class NotesImagePresentation: NSObject {
     weak var text: NotesTextView?
     var views: [NotesImageView] = []
     private var signature = ""
-    private var preparedText = ""
+    private var references: [NotesImageReference] = []
+    private var referencesDirty = true
+    private let parseReferences: (String) -> [NotesImageReference]
     private var pendingEdits: [(NSRange, Int)] = []
+    private var proposedEdit: (range: NSRange, replacement: String)?
     private static let spacingKey = NSAttributedString.Key("GdayNotesImageSpacing")
     private var cache: [String: NSImage] = [:]
-    init(text: NotesTextView) { self.text = text }
+    init(text: NotesTextView, parseReferences: @escaping (String) -> [NotesImageReference] = NotesImageReference.parse)
+    {
+        self.text = text
+        self.parseReferences = parseReferences
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(storageDidProcessEditing(_:)),
+            name: NSTextStorage.didProcessEditingNotification, object: text.textStorage)
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func storageDidProcessEditing(_ notification: Notification) {
+        guard let storage = notification.object as? NSTextStorage,
+            storage.editedMask.contains(.editedCharacters)
+        else { return }
+        referencesDirty = true
+        // A processed range can be the union of several character and attribute
+        // edits. Rebase only a matching native edit; otherwise reconcile parsed
+        // references without treating that union as deleted text.
+        defer { proposedEdit = nil }
+        guard let proposedEdit else { return }
+        let replacement = storage.editedRange
+        guard replacement.location == proposedEdit.range.location,
+            replacement.length == proposedEdit.replacement.utf16.count,
+            storage.changeInLength == replacement.length - proposedEdit.range.length,
+            (storage.string as NSString).substring(with: replacement) == proposedEdit.replacement
+        else { return }
+        let replacesDocument =
+            proposedEdit.range.location == 0
+            && proposedEdit.range.length == storage.length - storage.changeInLength
+        let unchangedImage = views.contains {
+            $0.reference.range == proposedEdit.range && $0.reference.markdown == proposedEdit.replacement
+        }
+        if !replacesDocument && !unchangedImage {
+            pendingEdits.append((proposedEdit.range, replacement.length))
+        }
+    }
 
     func prepare() {
         guard let text, let directory = text.editor?.directory, let storage = text.textStorage else { return }
         let width = max(40, text.bounds.width - text.textContainerInset.width * 2 - 10)
-        let references = NotesImageReference.parse(in: text.string)
+        reconcileRanges()
         let versions = references.map { reference -> String in
             guard let file = try? NotesAssets.safeURL(relativePath: reference.displayPath, directory: directory),
                 let metadata = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -23,10 +62,18 @@ import QuickLookUI
             return "\(metadata.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(metadata.fileSize ?? 0)"
         }.joined(separator: ",")
         let key = references.map { "\($0.range):\($0.markdown)" }.joined(separator: "\n") + "\n@\(width)@" + versions
-        reconcileRanges()
         guard key != signature else { return }
         signature = key
-        preparedText = text.string
+        if let content = text.textLayoutManager?.textContentManager {
+            content.performEditingTransaction {
+                updateDecorations(text: text, storage: storage, directory: directory, width: width)
+            }
+        }
+        else {
+            updateDecorations(text: text, storage: storage, directory: directory, width: width)
+        }
+    }
+    private func updateDecorations(text: NotesTextView, storage: NSTextStorage, directory: URL, width: CGFloat) {
         storage.beginEditing()
         defer {
             storage.endEditing()
@@ -116,8 +163,8 @@ import QuickLookUI
     }
     // Rebase surviving decorations immediately after edits, without touching
     // text storage or invalidating layout. Unrelated typing keeps them visible.
-    func willChange(_ range: NSRange, replacementLength: Int) {
-        pendingEdits.append((range, replacementLength))
+    func willChange(_ range: NSRange, replacement: String) {
+        proposedEdit = (range, replacement)
     }
     private func applyPendingEdits() {
         for (range, replacementLength) in pendingEdits {
@@ -137,31 +184,28 @@ import QuickLookUI
         pendingEdits.removeAll(keepingCapacity: true)
     }
     func didChangeText() {
-        if preparedText == text?.string {
-            pendingEdits.removeAll(keepingCapacity: true)
-        }
-        else {
-            reconcileRanges()
-        }
+        reconcileRanges()
+        pendingEdits.removeAll(keepingCapacity: true)
     }
     func reconcileRanges() {
-        guard let text, preparedText != text.string else { return }
+        guard let text, referencesDirty else { return }
+        referencesDirty = false
         applyPendingEdits()
-        var references = NotesImageReference.parse(in: text.string)
+        references = parseReferences(text.string)
+        var unmatched = references
         views = views.filter { view in
             let index =
-                references.firstIndex {
+                unmatched.firstIndex {
                     $0.range.location == view.reference.range.location && $0.originalPath == view.reference.originalPath
-                } ?? references.firstIndex { $0.markdown == view.reference.markdown }
-                ?? references.firstIndex { $0.originalPath == view.reference.originalPath }
+                } ?? unmatched.firstIndex { $0.markdown == view.reference.markdown }
+                ?? unmatched.firstIndex { $0.originalPath == view.reference.originalPath }
             guard let index else {
                 view.removeFromSuperview()
                 return false
             }
-            view.reference = references.remove(at: index)
+            view.reference = unmatched.remove(at: index)
             return true
         }
-        preparedText = text.string
     }
     func layout() {
         guard let text, let manager = text.textLayoutManager, let content = manager.textContentManager else { return }
@@ -197,6 +241,8 @@ import QuickLookUI
     }
     func invalidate() {
         signature = ""
+        referencesDirty = true
+        proposedEdit = nil
         pendingEdits.removeAll(keepingCapacity: true)
     }
 }

@@ -5,7 +5,47 @@ status: measured
 scope: swift-app-performance
 ---
 
-# Recording resources over time
+# Notes and Summary capacity — October 3
+
+![Aligned CPU, memory, disk, and operation-time comparisons over elapsed time and payload size, with separate GPU and Neural Engine probes.](assets/2026-10-02-recording-endurance/capacity-comparison.svg)
+
+- **Notes does less work per edit.** At 100 KiB, main CPU fell from 36.9% to 22.2%; p95 edit-and-layout time fell from 31.9 to 20.3 ms. At 500 KiB, CPU fell from 99.9% to 56.1% and p95 from 101.8 to 54.3 ms. The 10 KiB case meets the 16.7 ms operation target; larger cases do not.
+- **Summary's quadratic timestamp scan is fixed, but visible rendering still scales poorly.** At 100 KiB, p95 fell from 1,995 to 181 ms. The fixed run completed, delivering 5.74 updates/s rather than the requested ten. At 500 KiB it delivered only 1.26 updates/s. Hidden Summary at 100 KiB uses 3.3% main CPU, identifying visible document work as the remaining cost.
+- **These UI workloads are CPU-bound.** Separate 20-second device probes show negligible app GPU activity and no recorded ANE or Core ML events. They do not measure model inference. System GPU includes other apps; its before/after difference is not a measured effect of these fixes.
+
+| Final release workload | Initial KiB | Mean main CPU | p95 operation, ms | Achieved updates/s | Peak footprint, MiB | Process writes, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Notes append | 10 | 14.1% | 12.2 | 9.68 | 53.1 | 56 |
+| Notes append | 100 | 22.2% | 20.3 | 9.72 | 86.4 | 180 |
+| Notes append | 500 | 56.1% | 54.3 | 9.76 | 212.0 | 3,632 |
+| Summary visible | 10 | 52.5% | 70.9 | 10.00 | 62.0 | 0 |
+| Summary visible | 100 | 97.3% | 181.5 | 5.74 | 72.2 | 0 |
+| Summary visible | 500 | 99.6% | 807.0 | 1.26 | 118.4 | 0 |
+| Summary hidden | 100 | 3.3% | 1.4 | 10.00 | 61.5 | 0 |
+
+Each unprofiled run uses a fresh release test process, 25 seconds of input and five seconds of settling, without concurrent compilation or tracing. Notes inserts one character at a time into synthetic Unicode paragraphs with four image references and flushes persistence. Summary adds one paragraph per update, ending with about 43, 119, and 504 KiB respectively. Its synthetic streaming path does not request a provider or persist a final generated summary; zero writes here does not describe a complete generation task. The operation timer includes a run-loop opportunity and forced layout; deferred work may follow. It is **not key-to-photon latency**. These single short runs establish tested cases, not a universal content limit or long-session stability.
+
+“Before scan fixes” already includes Summary publication isolation and the image-reference cache. “After” adds dirty-range styling, linear reading timestamps, and the Notes gutter index. The before Summary runs at 100 and 500 KiB hit latency guards; triangles retain their observed values and actual shorter input windows, not completed capacity results. The 500 KiB before run had one 45.5-second operation, so its footprint is not a matched-duration memory comparison. Input-at-start, increasing image counts, and a final provider-driven/full-library repeat remain separate follow-ups.
+
+## Repetitive work removed
+
+**Problem and implemented solution:** Unchanged Notes layout compared and rescanned complete strings. Styling now consumes completed character-edit ranges, expands them to paragraphs, and skips unchanged transactions. Image references are parsed once per actual edit rather than again on unchanged layout. The timestamp gutter caches derived UTF-16 line offsets once per document revision and uses binary lookup for visible fragments. Summary reading resolves block timestamps in one linear pass instead of rescanning all preceding lines for every block. Draft publication remains confined to the Summary document.
+
+**Evidence and reasoning:** After the image cache alone, a 21.30-second Notes probe still spent 2.430 inclusive CPU-seconds in layout preparation, including 1.852 in string equality. After styling, repeated line lookup accounted for 1.276 seconds in a 21.21-second probe. The final 21.00-second Notes probe uses 4.543 main CPU-seconds; the retained top frames instead include document replacement (1.131 seconds), image-reference parsing (0.873), and view-graph updates (1.031). Inclusive values overlap and cannot be added. This identifies the next candidates without assuming all remaining CPU is layout.
+
+Summary's initial 21.17-second probe spent 11.678 of 17.931 main CPU-seconds in repeated timestamp lookup. An independent release parser comparison at 100 KiB took 6,314 ms for repeated scalar lookups versus 4.6 ms for the linear metadata pass; constructing the full fixed reading document took 73.5 ms. The visible workload still rebuilds Markdown and attributed content on each delivery. Increasing the streaming delay would mask that cost, so cadence remains unchanged.
+
+**Design and validation:** Preserve the inspected Notes and Summary layouts, timestamps, images, selection, undo, and streaming semantics. Earlier Summary preview checks passed in light and dark appearances. The Notes component screenshot after image caching showed the expected editor and image structure. Final gutter/style changes passed 53 release tests, including Unicode, CRLF, grouped edits, empty/trailing lines, native undo/redo, timestamp equivalence, and image behavior; the preceding combined reader/style run passed 88 tests. Summary publication/streaming checks passed 21 tests. The final signed release build passed in 139.64 seconds. Existing missing Command Line Tools search-path warnings remain; no new application API deprecation was reported.
+
+Final full-library visual/input validation remains blocked: Computer Use refused access to the newly packaged test app despite the user's explicit authorization. Automated native component runs completed, but no final screenshot or measured real keystroke-to-display result is claimed. One sandboxed launch aborted during macOS application registration before measurement; it was excluded and the authorized desktop-session retry completed.
+
+**Reproducibility:** Use the [durable performance scripts](../../apps/client-macos-swift/scripts/performance/README.md) and [interaction runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md). The scripts build release fixtures, run bounded workloads, capture all devices, monitor an explicit PID every five minutes, validate/aggregate exports, and draw the shared SVG. Successful captures remove intermediate traces and exports; failures retain evidence within the shared disk guard. The monitor records deadlines but does not stop or save recordings. Native workload and capture runners were exercised; the reusable long-recording wrapper has counter-conversion checks but has not yet had a new multi-hour run.
+
+The plotted [numeric data](assets/2026-10-02-recording-endurance/capacity-data.json) and [labels](assets/2026-10-02-recording-endurance/capacity-labels.json) regenerate the SVG using `plot.py`. SVG fonts are outlined and the rendered figure was inspected. Metric checks, Python lint/formatting, shell syntax, and diff checks passed. Workload manifests retain exact binary hashes: final Notes `c6d8ff75fa360b699cdd3075026f7b0bc4e60bace3791d8521be2ee3b201bee2`; Summary `aba8dd9b9a043fc2d0f631ed51200c91b5ce1d518c7b2a4cbf73248425a101dd`. These are source snapshots based on `847b840` plus the repairs, not claims about the installed app. Concurrent transcript migration and build-script commits were preserved.
+
+**Technical debt:** No second content store or delayed-render compatibility layer was added. Derived caches have explicit mutation invalidation. Existing whole-document Markdown replacement, Notes normalization/reference parsing per edit, and full-window verification remain; profile and repair those paths next, then repeat provider-driven typing/navigation and long-session tests. The tools depend on Apple's test-host path and Instruments XML schemas; validate them after toolchain upgrades. Short device probes cannot establish accelerator use over the whole task. Release validation does not establish that large Notes editing is realtime.
+
+# Earlier recording measurements
 
 ![CPU, physical memory, app GPU, system GPU, and Neural Engine activity across the recording phases. Blank intervals are unmeasured.](assets/2026-10-02-recording-endurance/resource-comparison.svg)
 
@@ -46,15 +86,19 @@ Summary windows come from persisted managed-task start/finish logs and fit compl
 
 For the longer Summary task, inclusive main-thread samples include **13.841 CPU-seconds of view-graph updates**, **6.361 of size fitting**, **3.192 of hosting minimum-size work**, and **1.298 of Markdown rendering**, with only **8 ms of accessibility work**. These categories overlap and must not be added. Markdown/regular-expression work is present but is much smaller than the broader view/layout cost. After task completion, main CPU returned near idle: 0.98% for the shorter visible run and 0.43% for the longer run over their measured settling windows.
 
-The complete Notes input window includes **5.426 CPU-seconds in change handling**, **5.347 in image handling**, **3.331 in size fitting**, and only **11 ms of accessibility work**. This is substantial main-thread work during input, unlike the earlier partial typing capture. Navigation is more confounded: **3.646 of its 8.576 main CPU-seconds** include accessibility inspection. Tab actions alone used 5.286 main CPU-seconds over 8.719 seconds; meeting actions used 1.801 over 2.242 seconds. These are automated workload costs, not measured user-visible delays.
+The complete Notes input window includes **5.426 CPU-seconds in change handling**, **5.347 in image-presentation paths**, **3.331 in size fitting**, and only **11 ms of accessibility work**. This is substantial main-thread work during input, unlike the earlier partial typing capture. Navigation is more confounded: **3.646 of its 8.576 main CPU-seconds** include accessibility inspection. Tab actions alone used 5.286 main CPU-seconds over 8.719 seconds; meeting actions used 1.801 over 2.242 seconds. These are automated workload costs, not measured user-visible delays.
 
 The longer recording has **1,860 timed rows / 39,995 transcript characters**, without Notes or images. The shorter one has **584 rows / 13,772 transcript characters**, plus **14,172 Notes characters and four images**. The longer Summary contained **3,669 characters**, versus **2,186** for the latest shorter result—about 68% more output. That shorter result is from the hidden run; the visible run’s output was replaced, so these output sizes are not a matched pair for the CPU comparison. Separately, the longer visible task used 7.7% more app CPU (18.537 versus 17.218 CPU-seconds). Inputs, generated output, and request duration differ; this is not a controlled scaling result.
 
 These full-task traces measure **CPU only**. A long CPU+ANE+Core ML attempt failed during finalization; its timing samples survive but its stacks do not. Earlier short all-device probes remain separate evidence and cannot supply missing GPU/ANE measurements for these exact task windows. The installed build was unchanged. Current source includes the newer `dcc4679` canonical-transcript and `8fd4a75` saved-row changes, but these do not validate a repair for Summary publication/layout or Notes image work. Repeat the same tasks on the proposed fix using the [performance runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md).
 
-The proposed Summary repair moves transient draft state out of the broadly published meeting store into a stable object observed only by the Summary document. It preserves the 100 ms delivery cadence, layout, task ownership, and completion/cancellation behavior. The isolated proposal on `dcc4679` passed 21 focused tests, formatting/lint checks, and `make build-macos`, including signing verification. It has not been installed, visually validated after the change, or measured, so no CPU improvement is claimed. Notes image/change handling remains a separate measured cost.
+The Summary repair and its controlled publication comparison are documented below. The installed baseline remains unchanged; synthetic results do not replace a full provider-driven comparison. Notes image-presentation stacks primarily contain repeated string comparisons and parsing, not image decoding.
 
-Prototype validation retained toolchain warnings for missing Command Line Tools framework/library search paths and an obsolete linker option in bundled autotools configuration probes. No application API deprecation was reported. These warnings did not prevent the tests or release build; follow up by checking Xcode selection and regenerating the dependency probes before describing the build as warning-free. The proposal adds no duplicate draft storage or compatibility bridge; broader Markdown rebuilding remains unchanged pending a measured comparison.
+### Payload and typing-latency evaluation
+
+The next controlled matrix seeds 10 KB, 100 KB, and, if bounded screening succeeds, 500 KB documents before measurement. It holds incoming fragment size and update rate constant, records actual UTF-8 bytes and line counts, and includes an idle tail. Notes adds single-character typing, an edit near the beginning, and saving. A fixed-size repeated-edit case separates elapsed-time effects from growing payload. Report per-update CPU cost, main-thread edit-through-layout latency (median, p95, maximum), physical footprint, disk reads/writes, and measured accelerator intervals. Forced-layout timing is a responsiveness proxy, not key-to-photon latency. The typing target is roughly one 60 Hz frame (16.7 ms) for ordinary edits; a 100 ms per-key delay is not acceptable merely because average CPU falls.
+
+Use one comparison figure with elapsed-time and payload-size columns, shared task colors, and separate rows for CPU, memory, disk writes, and device activity. Overlay comparable workloads; leave unmeasured device intervals open. Short GPU/Neural Engine/Core ML probes remain separate from unprofiled timing runs. Stop a screening run at 2 GiB footprint, a two-second synchronous update, or its bounded wall-time deadline. Passing these checks establishes a tested range on this Mac, not a universal content limit.
 
 ## Rendering and saving
 
@@ -250,12 +294,60 @@ A final source check during the Summary follow-up found no newer committed app i
 
 ## Technical debt and follow-up
 
-No application code changed. This experiment retains measurement limitations:
+The baseline experiments preceded the code repairs documented below. These measurement limitations remain:
 
 - **Foregrounding and save diagnosis:** capture UI/hang and allocation evidence before reproducing the blank transcript or pressing Stop & Save. Current CPU profiles do not establish the proposed input-latency target.
 - **Sequential workloads and caches:** repeat fixed synthetic material in fresh processes, with no competing builds, for controlled mode comparisons.
 - **Sparse first-phase accelerators:** the final repeat improves coverage; it cannot reconstruct missing historical device activity.
 - **Rolling trace retention:** intermediate detailed stacks are discarded after numeric verification to bound disk usage. Re-capture anomalies that need deeper stack/allocation analysis.
-- **Summary generation and Notes:** complete-task profiles identify main-thread view/layout and Notes image/change costs. Validate the proposed repair with the same task windows and measure input latency separately. See the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
+- **Summary generation and Notes:** complete-task profiles identify main-thread view/layout and Notes image/change costs. The synthetic repair comparison is above; repeat provider-driven full-window tasks and measure input latency separately. See the [repeat runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
 
 SVG text is embedded as vector outlines to avoid viewer font substitution. The exported SVG is rasterized only for visual checking; the worklog uses the SVG.
+
+## Summary publication repair — October 3
+
+**Problem:** Each partial Summary update published a change through `MeetingStore`, notifying views throughout the library even when Summary was hidden. Complete-task traces support this explanation for repeated view-graph and layout work; Markdown parsing was a smaller measured component.
+
+**Implemented solution:** `MeetingStore` now owns a separate `SummaryDraftState`. Only the Summary document child observes its draft dictionary. The provider's 100 ms delivery cadence, task ownership, saved-result validation, and cleanup remain unchanged. An absent draft displays the saved summary; an empty draft displays “Writing summary…”. Removing the draft after success, cancellation, or failure restores the saved document and its task controls. Preview and existing streaming tests use the same state object.
+
+**Reasoning and design:** Isolate the frequently changing state using the same pattern as recording meters. The inspected existing Summary screenshot established an unchanged layout: heading and action above the document card, with the same tabs, selection, citations, and task controls. This removes unnecessary library notifications without delaying visible text or changing Markdown rendering.
+
+**Technical debt:** No duplicate storage or compatibility property was added. The existing whole-document Markdown renderer remains a secondary cost; a controlled comparison is needed before designing incremental rendering. The shared draft dictionary would notify every Summary document in a future multiwindow interface; that design should introduce a separate observable for each meeting. The current app has one main window.
+
+**Validation:** The isolated prototype on `dcc4679` passed 21 tests in `SummaryDraftStateTests`, `SummaryStreamingTests`, `AutomaticSummaryTests`, and `BackgroundJobTests`. The observer test recorded 103 draft notifications for creation, 100 replacements, a second draft, and removal, with zero `MeetingStore` notifications. Formatting, lint, and diff checks passed. The release build, property-list validation, signing, and strict signature verification passed. Integration onto `847b840` applied without conflicts. Existing Command Line Tools linker warnings report missing Developer framework/library search paths; the toolchain update remains the follow-up. Cold bundled-autotools configuration also probes obsolete `-single_module`; update those upstream scripts with the next pinned dependency refresh. No application API deprecation warning occurred. The integration and synthetic checks below supersede the prototype’s pending validation. The installed app has not been replaced.
+
+**Controlled publication comparison:** `SummaryPerformanceTests.hiddenSummaryPublication` uses the actual library view in an unshown native window, with 26 synthetic meetings. It forces layout and drawing on each run-loop iteration and delivers identical growing draft text at 10 Hz. Three alternating pairs compare document-only publication with the same updates plus the old library-wide notification. Each measured condition lasts four seconds. Main-thread CPU was 1.2%, 1.3%, and 1.3% of one core with document-only updates, versus 30.1%, 30.3%, and 28.6% with the library notification restored. Process CPU was 2.1–2.4% versus 29.1–30.9%. This debug-build experiment isolates the cost of the removed notification in a synthetic hidden-Summary workload. It does not measure provider duration, visible Summary rendering, keystroke latency, or the installed app’s improvement. Run it alone with `GDAY_PERFORMANCE=1` and the `SummaryPerformanceTests` filter to avoid concurrent test interference.
+
+**Integration and UI check:** The focused 21-test run and signed release build were repeated successfully on `847b840` with the Summary changes. An isolated preview bundle used synthetic data and a separate application identifier. Captured screenshots in System/light and Dark appearances matched the intended Summary heading, action, tabs, and document card. Native keyboard selection covered all 30 synthetic paragraphs, and navigating to Notes and back preserved the draft. The preview fixture had finished delivering its 1 Hz fragments before inspection, so these checks do not establish live-update smoothness. Narrow windows, inactive-window appearance, citation playback, task toggles, and a visible 10 Hz CPU comparison were not exercised in this UI check; streaming completion and cancellation remain covered by automated tests. The installed app and user library were unchanged.
+
+## Notes repeated-work repair — October 3
+
+**Problem:** The complete typing trace identifies repeated text work rather than attachment decoding. Of 20.071 main CPU-seconds during input, image-presentation paths include 3.873 seconds of whole-document string comparisons and 1.443 seconds of reference parsing. Parsing includes 994 ms scanning code ranges, 293 ms matching regular expressions, and 81 ms compiling them. The comparisons repeatedly traverse and normalize Unicode text. No attachment thumbnail/info or ImageIO decoding samples appeared in that window. Inclusive categories overlap.
+
+**Implemented solution:** Image presentation invalidates cached references on completed character edits. Attribute-only changes and unchanged layout reuse the references, while width and asset metadata checks still refresh images. Native edit proposals rebase ranges only when they match the completed edit; grouped edits use reference reconciliation so an unchanged image is not mistaken for deleted text. This avoids whole-document equality checks and duplicate parsing between input and layout.
+
+**Reasoning and design:** Keep the observed Notes layout and behavior: editable paragraphs, timestamp gutter, image placement, selection, and undo. Invalidation follows actual edits rather than a delayed UI refresh. Existing image undo and duplicate-reference tests passed, along with new grouped-edit, Unicode range, same-document replacement, and external-asset checks: 61 Notes tests in total.
+
+**Controlled image-path comparison:** A release benchmark uses 300 synthetic Unicode paragraphs, four image references, 100 character edits, and 2,000 unchanged reconciliations. Three baseline runs took 2.674, 2.595, and 2.612 seconds; fixed runs took 0.264, 0.257, and 0.251 seconds. Median elapsed time fell 90.2% for this path. This is not whole-window typing latency or a 90.2% reduction in total app CPU.
+
+**Technical debt and remaining work:** The capacity comparison and later styling/gutter repairs are documented at the top of this file. Cursor hit testing, block normalization, and library updates on edits remain relevant follow-ups. The cache is derived state, not a second source of Notes content. Combined release validation passed; final full-window visual/input verification remains blocked by Computer Use access.
+
+
+### Completed Notes component comparison
+
+A fresh release test process requested one character at 10 Hz for 25 seconds into approximately 100 KiB of synthetic Notes with four image references, then waited five seconds and flushed Notes. Both runs completed. The actual Notes workspace and persistence code were used; the library sidebar was excluded. No build or profiler ran concurrently.
+
+| Metric | Before image cache | With image cache |
+| --- | ---: | ---: |
+| Main-thread CPU during input, % of one core | 69.6 | 36.9 |
+| Process CPU during input, % of one core | 70.5 | 38.5 |
+| Edit and layout, median ms | 33.12 | 19.92 |
+| Edit and layout, p95 ms | 34.05 | 31.93 |
+| Edit and layout, maximum ms | 48.16 | 38.23 |
+| Completed edits | 245 | 241 |
+| Peak physical footprint, MiB | 81.34 | 84.24 |
+| Process disk writes, KiB | 112 | 144 |
+
+The cache reduces CPU substantially, but the p95 remains above the 16.7 ms ordinary-edit target. The timed action covers insertion, a 1 ms run-loop opportunity, and forced layout/drawing; deferred styling can occur afterward, so it is not hardware key-to-photon latency. These are single runs. Notes schedules its next delivery relative to the previous start; count divided by actual input duration is the achieved rate, and its skipped counter misses accumulated scheduling drift. GPU, Neural Engine, and Core ML were not captured in this pair and remain unmeasured.
+
+The earlier instrumented baseline terminated after 11.4 seconds and is excluded. Its Instruments export also contained an invalid XML control character from the inherited shell prompt. Subsequent test launches remove prompt variables; neither failure is treated as evidence of zero accelerator activity or a completed typing test.
