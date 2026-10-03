@@ -11,6 +11,7 @@ struct MeetingTranscriptView: View {
     @ViewState private var revisions: [TranscriptRevision] = []
     @ViewState private var failure: String?
     @ViewState private var displayRows: [TranscriptDisplayRow] = []
+    @ViewState private var visibleRows: [TranscriptDisplayRow] = []
     @ViewState private var displayGeneration = 0
     @ViewState private var displayedMeetingID: UUID?
     @ViewState private var showsSpeakers = false
@@ -21,6 +22,12 @@ struct MeetingTranscriptView: View {
         meeting?.transcript.isEmpty == true && meeting?.liveTranscriptAdopted != true && draft?.hasUsableText == true
     }
     private var segments: [TranscriptSegment] { usesCheckpoint ? draft?.segments ?? [] : meeting?.transcript ?? [] }
+    private var playbackVisibility: TranscriptPlaybackVisibility {
+        TranscriptPlaybackVisibility(
+            meetingID: playback.meetingID,
+            audioFiles: playback.trackNames.indices.compactMap { playback.audioURL(forTrack: $0)?.lastPathComponent },
+            mutedTracks: playback.mutedTracks)
+    }
     private var canRestore: Bool {
         store.libraryWritable && store.recordingID != meetingID && meeting?.transcriptionAttempt == nil
             && !store.isJobRunning(.transcription, .meeting(meetingID))
@@ -62,9 +69,16 @@ struct MeetingTranscriptView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                else if visibleRows.isEmpty {
+                    ContentUnavailableView(
+                        "Transcript Hidden", systemImage: "speaker.slash",
+                        description: Text("Unmute an audio track to show its transcript.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 else {
                     NativeTranscriptView(
-                        rows: displayRows, generation: displayGeneration, showsSpeakers: showsSpeakers,
+                        rows: visibleRows, generation: displayGeneration, showsSpeakers: showsSpeakers,
                         editable: store.libraryWritable && (!usesCheckpoint || canRestore), canPlay: canSeek,
                         playback: playback, meetingID: meetingID,
                         transcriptSourceID: meeting.transcriptSource?.id,
@@ -115,6 +129,7 @@ struct MeetingTranscriptView: View {
                 refreshRows()
             }
             .onChange(of: store.people) { _, _ in refreshRows() }
+            .onChange(of: playbackVisibility) { _, _ in refreshVisibleRows() }
         }
     }
     @ViewBuilder private var speakerLabelAction: some View {
@@ -188,6 +203,7 @@ struct MeetingTranscriptView: View {
         displayedMeetingID = meetingID
         guard let meeting else {
             displayRows = []
+            visibleRows = []
             displayGeneration += 1
             return
         }
@@ -224,6 +240,15 @@ struct MeetingTranscriptView: View {
                 speakerColorIndex: colorIndices[colorKey(segment)],
                 isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false)
         }
+        refreshVisibleRows()
+    }
+
+    private func refreshVisibleRows() {
+        let hidden = playbackVisibility.hiddenSegments(
+            meetingID: meetingID, segments: segments,
+            speakers: usesCheckpoint ? draft?.speakers ?? [] : meeting?.speakers ?? [],
+            audioFiles: meeting?.audioFiles ?? [])
+        visibleRows = displayRows.filter { !hidden.contains($0.id) }
         displayGeneration += 1
     }
 

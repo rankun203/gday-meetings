@@ -27,6 +27,7 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 - Preserve native list spacing. Do not add compensating scroll insets or offsets to hide a layout issue; reproduce the cause and verify navigation, playback changes, and window activation.
 - Keep playback updates local to the transport. Menus, text editing, selection, and the main content layout must remain stable while time advances.
 - Center waveform and primary playback controls together, with time labels below. Every track shares one playback/scrubbing timeline.
+- Muting a playback track also hides its attributed transcript passages for the player’s selected meeting, including while paused. Unmuting restores them. Keep other meetings and passages with unknown source metadata visible. If every passage is hidden, explain that unmuting a track restores its transcript. This is a display filter; saved text, history, and exports stay complete.
 - Support keyboard navigation, visible focus, Space for playback outside text editing, and VoiceOver labels and selection state. Respect Reduce Motion, Reduce Transparency, and increased contrast; do not override system accessibility preferences to preserve an effect.
 
 ## Meeting title header
