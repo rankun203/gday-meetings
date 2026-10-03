@@ -39,6 +39,3 @@ node_modules/
 
 # Private local analysis and meeting data
 /tmp/
-
-# Local UI audit captures; keep written findings in Git
-/docs/design/assets/*-ui-audit/

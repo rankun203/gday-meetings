@@ -194,7 +194,7 @@ Why Preview can look old: `scripts/preview-macos.sh` copies the **same built app
 
 ### Screenshot index
 
-The captures are retained locally under `docs/design/assets/2026-10-03-ui-audit/`, which is ignored by Git. The table preserves their filenames and evidence notes for review; images are not repository deliverables. The component matrix above specifies the corresponding target.
+The captures are retained locally under `tmp/ui-audit/2026-10-03-ui-audit/`, covered by the repository’s existing `/tmp/` ignore rule. The table preserves their filenames and evidence notes for review; images are not repository deliverables. The component matrix above specifies the corresponding target.
 
 | Capture | Current elements and state |
 | --- | --- |
@@ -249,4 +249,4 @@ Reviewed the shared theme, surrounding AGENTS wording, component matrix, source 
 
 ### Screenshot storage correction
 
-The initial audit commit included 34 PNGs (about 7.9 MB). Removed them from the tracked tree at the user’s request, retained the local files, and ignored audit capture folders. The written inventory, observations and provenance remain. Earlier published history still contains the binaries; this correction does not rewrite shared history. Future UI validation captures should stay in ignored local storage unless the user explicitly requests that assets be committed.
+The initial audit commit included 34 PNGs (about 7.9 MB). At the user’s request, moved the captures to `tmp/ui-audit/2026-10-03-ui-audit/` and replaced this task’s two commits with a single documentation commit whose tree contains no capture binaries. A guarded force-with-lease push removed their introduction from `master` history without changing earlier commits or uncommitted source work. The written inventory, observations and provenance remain. Old clones and server retention may still hold unreachable objects until garbage collection; no history outside this task was rewritten. Future UI validation captures stay under ignored `tmp/` or a system temporary directory unless the user explicitly requests that assets be committed.
