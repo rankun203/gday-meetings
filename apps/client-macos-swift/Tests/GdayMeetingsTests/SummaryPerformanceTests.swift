@@ -13,6 +13,8 @@ struct SummaryPerformanceTests {
     @Test func summaryCapacity() throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["GDAY_SUMMARY_CAPACITY"] == "1" else { return }
+        let operationLimit = Int(environment["GDAY_PERFORMANCE_OPERATIONS"] ?? "250") ?? 250
+        try #require((1...250).contains(operationLimit))
         let initialBytes = Int(environment["GDAY_SUMMARY_INITIAL_BYTES"] ?? "10240") ?? 10240
         let mode = environment["GDAY_SUMMARY_MODE"] ?? "visible"
         guard (1024...512_000).contains(initialBytes), ["visible", "hidden"].contains(mode) else {
@@ -65,19 +67,22 @@ struct SummaryPerformanceTests {
         var nextSample = 1.0
         var phase = "grow"
         var stopped = false
+        var holdStarted: Double?
 
         while ProcessInfo.processInfo.systemUptime - started < 30 {
             let elapsed = ProcessInfo.processInfo.systemUptime - started
-            if elapsed >= 25, phase != "hold" {
+            if elapsed >= 25 || updates >= operationLimit, phase != "hold" {
+                holdStarted = elapsed
                 phase = "hold"
-                skipped = max(skipped, 250 - updates)
+                skipped = max(skipped, operationLimit - updates)
                 try metrics.record(
                     event: "phase", phase: phase, payload: payload, updates: updates, skipped: skipped,
                     insertedBytes: updates * fragmentBytes,
                     payloadUTF8Bytes: seededBytes + updates * fragmentBytes,
                     payloadUTF16Units: seededUTF16 + updates * fragmentUTF16, lineCount: seededLines + updates)
             }
-            if elapsed < 25 {
+            if let holdStarted, elapsed - holdStarted >= 5 { break }
+            if phase == "grow" {
                 let slot = Int(elapsed * 10)
                 if slot >= nextSlot {
                     skipped += max(0, slot - nextSlot)
@@ -119,6 +124,9 @@ struct SummaryPerformanceTests {
                 stopped = true
                 break
             }
+        }
+        if environment["GDAY_PERFORMANCE_OPERATIONS"] != nil {
+            #expect(updates == operationLimit, "The fixed-work scaling batch did not complete")
         }
         try metrics.record(
             event: "end", phase: stopped ? "safety_stop" : "complete", payload: payload,

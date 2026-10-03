@@ -36,7 +36,18 @@ def main():
         help="New run directory; never overwritten",
     )
     parser.add_argument("--bytes", type=int, default=10240)
-    parser.add_argument("--mode", choices=["append", "beginning", "visible", "hidden"])
+    parser.add_argument(
+        "--mode",
+        choices=[
+            "append",
+            "beginning",
+            "middle",
+            "style",
+            "image",
+            "visible",
+            "hidden",
+        ],
+    )
     parser.add_argument(
         "--workspace", choices=["component", "library"], default="component"
     )
@@ -44,6 +55,11 @@ def main():
         "--revision",
         default="unspecified",
         help="Commit plus description of uncommitted changes",
+    )
+    parser.add_argument(
+        "--operations",
+        type=int,
+        help="Fixed batch size, 1 through 250; required for scaling comparisons",
     )
     parser.add_argument("--profile", action="store_true")
     parser.add_argument(
@@ -57,11 +73,15 @@ def main():
         help="Wait for external gate file after UI setup",
     )
     args = parser.parse_args()
+    if args.operations is not None and not 1 <= args.operations <= 250:
+        parser.error("--operations must be between 1 and 250")
     mode = args.mode or ("append" if args.task == "notes" else "visible")
     if not 1024 <= args.bytes <= 512000:
         parser.error("Use 1024 through 512000 bytes")
     if mode not in (
-        ["append", "beginning"] if args.task == "notes" else ["visible", "hidden"]
+        ["append", "beginning", "middle", "style", "image"]
+        if args.task == "notes"
+        else ["visible", "hidden"]
     ):
         parser.error("Mode does not match task")
     if args.profile and not args.budget_root:
@@ -133,6 +153,8 @@ def main():
         GDAY_PERFORMANCE_BUILD_REVISION=args.revision,
         GDAY_PERFORMANCE_METRICS_PATH=str(output / "metrics.jsonl"),
     )
+    if args.operations is not None:
+        env["GDAY_PERFORMANCE_OPERATIONS"] = str(args.operations)
     if args.task == "notes":
         env.update(
             GDAY_NOTES_CAPACITY="1",
@@ -167,6 +189,7 @@ def main():
         "workspace": args.workspace,
         "requested_bytes": args.bytes,
         "profiled": args.profile,
+        "operations": args.operations,
         "revision": args.revision,
         "bundle_sha256": sha256(executable),
         "test_bundle": str(args.bundle.resolve()),

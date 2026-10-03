@@ -7,8 +7,8 @@ performance_toolchain="$(cd "$(dirname "$(/usr/bin/xcrun --find swift)")/.." && 
 performance_plugin="$performance_toolchain/lib/swift/host/plugins/testing/libTestingMacros.dylib"
 if [[ -f "$performance_plugin" ]]; then
     swift_package test -c release -Xswiftc -load-plugin-library -Xswiftc "$performance_plugin" \
-        --filter 'NotesCapacityTests|SummaryPerformanceTests'
+        --filter 'StreamingGrowthIntegrationTests|NotesCapacityTests|SummaryPerformanceTests'
 else
-    swift_package test -c release --filter 'NotesCapacityTests|SummaryPerformanceTests'
+    swift_package test -c release --filter 'StreamingGrowthIntegrationTests|NotesCapacityTests|SummaryPerformanceTests'
 fi
 printf 'Release test bundle: %s\n' "$client_dir/.build/out/Products/Release/GdayMeetingsTests.xctest"

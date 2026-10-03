@@ -45,6 +45,34 @@ The plotted [numeric data](assets/2026-10-02-recording-endurance/capacity-data.j
 
 **Technical debt:** No second content store or delayed-render compatibility layer was added. Derived caches have explicit mutation invalidation. Existing whole-document Markdown replacement, Notes normalization/reference parsing per edit, and full-window verification remain; profile and repair those paths next, then repeat provider-driven typing/navigation and long-session tests. The tools depend on Apple's test-host path and Instruments XML schemas; validate them after toolchain upgrades. Short device probes cannot establish accelerator use over the whole task. Release validation does not establish that large Notes editing is realtime.
 
+# Automated growth contracts — October 3
+
+**Problem:** A fixed CPU limit depends on the Mac and can hide a slowdown when CPU is already saturated. The previous capacity fixtures measured fixed-duration windows, so larger documents could complete fewer actions and appear to use similar resources.
+
+**Implemented solution:** `StreamingGrowthIntegrationTests` runs production transcription/speaker attribution and display caches across 1/10/100 minutes of synthetic two-source history, including delayed labels and 40-second label outages. It bounds attribution and paragraph rebuild counts, mutable rows, and changes to frozen history. Real capture fan-out tests increasing stalls in both transcription and labeling consumers. Continuous dual-track Opus encoding, meters, and echo processing check bounded page writes in equal windows after 1/10/100 encoded seconds. These deterministic checks run in the macOS CI matrix.
+
+The strict [scaling runner](../../apps/client-macos-swift/scripts/performance/scaling.py) repeats identical fixed-count native operations at 10/100/500 KiB in fresh release processes and rotates size order. It covers Notes append, beginning, middle, local styling and image insertion, plus visible/hidden Summary. It verifies completion, equal work, exact binary hash, and matching fixture identity before comparing CPU time/operation, p95 operation duration, and writes/operation. The default 2× repeat-spread budget detects growth without prescribing an absolute device speed. Missing, guarded, and noisy cases cannot silently pass. The updated [agent runbook](../../apps/client-macos-swift/docs/PERFORMANCE_TESTING.md) reserves manual work for visible delay, composition/selection/undo, image correctness, real provider output, foregrounding, and actual audio routes/models.
+
+**Reasoning:** Retained document/audio bytes naturally grow; fixed-size local work should not repeatedly process old content. Work counts provide deterministic structural guards, while repeated release comparisons catch costs those counters do not observe. Average CPU alone is not a gate. A 2× budget over 50× history is a regression detector, not proof of constant complexity. Incremental peak footprint remains an observation, because process counters do not identify allocation lifetime. Real GPU/ANE and model inference require the separate hardware lane; synthetic speaker events cannot certify them.
+
+**Validation:** The deterministic release integration suite passed, including actual speaker identity checks; ten Python metric/negative-control tests passed. Negative controls reject linear/quadratic growth and fewer completed actions under saturated CPU, preserve verdicts under uniform device-speed changes, and include deferred CPU work. The signed release build passed in 137.96 seconds. Existing missing Command Line Tools linker search-path warnings remain; no new application API deprecation warning was reported.
+
+All **63 native workloads completed correctly**: seven cases × three sizes × three repeats, six operations each, plus five seconds settling/save. This shorter validation matrix uses the same gate as the default five-repeat, twelve-operation protocol. Across both larger sizes and four metrics, **31 comparisons failed and 25 passed**, with no missing/inconclusive runs. Current product scaling therefore fails the contract; the harness did not fail to execute. CPU and disk include deferred work and persistence, not only the synchronous edit. Exact test binary: `525f357474c97bb0402b90da6c1d90766cc4c8525b7354d96743a41dc9ac0c3d`.
+
+| Workload | Main CPU/operation growth, 500 vs 10 KiB | p95 operation growth | Process writes/operation growth |
+| --- | ---: | ---: | ---: |
+| Notes append | 5.34× | 3.07× | 244.0× |
+| Notes beginning | 5.21× | 3.94× | 243.3× |
+| Notes middle | 5.13× | 3.50× | 244.7× |
+| Notes local styling | 5.03× | 3.55× | 244.7× |
+| Notes image insertion | 4.09× | 2.78× | 134.6× |
+| Summary visible | 18.63× | 23.36× | Both zero |
+| Summary hidden | 1.00× | 0.99× | Both zero |
+
+These are ratios of repeat medians; verdicts use the documented quartile-spread rule. Process disk counters include settling and Notes flush and do not identify the writing subsystem. The very large write ratios warrant a separate trace; they are not evidence of a specific persistence defect. [Full verdicts and numeric observations](assets/2026-10-02-recording-endurance/scaling-contract-results.json) retain the matrix, binary hash, initial footprint, and incremental footprint observations. No model/GPU/ANE scaling claim is made from these unprofiled UI fixtures.
+
+**Technical debt:** Known Notes/Summary whole-document work remains. The strict release scaling lane is opt-in and retains failing verdicts; it is not an expected-failure exemption or a green claim about current scaling. Enable it as a required gate after those paths satisfy the contract. CI enforces the deterministic streaming checks now. Models, hardware delivery, transient allocations, and key-to-photon latency remain outside the synthetic suite and must be measured using the hardware/agent lane. No product UI or storage behavior changed in this test task.
+
 # Earlier recording measurements
 
 ![CPU, physical memory, app GPU, system GPU, and Neural Engine activity across the recording phases. Blank intervals are unmeasured.](assets/2026-10-02-recording-endurance/resource-comparison.svg)

@@ -34,11 +34,25 @@ uv run --no-project python "$PERF_DIR/run.py" summary \
   --bytes 102400 --mode visible --revision 'commit-and-local-change-description'
 ```
 
-Start with `10240`, then `102400`, then `512000` bytes. Stop increasing a task's payload when it reaches its latency guard. Keep each comparison in a fresh process, without competing builds or captures. Notes also supports `--mode beginning`; Summary supports `--mode hidden` as a control. Seed size is approximate because fixtures contain whole paragraphs.
+Start with `10240`, then `102400`, then `512000` bytes. Stop increasing a task's payload when it reaches its latency guard. Keep each comparison in a fresh process, without competing builds or captures. Notes also supports `--mode beginning`, `middle`, `style`, and `image`; Summary supports `--mode hidden` as a control. Seed size is approximate because fixtures contain whole paragraphs.
 
 Each run records its binary hash, PID, configuration, timestamp, console output, per-second resources, per-operation durations, and final outcome. The test host is packaged from Apple's installed Swift test helper and uses a unique bundle identifier. The runner strips inherited credentials and terminal prompt variables from its child environment. Console collection happens in the runner, outside the measured process. Output directories must be new.
 
 Exit code `0` requires both a successful test process and a completed workload. Exit code `2` means incomplete, a latency guard, timeout, or capture failure; inspect `result.json`. A successful Swift test alone can still contain a guarded performance run. A 240-second external watchdog bounds synchronous work that cannot observe the in-test guard until it returns.
+
+## Enforce growth limits
+
+`scaling.py` runs repeated equal-work integration batches across increasing payloads. It compares CPU time and p95 duration per operation, rather than an absolute CPU threshold. It also reports disk writes per operation and incremental peak footprint. See the [scaling contract and agent checks](../../docs/PERFORMANCE_TESTING.md) for coverage, noise handling, and known violations.
+
+```sh
+uv run --no-project python "$PERF_DIR/scaling.py" \
+  --bundle "$TEST_BUNDLE" --output "$RUN_ROOT/scaling" \
+  --revision 'commit-and-local-change-description'
+uv run --no-project python "$PERF_DIR/scaling.py" \
+  --output "$RUN_ROOT/scaling" --evaluate-only
+```
+
+Default cases cover Notes append, beginning, middle, styling, image insertion, visible Summary, and hidden Summary. Five fresh-process repeats rotate three payload sizes. Use `run.py --operations 12` for one equal-work diagnostic case. A scaling result is strict: exit 1 for detected growth, 2 for inconclusive evidence, and 0 only for covered metrics passing. CPU-only fixtures do not certify accelerators or model inference. The normal release-test build also runs deterministic `StreamingGrowthIntegrationTests`; these are enforced in macOS CI.
 
 ## Add all-device profiling
 

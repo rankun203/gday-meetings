@@ -16,3 +16,6 @@ runs:
     - name: Build and verify release app
       shell: bash
       run: make build-macos
+    - name: Verify bounded streaming integration
+      shell: bash
+      run: bash apps/client-macos-swift/scripts/performance/build-tests.sh

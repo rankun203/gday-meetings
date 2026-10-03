@@ -1,13 +1,58 @@
 ---
-title: Repeat the speaker-processing and interaction test
+title: Test resource scaling and app interactions
 date: 2026-10-03
 status: ready
 scope: macos-performance-runbook
 ---
 
-# One-hour recording, Notes, and Summary test
+# Resource scaling and app interactions
 
-Repeat the final speaker-enabled run using this checklist. Append measurements to the [endurance worklog](../../../docs/worklogs/2026-10-02-recording-endurance.md); keep real meeting content and raw traces outside the repository.
+Start with automated scaling tests. Use agent-led testing for behavior the fixtures cannot establish: perceived input delay, visual correctness, real capture routes, provider streaming, and accelerator activity. Append measurements to the [endurance worklog](../../../docs/worklogs/2026-10-02-recording-endurance.md); keep real meeting content and raw traces outside the repository.
+
+## Scaling contract
+
+Compare **the same amount of new work** after increasing accumulated history. Total recording bytes and stored text may grow; CPU per audio second or edit, incremental writes, mutable queues, and work on the visible region should remain bounded. Initial loading, full export, search, and edits that deliberately affect the whole document are separate workloads. A large image has an unavoidable decoding cost; hold its dimensions and format fixed when testing growth in surrounding Notes.
+
+| Lane | Automated coverage | Pass condition |
+| --- | --- | --- |
+| Default CI | Real stream, speaker-attribution and display-cache updates after 1, 10, and 100 minutes of synthetic two-source history; delayed labels included | Bounded attribution/rebuild counts and hot rows; the first frozen row stays unchanged; all final rows survive |
+| Default CI | Real capture fan-out to transcription and labeling queues, with increasingly stalled consumers | PCM stays within two seconds per queue; bounded loss records preserve overload evidence |
+| Default CI | Continuous dual-track Opus encoding, metering, and echo processing; fixed windows after 1, 10, and 100 encoded seconds | Bounded page writes per window; output is appended, not rewritten with accumulated history |
+| Release scaling | Notes append/start/middle edits, local Markdown styling, image insertion; visible and hidden Summary streams at 10/100/500 KiB | Repeated equal-work CPU/operation, p95 operation duration, and writes/operation stay within the growth budget |
+| Hardware recording | Real microphone/system capture, Apple transcription and installed speaker models | Measure matched early/middle/late windows with CPU, memory, disk, GPU/ANE and completed-audio coverage; never substitute synthetic labels for inference coverage |
+
+The deterministic integration suite runs in the macOS build matrix through `build-tests.sh`. It exercises production components without model downloads or permission prompts. It does not prove the model's internal caches, GPU/ANE cost, actual device delivery, or complete-window rendering are bounded.
+
+Run the strict release lane separately on a quiet desktop:
+
+```sh
+bash apps/client-macos-swift/scripts/performance/build-tests.sh
+PERF_DIR="$PWD/apps/client-macos-swift/scripts/performance"
+TEST_BUNDLE="$PWD/apps/client-macos-swift/.build/out/Products/Release/GdayMeetingsTests.xctest"
+uv run --no-project python "$PERF_DIR/scaling.py" \
+  --bundle "$TEST_BUNDLE" --output /private/tmp/gday-scaling-new \
+  --revision "$(git rev-parse HEAD)"
+```
+
+Use a new output directory and an isolated checkout when a development bundle is running. The runner uses five fresh processes per case and size, rotates size order, and applies twelve identical operations per run. All cases receive the same operation count, fragment or image, viewport, and binary. A fixed upper duration and external watchdog prevent a slow case from hanging indefinitely. Incomplete work is not a passing measurement. Narrow a diagnostic run with `--cases notes:middle summary:visible`; at least three repeats and three sizes spanning 10× are required.
+
+The default budget is **2× cost over the tested history range**, not two times a particular Mac's CPU percentage. A comparison fails when the larger case's lower quartile exceeds twice the baseline's upper quartile. It passes when the larger upper quartile stays within twice the baseline's lower quartile; overlap is inconclusive. This repeat-spread rule reduces noisy verdicts but is not a statistical confidence interval or proof of constant asymptotic cost. Unit tests verify that uniform device-speed changes preserve verdicts and that linear/quadratic growth fails. Do not increase the budget to accommodate a regression.
+
+`scaling-report.json` records every comparison, failed/incomplete run, release binary hash, final payload and counter scope. Exit **0** means the measured CPU/latency/disk contract passed, **1** means a detected violation, and **2** means missing or noisy evidence. Average CPU is insufficient: a saturated app can remain at 100% while completing fewer actions. The gate compares CPU time per operation and checks equal delivered work. CPU and disk totals include the five-second settling/save window, so postponing work cannot evade the gate. Total footprint is allowed to grow with document storage; incremental peak footprint is reported, but allocator retention makes it unsuitable as a universal allocation bound. Missing GPU/ANE data is unmeasured, never zero or an implied pass.
+
+Current large-document Notes and Summary paths are known to violate the desired flat-cost contract. The release lane is an explicit strict test, not a silently passing benchmark or an expected-failure exemption. Keep it out of the ordinary build gate until the product paths satisfy it; deterministic bounded-work checks remain enforced on every macOS build. Use failures to locate repeated work, repair it, and rerun the same cases.
+
+## Agent-led checks
+
+An agent should run and interpret the automated report first, then spend UI time on what it cannot prove:
+
+- Compare typing at the beginning, middle, and end of large Notes. Use composition input, selection replacement, undo/redo, and rapid typing; watch caret movement, dropped/reordered text, scroll jumps, and visible delay. Verify saved/reopened content and timestamps.
+- Paste images into large Notes, resize and undo them, then switch read/edit. Verify image identity, position, sharpness, aspect ratio, and selection. Use a fixed image for resource comparisons, then separately vary pixel dimensions and asset count.
+- Observe actual provider fragments while Summary is visible and hidden. Check incomplete Markdown, lists, code fences, citations, scrolling/selection, cancellation and final persistence. A synthetic stream does not cover network cadence or arbitrary Markdown block boundaries.
+- Switch meetings, tabs and applications during recording and streaming. Capture the first frame after returning, blank content, focus, transient stalls, and whether controls remain usable. Locate controls before profiling to avoid charging accessibility polling to the app.
+- Exercise real input devices, route changes, silence, overlap, and repeated fixed audio with installed models. Check transcript coverage and speaker continuity as well as resources; lower resource use caused by dropped work is a failure.
+
+Do not repeat manually what automated counters already establish. Record the build, expected and observed behavior, screenshots, actual action/capture timestamps, and unavailable permissions/providers. For a visual stall, use UI/hang or allocation profiling; CPU alone cannot establish key-to-photon latency. For scaling comparisons, warm the selected models first, then loop the same authorized fixed audio at the same cadence. Keep speakers, audio format, device routes, model presets, and visible content constant; compare equal completed-audio windows after warm-up, midway, and near the end. Record gaps and dropped work. Separate changing-source endurance observations from this controlled test. The following one-hour schedule covers the hardware and interaction lane.
 
 ## Prepare
 

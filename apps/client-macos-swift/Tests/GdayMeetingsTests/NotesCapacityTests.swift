@@ -11,7 +11,8 @@ import Testing
         guard environment["GDAY_NOTES_CAPACITY"] == "1" else { return }
         let sizes = (environment["GDAY_NOTES_CAPACITY_BYTES"] ?? "10240,102400")
             .split(separator: ",").compactMap { Int($0) }.filter { (1...512_000).contains($0) }
-        let mode = environment["GDAY_NOTES_CAPACITY_MODE"] == "beginning" ? "beginning" : "append"
+        let mode = environment["GDAY_NOTES_CAPACITY_MODE"] ?? "append"
+        try #require(["append", "beginning", "middle", "style", "image"].contains(mode))
         for bytes in sizes { try await exercise(bytes: bytes, mode: mode) }
     }
 
@@ -68,35 +69,57 @@ import Testing
         try PerformanceResourceMetrics.waitForStartGate(task: "notes", mode: "\(scope)-\(mode)")
         let text = try #require(editor(in: host))
         window.makeFirstResponder(text)
-        let fragment = "文"
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.setData(try fixtures.png(), forType: .png)
+        let fragment = mode == "style" ? "**文**" : "文"
+        let operationLimit = Int(ProcessInfo.processInfo.environment["GDAY_PERFORMANCE_OPERATIONS"] ?? "250") ?? 250
+        try #require((1...250).contains(operationLimit))
         let rate = 10.0
         let metrics = try PerformanceResourceMetrics(
             task: "notes", mode: "\(scope)-\(mode)", initialPayload: initial, cadenceHz: rate,
             fragmentBytes: fragment.utf8.count,
             imageReferenceCount: 4, uniqueAssetPixels: 80_000)
+        _ = try metrics.record(
+            event: "begin", phase: "typing", payload: text.string, updates: 0, skipped: 0, insertedBytes: 0)
         var updates = 0
         var skipped = 0
         var nextUpdate = 0.0
         var nextSample = 0.0
         var aborted = false
         let started = ProcessInfo.processInfo.systemUptime
-        while ProcessInfo.processInfo.systemUptime - started < 25 {
+        while ProcessInfo.processInfo.systemUptime - started < 25 && updates < operationLimit {
             let elapsed = ProcessInfo.processInfo.systemUptime - started
             if elapsed >= nextUpdate {
                 skipped += max(0, Int((elapsed - nextUpdate) * rate))
                 nextUpdate = elapsed + 1 / rate
-                let location = mode == "append" ? (text.string as NSString).length : 0
+                let source = text.string as NSString
+                let location: Int
+                switch mode {
+                case "beginning": location = 0
+                case "middle", "style", "image":
+                    // Use a paragraph boundary, never split a Unicode grapheme.
+                    location = source.paragraphRange(for: NSRange(location: source.length / 2, length: 0)).location
+                default: location = source.length
+                }
                 let actionUTC = Date()
                 let actionStarted = ProcessInfo.processInfo.systemUptime
-                text.insertText(fragment, replacementRange: NSRange(location: location, length: 0))
+                if mode == "image" {
+                    text.setSelectedRange(NSRange(location: location, length: 0))
+                    try #require(text.pasteImages(from: pasteboard))
+                }
+                else {
+                    text.insertText(fragment, replacementRange: NSRange(location: location, length: 0))
+                }
                 try await Task.sleep(for: .milliseconds(1))
                 host.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let actionDuration = ProcessInfo.processInfo.systemUptime - actionStarted
                 updates += 1
                 try metrics.recordAction(
-                    name: "insert-character-and-layout", startedAt: actionUTC, durationSeconds: actionDuration,
-                    payloadBytes: initial.utf8.count + updates * fragment.utf8.count)
+                    name: mode == "image" ? "paste-image-and-layout" : "insert-and-style-layout", startedAt: actionUTC,
+                    durationSeconds: actionDuration,
+                    payloadBytes: text.string.utf8.count)
                 if actionDuration > 2 {
                     aborted = true
                     break
@@ -106,7 +129,7 @@ import Testing
                 nextSample = elapsed + 1
                 let sample = try metrics.record(
                     phase: "typing", payload: text.string, updates: updates, skipped: skipped,
-                    insertedBytes: updates * fragment.utf8.count)
+                    insertedBytes: text.string.utf8.count - initial.utf8.count)
                 if (sample.physicalFootprintBytes ?? 0) > 2 * 1024 * 1024 * 1024 {
                     aborted = true
                     break
@@ -116,27 +139,33 @@ import Testing
         }
         _ = try metrics.record(
             event: "phase", phase: aborted ? "guard-stop" : "hold", payload: text.string,
-            updates: updates, skipped: skipped, insertedBytes: updates * fragment.utf8.count)
+            updates: updates, skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
         for second in 0..<5 {
             try await Task.sleep(for: .seconds(1))
             if second == 0 {
                 _ = try metrics.record(
                     event: "phase", phase: "save-start", payload: text.string, updates: updates,
-                    skipped: skipped, insertedBytes: updates * fragment.utf8.count)
+                    skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
                 #expect(store.flushNotes())
                 _ = try metrics.record(
                     event: "phase", phase: "save-end", payload: text.string, updates: updates,
-                    skipped: skipped, insertedBytes: updates * fragment.utf8.count)
+                    skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
             }
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             _ = try metrics.record(
                 phase: "hold", payload: text.string, updates: updates, skipped: skipped,
-                insertedBytes: updates * fragment.utf8.count)
+                insertedBytes: text.string.utf8.count - initial.utf8.count)
         }
         _ = try metrics.record(
             event: "end", phase: aborted ? "guard-stop" : "finished", payload: text.string,
-            updates: updates, skipped: skipped, insertedBytes: updates * fragment.utf8.count)
+            updates: updates, skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
         #expect(store.meetings.first?.notes == text.document.markdown)
+        if ProcessInfo.processInfo.environment["GDAY_PERFORMANCE_OPERATIONS"] != nil {
+            #expect(updates == operationLimit, "The fixed-work scaling batch did not complete")
+        }
+        if mode == "image" {
+            #expect(NotesImageReference.parse(in: text.string).count == 4 + updates)
+        }
     }
 }
