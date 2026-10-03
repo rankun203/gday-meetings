@@ -19,6 +19,26 @@ private final class ModelDownloadObservations: @unchecked Sendable {
 }
 
 @MainActor struct LocalModelManagerTests {
+    @Test func readinessIgnoresDownloadProgressAndLeases() {
+        var state = LocalModelState(phase: .downloading, totalBytes: 100)
+        let initial = state.healthIdentity
+        for bytes in 1...100 {
+            state.completedBytes = Int64(bytes)
+            #expect(state.healthIdentity == initial)
+        }
+        state.totalBytes = 200
+        state.inUse = 1
+        #expect(state.healthIdentity == initial)
+        for phase in [LocalModelPhase.verifying, .preparing, .ready, .cancelled, .failed, .missing, .unverified] {
+            let previous = state.healthIdentity
+            state.phase = phase
+            #expect(state.healthIdentity != previous)
+        }
+        let previous = state.healthIdentity
+        state.message = "Synthetic setup failure."
+        #expect(state.healthIdentity != previous)
+    }
+
     @Test func legacyModelsCopyIntoDataFolderWithoutOverwritingExistingModels() async throws {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: fixture) }

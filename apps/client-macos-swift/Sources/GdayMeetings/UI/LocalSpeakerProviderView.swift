@@ -18,6 +18,12 @@ struct LocalSpeakerProviderView: View {
     }
     private var modelID: LocalModelID? { LocalModelID(rawValue: draft.model) }
     private var changed: Bool { store.settings.serviceProviders.first { $0.id == draft.id } != draft }
+    private var modelHealthIdentity: [LocalModelID: LocalModelState.HealthIdentity] {
+        let savedModel = store.settings.serviceProviders.first { $0.id == draft.id }
+            .flatMap { LocalModelID(rawValue: $0.model) }
+        return localModels.states.filter { $0.key == savedModel || $0.key == .voiceEmbedding }
+            .mapValues(\.healthIdentity)
+    }
 
     var body: some View {
         Form {
@@ -96,9 +102,8 @@ struct LocalSpeakerProviderView: View {
                     !changed || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .task { await store.refreshProviderHealth(providerID: draft.id) }
-        .onReceive(localModels.$states) { _ in
-            Task { await store.refreshProviderHealth(providerID: draft.id) }
+        .task(id: modelHealthIdentity) {
+            await store.refreshProviderHealth(providerID: draft.id)
         }
     }
     private func save() {
@@ -225,9 +230,12 @@ struct LocalModelDownloadView: View {
         }
         .task {
             await models.refresh([modelID])
-            readiness = await models.health(for: modelID)
         }
-        .onReceive(models.$states) { _ in Task { readiness = await models.health(for: modelID) } }
+        .task(id: state.healthIdentity) {
+            let result = await models.health(for: modelID)
+            guard !Task.isCancelled else { return }
+            readiness = result
+        }
     }
     private func openFolder() {
         Task {

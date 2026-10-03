@@ -52,6 +52,7 @@ Read the relevant documents before changing the app:
 - [General settings and provider health](../../docs/worklogs/2026-10-02-general-settings.md): stage behavior, shared scrolling, capability readiness, and initial provider selection.
 - [General appearance preference](../../docs/worklogs/2026-10-02-appearance-settings.md): persisted System, Light, and Dark appearance across app windows.
 - [Speaker association health](../../docs/worklogs/2026-10-02-speaker-association-health.md): Nemotron capability migration and automatic local model verification.
+- [Model download health](../../docs/worklogs/2026-10-03-model-download-health.md): readiness updates by model phase without repeated checks on download progress.
 - [Provider icons](../../docs/worklogs/2026-10-02-provider-header-icon.md): shared symbols in provider rows, headers, and the Add menu.
 - [Transcript result presentation](../../docs/worklogs/2026-09-28-transcript-result-presentation.md): reset the viewport when a provider result replaces a transcript version.
 - [Transcript whitespace](../../docs/worklogs/2026-09-28-transcript-whitespace.md): normalize incoming provider text before persistence.

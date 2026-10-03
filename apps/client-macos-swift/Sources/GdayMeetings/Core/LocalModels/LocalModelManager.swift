@@ -8,12 +8,19 @@ enum LocalModelPhase: String, Sendable {
 }
 
 struct LocalModelState: Sendable {
+    struct HealthIdentity: Equatable {
+        let phase: LocalModelPhase
+        let message: String?
+    }
+
     var phase: LocalModelPhase = .missing
     var completedBytes: Int64 = 0
     var totalBytes: Int64 = 0
     var message: String?
     var inUse = 0
     var progress: Double? { totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil }
+    // Download progress and leases do not change model readiness.
+    var healthIdentity: HealthIdentity { .init(phase: phase, message: message) }
 }
 
 struct LocalModelLease: @unchecked Sendable {
