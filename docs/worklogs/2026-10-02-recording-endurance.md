@@ -1,7 +1,7 @@
 ---
 title: Recording endurance and processing cost
 date: 2026-10-02
-status: measured-summary-pending
+status: measured
 scope: swift-app-performance
 ---
 
@@ -58,7 +58,27 @@ The later saved-Notes typing trace ran 15:12:59.380–15:13:20.560, covering onl
 
 The capture intended for final save ran 15:01:15.394–36.422, but Stop was clicked at **15:02:07.669**. Treat its values as pre-save only. Later ordinary samples retain the save memory peak; no corresponding stack trace covers it.
 
-A later capture labeled Summary-visible did **not** run Summary generation: automatic approval review blocked the external-provider request. It is an idle blocked-attempt observation, not evidence about Summary performance. A 30-second navigation attempt also failed during trace finalization; its CPU/memory samples remain, but no verified accelerator or stack measurements do. A later 20.927-second capture covered switching away from a saved meeting: app/main CPU averaged 6.78% / 6.72%, with no observed app GPU or ANE activity. The return occurred after the capture ended. This is saved-meeting navigation, not navigation during Summary generation. The reported Summary CPU problem remains untested until generation is authorized and actually starts; no Summary success or performance conclusion is claimed.
+A later capture labeled Summary-visible did **not** run Summary generation: automatic approval review blocked the external-provider request. It is an idle blocked-attempt observation, not evidence about Summary performance. A 30-second navigation attempt also failed during trace finalization; its CPU/memory samples remain, but no verified accelerator or stack measurements do. A later 20.927-second capture covered switching away from a saved meeting: app/main CPU averaged 6.78% / 6.72%, with no observed app GPU or ANE activity. The return occurred after the capture ended. This is saved-meeting navigation, not navigation during Summary generation. That initial attempt did not test Summary generation. The authorized follow-up below supersedes the pending status.
+
+## Summary generation follow-up
+
+![Local app CPU and footprint during three authorized Summary requests, with discrete GPU and Neural Engine captures.](assets/2026-10-02-recording-endurance/summary-resource.svg)
+
+On October 3, after approval for the configured OpenRouter provider, Summary generation reproduced local app CPU near one core: ten-second samples reached **93.3%** on the first request and **100.6%** on the second. CPU returned below 0.1% after the third run. This reproduces temporary high local CPU, not continuous one-core use throughout generation. Physical footprint peaked at **537.5 MiB** during the follow-up.
+
+The strongest CPU spikes fell outside the short Instruments windows. Startup traces also contain substantial accessibility inspection: 2.261 and 2.155 seconds of sampled main-thread work. The later capture avoided UI polling and recorded 193 ms of Markdown rendering, 204 ms of Markdown update work, 995 ms of layout, and 11 ms of accessibility work over 20.967 seconds. These inclusive categories overlap. They show rendering activity but do not establish the cause of the one-core spikes.
+
+All three captures observed **zero app GPU and system Neural Engine activity**, with valid empty Core ML tables. System GPU active wall time was 0.20–2.47%. The provider performs generation remotely; these measurements describe local client processing and rendering, not server inference.
+
+| Capture | Actual UTC interval | App / main CPU, % of one core | Workload coverage |
+| --- | --- | ---: | --- |
+| First request startup | 01:07:13.610–34.809 | 22.23 / 21.58 | Request began 01:07:23.666; trace ended before the 93.3% sample and observed completion |
+| Second request startup | 01:08:36.649–57.637 | 20.49 / 20.09 | Request began 01:08:52.859; trace ended before Notes/Summary tab changes and the 100.6% sample |
+| Later output, no UI polling | 01:10:54.420–01:11:15.387 | 14.05 / 13.55 | Request began 01:10:34.160; trace covers later output and return toward idle, not the complete request |
+
+Notes and Summary tabs were changed during the second request, but after its trace ended. Saved meetings were switched after generation completed. Those interactions therefore lack overlapping stack captures; no measured input-latency or navigation-during-streaming conclusion is claimed. Use the [repeat runbook](2026-10-03-speaker-repeat-runbook.md) to align a short CPU/hang capture with incoming output and measure visible-versus-hidden Summary at fixed output sizes and chunk cadence. Keep heavyweight GPU tracing separate if it prevents covering the relevant UI interval.
+
+The final Summary was verified in the app and persisted in `summary.md` (4,027 bytes). The three new raw traces were removed after aggregate verification; numeric results, TOCs, export hashes, and private provenance remain. This follow-up supersedes the earlier pending-approval status; the earlier blocked attempt remains an idle observation.
 
 ## Recording integrity
 
@@ -183,13 +203,15 @@ A 154-second monitor interruption in Part 1 and its first invalid restarted CPU 
 
 Raw artifacts stay outside the repository under `/private/tmp/gday-longrun-20261002`. The artifact interruption threshold is **8 GiB**, with a **20 GiB free-space floor**. Two-second polling and a 20-second graceful-stop interval allow transient overshoot during finalization; this is not a hard disk quota. Each combined capture is exported and validated immediately. Numeric aggregates and provenance are retained; disposable exports and verified intermediate traces are removed. The first and latest successful raw trace are retained separately for Parts 3 and 4. Earlier-phase references are retained. User-authorized cleanup removed verified manual raw traces after aggregation and an unrecoverable failed Notes trace. The 90-second Notes and 30-second navigation attempts exceeded the threshold during trace finalization and failed. The manual helper now accepts exactly 20 seconds.
 
-Settings were restored: after-recording Summary and to-do generation are on; live transcription, speaker labeling, association, microphone, and system audio are on. Recording measurements are finished. Monitor, speech-service sampler, playback queue, players, tracing, and keep-awake processes were stopped; shutdown was verified. Summary generation remains pending explicit approval for the configured external provider.
+Settings were restored: after-recording Summary and to-do generation are on; live transcription, speaker labeling, association, microphone, and system audio are on. Recording measurements are finished. Monitor, speech-service sampler, playback queue, players, tracing, and keep-awake processes were stopped; shutdown was verified. The user later approved OpenRouter, and the Summary follow-up was completed; the restarted samplers were stopped.
 
 ## Source fixes versus the measured build
 
 A read-only audit at 14:27 UTC found source commit `8fd4a75`, newer than the running app. Its [saved-transcript changes](2026-10-03-saved-transcript-segments.md) remove full event replay, hashing, and full draft rewriting from a healthy stop, and change ordinary reopening to read the saved projection. Those paths are fixed in source; this experiment does not validate their latency or memory benefit, nor prove they caused the earlier spike.
 
 No newer Notes, Summary, or foreground-layout repair was found in that audit. Summary publication is already throttled to about 100 ms, but changed text still replaces the complete attributed document. Notes edits publish Markdown and invalidate layout, with image normalization debounced by 450 ms. These are paths to measure, not established causes. A further read-only check at 15:11 UTC still found HEAD `8fd4a75` with no uncommitted application code.
+
+A final source check during the Summary follow-up found no newer committed app implementation. Concurrent uncommitted changes corrected transcript filenames in data-event records and tests; they were not part of this measured build or this documentation commit.
 
 ## Technical debt and follow-up
 
@@ -199,6 +221,6 @@ No application code changed. This experiment retains measurement limitations:
 - **Sequential workloads and caches:** repeat fixed synthetic material in fresh processes, with no competing builds, for controlled mode comparisons.
 - **Sparse first-phase accelerators:** the final repeat improves coverage; it cannot reconstruct missing historical device activity.
 - **Rolling trace retention:** intermediate detailed stacks are discarded after numeric verification to bound disk usage. Re-capture anomalies that need deeper stack/allocation analysis.
-- **Summary generation:** sustained summary-generation CPU remains a separate workload in the [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
+- **Summary generation:** temporary one-core CPU was reproduced, but the strongest spikes lack overlapping stacks. Align output arrival with a CPU/hang capture before attributing the cause. See the [repeat runbook](2026-10-03-speaker-repeat-runbook.md) and [performance evaluation plan](2026-10-02-performance-evaluation-plan.md).
 
 SVG text is embedded as vector outlines to avoid viewer font substitution. The exported SVG is rasterized only for visual checking; the worklog uses the SVG.
