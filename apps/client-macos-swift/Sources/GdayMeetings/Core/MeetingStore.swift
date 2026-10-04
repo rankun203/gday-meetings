@@ -711,32 +711,41 @@ final class MeetingStore: ObservableObject {
 
     @discardableResult
     func mergePerson(id: UUID, into targetID: UUID) -> Bool {
+        mergePeople(ids: [id, targetID], into: targetID)
+    }
+
+    @discardableResult
+    func mergePeople(ids: Set<UUID>, into targetID: UUID) -> Bool {
         guard canMergePeople else {
             errorMessage = "Wait for recording, processing, and indexing to finish before merging people."
             return false
         }
-        guard id != targetID, let source = people.first(where: { $0.id == id }),
+        guard ids.count > 1, ids.contains(targetID), ids.isSubset(of: Set(people.map(\.id))),
             let targetIndex = people.firstIndex(where: { $0.id == targetID })
         else {
-            errorMessage = "Select two different people to merge."
+            errorMessage = "Select at least two people and choose one to keep."
             return false
         }
-        let merge = PersonMerge(sourceID: id, targetID: targetID)
-        guard voiceLibrary.mergePerson(id: id, into: targetID, staged: true) else {
+        let sourceIDs = ids.subtracting([targetID])
+        let sources = people.filter { sourceIDs.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }
+        let merge = PersonMerge(sourceIDs: sourceIDs, targetID: targetID)
+        guard voiceLibrary.mergePeople(ids: sourceIDs, into: targetID, staged: true) else {
             errorMessage = voiceLibrary.errorMessage ?? "Couldn’t update voice samples."
             return false
         }
-        people[targetIndex] = PersonMerge.combining(source, into: people[targetIndex])
-        people.removeAll { $0.id == id }
+        for source in sources { people[targetIndex] = PersonMerge.combining(source, into: people[targetIndex]) }
+        people.removeAll { sourceIDs.contains($0.id) }
         for index in meetings.indices { merge.apply(to: &meetings[index]) }
-        let sourceKey = Self.contextChatKey(personID: id)
         let targetKey = Self.contextChatKey(personID: targetID)
-        if let messages = contextualChats.removeValue(forKey: sourceKey) {
-            var combined = contextualChats[targetKey] ?? []
-            for message in messages where !combined.contains(where: { $0.id == message.id }) {
-                combined.append(message)
+        for source in sources {
+            let sourceKey = Self.contextChatKey(personID: source.id)
+            if let messages = contextualChats.removeValue(forKey: sourceKey) {
+                var combined = contextualChats[targetKey] ?? []
+                for message in messages where !combined.contains(where: { $0.id == message.id }) {
+                    combined.append(message)
+                }
+                contextualChats[targetKey] = combined.sorted { $0.createdAt < $1.createdAt }
             }
-            contextualChats[targetKey] = combined.sorted { $0.createdAt < $1.createdAt }
         }
         return save(personMerge: merge)
     }

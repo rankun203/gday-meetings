@@ -17,7 +17,7 @@ struct LibraryView: View {
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
     @ViewState private var selectedMeeting: UUID?
-    @ViewState private var selectedPerson: UUID?
+    @ViewState private var selectedPeople: Set<UUID> = []
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @FocusState private var searchFocused: Bool
@@ -155,7 +155,7 @@ struct LibraryView: View {
                     HSplitView {
                         Group {
                             switch destination {
-                            case .people: PeopleView(selection: $selectedPerson)
+                            case .people: PeopleView(selection: $selectedPeople)
                             case .tags: TagsView(selection: $selectedTag)
                             default:
                                 meetingList
@@ -167,10 +167,17 @@ struct LibraryView: View {
                             {
                                 MeetingDetailView(meetingID: id).id(id)
                             }
-                            else if destination == .people, let id = selectedPerson,
+                            else if destination == .people, selectedPeople.count == 1, let id = selectedPeople.first,
                                 let person = store.people.first(where: { $0.id == id })
                             {
                                 ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
+                            }
+                            else if destination == .people, selectedPeople.count > 1 {
+                                ContentUnavailableView {
+                                    Label("\(selectedPeople.count) People Selected", systemImage: "person.2")
+                                } description: {
+                                    Text("Choose Merge to combine the selected people.")
+                                }
                             }
                             else if destination == .tags, let id = selectedTag,
                                 let tag = store.tags.first(where: { $0.id == id })

@@ -1,13 +1,17 @@
 import SwiftUI
 
 struct PeopleView: View {
-    @Binding var selection: UUID?
+    @Binding var selection: Set<UUID>
     @EnvironmentObject private var store: MeetingStore
     @ViewState private var name = ""
     @ViewState private var deleting: Person?
     @ViewState private var showExcluded = false
     @ViewState private var reviewingVoices = false
-    @ViewState private var merging: Person?
+    private struct MergeRequest: Identifiable {
+        let id = UUID()
+        let personIDs: Set<UUID>
+    }
+    @ViewState private var mergeRequest: MergeRequest?
     private var visiblePeople: [Person] {
         let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return (showExcluded ? store.people : store.listedPeople)
@@ -19,14 +23,19 @@ struct PeopleView: View {
     }
     var body: some View {
         VStack(alignment: .leading) {
-            Button("Review Voices…", systemImage: "waveform") { reviewingVoices = true }
-                .buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal).padding(.top)
-            Button("Merge Person…", systemImage: "person.2") {
-                merging = store.people.first { $0.id == selection }
+            HStack(spacing: 8) {
+                Button("Review Voices…") { reviewingVoices = true }
+                if selection.count > 1 {
+                    Button("Merge…") {
+                        mergeRequest = MergeRequest(personIDs: selection)
+                    }
+                    .accessibilityLabel("Merge Selected People")
+                    .help("Merge selected people")
+                }
+                Spacer(minLength: 0)
             }
-            .disabled(selection == nil || store.people.count < 2)
-            .padding(.horizontal)
+            .buttonStyle(.bordered).controlSize(.small)
+            .padding(.horizontal).padding(.top)
             HStack {
                 TextField("Find or Add Person", text: $name).onSubmit(findOrAdd)
                     .accessibilityLabel("Find or Add Person")
@@ -50,23 +59,22 @@ struct PeopleView: View {
                             "Delete person"
                         ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(person.id)
-                        .contextMenu {
-                            Button("Merge Person…") { merging = person }
-                                .disabled(store.people.count < 2)
-                        }
                 }
             }
             Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox).padding(.horizontal).padding(.bottom)
         }.navigationTitle("People")
-            .sheet(item: $merging) { person in
-                PersonMergeView(sourceID: person.id) { keptID in
+            .onChange(of: visiblePeople.map(\.id)) { _, ids in
+                selection.formIntersection(ids)
+            }
+            .sheet(item: $mergeRequest) { request in
+                PersonMergeView(selectedIDs: request.personIDs) { keptID in
                     name = ""
                     if let kept = store.people.first(where: { $0.id == keptID }),
                         !store.excludedTagIDs.isDisjoint(with: kept.tagIDs)
                     {
                         showExcluded = true
                     }
-                    selection = keptID
+                    selection = [keptID]
                 }
             }
             .sheet(isPresented: $reviewingVoices) {
@@ -91,7 +99,7 @@ struct PeopleView: View {
         if let person = visiblePeople.first(where: {
             $0.name.compare(query, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == .orderedSame
         }) {
-            selection = person.id
+            selection = [person.id]
         }
         else {
             add()
@@ -100,7 +108,7 @@ struct PeopleView: View {
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        selection = store.addPerson(name: value)
+        selection = [store.addPerson(name: value)]
         name = ""
     }
 }

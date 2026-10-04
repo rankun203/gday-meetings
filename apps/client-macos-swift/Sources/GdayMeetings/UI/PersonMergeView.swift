@@ -1,22 +1,16 @@
 import SwiftUI
 
 struct PersonMergeView: View {
-    let sourceID: UUID
+    let selectedIDs: Set<UUID>
     var didMerge: (UUID) -> Void
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.dismiss) private var dismiss
     @ViewState private var targetID: UUID?
-    @ViewState private var query = ""
     @ViewState private var failure: String?
 
-    private var source: Person? { store.people.first { $0.id == sourceID } }
     private var target: Person? { store.people.first { $0.id == targetID } }
     private var candidates: [Person] {
-        store.people.filter {
-            $0.id != sourceID
-                && (query.isEmpty || $0.name.localizedStandardContains(query)
-                    || $0.email.localizedStandardContains(query))
-        }.sorted {
+        store.people.filter { selectedIDs.contains($0.id) }.sorted {
             let order = $0.name.localizedStandardCompare($1.name)
             return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
         }
@@ -24,13 +18,11 @@ struct PersonMergeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Merge Person").font(.title2.bold())
+            Text("Merge People").font(.title2.bold())
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Merge “\(source?.name ?? "")” into the person you select below.")
+                    Text("Combine \(selectedIDs.count) selected people. Choose the person to keep.")
                         .fixedSize(horizontal: false, vertical: true)
-                    TextField("Find Person to Keep", text: $query)
-                        .accessibilityLabel("Find Person to Keep")
                     List(selection: $targetID) {
                         ForEach(candidates) { person in
                             VStack(alignment: .leading, spacing: 4) {
@@ -43,8 +35,10 @@ struct PersonMergeView: View {
                             }.tag(person.id)
                         }
                     }.frame(height: 150)
-                    if let source, let target {
-                        let combined = PersonMerge.combining(source, into: target)
+                    if let target {
+                        let combined = candidates.filter { $0.id != target.id }
+                            .sorted { $0.id.uuidString < $1.id.uuidString }
+                            .reduce(target) { PersonMerge.combining($1, into: $0) }
                         Text("Keep: \(target.name)").font(.headline)
                         if !combined.email.isEmpty { Text(combined.email).textSelection(.enabled) }
                         if !combined.notes.isEmpty {
@@ -59,7 +53,7 @@ struct PersonMergeView: View {
             )
             .fixedSize(horizontal: false, vertical: true)
             Text(
-                "The duplicate person will be removed. This can’t be undone, and voice-review undo history will be cleared."
+                "The other selected people will be removed. This can’t be undone, and voice-review undo history will be cleared."
             )
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -73,16 +67,18 @@ struct PersonMergeView: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Merge People") {
                     guard let targetID else { return }
-                    if store.mergePerson(id: sourceID, into: targetID) {
+                    if store.mergePeople(ids: selectedIDs, into: targetID) {
                         didMerge(targetID)
                         dismiss()
                     }
                     else {
-                        failure = store.errorMessage ?? "Couldn’t merge these people. Try again."
+                        failure = store.errorMessage ?? "Couldn’t merge the selected people. Try again."
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(source == nil || target == nil || !store.canMergePeople)
+                .disabled(
+                    candidates.count != selectedIDs.count || candidates.count < 2 || target == nil
+                        || !store.canMergePeople)
             }
         }.padding(24).frame(width: 500, height: 600)
     }

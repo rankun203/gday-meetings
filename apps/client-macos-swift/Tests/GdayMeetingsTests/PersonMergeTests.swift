@@ -4,6 +4,43 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct PersonMergeTests {
+    @Test(arguments: [false, true])
+    func multiplePeopleMergeAsOneTransaction(failSave: Bool) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        let first = store.addPerson(name: "Alex One")
+        let second = store.addPerson(name: "Alex Two")
+        let kept = store.addPerson(name: "Alex")
+        let unrelated = store.addPerson(name: "Sam")
+        let older = store.createMeeting(title: "Older synthetic meeting")
+        let newer = store.createMeeting(title: "Newer synthetic meeting")
+        for id in [older, newer] {
+            var meeting = try #require(store.meeting(id: id))
+            meeting.personIDs = [first, second, kept, unrelated]
+            #expect(store.updateMeeting(meeting))
+        }
+        #expect(
+            store.voiceLibrary.upsert([
+                VoiceExample(
+                    meetingID: newer, speakerID: UUID(), source: "system", personID: first, review: .confirmed),
+                VoiceExample(
+                    meetingID: older, speakerID: UUID(), source: "system", personID: second, review: .confirmed),
+            ]))
+        store.clearLoadedMeetingCache()
+        if failSave {
+            try Data("broken".utf8).write(to: store.directory(for: older).appendingPathComponent("content.json"))
+        }
+        #expect(!store.mergePeople(ids: [first, second], into: unrelated))
+        #expect(store.mergePeople(ids: [first, second, kept], into: kept) == !failSave)
+        let diskPeople = try FileEntityStorage.load(Person.self, kind: "people", directory: root)
+        #expect(Set(diskPeople.map(\.id)) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
+        let meeting = try MeetingFolderStorage.read(id: newer, directory: root)
+        #expect(Set(meeting.personIDs) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
+        let voices = VoiceLibraryStore(directory: root)
+        #expect(Set(voices.examples.compactMap(\.personID)) == (failSave ? [first, second] : [kept]))
+    }
+
     @Test func metadataOnlyMeetingAndLoadedMeetingBothMerge() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -761,15 +761,22 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func mergePerson(id: UUID, into targetID: UUID, staged: Bool = false) -> Bool {
-        guard id != targetID, readable, canWrite(), persistence != nil,
+        mergePeople(ids: [id], into: targetID, staged: staged)
+    }
+
+    @discardableResult
+    func mergePeople(ids: Set<UUID>, into targetID: UUID, staged: Bool = false) -> Bool {
+        guard !ids.isEmpty, !ids.contains(targetID), readable, canWrite(), persistence != nil,
             !document.deletedPersonIDs.contains(targetID)
         else { return false }
         var next = document
-        if !next.deletedPersonIDs.contains(id) { next.deletedPersonIDs.append(id) }
+        next.deletedPersonIDs += ids.subtracting(next.deletedPersonIDs).sorted { $0.uuidString < $1.uuidString }
         for index in next.examples.indices {
-            if next.examples[index].personID == id { next.examples[index].personID = targetID }
-            if next.examples[index].suggestedPersonID == id { next.examples[index].suggestedPersonID = targetID }
-            next.examples[index].rejectedPersonIDs = PersonMerge(sourceID: id, targetID: targetID)
+            if next.examples[index].personID.map(ids.contains) == true { next.examples[index].personID = targetID }
+            if next.examples[index].suggestedPersonID.map(ids.contains) == true {
+                next.examples[index].suggestedPersonID = targetID
+            }
+            next.examples[index].rejectedPersonIDs = PersonMerge(sourceIDs: ids, targetID: targetID)
                 .replacing(next.examples[index].rejectedPersonIDs)
             if next.examples[index].personID == targetID {
                 next.examples[index].rejectedPersonIDs.removeAll { $0 == targetID }
@@ -781,7 +788,7 @@ final class VoiceLibraryStore: ObservableObject {
                 if next.examples[index].review == .suggested { next.examples[index].review = .rejected }
             }
         }
-        for index in next.decisions.indices where next.decisions[index].personID == id {
+        for index in next.decisions.indices where next.decisions[index].personID.map(ids.contains) == true {
             next.decisions[index].personID = targetID
         }
         // Review undo must not restore the removed directory identity.

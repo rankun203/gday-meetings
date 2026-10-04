@@ -1,12 +1,21 @@
 import Foundation
 
 struct PersonMerge {
-    let sourceID: UUID
+    let sourceIDs: Set<UUID>
     let targetID: UUID
+
+    init(sourceID: UUID, targetID: UUID) {
+        self.init(sourceIDs: [sourceID], targetID: targetID)
+    }
+
+    init(sourceIDs: Set<UUID>, targetID: UUID) {
+        self.sourceIDs = sourceIDs
+        self.targetID = targetID
+    }
 
     func replacing(_ ids: [UUID]) -> [UUID] {
         var seen = Set<UUID>()
-        return ids.map { $0 == sourceID ? targetID : $0 }.filter { seen.insert($0).inserted }
+        return ids.map { sourceIDs.contains($0) ? targetID : $0 }.filter { seen.insert($0).inserted }
     }
 
     static func combining(_ source: Person, into target: Person) -> Person {
@@ -31,8 +40,10 @@ struct PersonMerge {
     func apply(to meeting: inout Meeting) {
         meeting.personIDs = replacing(meeting.personIDs)
         for index in meeting.speakers.indices {
-            if meeting.speakers[index].personID == sourceID { meeting.speakers[index].personID = targetID }
-            if meeting.speakers[index].voiceReviewOrigin?.personID == sourceID {
+            if meeting.speakers[index].personID.map(sourceIDs.contains) == true {
+                meeting.speakers[index].personID = targetID
+            }
+            if meeting.speakers[index].voiceReviewOrigin?.personID.map(sourceIDs.contains) == true {
                 meeting.speakers[index].voiceReviewOrigin?.personID = targetID
             }
         }
