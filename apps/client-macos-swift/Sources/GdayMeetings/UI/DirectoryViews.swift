@@ -7,18 +7,33 @@ struct PeopleView: View {
     @ViewState private var deleting: Person?
     @ViewState private var showExcluded = false
     @ViewState private var reviewingVoices = false
+    private var visiblePeople: [Person] {
+        let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (showExcluded ? store.people : store.listedPeople)
+            .filter { query.isEmpty || $0.name.localizedStandardContains(query) }
+            .sorted {
+                let order = $0.name.localizedStandardCompare($1.name)
+                return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+            }
+    }
     var body: some View {
         VStack(alignment: .leading) {
             Button("Review Voices…", systemImage: "waveform") { reviewingVoices = true }
                 .buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal).padding(.top)
             HStack {
-                TextField("New person", text: $name).onSubmit(add)
-                Button("Add", systemImage: "plus", action: add).help("Add").labelStyle(.iconOnly).disabled(
-                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                TextField("Find or Add Person", text: $name).onSubmit(findOrAdd)
+                    .accessibilityLabel("Find or Add Person")
+                if !name.isEmpty {
+                    Button("Clear Search", systemImage: "xmark.circle.fill") { name = "" }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless).help("Clear Search")
+                }
+                Button("Add Person", systemImage: "plus", action: add).help("Add Person").labelStyle(.iconOnly)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding()
             List(selection: $selection) {
-                ForEach(showExcluded ? store.people : store.listedPeople) { person in
+                ForEach(visiblePeople) { person in
                     HStack {
                         Label(person.name, systemImage: "person.crop.circle")
                         Spacer()
@@ -49,6 +64,17 @@ struct PeopleView: View {
             } message: {
                 Text("The person will be removed from your directory and meeting assignments.")
             }
+    }
+    private func findOrAdd() {
+        let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let person = visiblePeople.first(where: {
+            $0.name.compare(query, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == .orderedSame
+        }) {
+            selection = person.id
+        }
+        else {
+            add()
+        }
     }
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)

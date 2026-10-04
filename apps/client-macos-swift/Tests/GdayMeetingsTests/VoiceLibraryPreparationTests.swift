@@ -81,8 +81,13 @@ struct VoiceLibraryPreparationTests {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(directory: directory)
-        let sample = try example(in: directory, embeddings: [embedding()])
+        var sample = try example(in: directory, embeddings: [embedding()])
+        sample.audioFile = nil
+        sample.audioRevision = nil
+        sample.start = nil
+        sample.end = nil
         #expect(library.upsert([sample]))
+        #expect(library.examples.allSatisfy { $0.embeddings.isEmpty })
         let extractor = FakeVoiceExampleExtractor(result: embedding())
         let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
         let task = job([sample])
@@ -114,7 +119,8 @@ struct VoiceLibraryPreparationTests {
         #expect(await extractor.calls == 2)
         #expect(library.jobs.first?.state == .completed)
         #expect(library.jobs.first?.failures.isEmpty == true)
-        #expect(library.examples.first(where: { $0.id == second.id })?.embeddings == [embedding()])
+        #expect(library.examples.allSatisfy { $0.embeddings.isEmpty })
+        #expect(library.hydratedExample(id: second.id)?.embeddings == [embedding()])
     }
 
     @Test func incompatibleOutputNeverBecomesAnExampleRepresentation() async throws {
@@ -131,7 +137,7 @@ struct VoiceLibraryPreparationTests {
         #expect(library.setJobs([task]))
         await preparation.run(jobID: task.id, directory: { _ in directory })
         #expect(library.jobs.first?.state == .failed)
-        #expect(library.examples.first?.embeddings.isEmpty == true)
+        #expect(library.hydratedExample(id: sample.id)?.embeddings.isEmpty == true)
     }
 
     @Test func reopeningPausesUnfinishedWorkAndRetainsProgress() throws {
@@ -252,7 +258,7 @@ struct VoiceLibraryPreparationTests {
         #expect(try Data(contentsOf: transcript) == original)
     }
 
-    @Test func changedRecordingIsNotAnalyzedOrReused() async throws {
+    @Test func changedRecordingBlocksNewAnalysisButRetainsCompatibleRepresentation() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let sample = try example(in: directory, embeddings: [embedding()])
@@ -275,7 +281,8 @@ struct VoiceLibraryPreparationTests {
         #expect(await discovery.calls == 0)
         #expect(await extractor.calls == 0)
         #expect(library.jobs.first?.state == .failed)
-        #expect(library.jobs.first?.completedExampleIDs.isEmpty == true)
+        #expect(library.jobs.first?.completedExampleIDs == [sample.id])
+        #expect(library.hydratedExample(id: sample.id)?.voiceEmbeddings == [embedding()])
     }
 
     @Test func largeInventoryStartsAsDescriptorsAndCanPauseBeforeReadingAnyAudio() throws {
@@ -319,7 +326,7 @@ struct VoiceLibraryPreparationTests {
         await preparation.run(jobID: task.id, directory: { _ in folder })
         #expect(library.jobs.first?.state == .failed)
         #expect(library.jobs.first?.completedExampleIDs.isEmpty == true)
-        #expect(library.examples.first?.embeddings.isEmpty == true)
+        #expect(library.hydratedExample(id: sample.id)?.embeddings.isEmpty == true)
     }
 
     @Test func oneReviewedSourceDoesNotHideOtherVoicesAndFullAnalysisIsReused() async throws {

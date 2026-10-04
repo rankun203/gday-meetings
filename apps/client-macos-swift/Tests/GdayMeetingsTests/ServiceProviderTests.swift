@@ -113,6 +113,40 @@ struct ServiceProviderTests {
         }
         #expect(generic == "RunPod transcription failed.")
     }
+    @Test func runpodExplicitEmbeddingTypeOverridesHistoricalContract() throws {
+        var other = EmbeddingType.community1
+        other.modelID = "synthetic-other-model"
+        let type = try JSONSerialization.jsonObject(with: JSONEncoder().encode(other))
+        for declared: Any in [type, ["invalid": true], "invalid", 42, NSNull()] {
+            let payload: [String: Any] = [
+                "status": "COMPLETED",
+                "output": [
+                    "tracks": [
+                        "system": [
+                            "segments": [
+                                ["start": 0.0, "end": 2.0, "text": "Synthetic passage", "speaker": "speaker_0"]
+                            ],
+                            "speaker_embeddings": ["speaker_0": [2.0] + Array(repeating: 0.0, count: 255)],
+                            "speaker_embedding_type": declared,
+                        ]
+                    ]
+                ],
+            ]
+            guard case .complete(let rows) = try RunPodProvider.parseStatus(payload) else {
+                Issue.record("Missing transcript")
+                return
+            }
+            #expect(rows.first?.embedding == nil)
+            if declared is [String: Bool] || declared is String || declared is Int || declared is NSNull {
+                #expect(rows.first?.voiceEmbedding == nil)
+            }
+            else {
+                #expect(rows.first?.voiceEmbedding?.type == other)
+                #expect(rows.first?.voiceEmbedding?.isValid == true)
+            }
+        }
+    }
+
     @Test func runpodStatusValidatesResults() throws {
         let result: [String: Any] = [
             "status": "COMPLETED",

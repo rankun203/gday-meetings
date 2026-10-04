@@ -22,6 +22,8 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable {
     var manuallyAssigned: Bool?
     var voiceReviewOrigin: VoiceProjectionOrigin?
     var voiceReviewExampleID: UUID?
+    /// A meeting-local palette slot, independent of the assigned person's name.
+    var colorSlot: Int?
 
     var canAssignPerson: Bool { sourcePlaceholder == nil }
     var displayLabel: String {
@@ -151,7 +153,8 @@ enum SpeakerRecognition {
                     let speaker = MeetingSpeaker(
                         label: label, track: segment.track, providerName: attempt.kind.title,
                         voiceScope: attempt.kind == .runpod ? "runpod:" + attempt.endpoint : nil,
-                        embedding: attempt.diarize ? segment.embedding : nil)
+                        embedding: attempt.diarize ? segment.embedding : nil,
+                        voiceEmbedding: attempt.diarize ? segment.voiceEmbedding : nil)
                     speakers.append(speaker)
                     speakerID = speaker.id
                 }

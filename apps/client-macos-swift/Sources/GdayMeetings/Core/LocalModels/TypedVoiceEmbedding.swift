@@ -35,6 +35,23 @@ struct TypedVoiceEmbedding: Codable, Equatable, Sendable {
         self.type = type
         self.values = values
         self.provenance = provenance
+        // The repository's RunPod worker has always used Community-1. These
+        // source labels identify that contract, not arbitrary 256-D vectors.
+        if type.modelID == "unknown", let provenance,
+            provenance == "legacy:rust:runpod" || provenance.hasPrefix("runpod:"),
+            let normalized = Self.normalizing(type: .community1, values: values, provenance: provenance)
+        {
+            self = normalized
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case type, values, provenance }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            type: try values.decode(EmbeddingType.self, forKey: .type),
+            values: try values.decode([Double].self, forKey: .values),
+            provenance: try values.decodeIfPresent(String.self, forKey: .provenance))
     }
 
     var isValid: Bool {

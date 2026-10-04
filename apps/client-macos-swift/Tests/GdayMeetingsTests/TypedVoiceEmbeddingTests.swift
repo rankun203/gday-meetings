@@ -7,6 +7,41 @@ struct TypedVoiceEmbeddingTests {
     let type = EmbeddingType(
         modelID: "synthetic", revision: "v1", compatibilityVersion: "clean-v1", dimension: 2, normalization: "unitL2")
 
+    @Test func knownRunPodSamplesShareCommunityModelSpaceAndNormalize() throws {
+        let raw = [2.0] + Array(repeating: 0.0, count: 255)
+        for provenance in ["legacy:rust:runpod", "runpod:https://worker.example/v2/synthetic"] {
+            let sample = PersonVoiceSample(meetingID: UUID(), speakerID: UUID(), scope: provenance, embedding: raw)
+            let resolved = sample.resolvedVoiceEmbedding
+            #expect(resolved.type == .community1 && resolved.isValid)
+            #expect(resolved.values[0] == 1)
+            let person = Person(name: "Synthetic person", voiceSamples: [sample])
+            let local = TypedVoiceEmbedding(type: .community1, values: [1] + Array(repeating: 0, count: 255))
+            #expect(SpeakerRecognition.match(embedding: local, people: [person])?.personID == person.id)
+        }
+        let unknown = TypedVoiceEmbedding(type: .unknownLegacy(dimension: 256), values: raw, provenance: "legacy:rust")
+        #expect(!unknown.isValid)
+        let short = TypedVoiceEmbedding(
+            type: .unknownLegacy(dimension: 2), values: [1, 0], provenance: "legacy:rust:runpod")
+        #expect(!short.isValid)
+        var other = EmbeddingType.community1
+        other.modelID = "synthetic-different-model"
+        let explicit = TypedVoiceEmbedding(type: other, values: raw, provenance: "legacy:rust:runpod")
+        #expect(explicit.type == other)
+    }
+
+    @Test func decodingOldKnownRunPodRepresentationUsesRegisteredAlias() throws {
+        let old: [String: Any] = [
+            "type": [
+                "modelID": "unknown", "revision": "unknown", "compatibilityVersion": "unknown", "dimension": 256,
+                "normalization": "unknown",
+            ],
+            "values": [3.0] + Array(repeating: 0.0, count: 255), "provenance": "legacy:rust:runpod",
+        ]
+        let decoded = try JSONDecoder().decode(
+            TypedVoiceEmbedding.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(decoded.type == .community1 && decoded.isValid)
+    }
+
     @Test func unknownLegacySamplesRoundTripButCannotMatch() throws {
         let sample = PersonVoiceSample(
             meetingID: UUID(), speakerID: UUID(), scope: "synthetic:endpoint", embedding: [1, 0])

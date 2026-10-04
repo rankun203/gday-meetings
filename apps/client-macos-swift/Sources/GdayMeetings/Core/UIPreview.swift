@@ -140,7 +140,7 @@ enum UIPreview {
                 conversation.transcriptSource = TranscriptSource(
                     id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
                 store.updateMeeting(conversation)
-                seedVoiceExamples(store: store, meeting: conversation, firstPerson: person, secondPerson: matched)
+                try seedVoiceExamples(store: store, meeting: conversation, firstPerson: person, secondPerson: matched)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 // The checkpoint shares the canonical segment store with the
                 // saved transcript, so retain the conversation's timed rows.
@@ -276,10 +276,14 @@ enum UIPreview {
 
     @MainActor private static func seedVoiceExamples(
         store: MeetingStore, meeting: Meeting, firstPerson: UUID, secondPerson: UUID
-    ) {
+    ) throws {
         guard meeting.speakers.count >= 3 else { return }
         let reviewGroup = UUID()
         let unnamedGroup = UUID()
+        let typedPreview = TypedVoiceEmbedding(
+            type: .community1, values: [1] + Array(repeating: 0, count: 255), provenance: "Synthetic Local Provider")
+        let legacyPreview = TypedVoiceEmbedding(
+            type: .unknownLegacy(dimension: 2), values: [1, 0], provenance: "Synthetic Previous Provider")
         var examples = [
             VoiceExample(
                 meetingID: meeting.id, speakerID: meeting.speakers[0].id, source: "system",
@@ -302,6 +306,21 @@ enum UIPreview {
                 meetingID: meeting.id, speakerID: UUID(), source: "unknown",
                 suggestedPersonID: firstPerson, review: .suggested, excluded: true, createdAt: .distantPast),
         ]
+        examples[0].embeddings = [typedPreview]
+        examples[0].origin = .savedSpeaker
+        var legacy = VoiceExample(
+            meetingID: meeting.id, speakerID: meeting.speakers[1].id, source: "unknown",
+            createdAt: meeting.createdAt.addingTimeInterval(1))
+        legacy.origin = .legacyProfile
+        legacy.suggestedPersonID = secondPerson
+        legacy.review = .suggested
+        legacy.embeddings = [legacyPreview, typedPreview]
+        examples.append(legacy)
+        examples.append(
+            VoiceExample(
+                meetingID: meeting.id, speakerID: UUID(), source: "unknown",
+                suggestedPersonID: firstPerson, review: .suggested, embeddings: [typedPreview],
+                createdAt: meeting.createdAt.addingTimeInterval(2)))
         for index in examples.indices {
             if let file = examples[index].audioFile {
                 examples[index].audioRevision = VoiceLibraryStore.revision(
@@ -309,6 +328,12 @@ enum UIPreview {
             }
         }
         store.voiceLibrary.upsert(examples)
+        let previousLabels = LocalDiarizationResult(
+            generatedAt: meeting.createdAt.addingTimeInterval(-600), modelRevision: "synthetic-community1-revision",
+            ranges: [], speakers: [])
+        try PrivateTranscriptFile.write(
+            try JSONEncoder().encode(previousLabels), name: "speaker-labels-\(previousLabels.id).json",
+            at: store.directory(for: meeting.id))
     }
 
     /// A visible draft fixture uses no provider, credentials, or network request.
@@ -343,6 +368,21 @@ enum UIPreview {
         let now = Date()
         store.managedTasks = [
             ManagedTaskRecord(
+                kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "Synthetic Community-1", state: .completed,
+                progress: "Speaker labeling completed.", createdAt: now.addingTimeInterval(-500),
+                finishedAt: now.addingTimeInterval(-450), isPreview: true),
+            ManagedTaskRecord(
+                kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "Synthetic Community-1", state: .failed,
+                progress: "Needs attention", errorMessage: "The audio file was unavailable. The transcript was kept.",
+                createdAt: now.addingTimeInterval(-400), isPreview: true),
+            ManagedTaskRecord(
+                kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "Synthetic Community-1", state: .running,
+                progress: "Labeling speakers in system audio…", createdAt: now.addingTimeInterval(-330),
+                isPreview: true),
+            ManagedTaskRecord(
                 kind: .transcription, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Preview RunPod", state: .running,
                 progress: "Waiting for RunPod to finish processing…", createdAt: now.addingTimeInterval(-300),
@@ -375,6 +415,31 @@ enum UIPreview {
         for task in store.managedTasks where task.state.isActive {
             store.backgroundJobs.append(BackgroundJob(key: task.key, progress: task.progress))
         }
+        let providerID = UUID()
+        let preparedIDs = store.voiceLibrary.examples.compactMap { example in
+            store.voiceLibrary.hydratedExample(id: example.id)?.embeddings.isEmpty == false ? example.id : nil
+        }
+        let unavailableIDs = store.voiceLibrary.examples.filter { !$0.isPlayable }.map(\.id)
+        store.voiceLibrary.setJobs([
+            VoicePreparationJob(
+                providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
+                discover: false, exampleIDs: preparedIDs, state: .paused, createdAt: now.addingTimeInterval(-150)),
+            VoicePreparationJob(
+                providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
+                discover: false, exampleIDs: unavailableIDs,
+                failures: Dictionary(
+                    uniqueKeysWithValues: unavailableIDs.map {
+                        (
+                            $0.uuidString,
+                            "The saved example has no audio range. Find a playable example in its recording."
+                        )
+                    }),
+                state: .failed, createdAt: now.addingTimeInterval(-120)),
+            VoicePreparationJob(
+                providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
+                discover: false, exampleIDs: preparedIDs, completedExampleIDs: preparedIDs,
+                state: .completed, createdAt: now.addingTimeInterval(-90)),
+        ])
     }
 
     /// Parses only the explicitly supplied test file. Values are never logged or

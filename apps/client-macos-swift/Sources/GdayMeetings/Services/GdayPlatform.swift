@@ -13,6 +13,7 @@ struct ServerTranscriptSegment: Equatable {
     let speaker: String?
     let track: String
     var embedding: [Double]?
+    var voiceEmbedding: TypedVoiceEmbedding? = nil
 }
 enum ServerTaskResult {
     case pending

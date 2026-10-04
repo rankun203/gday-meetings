@@ -126,7 +126,7 @@ import Testing
         _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
         #expect(saved.personIDs == [personID])
-        #expect(saved.speakers == meeting.speakers)
+        #expect(saved.speakers == MeetingSpeakerColors.assigning(meeting).speakers)
         #expect(saved.speakerName(for: saved.transcript[0], people: reopened.people) == "Alex")
         #expect(reopened.people[0].voiceSamples.isEmpty)
         let markdown = root.appendingPathComponent("automatic.md")
@@ -163,7 +163,11 @@ import Testing
         _ = try #require(reopened.meeting(id: meeting.id))
         reopened.applySavedTranscriptionResult(meetingID: meeting.id)
         #expect(reopened.meetings[0].transcript[0].text == "Replacement")
-        #expect(reopened.meetings[0].speakers == replacement.speakers)
+        var expectedReplacement = meeting
+        expectedReplacement.speakers = replacement.speakers
+        #expect(
+            reopened.meetings[0].speakers
+                == MeetingSpeakerColors.assigning(expectedReplacement, previous: meeting).speakers)
         #expect(reopened.meetings[0].personIDs.isEmpty)
     }
 

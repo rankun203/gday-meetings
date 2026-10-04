@@ -282,6 +282,7 @@ final class LiveTranscriptStream {
                         row.diarizationLabel = preceding.diarizationLabel
                         row.personID = preceding.personID
                         row.voiceEmbedding = preceding.voiceEmbedding
+                        row.speakerColorSlot = preceding.speakerColorSlot
                     }
                     else {
                         // An empty label is a source with no detected voice yet.

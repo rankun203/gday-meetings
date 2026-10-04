@@ -239,14 +239,70 @@ import Testing
         #expect(scroll.contentView.bounds.minY == 0)
     }
 
+    @Test func reviewNavigationWaitsForRowsWithoutChangingPlayback() {
+        let playback = MeetingPlayback()
+        let playingMeeting = Meeting(title: "Existing playback")
+        playback.select(meeting: playingMeeting, files: [])
+        playback.progress.update(17)
+        let previous = playback.progress.snapshot
+        let rows = (0..<200).map {
+            TranscriptDisplayRow(
+                id: UUID(), start: Double($0), end: Double($0) + 1, speaker: "Speaker", speakerID: nil,
+                text: "A saved transcript passage.")
+        }
+        var playbackRequests = 0
+        var view = NativeTranscriptView(
+            rows: [], generation: 1, showsSpeakers: true, editable: false, canPlay: true,
+            playback: playback, meetingID: UUID(), initialRowID: rows[100].id,
+            play: { _ in playbackRequests += 1 }, save: { _, _ in },
+            speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        let table = TranscriptNativeTable(frame: scroll.bounds)
+        table.usesAutomaticRowHeights = false
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        #expect(table.selectedRow == -1)
+        #expect(playback.progress.snapshot == previous)
+        view.rows = rows
+        view.generation = 2
+        coordinator.update(view)
+        coordinator.settleLayout()
+        #expect(table.rows(in: scroll.contentView.bounds).contains(100))
+        #expect(table.selectedRow == 100)
+        #expect((table.rowView(atRow: 100, makeIfNecessary: true) as? TranscriptNativeRowView)?.isReviewTarget == true)
+        #expect(coordinator.activeRows.isEmpty)
+        let positioned = scroll.contentView.bounds.minY
+        coordinator.settleLayout()
+        #expect(abs(scroll.contentView.bounds.minY - positioned) < 1)
+        view.initialRowID = rows[150].id
+        coordinator.update(view)
+        coordinator.settleLayout()
+        #expect(table.rows(in: scroll.contentView.bounds).contains(150))
+        #expect(table.selectedRow == 150)
+        #expect((table.rowView(atRow: 150, makeIfNecessary: true) as? TranscriptNativeRowView)?.isReviewTarget == true)
+        #expect((table.rowView(atRow: 100, makeIfNecessary: true) as? TranscriptNativeRowView)?.isReviewTarget == false)
+        #expect(playback.progress.snapshot == previous)
+        #expect(playbackRequests == 0)
+        coordinator.tearDown()
+    }
+
     @Test func speakerPaletteSurvivesInsertionRemovalAndReordering() {
         let keys = (0..<32).map { "speaker-\($0)" }
         let colors = TranscriptSpeakerPalette.indices(for: keys)
         #expect(colors == TranscriptSpeakerPalette.indices(for: keys.reversed()))
+        #expect(Set(colors.values).count == keys.count)
         for key in keys {
-            #expect(TranscriptSpeakerPalette.indices(for: [key])[key] == colors[key])
-            #expect(TranscriptSpeakerPalette.indices(for: ["new-speaker", key])[key] == colors[key])
+            #expect(TranscriptSpeakerPalette.indices(for: [key], preserving: colors)[key] == colors[key])
+            #expect(
+                TranscriptSpeakerPalette.indices(for: ["new-speaker", key], preserving: colors)[key] == colors[key])
         }
+        #expect(TranscriptSpeakerPalette.color(for: "", index: 8) != TranscriptSpeakerPalette.color(for: "", index: 0))
     }
 
     @Test func speakerChipsFollowPersonIdentityAndUnassignedOutline() {

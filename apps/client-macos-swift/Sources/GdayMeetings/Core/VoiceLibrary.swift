@@ -5,8 +5,12 @@ enum VoiceReviewState: String, Codable, Sendable {
     case unassigned, suggested, confirmed, rejected
 }
 
-/// The original audio is the evidence. Model output can be replaced without
-/// changing the identity of a reviewed excerpt.
+enum VoiceExampleOrigin: String, Codable, Sendable {
+    case legacyProfile, savedSpeaker, liveSpeech, discovery
+}
+
+/// Optional playback location for a voice sample. Identity decisions and model
+/// representations remain usable when the source recording is unavailable.
 struct VoiceSampleRange: Codable, Equatable, Sendable {
     var audioFile: String
     var source: String
@@ -38,6 +42,11 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var groupID = UUID()
     var manuallyGrouped = false
     var createdAt = Date()
+    var origin: VoiceExampleOrigin?
+    var firstPassage: VoiceSampleRange?
+    var sourceResolutionIssue: String?
+
+    var voiceEmbeddings: [TypedVoiceEmbedding] { embeddings }
 
     var range: VoiceSampleRange? {
         guard let audioFile, let start, let end else { return nil }
@@ -71,7 +80,7 @@ struct VoiceProjectionOrigin: Codable, Equatable {
     }
 }
 
-struct VoiceExampleReviewSnapshot: Codable {
+struct VoiceExampleReviewSnapshot: Codable, Equatable {
     var id: UUID
     var personID: UUID?
     var suggestedPersonID: UUID?
@@ -106,12 +115,12 @@ struct VoiceExampleReviewSnapshot: Codable {
     }
 }
 
-struct VoiceLibraryUndo: Codable {
+struct VoiceLibraryUndo: Codable, Equatable {
     var examples: [VoiceExampleReviewSnapshot]
     var decisions: [VoiceSpeakerDecision]
 }
 
-struct VoiceLibraryDocument: Codable {
+struct VoiceLibraryDocument: Codable, Equatable {
     var version = 1
     var examples: [VoiceExample] = []
     var decisions: [VoiceSpeakerDecision] = []

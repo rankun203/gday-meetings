@@ -13,9 +13,16 @@ struct VoiceLibraryView: View {
     @ViewState private var assigning = false
     @ViewState private var assignmentExamples = Set<UUID>()
     @ViewState private var merging = false
-    @ViewState private var selectedMeeting: UUID?
+    private struct RecordingTarget: Identifiable {
+        let id: UUID
+        let rowID: UUID?
+    }
+    @ViewState private var selectedRecording: RecordingTarget?
     @ViewState private var localError: String?
     @ViewState private var meetingEntries: [UUID: MeetingListEntry] = [:]
+    @ViewState private var attemptedRecovery = Set<UUID>()
+    @ViewState private var recovering = Set<UUID>()
+    @ViewState private var recoveryErrors: [UUID: String] = [:]
 
     private enum VoiceFilter: String, CaseIterable, Identifiable {
         case review = "Review"
@@ -36,7 +43,9 @@ struct VoiceLibraryView: View {
                     || example.rejectedPersonIDs.contains(personID)
             }
             switch filter {
-            case .review: return example.review == .suggested && !example.excluded
+            case .review:
+                return example.review == .suggested
+                    && !example.excluded && example.review != .rejected && !example.manuallyCleared
             case .unnamed: return example.personID == nil && example.review != .suggested
             case .named: return example.personID != nil
             case .all: return true
@@ -108,7 +117,9 @@ struct VoiceLibraryView: View {
                     }
                 }.frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let error = localError ?? library.errorMessage ?? playback.errorMessage {
+            if let error = localError ?? library.errorMessage ?? playback.errorMessage,
+                !recoveryErrors.values.contains(error)
+            {
                 Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 8)
             }
@@ -160,17 +171,15 @@ struct VoiceLibraryView: View {
                 Button("Cancel") { merging = false }.keyboardShortcut(.cancelAction)
             }.padding(24).frame(width: 480)
         }
-        .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
-            if let selectedMeeting {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button("Done") { self.selectedMeeting = nil }.keyboardShortcut(.cancelAction)
-                    }
-                    .padding()
-                    MeetingDetailView(meetingID: selectedMeeting)
-                }.frame(width: 880, height: 680)
-            }
+        .sheet(item: $selectedRecording) { target in
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Done") { selectedRecording = nil }.keyboardShortcut(.cancelAction)
+                }
+                .padding()
+                MeetingDetailView(meetingID: target.id, initialTranscriptRowID: target.rowID)
+            }.frame(width: 880, height: 680)
         }
     }
 
@@ -257,11 +266,22 @@ struct VoiceLibraryView: View {
                 Button("Open Recording") { open(example) }.controlSize(.small)
             }
             if !audioAvailable(example) {
-                Text("This example’s audio excerpt is unavailable. Open its recording to review it.")
+                HStack {
+                    Text(
+                        recoveryErrors[example.id] ?? library.availabilityReason(for: example)
+                            ?? "This example’s audio excerpt is unavailable."
+                    )
                     .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if example.range == nil {
+                        if recovering.contains(example.id) { ProgressView().controlSize(.small) }
+                        Button("Find Playable Example") { Task { await recover(example) } }
+                            .controlSize(.small).disabled(recovering.contains(example.id) || !store.libraryWritable)
+                    }
+                }
             }
             HStack(spacing: 8) {
-                if let candidate = example.suggestedPersonID ?? example.personID,
+                if let candidate = candidateID(example),
                     let candidateName = name(for: candidate)
                 {
                     if example.review != .confirmed {
@@ -286,6 +306,7 @@ struct VoiceLibraryView: View {
                 .menuStyle(.borderlessButton).fixedSize().help("Voice example actions")
                 .accessibilityLabel("Voice example actions")
             }.controlSize(.small).disabled(!store.libraryWritable)
+            VoiceExampleDetailsView(library: library, example: example)
         }
         .padding(12)
         .background(
@@ -319,8 +340,12 @@ struct VoiceLibraryView: View {
         case .confirmed: return name(for: example.personID).map { "Confirmed: \($0)" } ?? "Confirmed"
         case .suggested: return name(for: example.suggestedPersonID).map { "Suggested: \($0)" } ?? "Needs Review"
         case .rejected: return "Assignment Rejected"
-        case .unassigned: return "Unassigned"
+        case .unassigned: return example.manuallyCleared ? "Assignment Removed" : "Unassigned"
         }
+    }
+
+    private func candidateID(_ example: VoiceExample) -> UUID? {
+        example.personID ?? example.suggestedPersonID
     }
 
     private func presentAssignment(ids: Set<UUID>) {
@@ -350,6 +375,25 @@ struct VoiceLibraryView: View {
         }.value
         guard !Task.isCancelled else { return }
         meetingEntries.merge(entries) { _, new in new }
+        for example in current?.examples ?? [] where example.range == nil {
+            guard !Task.isCancelled else { return }
+            guard attemptedRecovery.insert(example.id).inserted else { continue }
+            await recover(example)
+        }
+    }
+
+    private func recover(_ example: VoiceExample) async {
+        guard !recovering.contains(example.id), store.libraryWritable else { return }
+        recovering.insert(example.id)
+        recoveryErrors.removeValue(forKey: example.id)
+        defer { recovering.remove(example.id) }
+        let updated = await store.voicePreparation.findPlayableExample(
+            exampleID: example.id, directory: store.directory(for: example.meetingID))
+        if updated == nil {
+            recoveryErrors[example.id] =
+                store.voicePreparation.errorMessage
+                ?? "Couldn’t find a playable example. Open the recording to review its transcript."
+        }
     }
 
     private func open(_ example: VoiceExample, playAtStart: Bool = false) {
@@ -359,7 +403,8 @@ struct VoiceLibraryView: View {
             localError = "Couldn’t open this recording."
             return
         }
-        selectedMeeting = meeting.id
+        selectedRecording = RecordingTarget(
+            id: meeting.id, rowID: VoiceExampleTranscriptNavigation.rowID(for: example, meeting: meeting))
         localError = nil
         if playAtStart, let start = example.start, let file = example.audioFile {
             playback.play(
@@ -386,15 +431,23 @@ struct PersonVoiceSamplesView: View {
             }
             else {
                 Text(
-                    "\(examples.filter { $0.review == .confirmed && !$0.excluded }.count) confirmed · \(examples.filter { $0.review == .suggested }.count) to review"
+                    "\(examples.filter { $0.review == .confirmed && !$0.excluded }.count) confirmed · \(examples.filter { !$0.excluded && !$0.manuallyCleared && $0.review == .suggested }.count) to review"
                 )
                 .font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 16) {
-                    ForEach(Array(examples.filter(\.isPlayable).prefix(2))) { example in
+                    ForEach(
+                        Array(
+                            examples.filter {
+                                $0.isPlayable && !$0.excluded && $0.review != .rejected && !$0.manuallyCleared
+                            }.prefix(2))
+                    ) { example in
                         HStack(spacing: 4) {
                             VoiceExamplePlaybackButton(example: example)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(example.review == .confirmed ? "Confirmed Example" : "Needs Review").font(.caption)
+                                Text(
+                                    example.review == .confirmed
+                                        ? "Confirmed Example" : "Needs Review"
+                                ).font(.caption)
                                 if let start = example.start, let end = example.end {
                                     Text(
                                         "\(TranscriptRow<Text>.timestamp(start))–\(TranscriptRow<Text>.timestamp(end))"

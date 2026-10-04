@@ -11,6 +11,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     let text: String
     var personID: UUID? = nil
     var speakerColorIndex: Int? = nil
+    var speakerColorKey: String? = nil
     var isProvisional = false
     var provisionalTextRanges: [NSRange]? = nil
     var recentWordRanges: [NSRange] = []
@@ -30,6 +31,8 @@ struct NativeTranscriptView: NSViewRepresentable {
     var playback: MeetingPlayback? = nil
     var meetingID: UUID? = nil
     var transcriptSourceID: UUID? = nil
+    /// A review link positions the transcript without selecting or starting audio.
+    var initialRowID: UUID? = nil
     var liveRows: LiveTranscriptStreamDisplayCache? = nil
     var captureSave: ((UUID) -> (String) -> Void)? = nil
     /// nil retains saved-transcript playback following.
@@ -101,6 +104,7 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var playbackSubscription: AnyCancellable?
         private var lastSeekRevision: UInt64?
         private var needsInitialPosition = true
+        private var speakerColors: [String: Int] = [:]
         private var layoutWork: DispatchWorkItem?
         private var settledWidth: CGFloat?
         private var followTimer: Timer?
@@ -123,6 +127,7 @@ struct NativeTranscriptView: NSViewRepresentable {
 
         init(_ parent: NativeTranscriptView) { self.parent = parent }
         func update(_ value: NativeTranscriptView) {
+            if parent.meetingID != value.meetingID { speakerColors = [:] }
             let sourceChanged =
                 parent.meetingID != value.meetingID
                 || parent.transcriptSourceID != value.transcriptSourceID || generation == nil
@@ -133,17 +138,28 @@ struct NativeTranscriptView: NSViewRepresentable {
                 sourceChanged || presentationChanged
                 || (value.liveRows != nil ? generation != value.generation : rows != value.rows)
             let followChanged = parent.followsLive != value.followsLive
+            let navigationChanged = parent.initialRowID != value.initialRowID
+            if navigationChanged {
+                needsInitialPosition = true
+                userScrollUntil = 0
+            }
             if followChanged, value.followsLive == true { liveFollowPaused = false }
             if !sourceChanged, value.followsLive != nil, editedID != nil || popover?.isShown == true {
                 deferredLiveUpdate = value
                 return
             }
             parent = value
+            if navigationChanged {
+                table?.enumerateAvailableRowViews { view, index in
+                    (view as? TranscriptNativeRowView)?.isReviewTarget =
+                        self.rows.indices.contains(index) && self.rows[index].id == value.initialRowID
+                }
+            }
             deferredLiveUpdate = nil
             guard changed, let table else {
                 observePlayback()
                 refreshPlayback()
-                if followChanged { scheduleLayout() }
+                if followChanged || navigationChanged { scheduleLayout() }
                 return
             }
             cancelFollow()
@@ -169,6 +185,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                 selectionBoundary = boundary
                 let previousTail = Array(rows[boundary...])
                 let nextTail = live.rows(from: boundary)
+                registerSpeakerColors(nextTail)
                 update = TranscriptRowUpdate(previous: previousTail, current: nextTail, offset: boundary)
                 for row in previousTail { heights.remove(id: row.id) }
                 rows.replaceSubrange(boundary..., with: nextTail)
@@ -178,6 +195,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                 playbackMaxEnds.removeAll(keepingCapacity: true)
             }
             else {
+                registerSpeakerColors(value.rows)
                 update = TranscriptRowUpdate(previous: rows, current: value.rows)
                 rows = value.rows
                 playbackOrder = rows.enumerated().filter {
@@ -364,10 +382,12 @@ struct NativeTranscriptView: NSViewRepresentable {
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let view = TranscriptNativeRowView()
             view.isPlaybackRow = activeRows.contains(row)
+            view.isReviewTarget = rows[row].id == parent.initialRowID
             return view
         }
         func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
             (rowView as? TranscriptNativeRowView)?.isPlaybackRow = activeRows.contains(row)
+            (rowView as? TranscriptNativeRowView)?.isReviewTarget = rows[row].id == parent.initialRowID
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             let id = NSUserInterfaceItemIdentifier("transcript-cell")
@@ -382,7 +402,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             // A field editor must commit to its captured segment before this
             // reusable cell is rebound to a different row.
             if cell === editedCell && cell.rowID != value.id { finishEdit() }
-            cell.configure(value, showsSpeakers: parent.showsSpeakers)
+            cell.configure(colored(value), showsSpeakers: parent.showsSpeakers)
             cell.isPlaybackRow = activeRows.contains { rows[$0].id == value.id }
             cell.allowsEditing = parent.editable
             cell.body.delegate = self
@@ -395,6 +415,25 @@ struct NativeTranscriptView: NSViewRepresentable {
                     guard let self, let cell else { return }
                     self.showSpeaker(value, cell: cell)
                 } : nil
+        }
+        private func registerSpeakerColors(_ rows: [TranscriptDisplayRow]) {
+            for row in rows {
+                if let slot = row.speakerColorIndex {
+                    speakerColors[row.speakerColorKey ?? row.speakerID?.uuidString ?? row.speaker] = slot
+                }
+            }
+            speakerColors = TranscriptSpeakerPalette.indices(
+                for: rows.filter { $0.speakerColorIndex == nil }.map {
+                    $0.speakerColorKey ?? $0.speakerID?.uuidString ?? $0.speaker
+                }, preserving: speakerColors)
+        }
+        private func colored(_ row: TranscriptDisplayRow) -> TranscriptDisplayRow {
+            var result = row
+            if result.speakerColorIndex == nil {
+                result.speakerColorIndex =
+                    speakerColors[row.speakerColorKey ?? row.speakerID?.uuidString ?? row.speaker]
+            }
+            return result
         }
         func widthChanged() {
             cancelFollow()
@@ -441,8 +480,25 @@ struct NativeTranscriptView: NSViewRepresentable {
                             x: 0, y: max(0, table.bounds.height - scroll.contentView.bounds.height)))
                 }
                 else if needsInitialPosition {
+                    // Saved rows can arrive after the first layout. Keep an
+                    // explicit navigation request pending until its row exists.
+                    if let initialRowID = parent.initialRowID,
+                        !rows.contains(where: { $0.id == initialRowID })
+                    {
+                        return
+                    }
                     needsInitialPosition = false
-                    if activeRow != nil {
+                    if let initialRowID = parent.initialRowID,
+                        let row = rows.firstIndex(where: { $0.id == initialRowID })
+                    {
+                        let target = min(
+                            max(0, table.rect(ofRow: row).minY - scroll.contentView.bounds.height * 0.3),
+                            max(0, table.bounds.height - scroll.contentView.bounds.height))
+                        scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+                        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                        userScrollUntil = ProcessInfo.processInfo.systemUptime + 4
+                    }
+                    else if activeRow != nil {
                         followActiveRow(force: true, animated: false)
                     }
                     else {
@@ -573,7 +629,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell?.body.isSelectable = false
             editSession.finish(cancel: cancel)
             if cancel, let id = cell?.rowID, let row = rows.first(where: { $0.id == id }) {
-                cell?.configure(row, showsSpeakers: parent.showsSpeakers)
+                cell?.configure(colored(row), showsSpeakers: parent.showsSpeakers)
             }
             applyDeferredLiveUpdate()
             scheduleLayout()
@@ -711,6 +767,9 @@ struct NativeTranscriptView: NSViewRepresentable {
 }
 
 @MainActor final class TranscriptNativeRowView: NSTableRowView {
+    var isReviewTarget = false {
+        didSet { if oldValue != isReviewTarget { needsDisplay = true } }
+    }
     var isPlaybackRow = false {
         didSet { if oldValue != isPlaybackRow { updatePlaybackFill(animated: true) } }
     }
@@ -775,6 +834,12 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
+        if isReviewTarget {
+            NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
+            outline.lineWidth = 1
+            outline.stroke()
+        }
         let pointerInside =
             window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
         let highlight = table?.hoverEnabled == true && pointerInside
@@ -803,9 +868,16 @@ enum TranscriptSpeakerPalette {
         let hash = key.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
         return Int(hash % 8)
     }
-    static func indices(for keys: [String]) -> [String: Int] {
-        // Color depends only on identity, never on which other speakers are present.
-        Dictionary(Set(keys).map { ($0, index(for: $0)) }, uniquingKeysWith: { first, _ in first })
+    static func indices(for keys: [String], preserving previous: [String: Int] = [:]) -> [String: Int] {
+        var result = previous
+        var used = Set(previous.values)
+        for key in Set(keys).sorted() where result[key] == nil {
+            var slot = 0
+            while used.contains(slot) { slot += 1 }
+            result[key] = slot
+            used.insert(slot)
+        }
+        return result
     }
 
     static func foreground(for tint: NSColor) -> NSColor {
@@ -820,10 +892,14 @@ enum TranscriptSpeakerPalette {
         }
     }
     static func color(for key: String, index: Int? = nil) -> NSColor {
-        [
+        let slot = max(0, index ?? self.index(for: key))
+        let semantic: [NSColor] = [
             .systemTeal, .systemPink, .systemPurple, .systemOrange, .systemBlue, .systemGreen, .systemIndigo,
             .systemBrown,
-        ][index ?? self.index(for: key)]
+        ]
+        if slot < semantic.count { return semantic[slot] }
+        let hue = (Double(slot - semantic.count + 1) * 0.618033988749895).truncatingRemainder(dividingBy: 1)
+        return NSColor(calibratedHue: hue, saturation: 0.68, brightness: 0.78, alpha: 1)
     }
 }
 

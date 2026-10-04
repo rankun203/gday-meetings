@@ -12,6 +12,7 @@ struct LiveSpeakerIdentity: Codable, Equatable, Identifiable, Sendable {
     var activityPolicy: String?
     var manuallyAssigned = false
     var label: String { (source == .microphone ? "mic_" : "sys_") + String(format: "%02d", slot + 1) }
+    var colorSlot: Int { 2 + slot * 2 + (source == .microphone ? 0 : 1) }
 }
 
 struct LiveSpeakerInterval: Codable, Equatable, Sendable {
@@ -177,12 +178,14 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
                 row.diarizationLabel = identity.label
                 row.personID = identity.personID
                 row.voiceEmbedding = identity.voiceEmbedding
+                row.speakerColorSlot = identity.colorSlot
             }
             else if !ids.isEmpty {
                 row.diarizationLabel = phrase.source == .microphone ? "mic_?" : "sys_?"
                 row.speakerIdentity = nil
                 row.personID = nil
                 row.voiceEmbedding = nil
+                row.speakerColorSlot = nil
             }
             return row
         }

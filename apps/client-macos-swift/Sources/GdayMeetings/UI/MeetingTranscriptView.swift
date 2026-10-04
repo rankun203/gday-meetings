@@ -7,6 +7,7 @@ struct MeetingTranscriptView: View {
     @EnvironmentObject private var playback: MeetingPlayback
     @ObservedObject private var localModels = LocalModelManager.shared
     let meetingID: UUID
+    var initialRowID: UUID? = nil
     @ViewState private var draft: LiveTranscriptDraft?
     @ViewState private var revisions: [TranscriptRevision] = []
     @ViewState private var failure: String?
@@ -16,6 +17,8 @@ struct MeetingTranscriptView: View {
     @ViewState private var displayedMeetingID: UUID?
     @ViewState private var showsSpeakers = false
     @ViewState private var showsLiveText = false
+    @ViewState private var labelingHistory: SpeakerLabelingHistory?
+    @ViewState private var showsLabelingHistory = false
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private var usesCheckpoint: Bool {
@@ -27,6 +30,16 @@ struct MeetingTranscriptView: View {
             meetingID: playback.meetingID,
             audioFiles: playback.trackNames.indices.compactMap { playback.audioURL(forTrack: $0)?.lastPathComponent },
             mutedTracks: playback.mutedTracks)
+    }
+    private var labelingTasks: [ManagedTaskRecord] {
+        store.managedTasks.filter { $0.meetingID == meetingID && $0.kind == .diarization }
+    }
+    private var labelingHistoryKey: SpeakerLabelingHistoryReadKey {
+        .init(
+            meetingID: meetingID, sourceID: meeting?.transcriptSource?.id,
+            taskStates: labelingTasks.map {
+                $0.id.uuidString + ":" + $0.state.rawValue + ":" + ($0.speakerLabelingResultID?.uuidString ?? "")
+            })
     }
     private var canRestore: Bool {
         store.libraryWritable && store.recordingID != meetingID && meeting?.transcriptionAttempt == nil
@@ -82,6 +95,7 @@ struct MeetingTranscriptView: View {
                         editable: store.libraryWritable && (!usesCheckpoint || canRestore), canPlay: canSeek,
                         playback: playback, meetingID: meetingID,
                         transcriptSourceID: meeting.transcriptSource?.id,
+                        initialRowID: initialRowID,
                         play: { seek($0, meeting: meeting) },
                         save: { id, text in
                             updateSegment(id, meetingID: meeting.id, text: text, checkpoint: editableCheckpoint)
@@ -119,6 +133,7 @@ struct MeetingTranscriptView: View {
                 loadHistory()
                 refreshRows()
             }
+            .task(id: labelingHistoryKey) { await loadLabelingHistory() }
             .onChange(of: meeting.transcript) { _, _ in
                 loadHistory()
                 refreshRows()
@@ -133,26 +148,57 @@ struct MeetingTranscriptView: View {
         }
     }
     @ViewBuilder private var speakerLabelAction: some View {
-        if store.isJobRunning(.diarization, .meeting(meetingID)) {
-            Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
-        }
-        else if store.settings.serviceProviders.contains(where: {
-            $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
-        }) {
-            Button("Label Speakers") {
-                if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
-                Task { await store.diarizeLocally(id: meetingID) }
+        HStack(spacing: 6) {
+            if store.isJobRunning(.diarization, .meeting(meetingID)) {
+                Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
+                    .help(labelingHistoryHelp)
             }
-            .disabled(
-                !canRestore
-                    || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
-                    || localModels.state(for: .community1).phase != .ready
-            )
-            .help(
-                localModels.state(for: .community1).phase == .ready
-                    ? "Label speakers in saved audio without changing the text."
-                    : "Download and prepare Community-1 in Service Providers.")
+            else if store.settings.serviceProviders.contains(where: {
+                $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+            }) {
+                Button("Label Speakers") {
+                    if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
+                    Task { await store.diarizeLocally(id: meetingID) }
+                }
+                .disabled(
+                    !canRestore
+                        || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
+                        || localModels.state(for: .community1).phase != .ready
+                )
+                .help(labelingHistoryHelp)
+            }
+            Button("Speaker Labeling History", systemImage: "clock.arrow.circlepath") {
+                showsLabelingHistory = true
+            }
+            .labelStyle(.iconOnly).help("Speaker Labeling History")
+            .popover(isPresented: $showsLabelingHistory) {
+                SpeakerLabelingHistoryView(history: labelingHistory)
+            }
         }
+    }
+
+    private var labelingHistoryHelp: String {
+        let readiness =
+            localModels.state(for: .community1).phase == .ready
+            ? "Label speakers in saved audio without changing the text."
+            : "Download and prepare Community-1 in Service Providers."
+        guard let labelingHistory else { return readiness + "\nLoading speaker labeling history…" }
+        guard let latest = labelingHistory.entries.max(by: { $0.date < $1.date }) else {
+            return readiness + "\nNo recorded speaker labeling history."
+        }
+        let date = latest.date.formatted(date: .abbreviated, time: .shortened)
+        return readiness
+            + "\nLatest record: \(date) · \(latest.providerName ?? "Provider not recorded") · \(latest.status)."
+    }
+
+    private func loadLabelingHistory() async {
+        let key = labelingHistoryKey
+        labelingHistory = nil
+        let result = await SpeakerLabelingHistory.load(
+            directory: store.directory(for: meetingID), tasks: labelingTasks,
+            currentSourceID: key.sourceID)
+        guard !Task.isCancelled, key == labelingHistoryKey else { return }
+        labelingHistory = result
     }
     @ViewBuilder private var historyMenu: some View {
         if let meeting, draft?.hasUsableText == true || !meeting.transcript.isEmpty || !revisions.isEmpty {
@@ -210,6 +256,9 @@ struct MeetingTranscriptView: View {
         let people = Dictionary(uniqueKeysWithValues: store.people.map { ($0.id, $0.name) })
         let speakers = usesCheckpoint ? draft?.speakers ?? [] : meeting.speakers
         let speakerTracks = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.track) })
+        let speakerSlots = MeetingSpeakerColors.slots(for: speakers)
+        let speakerOrigins = Dictionary(
+            uniqueKeysWithValues: speakers.map { ($0.id, MeetingSpeakerColors.identity($0)) })
         let assignedPeople = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.personID) })
         let sourceIDs = Set(speakers.filter { !$0.canAssignPerson }.map(\.id))
         let names = Dictionary(
@@ -223,13 +272,13 @@ struct MeetingTranscriptView: View {
             checkpoint
             || (draft?.hasUsableText == true && Set(source.map(\.id)) == Set(draft?.segments.map(\.id) ?? []))
         func colorKey(_ segment: TranscriptSegment) -> String {
-            let personID = segment.speakerID.flatMap { assignedPeople[$0] ?? nil }
-            let label = segment.speakerID.flatMap { names[$0] } ?? SpeakerLabelPresentation.display(segment.speaker)
+            if let speakerID = segment.speakerID { return (speakerOrigins[speakerID] ?? speakerID).uuidString }
             return TranscriptSpeakerPalette.displayKey(
-                personID: personID.flatMap { people[$0] == nil ? nil : $0 },
-                track: segment.speakerID.flatMap { speakerTracks[$0] } ?? "", label: label)
+                personID: nil, track: segment.speakerID.flatMap { speakerTracks[$0] } ?? "", label: segment.speaker)
         }
-        let colorIndices = TranscriptSpeakerPalette.indices(for: source.map(colorKey))
+        let colorIndices = TranscriptSpeakerPalette.indices(
+            for: source.map(colorKey),
+            preserving: Dictionary(uniqueKeysWithValues: speakerSlots.map { ($0.key.uuidString, $0.value) }))
         displayRows = source.map { segment in
             TranscriptDisplayRow(
                 id: segment.id, start: segment.start, end: segment.end,
@@ -237,7 +286,9 @@ struct MeetingTranscriptView: View {
                 speakerID: segment.speakerID,
                 text: String(segment.text.drop(while: { $0.isWhitespace })),
                 personID: segment.speakerID.flatMap { assignedPeople[$0] ?? nil },
-                speakerColorIndex: colorIndices[colorKey(segment)],
+                speakerColorIndex: segment.speakerID.flatMap { speakerOrigins[$0] }.flatMap { speakerSlots[$0] }
+                    ?? colorIndices[colorKey(segment)],
+                speakerColorKey: colorKey(segment),
                 isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false)
         }
         refreshVisibleRows()

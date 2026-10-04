@@ -27,6 +27,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 if let id = row.speakerIdentity, let speaker = speakers[id] {
                     row.personID = speaker.personID
                     row.voiceEmbedding = speaker.voiceEmbedding
+                    row.speakerColorSlot = speaker.colorSlot
                 }
                 return row
             }
@@ -57,7 +58,8 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                     providerName: provider, voiceEmbedding: $0.voiceEmbedding,
                     personID: $0.personID, confirmed: $0.personID != nil,
                     sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source,
-                    manuallyAssigned: speakerTimeline?.speakers.first(where: { $0.id == identity })?.manuallyAssigned)
+                    manuallyAssigned: speakerTimeline?.speakers.first(where: { $0.id == identity })?.manuallyAssigned,
+                    colorSlot: $0.resolvedSpeakerColorSlot)
             }
     }
 
@@ -187,12 +189,14 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 row.diarizationLabel = nil
                 row.personID = nil
                 row.voiceEmbedding = nil
+                row.speakerColorSlot = nil
                 let attributed = cache.attributing(row)
                 if attributed.count == 1 {
                     row.speakerIdentity = attributed[0].speakerIdentity
                     row.diarizationLabel = attributed[0].diarizationLabel
                     row.personID = attributed[0].personID
                     row.voiceEmbedding = attributed[0].voiceEmbedding
+                    row.speakerColorSlot = attributed[0].speakerColorSlot
                 }
             }
             row.recognizedFinal = change.anchor.recognitionIsFinal || recognitionCovers(change.anchor)
@@ -248,6 +252,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                     row.personID = speaker.personID
                     row.voiceEmbedding = speaker.voiceEmbedding
                     row.diarizationLabel = speaker.label
+                    row.speakerColorSlot = speaker.colorSlot
                 }
                 else {
                     row.voiceEmbedding = nil
@@ -340,6 +345,11 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var speakerIdentity: UUID?
     var diarizationLabel: String?
     var voiceEmbedding: TypedVoiceEmbedding?
+    var speakerColorSlot: Int?
+    var resolvedSpeakerColorSlot: Int? {
+        if let speakerColorSlot { return speakerColorSlot }
+        return hasSpeakerIdentity ? nil : (source == .microphone ? 0 : 1)
+    }
     var speakerLabel: String { diarizationLabel ?? source.shortLabel }
     var hasSpeakerIdentity: Bool { speakerIdentity != nil }
     var isUserEdited: Bool { userEdited == true }
@@ -460,6 +470,7 @@ extension LiveTranscriptPhrase {
         presented.diarizationLabel = nil
         presented.speakerIdentity = nil
         presented.voiceEmbedding = nil
+        presented.speakerColorSlot = nil
         return presented
     }
 }

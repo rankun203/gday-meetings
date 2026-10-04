@@ -4,6 +4,7 @@ struct TaskQueueView: View {
     @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
     var focusedTaskID: UUID? = nil
+    @ViewState private var reviewingVoices = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -16,7 +17,7 @@ struct TaskQueueView: View {
             if let error = store.managedTaskJournalError {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
             }
-            if store.managedTasks.isEmpty && store.taskQueueOtherJobs.isEmpty {
+            if store.managedTasks.isEmpty && store.voiceLibrary.jobs.isEmpty && store.taskQueueOtherJobs.isEmpty {
                 ContentUnavailableView(
                     "No Tasks", systemImage: "list.bullet.rectangle",
                     description: Text(
@@ -29,22 +30,23 @@ struct TaskQueueView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 20) {
-                            if store.taskAttentionCount > 0 {
-                                Label("Needs Attention", systemImage: "exclamationmark.circle.fill")
-                                    .font(.headline).foregroundStyle(Color.accentColor)
-                                ForEach(store.tasksNewestFirst.filter { $0.state == .failed }) { record in
-                                    taskRow(record).id(record.id)
-                                }
-                                if store.managedTasks.contains(where: { $0.state != .failed }) {
-                                    Text("Other Tasks").font(.headline)
-                                }
+                            if store.managedTasks.contains(where: { $0.state.isActive })
+                                || !store.taskQueueOtherJobs.isEmpty
+                                || store.voiceLibrary.jobs.contains(where: {
+                                    $0.state == .running || $0.state == .queued
+                                })
+                            {
+                                Text("Active Tasks").font(.headline)
                             }
-                            ForEach(store.tasksNewestFirst.filter { $0.state != .failed }) { record in
+                            ForEach(store.tasksNewestFirst.filter { $0.state.isActive }) { record in
                                 taskRow(record).id(record.id)
+                            }
+                            ForEach(store.voiceTasksNewestFirst.filter { $0.state == .running || $0.state == .queued })
+                            { job in
+                                voiceTaskRow(job)
                             }
                             if !store.taskQueueOtherJobs.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text("Other Activity").font(.headline)
                                     ForEach(store.taskQueueOtherJobs) { job in
                                         HStack(spacing: 12) {
                                             ProgressView().controlSize(.small)
@@ -58,6 +60,32 @@ struct TaskQueueView: View {
                                 }
                             }
 
+                            if store.taskAttentionCount > 0 {
+                                Label("Needs Attention", systemImage: "exclamationmark.circle.fill").font(.headline)
+                            }
+                            ForEach(store.tasksNewestFirst.filter { $0.state == .failed }) { record in
+                                taskRow(record).id(record.id)
+                            }
+                            ForEach(store.voiceTasksNewestFirst.filter { $0.state == .failed }) { job in
+                                voiceTaskRow(job)
+                            }
+                            if store.voiceLibrary.jobs.contains(where: { $0.state == .paused }) {
+                                Text("Paused").font(.headline)
+                            }
+                            ForEach(store.voiceTasksNewestFirst.filter { $0.state == .paused }) { job in
+                                voiceTaskRow(job)
+                            }
+                            if store.managedTasks.contains(where: { $0.state == .completed || $0.state == .cancelled })
+                                || store.voiceLibrary.jobs.contains(where: { $0.state == .completed })
+                            {
+                                Text("History").font(.headline)
+                            }
+                            ForEach(store.tasksNewestFirst.filter { $0.state == .completed || $0.state == .cancelled })
+                            { record in taskRow(record).id(record.id) }
+                            ForEach(store.voiceTasksNewestFirst.filter { $0.state == .completed }) { job in
+                                voiceTaskRow(job)
+                            }
+
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .task(id: focusedTaskID) {
@@ -69,6 +97,39 @@ struct TaskQueueView: View {
                 }
             }
         }.padding(24)
+            .sheet(isPresented: $reviewingVoices) {
+                VoiceLibraryView(library: store.voiceLibrary).environmentObject(store)
+            }
+    }
+
+    private func voiceTaskRow(_ job: VoicePreparationJob) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                if job.state == .running { ProgressView().controlSize(.small) }
+                Text(job.discover ? "Find Voices" : "Prepare Voice Library").font(.headline)
+                Spacer()
+                Text(job.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+            }
+            Text(job.providerName).font(.subheadline).foregroundStyle(.secondary)
+            Text(job.progress).font(.callout)
+            ForEach(Array(Set(job.failures.values)).sorted(), id: \.self) { failure in
+                Text(failure).font(.callout).textSelection(.enabled)
+            }
+            HStack {
+                if job.state == .running || job.state == .queued {
+                    Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
+                }
+                if job.state == .paused || job.state == .failed {
+                    Button(job.state == .failed ? "Retry" : "Resume") {
+                        store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
+                    }
+                    .disabled(
+                        !store.libraryWritable || store.recordingID != nil
+                            || store.voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued })
+                }
+                Button("Open Voice Review") { reviewingVoices = true }
+            }
+        }.padding(14).taskQueueCard().id(job.id)
     }
 
     private func taskRow(_ record: ManagedTaskRecord) -> some View {
@@ -106,7 +167,7 @@ struct TaskQueueView: View {
                         Text("Dismiss discards this saved request. The provider may continue processing it.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if record.state == .running {
+                    if record.state == .running && record.kind != .diarization {
                         Text("The provider may continue processing after you stop waiting.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -144,7 +205,9 @@ struct TaskQueueView: View {
             if record.state == .queued {
                 Button("Run Next") { store.prioritizeManagedTask(id: record.id) }
             }
-            Button(record.state == .queued ? "Remove from Queue" : "Stop Waiting") {
+            Button(
+                record.state == .queued ? "Remove from Queue" : record.kind == .diarization ? "Cancel" : "Stop Waiting"
+            ) {
                 store.cancelManagedTask(id: record.id)
             }
         }
@@ -165,6 +228,7 @@ struct TaskQueueView: View {
         switch kind {
         case .transcription: "Transcription"
         case .summary: "Summary"
+        case .diarization: "Speaker Labeling"
         case .chat, .contextChat: "Chat"
         case .archive: "Archive"
         case .importAudio: "Audio Import"
@@ -219,7 +283,9 @@ struct TaskQueueStatusButton: View {
     private var activityButton: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if store.managedTasks.contains(where: { $0.state == .running }) || !store.taskQueueOtherJobs.isEmpty {
+                if store.managedTasks.contains(where: { $0.state == .running }) || !store.taskQueueOtherJobs.isEmpty
+                    || store.voiceLibrary.jobs.contains(where: { $0.state == .running })
+                {
                     ProgressView().controlSize(.small)
                 }
                 else {
@@ -239,17 +305,22 @@ struct TaskQueueStatusButton: View {
 }
 
 extension MeetingStore {
-    var taskAttentionCount: Int { managedTasks.filter { $0.state == .failed }.count }
+    var voiceTasksNewestFirst: [VoicePreparationJob] { voiceLibrary.jobs.sorted { $0.createdAt > $1.createdAt } }
+    var taskAttentionCount: Int {
+        managedTasks.filter { $0.state == .failed }.count + voiceLibrary.jobs.filter { $0.state == .failed }.count
+    }
 
     var showsTaskQueueStatus: Bool {
         managedTasks.contains { $0.state.isActive || $0.state == .failed } || !taskQueueOtherJobs.isEmpty
+            || voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued || $0.state == .failed }
     }
 
     var taskQueueOtherJobs: [BackgroundJob] {
         backgroundJobs.filter { job in
-            !managedTasks.contains { record in
-                record.state.isActive && record.kind == job.key.kind && record.meetingID == job.meetingID
-            }
+            job.key.kind.rawValue != "voiceLibrary"
+                && !managedTasks.contains { record in
+                    record.state.isActive && record.kind == job.key.kind && record.meetingID == job.meetingID
+                }
         }
     }
 
@@ -261,8 +332,11 @@ extension MeetingStore {
     }
 
     var taskQueueActivitySummary: String {
-        let running = managedTasks.filter { $0.state == .running }.count + taskQueueOtherJobs.count
-        let queued = managedTasks.filter { $0.state == .queued }.count
+        let running =
+            managedTasks.filter { $0.state == .running }.count + taskQueueOtherJobs.count
+            + voiceLibrary.jobs.filter { $0.state == .running }.count
+        let queued =
+            managedTasks.filter { $0.state == .queued }.count + voiceLibrary.jobs.filter { $0.state == .queued }.count
         var parts: [String] = []
         if running > 0 { parts.append("\(running) running") }
         if queued > 0 { parts.append("\(queued) queued") }

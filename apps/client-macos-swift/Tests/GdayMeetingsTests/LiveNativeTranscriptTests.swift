@@ -136,12 +136,34 @@ import Testing
         let other = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "Other")
         let original = LiveTranscriptDisplay.rows(finalized: [first], partials: [], people: [])[0]
         let expanded = LiveTranscriptDisplay.rows(finalized: [other, first, replacement], partials: [], people: [])
-        #expect(expanded.first { $0.id == first.id }?.speakerColorIndex == original.speakerColorIndex)
-        #expect(expanded.first { $0.id == replacement.id }?.speakerColorIndex == original.speakerColorIndex)
+        #expect(original.speakerColorKey != nil)
+        #expect(expanded.first { $0.id == first.id }?.speakerColorKey == original.speakerColorKey)
+        #expect(expanded.first { $0.id == replacement.id }?.speakerColorKey == original.speakerColorKey)
         #expect(expanded.first { $0.id == replacement.id }?.speakerID == replacement.id)
+        var view = NativeTranscriptView(
+            rows: [original], generation: 1, showsSpeakers: true, editable: false, canPlay: false,
+            meetingID: UUID(), play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        let table = TranscriptNativeTable(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        coordinator.table = table
+        coordinator.update(view)
+        let cell = TranscriptNativeCell()
+        coordinator.configure(cell, for: original)
+        let originalTint = cell.badge.tint
+        view.rows = expanded
+        view.generation += 1
+        coordinator.update(view)
+        coordinator.configure(cell, for: expanded.first { $0.id == replacement.id }!)
+        #expect(cell.badge.tint == originalTint)
+        coordinator.configure(cell, for: expanded.first { $0.id == other.id }!)
+        #expect(cell.badge.tint != originalTint)
+        coordinator.tearDown()
     }
 
-    @Test func savedAndLiveAnonymousColorsMatchWithoutMergingAssignmentTargets() {
+    @Test func anonymousRowsShareSourceColorIdentityWithoutMergingAssignmentTargets() {
         let first = LiveTranscriptPhrase(session: UUID(), source: .system, start: 0, end: 1, text: "First passage")
         let second = LiveTranscriptPhrase(session: UUID(), source: .system, start: 2, end: 3, text: "Second passage")
         let rows = LiveTranscriptDisplay.rows(finalized: [first, second], partials: [], people: [])
@@ -156,14 +178,49 @@ import Testing
             savedKey
                 == TranscriptSpeakerPalette.displayKey(
                     personID: savedSpeakers[1].personID, track: savedSpeakers[1].track, label: savedSpeakers[1].label))
-        #expect(rows[0].speakerColorIndex == TranscriptSpeakerPalette.index(for: savedKey))
-        #expect(rows[0].speakerColorIndex == rows[1].speakerColorIndex)
+        #expect(rows[0].speakerColorKey == savedKey)
+        #expect(rows[0].speakerColorKey == rows[1].speakerColorKey)
+        #expect(savedSpeakers.allSatisfy { $0.colorSlot == rows[0].speakerColorIndex })
         #expect(rows[0].speakerID != rows[1].speakerID)
         #expect(savedKey == TranscriptSpeakerPalette.displayKey(personID: nil, track: "SYS", label: first.speakerLabel))
         let person = UUID()
         #expect(
             TranscriptSpeakerPalette.displayKey(personID: person, track: "system", label: "First")
                 == TranscriptSpeakerPalette.displayKey(personID: person, track: "microphone", label: "Another"))
+    }
+
+    @Test func liveSpeakerColorsSurviveDraftAdoptionAndReopening() throws {
+        let session = UUID()
+        let microphone = LiveSpeakerIdentity(
+            id: UUID(), source: .microphone, generation: session, slot: 0,
+            model: "Synthetic", revision: "1", personID: UUID())
+        let system = LiveSpeakerIdentity(
+            id: UUID(), source: .system, generation: session, slot: 0,
+            model: "Synthetic", revision: "1", personID: UUID())
+        var timeline = LiveSpeakerTimeline()
+        timeline.speakers = [microphone, system]
+        timeline.intervals = [
+            .init(speakerID: microphone.id, start: 0, end: 2),
+            .init(speakerID: system.id, start: 3, end: 5),
+        ]
+        let phrases = [
+            LiveTranscriptPhrase(session: session, source: .microphone, start: 0, end: 2, text: "First voice."),
+            LiveTranscriptPhrase(session: session, source: .system, start: 3, end: 5, text: "Second voice."),
+        ]
+        let attributed = phrases.flatMap { timeline.attributing($0) }
+        let live = LiveTranscriptDisplay.rows(finalized: attributed, partials: [], people: [])
+        #expect(Set(live.compactMap(\.speakerColorIndex)).count == 2)
+        var draft = LiveTranscriptDraft(meetingID: UUID(), locale: "en")
+        draft.effectivePhrases = attributed
+        draft.speakerTimeline = timeline
+        var meeting = Meeting(title: "Synthetic recording")
+        meeting.speakers = draft.speakers
+        let saved = MeetingSpeakerColors.assigning(meeting)
+        let reopened = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(saved))
+        for (index, phrase) in attributed.enumerated() {
+            #expect(
+                reopened.speakers.first { $0.id == phrase.speakerIdentity }?.colorSlot == live[index].speakerColorIndex)
+        }
     }
 
     @Test func provisionalUnderlineEndsWhenFinalized() {

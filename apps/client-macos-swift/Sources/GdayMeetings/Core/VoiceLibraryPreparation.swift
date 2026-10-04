@@ -95,6 +95,30 @@ final class VoiceLibraryPreparation: ObservableObject {
         }
     }
 
+    /// Selection can repair old source references without starting a model or scanning the library.
+    func findPlayableExample(exampleID: UUID, directory: URL) async -> VoiceExample? {
+        guard let original = library.examples.first(where: { $0.id == exampleID }) else { return nil }
+        errorMessage = nil
+        do {
+            let snapshot = try await inventoryReader.read(meetingID: original.meetingID, folder: directory)
+            try Task.checkCancellation()
+            guard
+                let resolved = library.resolveLegacyExample(
+                    exampleID: exampleID, meeting: snapshot.meeting, directory: directory)
+            else {
+                errorMessage = library.errorMessage
+                return nil
+            }
+            errorMessage = library.availabilityReason(for: resolved)
+            return resolved
+        }
+        catch is CancellationError { return nil }
+        catch {
+            errorMessage = "Couldn’t read the source recording. \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     @discardableResult
     func start(
         provider: ServiceProvider, meetings: [Meeting], directory: @escaping (UUID) -> URL, discover: Bool = false
@@ -110,7 +134,8 @@ final class VoiceLibraryPreparation: ObservableObject {
         errorMessage = nil
         let meetingIDs = Set(meetings.map(\.id))
         let examples = library.examples.filter {
-            !$0.excluded && meetingIDs.contains($0.meetingID) && (discover || $0.review == .confirmed)
+            !$0.excluded && meetingIDs.contains($0.meetingID)
+                && (discover || $0.review == .confirmed)
         }
         let inputs: [VoiceDiscoveryInput] =
             discover
@@ -160,23 +185,26 @@ final class VoiceLibraryPreparation: ObservableObject {
             if library.jobs.first(where: { $0.id == jobID })?.completedExampleIDs.contains(exampleID) == true {
                 continue
             }
-            guard let example = library.examples.first(where: { $0.id == exampleID }), !example.excluded else {
+            guard let metadata = library.examples.first(where: { $0.id == exampleID }), !metadata.excluded else {
                 if !complete(exampleID, jobID: jobID) { return }
                 continue
             }
-            guard library.audioIsCurrent(example) else {
+            guard let example = library.hydratedExample(id: exampleID) else {
                 guard
-                    update(
-                        jobID,
-                        {
-                            $0.failures[exampleID.uuidString] =
-                                "The source audio changed or is unavailable. Review a new example."
-                        })
+                    update(jobID, { $0.failures[exampleID.uuidString] = "Couldn’t read saved voice representations." })
                 else { return }
                 continue
             }
-            if example.embeddings.contains(where: { $0.type == job.type && $0.isValid }) {
+            if example.voiceEmbeddings.contains(where: { $0.type == job.type && $0.isValid }) {
                 if !complete(exampleID, jobID: jobID) { return }
+                continue
+            }
+            guard library.audioIsCurrent(metadata) else {
+                guard
+                    update(
+                        jobID,
+                        { $0.failures[exampleID.uuidString] = "Audio is unavailable for this model’s preparation." })
+                else { return }
                 continue
             }
             do {
@@ -285,7 +313,7 @@ final class VoiceLibraryPreparation: ObservableObject {
                     return .init(
                         id: identity, meetingID: input.meetingID, speakerID: identity, source: range.source,
                         audioFile: range.audioFile, audioRevision: revision, start: range.start, end: range.end,
-                        embeddings: [embedding], groupID: identity)
+                        embeddings: [embedding], groupID: identity, origin: .discovery)
                 }
                 guard library.upsert(candidates),
                     finishRecording(
@@ -355,19 +383,19 @@ final class VoiceLibraryPreparation: ObservableObject {
     /// Grouping offers review candidates only; it never confirms a person or trains a profile.
     /// Complete-link comparison avoids chains of weakly related voices joining a group.
     private func groupUnassigned(type: EmbeddingType, exampleIDs: Set<UUID>) {
+        defer { library.releaseRepresentations() }
         var groups: [[VoiceExample]] = []
-        let candidates = library.examples.filter {
+        let candidates = library.hydratedExamples(ids: exampleIDs).filter {
             exampleIDs.contains($0.id) && !$0.isReviewed && !$0.manuallyGrouped && $0.review == .unassigned
-                && library.audioIsCurrent($0)
                 && $0.rejectedPersonIDs.isEmpty && $0.personID == nil
-                && $0.embeddings.contains(where: { $0.type == type && $0.isValid })
+                && $0.voiceEmbeddings.contains(where: { $0.type == type && $0.isValid })
         }.sorted { $0.id.uuidString < $1.id.uuidString }
         for example in candidates {
-            guard let vector = example.embeddings.first(where: { $0.type == type && $0.isValid }) else { continue }
+            guard let vector = example.voiceEmbeddings.first(where: { $0.type == type && $0.isValid }) else { continue }
             let index = groups.firstIndex { group in
                 group.allSatisfy { other in
                     guard other.meetingID != example.meetingID,
-                        let value = other.embeddings.first(where: { $0.type == type && $0.isValid }),
+                        let value = other.voiceEmbeddings.first(where: { $0.type == type && $0.isValid }),
                         let score = SpeakerRecognition.similarity(vector.values, value.values)
                     else { return false }
                     return score >= 0.95

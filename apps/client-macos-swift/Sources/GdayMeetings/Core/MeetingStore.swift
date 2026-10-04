@@ -44,7 +44,6 @@ final class MeetingStore: ObservableObject {
     /// block recording. Progress is transient: outcomes appear in the content
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
-    var localDiarizationTasks: [UUID: Task<Void, Never>] = [:]
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskJournalError: String?
     lazy var managedTaskJournal = ManagedTaskJournal(url: dataDirectory.appendingPathComponent("tasks.jsonl"))
@@ -89,11 +88,12 @@ final class MeetingStore: ObservableObject {
     lazy var notesStorage = NotesStorage(directory: dataDirectory)
     lazy var voiceLibrary: VoiceLibraryStore = {
         let library = VoiceLibraryStore(
-            directory: dataDirectory, legacyPeople: people,
+            directory: dataDirectory,
             canWrite: { [weak self] in self?.libraryWritable == true })
         library.didChange = { [weak self] ids in self?.refreshVoiceAssignments(meetingIDs: ids) }
         voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
             guard let self else { return }
+            self.objectWillChange.send()
             let kind = BackgroundJob.Kind(rawValue: "voiceLibrary")
             if let job = jobs.first(where: { $0.state == .running || $0.state == .queued }) {
                 if self.isJobRunning(kind, .library) {
@@ -221,6 +221,7 @@ final class MeetingStore: ObservableObject {
                 }
             }
             do {
+                _ = voicePreparation
                 try restoreManagedTasks()
                 managedTaskWakeObserver = ManagedTaskWakeObserver { [weak self] in
                     self?.recoverUnfinishedManagedTasks()
@@ -312,6 +313,12 @@ final class MeetingStore: ObservableObject {
         guard canSave else {
             errorMessage = "Library is read-only because loading failed. Check the data folder before saving changes."
             return false
+        }
+        for index in meetings.indices {
+            let previous = lastSavedLibrary.meetings.first { $0.id == meetings[index].id }
+            if previous != meetings[index] {
+                meetings[index] = MeetingSpeakerColors.assigning(meetings[index], previous: previous)
+            }
         }
         var transaction = LibraryFileTransaction(root: dataDirectory)
         do {

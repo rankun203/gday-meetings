@@ -75,7 +75,7 @@ if not token:
     sys.exit(0)
 print('HF_TOKEN found, pre-caching pyannote models...')
 from pyannote.audio import Pipeline
-Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token=token)
+Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', revision='3533c8cf8e369892e6b79ff1bf80f7b0286a54ee', token=token)
 print('Diarization pipeline cached (includes segmentation + embedding sub-models)')
 PYEOF
 

@@ -326,6 +326,13 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
                     throw ServiceError("The transcript is missing an audio track's segments.")
                 }
                 let embeddings = body["speaker_embeddings"] as? [String: Any] ?? [:]
+                let declaredType = body["speaker_embedding_type"]
+                let embeddingType = declaredType.flatMap { value -> Data? in
+                    guard JSONSerialization.isValidJSONObject(value) else { return nil }
+                    return try? JSONSerialization.data(withJSONObject: value)
+                }
+                .flatMap { try? JSONDecoder().decode(EmbeddingType.self, from: $0) }
+
                 for entry in entries {
                     guard let start = entry["start"] as? Double, let end = entry["end"] as? Double,
                         let text = entry["text"] as? String, start.isFinite, end.isFinite, start >= 0, end >= start
@@ -338,7 +345,15 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
                     segments.append(
                         .init(
                             start: start, end: end, text: text, speaker: label, track: track,
-                            embedding: embedding.flatMap { SpeakerRecognition.isValid($0) ? $0 : nil }))
+                            embedding: declaredType == nil
+                                ? embedding.flatMap { SpeakerRecognition.isValid($0) ? $0 : nil } : nil,
+                            voiceEmbedding: embeddingType.flatMap { type in
+                                embedding.flatMap {
+                                    TypedVoiceEmbedding.normalizing(
+                                        type: type, values: $0,
+                                        provenance: body["speaker_embedding_provenance"] as? String)
+                                }
+                            }))
                 }
             }
             return .complete(segments.sorted { $0.start == $1.start ? $0.track < $1.track : $0.start < $1.start })

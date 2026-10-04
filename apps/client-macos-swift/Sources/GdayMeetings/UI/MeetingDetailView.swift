@@ -4,6 +4,7 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     let meetingID: UUID
+    var initialTranscriptRowID: UUID? = nil
     @ViewState private var tab = 0
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
@@ -132,7 +133,7 @@ struct MeetingDetailView: View {
                 LiveTranscriptView(controller: store.liveTranscript)
             }
             else {
-                MeetingTranscriptView(meetingID: meetingID)
+                MeetingTranscriptView(meetingID: meetingID, initialRowID: initialTranscriptRowID)
             }
         case 1:
             MeetingNotesWorkspace(meetingID: meetingID)

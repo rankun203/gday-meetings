@@ -81,7 +81,7 @@ struct LocalProviderConfigurationTests {
             store.settings.diarizationProviderID = provider?.id
             await store.diarizeLocally(id: meeting.id)
             #expect(!store.isJobRunning(.diarization, .meeting(meeting.id)))
-            #expect(store.localDiarizationTasks[meeting.id] == nil)
+            #expect(!store.managedTasks.contains { $0.meetingID == meeting.id && $0.kind == .diarization })
             #expect(store.meeting(id: meeting.id)?.transcript == meeting.transcript)
         }
     }

@@ -27,6 +27,7 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable {
     var recovery: ManagedTaskRecovery = .automatic
     var attemptKey: String?
     var remoteJobID: String?
+    var speakerLabelingResultID: UUID?
     var submissionUncertain = false
     var hasSavedResult = false
     var providerFailed = false
@@ -47,6 +48,7 @@ struct MissingTranscriptionJob: LocalizedError {
 extension MeetingStore {
     static let maximumConcurrentTranscriptions = 2
     static let maximumConcurrentSummaries = 1
+    static let maximumConcurrentSpeakerLabeling = 1
 
     var tasksNewestFirst: [ManagedTaskRecord] { managedTasks.sorted(by: ManagedTaskJournal.newestFirst) }
 
@@ -64,6 +66,21 @@ extension MeetingStore {
         return enqueueManagedTask(
             kind: .summary, meeting: meeting, providerID: providerID ?? settings.summaryProviderID,
             automatically: automatically)
+    }
+
+    @discardableResult func queueSpeakerLabeling(id: UUID, providerID: UUID? = nil) -> UUID? {
+        let selectedID = providerID ?? settings.diarizationProviderID
+        guard libraryWritable, ensureMeetingLoaded(id: id), recordingID != id,
+            !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
+            let meeting = meetings.first(where: { $0.id == id }), meeting.transcriptionAttempt == nil,
+            settings.serviceProviders.contains(where: {
+                $0.id == selectedID && $0.kind == .community1 && $0.supports(.diarization)
+            })
+        else {
+            errorMessage = "Choose Community-1 for Speaker Labeling in Settings before labeling a saved transcript."
+            return nil
+        }
+        return enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
     }
 
     private func enqueueManagedTask(
@@ -90,6 +107,7 @@ extension MeetingStore {
         task.isAutomatic = automatically
         task.userStopped = false
         task.interrupted = false
+        if kind == .diarization { task.speakerLabelingResultID = nil }
         if kind == .transcription, let attempt = meeting.transcriptionAttempt { task.capture(attempt) }
         guard saveManagedTask(task) else { return nil }
         guard beginJob(kind, .meeting(meeting.id), progress: "Queued") else { return nil }
@@ -125,8 +143,11 @@ extension MeetingStore {
         guard !isChangingLibrary, !isSchedulingManagedTasks else { return }
         isSchedulingManagedTasks = true
         defer { isSchedulingManagedTasks = false }
-        for kind in [BackgroundJob.Kind.transcription, .summary] {
-            let limit = kind == .transcription ? Self.maximumConcurrentTranscriptions : Self.maximumConcurrentSummaries
+        for kind in [BackgroundJob.Kind.transcription, .summary, .diarization] {
+            let limit =
+                kind == .transcription
+                ? Self.maximumConcurrentTranscriptions
+                : kind == .diarization ? Self.maximumConcurrentSpeakerLabeling : Self.maximumConcurrentSummaries
             let candidates = managedTasks.filter { $0.kind == kind && $0.state == .queued && !$0.isPreview }
                 .sorted {
                     $0.queuePriority == $1.queuePriority
@@ -136,7 +157,7 @@ extension MeetingStore {
                 guard managedTasks.filter({ $0.kind == kind && $0.state == .running && !$0.isPreview }).count < limit,
                     var task = managedTasks.first(where: { $0.id == id && $0.state == .queued })
                 else { continue }
-                if task.isAutomatic && !settings.autoSummarize {
+                if task.kind == .summary && task.isAutomatic && !settings.autoSummarize {
                     cancelManagedTask(id: id)
                     continue
                 }
@@ -168,13 +189,15 @@ extension MeetingStore {
             case .transcription:
                 try await performTranscription(id: task.meetingID, providerID: task.providerID)
             case .summary:
-                if task.isAutomatic && !settings.autoSummarize {
+                if task.kind == .summary && task.isAutomatic && !settings.autoSummarize {
                     finishManagedTask(
                         id, state: .cancelled, recovery: .none, message: "Automatically Summarize is turned off.")
                     return
                 }
                 pendingAutomaticSummaries.remove(task.meetingID)
                 try await performSummary(id: task.meetingID, providerID: task.providerID)
+            case .diarization:
+                try await performLocalDiarization(id: task.meetingID, providerID: task.providerID)
             default: throw ServiceError("This task type cannot run from Tasks yet.")
             }
             try Task.checkCancellation()
@@ -185,7 +208,9 @@ extension MeetingStore {
             if Task.isCancelled || error is CancellationError {
                 finishManagedTask(
                     id, state: .cancelled, recovery: .manual,
-                    message: "Stopped waiting on this Mac. The provider may still be processing the request.")
+                    message: task.kind == .diarization
+                        ? "Speaker labeling cancelled. The current transcript was kept."
+                        : "Stopped waiting on this Mac. The provider may still be processing the request.")
             }
             else if error is MissingTranscriptionJob {
                 finishManagedTask(id, state: .failed, recovery: .restartRequired, message: error.localizedDescription)
@@ -257,6 +282,13 @@ extension MeetingStore {
             task.recovery != .restartRequired && task.recovery != .blocked
         else { return false }
         if task.isPreview || task.kind == .summary { return true }
+        if task.kind == .diarization {
+            return recordingID != task.meetingID && !isJobRunning(.transcription, .meeting(task.meetingID))
+                && !isJobRunning(.importAudio, .meeting(task.meetingID))
+                && settings.serviceProviders.contains {
+                    $0.id == task.providerID && $0.kind == .community1 && $0.supports(.diarization)
+                }
+        }
         if let current = meetings.first(where: { $0.id == task.meetingID })?.transcriptionAttempt {
             guard current.idempotencyKey == task.attemptKey, current.failure == nil, current.result == nil,
                 !current.submissionUncertain || current.taskID != nil
@@ -285,6 +317,9 @@ extension MeetingStore {
         guard ensureMeetingLoaded(id: task.meetingID), canRetryManagedTask(task) else { return }
         if task.kind == .transcription {
             _ = queueTranscription(id: task.meetingID, providerID: task.providerID)
+        }
+        else if task.kind == .diarization {
+            _ = queueSpeakerLabeling(id: task.meetingID, providerID: task.providerID)
         }
         else {
             _ = queueSummary(id: task.meetingID, providerID: task.providerID)
@@ -428,7 +463,7 @@ extension MeetingStore {
             guard original.state.isActive || (original.state == .failed && original.recovery == .automatic) else {
                 continue
             }
-            guard [.transcription, .summary].contains(original.kind) else {
+            guard [.transcription, .summary, .diarization].contains(original.kind) else {
                 finishManagedTask(
                     original.id, state: .failed, recovery: .blocked,
                     message: "This app cannot run this task type. The saved task has been kept.")
@@ -439,6 +474,12 @@ extension MeetingStore {
             if task.userStopped {
                 finishManagedTask(
                     task.id, state: .cancelled, recovery: .manual, message: "Stopped waiting on this Mac.")
+                continue
+            }
+            if task.kind == .diarization {
+                finishManagedTask(
+                    task.id, state: .failed, recovery: .manual,
+                    message: "Speaker labeling was interrupted. Retry starts analysis again.")
                 continue
             }
             if task.kind == .summary && task.state != .queued {
@@ -512,6 +553,18 @@ extension MeetingStore {
             managedTasks.contains(where: { $0.id == id && !$0.state.isActive && $0.state != .completed })
         else { return }
         finishManagedTask(id, state: .completed, recovery: .none)
+    }
+
+    func bindSpeakerLabelingResult(_ resultID: UUID, meetingID: UUID) throws {
+        guard
+            var task = managedTasks.first(where: {
+                $0.kind == .diarization && $0.meetingID == meetingID && $0.state.isActive
+            })
+        else { return }
+        task.speakerLabelingResultID = resultID
+        guard saveManagedTask(task) else {
+            throw ServiceError(managedTaskJournalError ?? "Couldn’t save the speaker-labeling task.")
+        }
     }
 
     func markManagedTaskCompletion(on meeting: inout Meeting, kind: BackgroundJob.Kind) {

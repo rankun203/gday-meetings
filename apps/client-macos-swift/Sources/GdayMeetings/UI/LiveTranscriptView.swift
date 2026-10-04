@@ -159,12 +159,12 @@ enum LiveTranscriptDisplay {
                 }
             }
             let key = TranscriptSpeakerPalette.displayKey(
-                personID: personID, track: phrase.source.rawValue, label: phrase.speakerLabel)
+                personID: nil, track: phrase.source.rawValue, label: phrase.speakerLabel)
             return TranscriptDisplayRow(
                 id: phrase.id, start: phrase.start, end: phrase.end,
                 speaker: personID.flatMap { names[$0] } ?? phrase.speakerLabel,
                 speakerID: phrase.id, text: phrase.text,
-                personID: personID, speakerColorIndex: TranscriptSpeakerPalette.index(for: key),
+                personID: personID, speakerColorIndex: phrase.resolvedSpeakerColorSlot, speakerColorKey: key,
                 isProvisional: !provisionalRanges.isEmpty, provisionalTextRanges: provisionalRanges,
                 recentWordRanges: recentRanges,
                 accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil,

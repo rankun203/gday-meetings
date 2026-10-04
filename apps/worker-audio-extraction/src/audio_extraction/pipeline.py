@@ -16,6 +16,8 @@ from pyannote.audio import Pipeline as PyannotePipeline
 from pyannote.audio.pipelines.speaker_diarization import DiarizeOutput
 from whisperx.diarize import DiarizationPipeline
 
+from .speaker_embeddings import COMMUNITY1_MODEL, COMMUNITY1_REVISION, embedding_metadata, normalize_embeddings
+
 # Suppress known harmless warnings from pyannote internals:
 # - TF32 reproducibility warning (pyannote disables TF32 intentionally)
 # - std() degrees-of-freedom warning on very short segments
@@ -75,7 +77,7 @@ class TranscriptionPipeline:
             os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
             os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 
-            model_name = "pyannote/speaker-diarization-community-1"
+            model_name = COMMUNITY1_MODEL
             pipeline = self._load_pyannote_pipeline(model_name)
 
             pipeline.segmentation_batch_size = self.segmentation_batch_size
@@ -102,7 +104,7 @@ class TranscriptionPipeline:
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             pipeline = PyannotePipeline.from_pretrained(
-                model_name, token=self.hf_token
+                model_name, revision=COMMUNITY1_REVISION, token=self.hf_token
             )
             logger.info("Loaded from cache in %.1fs", time.time() - t0)
             return pipeline
@@ -121,7 +123,7 @@ class TranscriptionPipeline:
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             pipeline = PyannotePipeline.from_pretrained(
-                model_name, token=self.hf_token
+                model_name, revision=COMMUNITY1_REVISION, token=self.hf_token
             )
         finally:
             os.environ.pop("HF_HUB_OFFLINE", None)
@@ -137,10 +139,10 @@ import os
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 from pyannote.audio import Pipeline
-pipeline = Pipeline.from_pretrained(os.environ["_MODEL"], token=os.environ["_TOKEN"])
+pipeline = Pipeline.from_pretrained(os.environ["_MODEL"], revision=os.environ["_REVISION"], token=os.environ["_TOKEN"])
 print('DOWNLOAD_OK')
 """
-        env = {**os.environ, "_MODEL": model_name, "_TOKEN": self.hf_token}
+        env = {**os.environ, "_MODEL": model_name, "_REVISION": COMMUNITY1_REVISION, "_TOKEN": self.hf_token}
         result = subprocess.run(
             [sys.executable, "-c", download_script],
             capture_output=True, text=True, timeout=180, env=env,
@@ -332,13 +334,14 @@ print('DOWNLOAD_OK')
         # Prefix speaker IDs to avoid cross-track collisions
         segments = _prefix_speakers(result["segments"], speaker_prefix)
         speaker_embeddings = {
-            f"{speaker_prefix}_{k}": v for k, v in speaker_embeddings.items()
+            f"{speaker_prefix}_{k}": v for k, v in normalize_embeddings(speaker_embeddings).items()
         }
 
         return {
             "duration_secs": round(duration_secs, 2),
             "segments": segments,
             "speaker_embeddings": speaker_embeddings,
+            **embedding_metadata(),
             "step_timings": step_timings,
         }
 
