@@ -5,6 +5,29 @@ import Testing
 
 @MainActor @Suite(.serialized)
 struct MarkdownBlockGeometryTests {
+    @Test func timestampedListsLayOutVisibleTextInBothTextEngines() throws {
+        let source = "- Visible bullet item. <!-- gday:t=00:12 -->\n- [ ] Visible task item. <!-- gday:t=01:23:45 -->"
+        for modern in [true, false] {
+            let text = MarkdownReadingTextView(usingTextLayoutManager: modern)
+            text.frame = NSRect(x: 0, y: 0, width: 480, height: 300)
+            text.textContainer?.containerSize = NSSize(width: 444, height: 1000)
+            text.textContainerInset = NSSize(width: 18, height: 16)
+            let rendered = MarkdownReadingRenderer.render(
+                source, timestamps: true, emptyMessage: "", directory: URL(fileURLWithPath: "/tmp"),
+                interactiveTasks: true)
+            text.textStorage!.setAttributedString(rendered)
+            text.refreshTaskRanges()
+            for item in ["Visible bullet item.", "Visible task item."] {
+                let range = (text.string as NSString).range(of: item)
+                #expect(range.location != NSNotFound)
+                let rect = try #require(text.textRangeRects(range, glyphBounds: true).first)
+                #expect(rect.width > 50)
+                #expect(rect.minX > text.textContainerInset.width)
+                #expect(rect.maxX < text.bounds.width)
+            }
+        }
+    }
+
     @Test func codePlaceholdersKeepListMarkers() {
         let document = NotesReadingDocument(
             "- Read `meetings/<UUID>/`.\n- Match `people/<personID>.json`.\n- Ordinary item.")

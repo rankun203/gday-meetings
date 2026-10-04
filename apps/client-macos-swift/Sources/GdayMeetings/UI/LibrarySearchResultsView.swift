@@ -1,0 +1,237 @@
+import AppKit
+import SwiftUI
+
+struct LibrarySearchResultsView: View {
+    @ObservedObject var session: LibrarySearchSession
+    var open: (LibrarySearchResult) -> Void
+    var retry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Search Results").font(.title2.bold())
+                Text("“\(session.query)”").font(.headline).textSelection(.enabled)
+                if let total = session.total {
+                    Text("\(total.formatted()) \(total == 1 ? "match" : "matches")")
+                        .foregroundStyle(.secondary).font(.callout)
+                }
+            }.padding(AppTheme.contentInset)
+            NativeSearchResults(session: session, results: session.results, generation: session.generation, open: open)
+                .overlay {
+                    if session.isLoading && session.results.isEmpty {
+                        ProgressView("Searching…")
+                    }
+                    else if session.total == 0 && session.error == nil {
+                        ContentUnavailableView.search(text: session.query)
+                    }
+                    else if let error = session.error, session.results.isEmpty {
+                        ContentUnavailableView {
+                            Label("Couldn’t Search", systemImage: "exclamationmark.magnifyingglass")
+                        } description: {
+                            Text(error)
+                        } actions: {
+                            Button("Try Again", action: retry)
+                        }
+                    }
+                }
+            if !session.results.isEmpty {
+                HStack {
+                    Text("Double-click a result or press Return to open it.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if session.isLoading { ProgressView().controlSize(.small) }
+                    if let error = session.error {
+                        Text(error).font(.callout)
+                        Button("Try Again", action: retry)
+                    }
+                }.padding(AppTheme.contentSpacing)
+            }
+        }
+        .background(AppTheme.readingBackground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Reusable native cells retain a pixel viewport and selection when returning from a meeting.
+private struct NativeSearchResults: NSViewRepresentable {
+    let session: LibrarySearchSession
+    let results: [LibrarySearchResult]
+    let generation: UUID
+    let open: (LibrarySearchResult) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        let table = SearchResultsTable()
+        table.headerView = nil
+        table.style = .inset
+        table.backgroundColor = .clear
+        table.rowHeight = 78
+        table.intercellSpacing = NSSize(width: 0, height: 1)
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.autoresizingMask = [.width]
+        table.allowsMultipleSelection = false
+        let column = NSTableColumn(identifier: .init("result"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.delegate = context.coordinator
+        table.dataSource = context.coordinator
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.activate)
+        table.activate = { [weak coordinator = context.coordinator] in coordinator?.activate() }
+        table.setAccessibilityLabel("Search Results")
+        scroll.documentView = table
+        context.coordinator.table = table
+        context.coordinator.scroll = scroll
+        scroll.contentView.postsBoundsChangedNotifications = true
+        context.coordinator.observer = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+        ) { [weak coordinator = context.coordinator] _ in
+            MainActor.assumeIsolated { coordinator?.scrolled() }
+        }
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) { context.coordinator.update(self) }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        if let observer = coordinator.observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        var parent: NativeSearchResults
+        weak var table: SearchResultsTable?
+        weak var scroll: NSScrollView?
+        var observer: NSObjectProtocol?
+        var rows: [LibrarySearchResult] = []
+        var generation: UUID?
+        var updating = false
+        var announced = false
+        init(_ parent: NativeSearchResults) { self.parent = parent }
+        func update(_ value: NativeSearchResults) {
+            guard let table, let scroll else { return }
+            updating = true
+            parent = value
+            let reset = generation != value.generation
+            if reset { announced = false }
+            generation = value.generation
+            if rows != value.results || reset {
+                let offset = value.session.scrollOffset
+                rows = value.results
+                table.reloadData()
+                table.layoutSubtreeIfNeeded()
+                if let selection = value.session.selection, let row = rows.firstIndex(where: { $0.id == selection }) {
+                    table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                }
+                else {
+                    table.deselectAll(nil)
+                }
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            updating = false
+            if !value.session.isLoading, value.session.error == nil, !announced, let total = value.session.total {
+                announced = true
+                if total > 0 {
+                    let generation = value.generation
+                    let session = value.session
+                    DispatchQueue.main.async { [weak table] in
+                        guard generation == session.generation, !session.isLoading,
+                            let table, let window = table.window
+                        else { return }
+                        window.makeFirstResponder(table)
+                    }
+                }
+                NSAccessibility.post(
+                    element: NSApplication.shared, notification: .announcementRequested,
+                    userInfo: [
+                        .announcement: "Search complete. \(total) \(total == 1 ? "match" : "matches").",
+                        .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+                    ])
+            }
+            scrolled()
+        }
+        func scrolled() {
+            guard !updating, let table, let scroll else { return }
+            parent.session.scrollOffset = scroll.contentView.bounds.minY
+            let visible = table.rows(in: scroll.contentView.bounds)
+            if visible.location != NSNotFound && NSMaxRange(visible) >= rows.count - 10 {
+                let session = parent.session
+                Task { @MainActor in session.loadMore() }
+            }
+        }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            guard !updating, let table else { return }
+            parent.session.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+        }
+        @objc func activate() {
+            guard let table, rows.indices.contains(table.selectedRow) else { return }
+            parent.open(rows[table.selectedRow])
+        }
+        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            let identifier = NSUserInterfaceItemIdentifier("search-result")
+            let cell =
+                tableView.makeView(withIdentifier: identifier, owner: nil) as? SearchResultCell ?? SearchResultCell()
+            cell.identifier = identifier
+            cell.configure(rows[row])
+            return cell
+        }
+    }
+}
+
+private final class SearchResultsTable: NSTableView {
+    var activate: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76 {
+            activate?()
+        }
+        else {
+            super.keyDown(with: event)
+        }
+    }
+}
+
+private final class SearchResultCell: NSTableCellView {
+    let title = NSTextField(labelWithString: "")
+    let metadata = NSTextField(labelWithString: "")
+    let excerpt = NSTextField(labelWithString: "")
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        metadata.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        metadata.textColor = .secondaryLabelColor
+        excerpt.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for field in [title, metadata, excerpt] {
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
+            field.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(field)
+            NSLayoutConstraint.activate([
+                field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+                field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            metadata.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
+            excerpt.topAnchor.constraint(equalTo: metadata.bottomAnchor, constant: 5),
+        ])
+        textField = title
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func configure(_ result: LibrarySearchResult) {
+        title.stringValue = result.title
+        let source: String
+        switch result.kind {
+        case .title: source = "Meeting"
+        case .notes: source = "Notes"
+        case .summary: source = "Summary"
+        case .transcript: source = "Transcript · " + playbackTime(result.start ?? 0)
+        }
+        metadata.stringValue = result.createdAt.formatted(date: .abbreviated, time: .shortened) + " · " + source
+        excerpt.stringValue = result.excerpt.replacingOccurrences(of: "\n", with: " ")
+        setAccessibilityLabel([title.stringValue, metadata.stringValue, excerpt.stringValue].joined(separator: ". "))
+        toolTip = result.excerpt
+    }
+}

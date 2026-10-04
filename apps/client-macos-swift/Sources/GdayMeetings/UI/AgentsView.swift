@@ -8,6 +8,7 @@ struct AgentsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Agents").font(.title.weight(.semibold))
             if let markdown {
                 NativeMarkdownReadingView(
                     markdown: AgentGuides.displayBody(markdown), showsTimestamps: false,
@@ -16,7 +17,7 @@ struct AgentsView: View {
                 .accessibilityLabel("AGENTS.md")
             }
             else if let loadError {
-                Text(loadError).textSelection(.enabled)
+                AppInlineMessage(text: loadError, systemImage: "exclamationmark.triangle", tint: .orange)
                 Button("Try Again") { reloadID = UUID() }
                     .modifier(MarkdownControlCursor())
                 Spacer()
@@ -26,8 +27,9 @@ struct AgentsView: View {
                 Spacer()
             }
         }
-        .padding(24)
+        .padding(AppTheme.contentInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppTheme.readingBackground)
         .task(id: reloadID) {
             markdown = nil
             loadError = nil

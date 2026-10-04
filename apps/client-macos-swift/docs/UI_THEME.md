@@ -23,16 +23,13 @@ Use a small shared design system with **native controls, semantic values, scoped
 | Feature views | Own screen state and task-specific composition. | Meeting detail, providers, task queue, voice review. Keep domain operations and persistence outside the theme. |
 | Native bridges | Keep performant native renderers and share resolved visual values. | Transcript table, meeting table, Markdown text view/editor, waveform. Update colors/metrics on appearance changes; do not recreate document/table identity on each tick. |
 
-Suggested organization when implementation begins:
+The implementation keeps the existing flat `UI/` layout. Do not move feature files merely to adopt the theme. Shared contracts are:
 
-```text
-UI/Theme/          semantic values, typography roles, native appearance adapters
-UI/Styles/         control styles and visual modifiers
-UI/Components/     shared composed controls and feedback
-UI/<feature>/     feature screens and feature-specific components
-```
-
-These folders are a proposed organization, not existing APIs. Extract existing `ActionButtonStyle`, `AppDisclosureStyle`, and `MeetingGlassSurface` rather than introducing competing replacements. Keep transcript and Markdown engines with their feature while sharing visual values. Do not perform a bulk file move alongside behavioral changes.
+- `AppTheme.swift`: `AppTheme` holds fixed spacing, radius, transport target, and semantic reading-background values.
+- `AppChromeSurface(shape:)`: stationary navigation and transport material. Uses native Liquid Glass on macOS 26, native regular material on earlier supported systems, and an opaque control background for Reduce Transparency or Increase Contrast. Increased contrast adds an outline. Never apply it to scrolling rows.
+- `AppContentSurface()`: an opaque semantic reading background for related content, with an outline only when contrast is increased. It adds no padding; the owning layout chooses the shared inset.
+- `SettingsComponents.swift`: `AppInlineMessage(text:systemImage:tint:)` combines wrapping, selectable primary text with a status symbol; tint affects the symbol. `ProviderHealthSummary(title:health:)` combines a capability, its readiness, and any explanation. These views draw supplied values and perform no service operations.
+- Existing `ActionButtonStyle`, `AppDisclosureStyle`, and native controls continue to own their interaction families. Do not introduce competing controls to obtain an appearance change.
 
 Use immutable static values for fixed conventions. Read `colorScheme`, contrast, enabled state, Reduce Motion, Reduce Transparency, and active-window state from the environment. Add a small typed environment value only for configuration that genuinely varies by subtree (for example, a supported density mode). Do not introduce an observable global theme singleton or broadcast playback time through it. Use bindings for editable state, not to bind every view to fixed styling constants. Current SwiftUI supports custom environment entries with `@Entry`; confirm toolchain and minimum-runtime compatibility when adopting it.
 
@@ -92,3 +89,9 @@ Apple documents the primitives below; the layered folder arrangement and adoptio
 - [SwiftUI performance](https://developer.apple.com/documentation/xcode/understanding-and-improving-swiftui-performance): measure expensive/frequent updates and their dependencies.
 
 Reviewed October 3, 2026. Verify API availability against the shipping SDK before implementation.
+
+## Implementation verification
+
+Reviewed Apple's current documentation on October 4, 2026: [`glassEffect(_:in:)`](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:)) requires macOS 26 and anchors the material to the view bounds. [`scrollContentBackground(_:)`](https://developer.apple.com/documentation/swiftui/view/scrollcontentbackground(_:)) can hide the native list background, allowing one stationary provider-directory surface. [`ViewThatFits`](https://developer.apple.com/documentation/swiftui/viewthatfits) selects the first layout whose ideal size fits the requested axes; task actions use horizontal and then vertical layouts. The latter two APIs support macOS 13 and therefore the app's macOS 14.2 minimum. Documentation was read from Apple's linked Markdown representations.
+
+API availability and source review do not establish visual or accessibility correctness. Validate the production components in Preview, including long status text, action wrapping, keyboard selection, both appearances, and material accessibility fallbacks. Record build, screenshot, runtime, and performance results in the refresh worklog rather than inferring them from these contracts.

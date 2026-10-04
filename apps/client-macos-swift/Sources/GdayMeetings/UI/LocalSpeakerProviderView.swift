@@ -60,8 +60,7 @@ struct LocalSpeakerProviderView: View {
             Section("Readiness") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     let result = health.state(providerID: draft.id, capability: capability)
-                    LabeledContent(capability.title, value: result.title)
-                    if let reason = result.reason { Text(reason).font(.caption).foregroundStyle(.orange) }
+                    ProviderHealthSummary(title: capability.title, health: result)
                 }
             }
             Section("Model") {
@@ -97,11 +96,14 @@ struct LocalSpeakerProviderView: View {
                 }
             }
             Section {
-                if let failure { Text(failure).foregroundStyle(.secondary).textSelection(.enabled) }
+                if let failure {
+                    AppInlineMessage(text: failure, systemImage: "exclamationmark.circle", tint: .orange)
+                }
                 Button("Save") { save() }.disabled(
                     !changed || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .formStyle(.grouped)
         .task(id: modelHealthIdentity) {
             await store.refreshProviderHealth(providerID: draft.id)
         }
@@ -131,7 +133,7 @@ struct LocalModelDownloadView: View {
     var body: some View {
         let state = models.state(for: modelID)
         let descriptor = LocalModelRegistry.descriptor(modelID)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             HStack {
                 Text(state.phase == .missing ? readiness.title : state.phase.settingsTitle)
                 Spacer()
@@ -165,7 +167,8 @@ struct LocalModelDownloadView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
-                    .buttonStyle(.plain).accessibilityLabel("Cancel Download")
+                    .buttonStyle(.borderless).accessibilityLabel("Cancel Download")
+                    .help("Cancel Download")
                 case .ready:
                     Button("Remove Download", role: .destructive) {
                         Task {
@@ -198,10 +201,10 @@ struct LocalModelDownloadView: View {
                     .secondary)
             }
             if state.phase == .missing, let reason = readiness.reason {
-                Text(reason).font(.caption).foregroundStyle(.secondary)
+                AppInlineMessage(text: reason, systemImage: "exclamationmark.circle", tint: .orange)
             }
             if let message = failure ?? state.message {
-                Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                AppInlineMessage(text: message, systemImage: "exclamationmark.circle", tint: .orange)
             }
             HStack {
                 Button("Open Model Folder") { openFolder() }

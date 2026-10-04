@@ -33,7 +33,7 @@ struct ProviderReadinessRow: View {
                     showsIssues = true
                 } label: {
                     Image(systemName: "info.circle")
-                        .foregroundStyle(.yellow)
+                        .foregroundStyle(.orange)
                         .frame(width: 28, height: 28).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

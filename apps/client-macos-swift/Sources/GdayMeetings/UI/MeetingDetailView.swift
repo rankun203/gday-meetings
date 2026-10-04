@@ -1,10 +1,15 @@
 import SwiftUI
 
+enum MeetingContentTab: Int {
+    case transcript, notes, summary, dataPrivacy
+}
+
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     let meetingID: UUID
     var initialTranscriptRowID: UUID? = nil
+    var initialContentTab: MeetingContentTab? = nil
     @ViewState private var tab = 0
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
@@ -21,7 +26,20 @@ struct MeetingDetailView: View {
             detailContent(meeting)
                 .modifier(AudioFileDrop(meetingID: meetingID))
                 .navigationTitle(meeting.title)
-                .onAppear { if store.recordingID == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 } }
+                .onAppear {
+                    if let initialContentTab {
+                        tab = initialContentTab.rawValue
+                    }
+                    else if store.recordingID == meetingID {
+                        tab = store.liveTranscript.enabled ? 0 : 1
+                    }
+                }
+                .onChange(of: initialContentTab) { _, value in
+                    if let value { tab = value.rawValue }
+                }
+                .onChange(of: initialTranscriptRowID) { _, rowID in
+                    if rowID != nil { tab = 0 }
+                }
                 .onChange(of: store.recordingID) { _, id in
                     if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
                 }
@@ -29,14 +47,14 @@ struct MeetingDetailView: View {
     }
 
     private func detailContent(_ meeting: Meeting) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             meetingHeader(meeting)
             if store.recordingID == meetingID {
                 RecordingWorkspaceView(meetingID: meetingID)
             }
             MeetingContentTabs(selection: $tab)
             meetingContent(meeting).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
+        }.padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentSpacing).padding(.bottom, 16)
     }
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
@@ -138,7 +156,7 @@ struct MeetingDetailView: View {
         case 1:
             MeetingNotesWorkspace(meetingID: meetingID)
         case 2:
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
                 HStack {
                     Text("Summary").font(.headline)
                     Spacer()
@@ -154,10 +172,8 @@ struct MeetingDetailView: View {
                     changed: store.libraryWritable ? { value in change { $0.summary = value } } : nil
                 )
                 .accessibilityLabel("Summary")
-                .background(.background, in: RoundedRectangle(cornerRadius: 10))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
+                .modifier(AppContentSurface())
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
 
             }
         default: MeetingDataPrivacyView(meetingID: meetingID)

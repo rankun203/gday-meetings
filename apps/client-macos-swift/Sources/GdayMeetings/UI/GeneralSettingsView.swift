@@ -38,8 +38,8 @@ struct GeneralSettingsView: View {
                     }
                     .padding(.horizontal, 20)
                 }
-                HStack(alignment: .top, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: AppTheme.sectionSpacing) {
+                    VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                         group("Record") {
                             switchRow("Microphone", enabled: setting(\.captureMicrophone))
                             switchRow("System Audio", enabled: setting(\.captureSystemAudio))
@@ -100,10 +100,10 @@ struct GeneralSettingsView: View {
                             }
                             .pickerStyle(.menu)
                             switchRow(
-                                "Display summary title on meetings", enabled: $displaySummaryTitleOnMeetings)
+                                "Display Summary Title on Meetings", enabled: $displaySummaryTitleOnMeetings)
                         }
                     }.frame(maxWidth: .infinity, alignment: .topLeading)
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                         group("Capability Providers") {
                             provider(
                                 "Live Transcription", capability: .liveTranscription,
@@ -122,7 +122,7 @@ struct GeneralSettingsView: View {
                                 selected: store.settings.diarizationProviderID)
                             provider(
                                 "Summarization", capability: .summarization, selected: store.settings.summaryProviderID)
-                            Button("Configure Capability Providers →") { settingsTab = "providers" }
+                            Button("Configure Capability Providers") { settingsTab = "providers" }
                                 .buttonStyle(.link).font(.callout)
                         }
                         group("Transcription Language") {
@@ -133,7 +133,7 @@ struct GeneralSettingsView: View {
                         )
                         .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .topLeading)
-                }.toggleStyle(.switch).padding(20)
+                }.toggleStyle(.switch).padding(AppTheme.contentInset)
             }
         }
         .task(id: healthFingerprint) { await health.checkSelected(settings: store.settings) }
@@ -202,11 +202,11 @@ struct GeneralSettingsView: View {
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             Text(title).font(.headline).accessibilityAddTraits(.isHeader)
-            VStack(alignment: .leading, spacing: 12, content: content)
-                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: AppTheme.contentSpacing, content: content)
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                .modifier(AppContentSurface())
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
@@ -221,22 +221,21 @@ struct GeneralSettingsView: View {
             ?? .notReady("Choose a provider.")
         let reason = prerequisite ?? status.reason
         let ready = prerequisite == nil && status.isReady
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title).fixedSize(horizontal: false, vertical: true)
-                if enabled.wrappedValue {
-                    Label(
-                        prerequisite == nil ? status.title : "Not Ready",
-                        systemImage: ready
-                            ? "checkmark.circle.fill" : reason == nil ? "clock" : "exclamationmark.circle"
-                    )
-                    .font(.caption).foregroundStyle(
-                        ready ? Color.green : reason == nil ? Color.secondary : Color.orange
-                    )
-                    .fixedSize()
-                }
-                else {
-                    Text("Off").font(.caption).foregroundStyle(.secondary).fixedSize()
+        return VStack(alignment: .leading, spacing: AppTheme.compactSpacing) {
+            HStack(alignment: .top, spacing: AppTheme.contentSpacing) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).fixedSize(horizontal: false, vertical: true)
+                    if enabled.wrappedValue {
+                        Label(
+                            prerequisite == nil ? status.title : "Not Ready",
+                            systemImage: ready
+                                ? "checkmark.circle" : reason == nil ? "clock" : "exclamationmark.circle"
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
+                    }
+                    else {
+                        Text("Off").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 0)
                 Toggle(title, isOn: enabled).labelsHidden()
@@ -244,7 +243,7 @@ struct GeneralSettingsView: View {
                     .accessibilityHint(enabled.wrappedValue ? (reason ?? status.title) : "Off")
             }
             if enabled.wrappedValue, let reason {
-                Text(reason).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                AppInlineMessage(text: reason, systemImage: "exclamationmark.circle", tint: .orange)
             }
         }
     }
@@ -323,8 +322,8 @@ private struct GeneralProviderPicker: View {
             if let selection {
                 let status = health.state(providerID: selection, capability: capability)
                 if let reason = status.reason {
-                    Text(reason).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                    Button("Open \(selectedName) Settings →") {
+                    AppInlineMessage(text: reason, systemImage: "exclamationmark.circle", tint: .orange)
+                    Button("Open \(selectedName) Settings") {
                         health.settingsProviderID = selection
                         settingsTab = "providers"
                     }.buttonStyle(.link).font(.caption)

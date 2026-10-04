@@ -18,7 +18,7 @@ struct ContextDetailView: View {
     private var meetings: [MeetingListEntry] { page.entries }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.largeTitle)
+            Text(title).font(.title.weight(.semibold)).lineLimit(2).textSelection(.enabled)
             if let personID, let person = store.people.first(where: { $0.id == personID }) {
                 PersonVoiceSamplesView(library: store.voiceLibrary, personID: personID) { reviewingVoices = true }
                 Form {
@@ -29,7 +29,7 @@ struct ContextDetailView: View {
                 PersonTagsView(personID: personID)
             }
             HStack {
-                Text("\(page.total) associated meetings").foregroundStyle(.secondary)
+                Text(page.total == 1 ? "1 Associated Meeting" : "\(page.total) Associated Meetings").font(.headline)
                 Spacer()
                 if let tagID {
                     Toggle(
@@ -58,7 +58,7 @@ struct ContextDetailView: View {
                         Text(meeting.createdAt, style: .date).foregroundStyle(.secondary)
                     }
                 }.buttonStyle(ActionButtonStyle())
-            }.frame(minHeight: 100, maxHeight: 200)
+            }.listStyle(.inset).frame(minHeight: 100, maxHeight: 200)
             HStack {
                 Button("Newer") { Task { await load(before: meetings.first) } }
                     .disabled(loading || !page.hasNewer)
@@ -70,7 +70,7 @@ struct ContextDetailView: View {
             }
             if let pageError {
                 HStack {
-                    Text(pageError).font(.caption).foregroundStyle(.secondary)
+                    AppInlineMessage(text: pageError, systemImage: "exclamationmark.triangle", tint: .orange)
                     Button("Try Again") { Task { await load() } }.disabled(loading)
                 }
             }
@@ -94,7 +94,8 @@ struct ContextDetailView: View {
                             .contextChat, .context(MeetingStore.contextChatKey(personID: personID, tagID: tagID)))
                         || meetings.isEmpty)
             }
-        }.padding(20).navigationTitle(title)
+        }.textFieldStyle(.roundedBorder)
+            .padding(AppTheme.contentInset).background(AppTheme.readingBackground).navigationTitle(title)
             .focusedValue(\.directoryControlFocus, true)
             .task { await load() }
             .sheet(isPresented: $reviewingVoices) {

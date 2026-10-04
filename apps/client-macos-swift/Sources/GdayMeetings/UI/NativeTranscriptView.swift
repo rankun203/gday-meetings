@@ -953,7 +953,7 @@ enum TranscriptSpeakerPalette {
     var isPlaybackRow = false {
         didSet {
             time.textColor = isPlaybackRow ? .controlAccentColor : .secondaryLabelColor
-            body.textColor = isPlaybackRow ? .labelColor : .secondaryLabelColor
+            body.textColor = .labelColor
         }
     }
     override var isFlipped: Bool { true }

@@ -63,15 +63,15 @@ final class LibraryIndex: @unchecked Sendable {
         }
         let previous = sqlite3_column_int(version, 0)
         release(version)
-        if previous != 2 {
+        if previous != 3 {
             let exists = try statement("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meetings'")
             if sqlite3_step(exists) == SQLITE_ROW { requiresRebuild = sqlite3_column_int(exists, 0) > 0 }
             release(exists)
             try execute(
-                "BEGIN IMMEDIATE; DROP TABLE IF EXISTS meetings; DROP TABLE IF EXISTS relations; DROP TABLE IF EXISTS search; DROP TABLE IF EXISTS index_state; COMMIT;"
+                "BEGIN IMMEDIATE; DROP TABLE IF EXISTS meetings; DROP TABLE IF EXISTS relations; DROP TABLE IF EXISTS search; DROP TABLE IF EXISTS search_passages; DROP TABLE IF EXISTS search_locations; DROP TABLE IF EXISTS index_state; COMMIT;"
             )
             try execute(
-                "CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY, created REAL NOT NULL, sortTime REAL NOT NULL, title TEXT NOT NULL, metadata BLOB NOT NULL); CREATE INDEX IF NOT EXISTS meeting_seek ON meetings(sortTime,id); CREATE TABLE IF NOT EXISTS relations(meeting TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,sortTime REAL NOT NULL,PRIMARY KEY(meeting,kind,target)); CREATE INDEX IF NOT EXISTS relation_seek ON relations(kind,target,sortTime,meeting); CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, text); CREATE TABLE IF NOT EXISTS index_state(id INTEGER PRIMARY KEY CHECK(id=1),complete INTEGER NOT NULL); INSERT OR IGNORE INTO index_state VALUES(1,0); PRAGMA user_version=2;"
+                "CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY, created REAL NOT NULL, sortTime REAL NOT NULL, title TEXT NOT NULL, metadata BLOB NOT NULL); CREATE INDEX IF NOT EXISTS meeting_seek ON meetings(sortTime,id); CREATE TABLE IF NOT EXISTS relations(meeting TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,sortTime REAL NOT NULL,PRIMARY KEY(meeting,kind,target)); CREATE INDEX IF NOT EXISTS relation_seek ON relations(kind,target,sortTime,meeting); CREATE TABLE IF NOT EXISTS index_state(id INTEGER PRIMARY KEY CHECK(id=1),complete INTEGER NOT NULL); INSERT OR IGNORE INTO index_state VALUES(1,0); CREATE TABLE IF NOT EXISTS search_locations(id INTEGER PRIMARY KEY AUTOINCREMENT,meeting TEXT NOT NULL,source TEXT NOT NULL,revision TEXT NOT NULL,UNIQUE(meeting,source)); CREATE INDEX IF NOT EXISTS search_location_meeting ON search_locations(meeting); CREATE VIRTUAL TABLE IF NOT EXISTS search_passages USING fts5(meeting UNINDEXED, kind UNINDEXED, segment UNINDEXED, start UNINDEXED, text); PRAGMA user_version=3;"
             )
         }
         try execute("CREATE TABLE IF NOT EXISTS meeting_folders(id TEXT PRIMARY KEY, name TEXT NOT NULL)")
@@ -143,7 +143,10 @@ final class LibraryIndex: @unchecked Sendable {
         }
     }
 
-    func upsert(_ entry: MeetingListEntry, folder suppliedFolder: URL? = nil, confirmedUnique: Bool = false) throws {
+    func upsert(
+        _ entry: MeetingListEntry, folder suppliedFolder: URL? = nil, confirmedUnique: Bool = false,
+        refreshSearch: Bool = true
+    ) throws {
         lock.lock()
         defer { lock.unlock() }
         let folder =
@@ -169,7 +172,6 @@ final class LibraryIndex: @unchecked Sendable {
         try execute("SAVEPOINT upsert_row")
         do {
             MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
-            let content = try MeetingFolderStorage.searchText(id: entry.id, directory: directory)
             let location = try statement(
                 "INSERT INTO meeting_folders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
             defer { release(location) }
@@ -191,17 +193,47 @@ final class LibraryIndex: @unchecked Sendable {
             bind(entry.id.uuidString, 1, delete)
             defer { release(delete) }
             guard sqlite3_step(delete) == SQLITE_DONE else { throw failure() }
-            let searchDelete = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
-            bind(entry.id.uuidString, 1, searchDelete)
-            defer { release(searchDelete) }
-            guard sqlite3_step(searchDelete) == SQLITE_DONE else { throw failure() }
-            let searchInsert = try statement(
-                "INSERT INTO search(rowid,id,text) VALUES((SELECT rowid FROM meetings WHERE id=?),?,?)")
-            defer { release(searchInsert) }
-            bind(entry.id.uuidString, 1, searchInsert)
-            bind(entry.id.uuidString, 2, searchInsert)
-            bind(entry.title + " " + entry.summary + " " + content, 3, searchInsert)
-            guard sqlite3_step(searchInsert) == SQLITE_DONE else { throw failure() }
+            // UI saves update catalog metadata immediately. The existing reconciliation
+            // worker refreshes passage content from the committed files off the main thread.
+            if refreshSearch {
+                let passages = try MeetingFolderStorage.searchPassages(id: entry.id, directory: directory)
+                let passageDelete = try statement(
+                    "DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting=?)")
+                defer { release(passageDelete) }
+                bind(entry.id.uuidString, 1, passageDelete)
+                guard sqlite3_step(passageDelete) == SQLITE_DONE else { throw failure() }
+                let revision = UUID().uuidString
+                let locationInsert = try statement(
+                    "INSERT INTO search_locations(meeting,source,revision) VALUES(?,?,?) ON CONFLICT(meeting,source) DO UPDATE SET revision=excluded.revision RETURNING id"
+                )
+                defer { release(locationInsert) }
+                let passageInsert = try statement(
+                    "INSERT INTO search_passages(meeting,kind,segment,start,text,rowid) VALUES(?,?,?,?,?,?)")
+                defer { release(passageInsert) }
+                for passage in [LibrarySearchPassage(kind: .title, text: entry.title)] + passages {
+                    sqlite3_reset(locationInsert)
+                    bind(entry.id.uuidString, 1, locationInsert)
+                    bind(passage.kind.rawValue + (passage.segmentID?.uuidString ?? ""), 2, locationInsert)
+                    bind(revision, 3, locationInsert)
+                    guard sqlite3_step(locationInsert) == SQLITE_ROW else { throw failure() }
+                    let passageID = sqlite3_column_int64(locationInsert, 0)
+                    guard sqlite3_step(locationInsert) == SQLITE_DONE else { throw failure() }
+                    sqlite3_reset(passageInsert)
+                    sqlite3_clear_bindings(passageInsert)
+                    bind(entry.id.uuidString, 1, passageInsert)
+                    bind(passage.kind.rawValue, 2, passageInsert)
+                    bind(passage.segmentID?.uuidString ?? "", 3, passageInsert)
+                    if let start = passage.start { sqlite3_bind_double(passageInsert, 4, start) }
+                    bind(passage.text, 5, passageInsert)
+                    sqlite3_bind_int64(passageInsert, 6, passageID)
+                    guard sqlite3_step(passageInsert) == SQLITE_DONE else { throw failure() }
+                }
+                let locationDelete = try statement("DELETE FROM search_locations WHERE meeting=? AND revision!=?")
+                defer { release(locationDelete) }
+                bind(entry.id.uuidString, 1, locationDelete)
+                bind(revision, 2, locationDelete)
+                guard sqlite3_step(locationDelete) == SQLITE_DONE else { throw failure() }
+            }
             let relation = try statement("INSERT OR IGNORE INTO relations VALUES(?,?,?,?)")
             defer { release(relation) }
             for (kind, ids) in [("person", entry.personIDs), ("tag", entry.tagIDs)] {
@@ -229,10 +261,15 @@ final class LibraryIndex: @unchecked Sendable {
         try execute("SAVEPOINT remove_row")
         do {
             MeetingFolderLocation.forget(id: id, directory: directory)
-            let search = try statement("DELETE FROM search WHERE rowid=(SELECT rowid FROM meetings WHERE id=?)")
-            defer { release(search) }
-            bind(id.uuidString, 1, search)
-            guard sqlite3_step(search) == SQLITE_DONE else { throw failure() }
+            let passages = try statement(
+                "DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting=?)")
+            defer { release(passages) }
+            bind(id.uuidString, 1, passages)
+            guard sqlite3_step(passages) == SQLITE_DONE else { throw failure() }
+            let locations = try statement("DELETE FROM search_locations WHERE meeting=?")
+            defer { release(locations) }
+            bind(id.uuidString, 1, locations)
+            guard sqlite3_step(locations) == SQLITE_DONE else { throw failure() }
             for table in ["meetings", "relations", "meeting_folders"] {
                 let stmt = try statement("DELETE FROM \(table) WHERE \(table == "relations" ? "meeting" : "id")=?")
                 defer { release(stmt) }
@@ -319,7 +356,9 @@ final class LibraryIndex: @unchecked Sendable {
         var clauses: [String] = []
         if related { clauses += ["r.kind=?", "r.target=?"] }
         if after != nil || before != nil { clauses.append("(\(order)) \(before == nil ? ">" : "<") (?,?)") }
-        if !query.isEmpty { clauses.append("m.id IN (SELECT id FROM search WHERE search MATCH ?)") }
+        if !query.isEmpty {
+            clauses.append("m.id IN (SELECT meeting FROM search_passages WHERE search_passages MATCH ?)")
+        }
         if !excludingTagIDs.isEmpty { clauses.append(Self.exclusionClause) }
         let from =
             related
@@ -361,6 +400,54 @@ final class LibraryIndex: @unchecked Sendable {
             result.append(try decode(stmt))
         }
     }
+    /// Search only the derived index. Passage IDs and snippets need no transcript reads.
+    func searchPage(query: String, after: Int64 = 0, limit: Int = 50, excludingTagIDs: Set<UUID> = []) throws
+        -> LibrarySearchPage
+    {
+        lock.lock()
+        defer { lock.unlock() }
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return LibrarySearchPage(results: [], total: 0) }
+        let expression = "\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        let exclusion = excludingTagIDs.isEmpty ? "" : " AND " + Self.exclusionClause
+        let count = try statement(
+            "SELECT count(*) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
+                + exclusion)
+        defer { release(count) }
+        bind(expression, 1, count)
+        if !excludingTagIDs.isEmpty { bind(try encodedTagIDs(excludingTagIDs), 2, count) }
+        guard sqlite3_step(count) == SQLITE_ROW else { throw failure() }
+        let total = Int(sqlite3_column_int64(count, 0))
+        let stmt = try statement(
+            "SELECT p.rowid,m.id,m.title,m.created,p.kind,p.segment,p.start,snippet(search_passages,4,'','','…',32) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ? AND p.rowid>?"
+                + exclusion + " ORDER BY p.rowid LIMIT ?"
+        )
+        defer { release(stmt) }
+        bind(expression, 1, stmt)
+        sqlite3_bind_int64(stmt, 2, after)
+        if !excludingTagIDs.isEmpty { bind(try encodedTagIDs(excludingTagIDs), 3, stmt) }
+        sqlite3_bind_int(stmt, excludingTagIDs.isEmpty ? 3 : 4, Int32(max(1, min(limit, 100))))
+        func text(_ column: Int32) -> String {
+            guard let value = sqlite3_column_text(stmt, column) else { return "" }
+            return String(cString: value)
+        }
+        var results: [LibrarySearchResult] = []
+        while true {
+            let status = sqlite3_step(stmt)
+            if status == SQLITE_DONE { return LibrarySearchPage(results: results, total: total) }
+            guard status == SQLITE_ROW, let meetingID = UUID(uuidString: text(1)),
+                let kind = LibrarySearchKind(rawValue: text(4))
+            else { throw failure() }
+            results.append(
+                LibrarySearchResult(
+                    id: sqlite3_column_int64(stmt, 0), meetingID: meetingID, title: text(2),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)), kind: kind,
+                    segmentID: UUID(uuidString: text(5)),
+                    start: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 6),
+                    excerpt: text(7)))
+        }
+    }
+
     /// Inspect the actual most recent paging query, including the forced ordering indexes.
     func pageQueryPlan() throws -> [String] {
         lock.lock()
@@ -462,7 +549,7 @@ final class LibraryIndex: @unchecked Sendable {
                 }
             }
             try execute(
-                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search WHERE id NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1; COMMIT"
+                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen)); DELETE FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1; COMMIT"
             )
             requiresRebuild = false
             lastCommittedCount = try self.count()

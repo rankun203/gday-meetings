@@ -1,12 +1,16 @@
 ---
 title: Liquid Glass appearance refresh proposal
 date: 2026-10-03
-updated: 2026-10-04
-status: proposed
+updated: 2026-10-05
+status: implemented-with-validation-gaps
 scope: swift-app-design
 ---
 
 # Liquid Glass appearance refresh
+
+## Implementation follow-up
+
+The [October 4 worklog](2026-10-04-liquid-glass-implementation.md) records the implementation and remaining validation: screen changes, search behavior, regression fixes, build results, and remaining validation limits. The proposal and original audit below remain historical evidence; their acceptance targets are not automatically satisfied by implementation.
 
 ## Problem and evidence
 

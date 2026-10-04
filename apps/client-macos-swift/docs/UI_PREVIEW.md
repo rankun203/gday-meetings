@@ -1,6 +1,7 @@
 ---
 title: UI Preview
 date: 2026-09-26
+updated: 2026-10-04
 status: active
 scope: swift-app-testing
 ---
@@ -18,15 +19,23 @@ The bundle is `apps/client-macos-swift/.build/preview/Gday Meetings UI Preview.a
 
 For full mode, use `make build-macos` or `make start-macos`; `make install-macos` stages the full app for installation. See the [mode comparison](../README.md#choose-a-run-mode). Quit Preview and the full `.build/macos` development copy before rebuilding Preview, because packaging reuses the full build. Copies running from Applications or `.build/installer` can remain open.
 
-The preview banner identifies the mode and provides an Appearance selector for UI testing. It shares the System, Light, and Dark preference in **Settings → General**. Changes apply across preview windows and persist between launches, separately from the full app’s preference. Use audio files from Finder for manual drop checks: drop files into the meetings list to create separate meetings, or onto a meeting to add tracks. Generated `microphone.wav` and `system.wav` fixtures can be copied from the temporary preview library for this purpose.
+The preview banner identifies the mode and provides an Appearance selector for UI testing. The selector shares the System, Light, and Dark preference in **Settings → General**. Changes apply across preview windows and persist between launches, separately from the full app’s preference.
+
+The banner also shows the packaged revision; hover over it for the build time. `preview-macos.sh` records these in `GdayPreviewRevision` and `GdayPreviewBuiltAt`. Set `GDAY_BUILD_REVISION` when a build includes uncommitted changes, and retain the source diff with the capture notes. A revision label alone does not identify a dirty source tree.
+
+Use audio files from Finder for manual drop checks: drop files into the meetings list to create separate meetings, or onto a meeting to add tracks. Generated `microphone.wav` and `system.wav` fixtures can be copied from the temporary preview library for this purpose.
 
 This uses the production SwiftUI screens with a clearly marked preview banner, generated one- and two-track audio, a fresh temporary library on each launch, silent playback, and a local light/dark appearance selector. Keychain reads/writes and real recording are disabled; playback is silent. Online services remain available for connection checks and deliberately started provider jobs. Normal recordings and saved credentials are not loaded. Enter test credentials in Service Providers or load a test credential file explicitly. Temporary fixture libraries are left in the system temporary directory for inspection and normal OS cleanup. “Synthetic single track” shows **Archived on meetings.example.invalid** and “Synthetic conversation” shows **Archive incomplete**. These checkpoints are synthetic; Preview cannot sign in to a website, so **Archive to Server** stays disabled and nothing is uploaded.
 
 The bundle flag `GdayUIPreview` enables this mode; developers can also launch the executable with `--ui-preview`. The separate preview bundle identifier isolates window/preferences state and lets the normal app remain open. Do not use preview results as evidence of real capture, permissions, or speaker output. A provider check validates its documented connection operation; a successful transcription test validates the tested service path. Neither establishes performance or accuracy for other recordings.
 
+Choose **Components…** in the banner to inspect production content tabs, playback and native action buttons, the recording-source row, disclosure style, and inline feedback. **Enable Controls** switches the group between enabled and disabled states. The gallery uses local synthetic state and starts no audio capture or provider job. Check pointer, keyboard, light/dark, and accessibility settings there, then check the same controls in their screens. The gallery does not cover every provider, network, or recording state.
+
+Launch the exact rebuilt bundle when comparing appearances; an already running Preview does not update after a build. Keep screenshots and comparisons under ignored `tmp/`, with the bundle path, revision and dirty diff, build time, macOS version, window size, appearance, and fixture flags. Record untested states separately from successful captures.
+
 The synthetic conversation includes overlapping microphone and system passages from 00:08 to 00:10. Seek to 00:08 and confirm both rows highlight; at 00:10 only the microphone passage remains active, and at 00:15 neither row highlights.
 
-The synthetic conversation includes multiple tags and manually assigned, automatically matched, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignment, reassignment, removal, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, Tags, and Tasks; providers are configured in Settings.
+The synthetic conversation includes multiple tags and manually assigned, automatically matched, and unassigned speakers below its transcript. Use these fixtures to check tag menus, speaker assignment, reassignment, removal, and narrow-window layout. They test interaction and persistence, not recognition accuracy. The sidebar contains Meetings, People, Tags, Tasks, and Agents; providers are configured in Settings.
 
 ## People voice review
 
@@ -42,11 +51,17 @@ Launch the Preview executable with `--synthetic-tasks`, or set its `GdaySyntheti
 
 Check **Open Meeting**, **Run Next**, **Remove from Queue**, **Stop Waiting**, **Retry**, and **Dismiss**. Synthetic Retry completes locally; stopping or removing a synthetic task updates its state without cancelling a remote job. Run Next changes queue order but does not execute synthetic work. Verify that active tasks appear first, followed by **Needs Attention**, **Paused**, and **History**, with newest-first order within each section. Check task counts, keyboard access, and action wrapping at narrow widths in light and dark appearance. Ordinary Preview launches have no synthetic tasks. Real provider tasks started deliberately in Preview use the production queue and can submit content.
 
-Use `--synthetic-pagination` to add 45 older meetings, load the first 20, then scroll through later pages. Search for **Unique last-page search phrase** to find content outside the first page. Use `--synthetic-summary-stream` to display a synthetic summary draft that grows for about 32 seconds in Synthetic conversation. This fixture makes no network requests and does not replace the saved summary; transport streaming is tested separately with a loopback server.
+Use `--synthetic-pagination`, or the `GdaySyntheticPagination` Boolean bundle flag, to add 45 older meetings, load the first 20, then scroll through later pages. Search for **Unique last-page search phrase** to find content outside the first page. Use `--synthetic-summary-stream` to display a synthetic summary draft that grows for about 32 seconds in Synthetic conversation. This fixture makes no network requests and does not replace the saved summary; transport streaming is tested separately with a loopback server.
+
+## Large library
+
+Launch with `--synthetic-library-size=1000` or `--synthetic-library-size=10000`, or set the integer bundle key `GdaySyntheticLibrarySize` to the same count. The count includes the two ordinary Preview meetings. This option replaces the 45-meeting pagination fixture when both are enabled.
+
+Additional meetings contain synthetic notes, a summary, and one transcript passage. They have no audio files. A background task prepares complete folders outside the library before moving them into it; the existing index worker makes them available for paging and search. Wait for preparation and indexing to finish, then confirm the count in **Settings → Data** before measuring scrolling. Search for **Synthetic library passage** to exercise paged results. Fixture preparation time and index-building time are separate from steady-state scrolling performance.
 
 ## Long transcript
 
-Launch with `--synthetic-long-transcript` to replace Synthetic conversation's transcript with 10,000 alternating short and wrapped segments. Scroll its Transcript tab and confirm timestamp/speaker alignment remains stable. Double-click text or choose **Edit Transcript** from its contextual menu to edit. Return or leaving the editor saves; Escape cancels. Only the active segment creates an editor. This synthetic fixture checks layout and editing; use the full app with an isolated real library for end-to-end CPU, memory, and perceived scrolling measurements.
+Launch with `--synthetic-long-transcript`, or set the `GdaySyntheticLongTranscript` Boolean bundle flag, to replace Synthetic conversation's transcript with 10,000 alternating short and wrapped segments. Scroll its Transcript tab and confirm timestamp/speaker alignment remains stable. Double-click text or choose **Edit Transcript** from its contextual menu to edit. Return or leaving the editor saves; Escape cancels. Only the active segment creates an editor. This synthetic fixture checks layout and editing; use the full app with an isolated real library for end-to-end CPU, memory, and perceived scrolling measurements.
 
 ## Provider testing
 
@@ -61,7 +76,7 @@ To seed test providers without typing credentials, build Preview, then launch it
 
 This option is for UI Preview. The file supplies `RUNPOD_ENDPOINT_URL`, `RUNPOD_API_KEY`, `FILE_DROP_URL`, and `FILE_DROP_API_KEY`. Credentials remain in memory; the app does not write them to Keychain or load this file during normal launches. Keep the file untracked. The seed creates RunPod and Filedrop providers, enables Transcription, Speaker Labeling, and File Transfer, links the upload provider, and selects RunPod for transcription. New meetings use **Settings → General → Transcription Language**, initially English (`en`); the provider seed does not set a language. Loading it makes no network requests and does not upload a recording. Saving provider settings later writes only non-secret settings into the temporary library.
 
-To fill **Settings → Data Privacy** without credentials, launch the executable with `--synthetic-providers`. It adds RunPod, Filedrop, and OpenAI-compatible providers with `.invalid` addresses, selects them for transcription and summaries, and turns on **Automatically Transcribe**. `.invalid` names never resolve, so checks and model lists started by opening a provider panel fail on this Mac and nothing is uploaded. Website sign-in cannot be simulated; website rows are covered by unit tests.
+To fill **Settings → Data Privacy** without credentials, launch the executable with `--synthetic-providers`, or set the `GdaySyntheticProviders` Boolean bundle flag. It adds RunPod, Filedrop, and OpenAI-compatible providers with `.invalid` addresses, selects them for transcription and summaries, and turns on **Automatically Transcribe**. `.invalid` names never resolve, so checks and model lists started by opening a provider panel fail on this Mac and nothing is uploaded. Website sign-in cannot be simulated; website rows are covered by unit tests.
 
 Use `--synthetic-multiple-transcription-providers` to add a second eligible RunPod connection with an `.invalid` address. The saved Transcript action becomes a provider menu; inspect its choices without starting a job. The ordinary `--synthetic-providers` fixture shows the single-provider action, and no provider flag shows setup.
 
@@ -81,7 +96,7 @@ New Recording's microphone menu lists this Mac's real input devices. Listing dev
 
 ## Markdown notes
 
-The synthetic conversation has timed headings and list items, a task checkbox, and an untimed line in **Notes**. Click a gutter time or use **Playback → Play From Line** (Command-Return) to seek the silent player three seconds before the saved time. Check editing, undo, list continuation, Format commands, and keyboard access in light and dark appearance and at narrow widths. Marker comments stay hidden in the editor and remain in the temporary library's `notes.md`. Images are a later phase and currently remain Markdown text.
+The synthetic conversation has timed headings and list items, a task checkbox, and an untimed line in **Notes**. Click a gutter time or use **Playback → Play From Line** (Command-Return) to seek the silent player three seconds before the saved time. Check editing, undo, list continuation, Format commands, and keyboard access in light and dark appearance and at narrow widths. Marker comments stay hidden in the editor and remain in the temporary library's `notes.md`. The fixture includes embedded images; check their editor and reader layout, resizing, and timestamp links.
 
 ## Live transcription and recording card
 
@@ -105,11 +120,11 @@ Compare feature on/off state with readiness, open a provider dropdown, and follo
 
 ### Provider controls
 
-Launch with `--synthetic-local-speakers` to add Nemotron and Community-1 provider configurations and independent General selections. This flag does not download models or start inference. Open **Service Providers** and select either provider to inspect capability switches, preset selection, buffering delay, and model readiness. Nemotron offers every preset supported by the shared native runtime; the delay describes required audio buffering, not time to a correct speaker label.
+Launch with `--synthetic-local-speakers`, or set the `GdaySyntheticLocalSpeakers` Boolean bundle flag, to add Nemotron and Community-1 provider configurations and independent General selections. This flag does not download models or start inference. Open **Service Providers** and select either provider to inspect capability switches, preset selection, buffering delay, and model readiness. Nemotron offers every preset supported by the shared native runtime; the delay describes required audio buffering, not time to a correct speaker label.
 
 In **General**, **Recording** and **After Recording** expose independent transcription, speaker labeling, and speaker association switches. Changing a switch in one stage must not change the other. Capability providers occupy the right column. Both columns share one scroll area. Provider warnings link to the affected provider’s settings.
 
-Use **Download**, the cancel button, **Retry**, **Verify…**, and **Remove Download** only when deliberately testing installation. These controls use the real model manager and its app-managed model folder, even in Preview. **Open Model Folder** reveals the selected revision's directory. Expand **Manual Installation** for its required folder layout; after copying files, choose **Refresh**, then **Verify…**. A discovered folder must pass verification and preparation before it is ready. Removing a provider configuration keeps downloaded models.
+Use **Download**, the cancel button, **Retry**, and **Remove Download** only when deliberately testing installation. These controls use the real model manager and its app-managed model folder, even in Preview. **Open Model Folder** reveals the selected revision's directory. Expand **Manual Installation** for its required folder layout; after copying files, choose **Refresh**. The app verifies and prepares discovered files before marking the model ready. Removing a provider configuration keeps downloaded models.
 
 The recording panel’s **Transcribe** and **Label Speakers** switches control processing for the current recording. Turning off Label Speakers stops speaker analysis even when General enables Speaker Association; turning it back on follows the recording’s association preference. During a synthetic recording it exercises controls and status without capture or inference. If a detected speaker identity exists, **Apply to This Speaker** in the person picker controls whether attribution affects linked passages or only the selected passage. Source placeholders cannot be assigned to a person. Previously assigned source passages keep their names; after saving, use **Speakers → Remove Assignment** to clear them.
 

@@ -185,10 +185,10 @@ enum UIPreview {
                     }
                 }
             }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
+            if UIPreviewPerformanceFixtures.flag("--synthetic-providers", infoKey: "GdaySyntheticProviders") {
                 store.settings = syntheticProviderSettings(store.settings)
             }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-local-speakers") {
+            if UIPreviewPerformanceFixtures.flag("--synthetic-local-speakers", infoKey: "GdaySyntheticLocalSpeakers") {
                 let live = ServiceProvider(kind: .nemotron)
                 let saved = ServiceProvider(kind: .community1)
                 store.settings.serviceProviders.append(contentsOf: [live, saved])
@@ -206,7 +206,7 @@ enum UIPreview {
                 second.uploadProviderID = store.settings.serviceProviders.first { $0.kind == .filedrop }?.id
                 store.settings.serviceProviders.append(second)
             }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-long-transcript"),
+            if UIPreviewPerformanceFixtures.flag("--synthetic-long-transcript", infoKey: "GdaySyntheticLongTranscript"),
                 var meeting = store.meetings.first(where: { $0.title == "Synthetic conversation" })
             {
                 meeting.transcript = (0..<10_000).map { index in
@@ -222,7 +222,9 @@ enum UIPreview {
                 }
                 store.updateMeeting(meeting)
             }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-pagination") {
+            if UIPreviewPerformanceFixtures.librarySize == nil,
+                UIPreviewPerformanceFixtures.flag("--synthetic-pagination", infoKey: "GdaySyntheticPagination")
+            {
                 for index in 1...45 {
                     var meeting = Meeting(title: String(format: "Pagination meeting %02d", index))
                     meeting.createdAt = Date().addingTimeInterval(-Double(index) * 3_600)
@@ -271,6 +273,7 @@ enum UIPreview {
         }
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         configureGeneralScenario(store)
+        UIPreviewPerformanceFixtures.schedule(store)
         return store
     }
 
@@ -568,6 +571,7 @@ struct PreviewContainer<Content: View>: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var appearance: AppearanceSettings
     @ViewState private var previewVoiceProcessing = false
+    @ViewState private var showsComponents = false
     private static func recordingLevel(at time: Double, offset: Double, reconnects: Bool = false)
         -> RecordingSourceLevel
     {
@@ -598,7 +602,15 @@ struct PreviewContainer<Content: View>: View {
             if UIPreview.enabled {
                 HStack {
                     Label("UI Preview · Synthetic audio · Silent playback", systemImage: "eye")
+                    if let revision = Bundle.main.object(forInfoDictionaryKey: "GdayPreviewRevision") as? String {
+                        Text(revision).foregroundStyle(.secondary)
+                            .help(
+                                Bundle.main.object(forInfoDictionaryKey: "GdayPreviewBuiltAt") as? String
+                                    ?? "Local build")
+                    }
                     Spacer()
+                    Button("Components…") { showsComponents = true }
+                        .popover(isPresented: $showsComponents) { PreviewComponents() }
                     if ProcessInfo.processInfo.arguments.contains("--synthetic-recording-start") {
                         Button("Start Synthetic Recording") { UIPreview.startSyntheticRecording(store) }
                             .disabled(store.recordingID != nil)

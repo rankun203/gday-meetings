@@ -70,7 +70,7 @@ struct VoiceLibraryView: View {
                 Button("Undo", systemImage: "arrow.uturn.backward") { library.undo() }
                     .disabled(!library.canUndo || !store.libraryWritable)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding(20)
+            }.padding(AppTheme.contentInset)
             Divider()
             HSplitView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -87,7 +87,7 @@ struct VoiceLibraryView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }.padding(.vertical, 5).tag(group.id)
                         }
-                    }
+                    }.listStyle(.inset)
                     Text("Select individual examples to change their assignments.")
                         .font(.caption).foregroundStyle(.secondary).padding(12)
                 }.frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
@@ -120,7 +120,7 @@ struct VoiceLibraryView: View {
             if let error = localError ?? library.errorMessage ?? playback.errorMessage,
                 !recoveryErrors.values.contains(error)
             {
-                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 8)
             }
             Divider()
@@ -309,11 +309,13 @@ struct VoiceLibraryView: View {
             VoiceExampleDetailsView(library: library, example: example)
         }
         .padding(12)
-        .background(
-            selectedExamples.contains(example.id) ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05),
-            in: RoundedRectangle(cornerRadius: 10)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.15)))
+        .modifier(AppContentSurface())
+        .overlay {
+            if selectedExamples.contains(example.id) {
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                    .strokeBorder(Color.accentColor, lineWidth: 2).allowsHitTesting(false)
+            }
+        }
     }
 
     private var selectionActions: some View {
@@ -460,7 +462,7 @@ struct PersonVoiceSamplesView: View {
                     Spacer(minLength: 0)
                 }
             }
-        }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+        }.padding(AppTheme.contentSpacing).modifier(AppContentSurface())
     }
 }
 
@@ -524,7 +526,9 @@ private struct VoicePreparationControls: View {
                     Text("Finish the recording before preparing voice examples.").font(.caption).foregroundStyle(
                         .secondary)
                 }
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+                if let error {
+                    AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
+                }
                 ForEach(Array(library.jobs.suffix(3).reversed())) { job in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
@@ -656,7 +660,9 @@ private struct VoicePersonAssignmentView: View {
                         .contentShape(Rectangle())
                 }.buttonStyle(ActionButtonStyle())
             }.frame(height: 220)
-            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            if let error {
+                AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
+            }
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()

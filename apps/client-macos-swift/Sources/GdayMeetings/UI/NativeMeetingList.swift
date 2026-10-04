@@ -162,6 +162,14 @@ struct NativeMeetingList: NSViewRepresentable {
                 displaySummaryTitle: parent.displaySummaryTitle)
             return cell
         }
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            let identifier = NSUserInterfaceItemIdentifier("meeting-selection-row")
+            let view =
+                tableView.makeView(withIdentifier: identifier, owner: nil) as? MeetingSelectionRow
+                ?? MeetingSelectionRow()
+            view.identifier = identifier
+            return view
+        }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
             parent.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
@@ -378,5 +386,22 @@ final class MeetingNativeCell: NSTableCellView {
     }
     static func rowHeight(_ source: String, enabled: Bool = true) -> CGFloat {
         enabled && !text(source).isEmpty ? 62 : 48
+    }
+}
+
+/// Keep selection quiet without replacing the native table's focus and selection semantics.
+final class MeetingSelectionRow: NSTableRowView {
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7)
+        NSColor.unemphasizedSelectedContentBackgroundColor.setFill()
+        path.fill()
+        if NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
     }
 }

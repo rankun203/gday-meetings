@@ -19,13 +19,19 @@ private struct DataSettingsContent: View {
     var body: some View {
         Form {
             Section("Data Folder") {
-                HStack {
-                    Text(store.dataDirectory.path).textSelection(.enabled)
-                        .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Change Folder…", action: chooseFolder)
-                        .disabled(!store.canChangeLibraryFolder)
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([store.dataDirectory])
+                VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
+                    Label {
+                        Text(store.dataDirectory.path).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button("Change Folder…", action: chooseFolder)
+                            .disabled(!store.canChangeLibraryFolder)
+                        Button("Show in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([store.dataDirectory])
+                        }
                     }
                 }
                 if store.isCopyingLibrary {
@@ -54,7 +60,7 @@ private struct DataSettingsContent: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = store.libraryFolderError {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    AppInlineMessage(text: error, systemImage: "exclamationmark.circle", tint: .red)
                 }
             }
             Section("Index") {
@@ -83,7 +89,8 @@ private struct DataSettingsContent: View {
                         .secondary)
                 }
                 if let error = status.error {
-                    Text("Couldn’t update the index. \(error)").foregroundStyle(.red).textSelection(.enabled)
+                    AppInlineMessage(
+                        text: "Couldn’t update the index. \(error)", systemImage: "exclamationmark.circle", tint: .red)
                 }
             }
             Section("Library") {
@@ -93,6 +100,7 @@ private struct DataSettingsContent: View {
                 LabeledContent("Tasks", value: store.managedTasks.count.formatted())
             }
         }
+        .formStyle(.grouped)
         .alert(
             copyCurrent ? "Copy Library to This Folder?" : "Open This Library After Restart?",
             isPresented: $confirmsFolder

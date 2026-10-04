@@ -46,9 +46,8 @@ struct MeetingNotesWorkspace: View {
                         changed: store.libraryWritable ? { store.editNotes(id: meetingID, text: $0) } : nil)
                 }
             }
-            .background(.background, in: RoundedRectangle(cornerRadius: 10))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
+            .modifier(AppContentSurface())
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
         }
         .task(id: meetingID) { store.openNotes(id: meetingID) }
         .onDisappear { store.closeNotes(id: meetingID) }

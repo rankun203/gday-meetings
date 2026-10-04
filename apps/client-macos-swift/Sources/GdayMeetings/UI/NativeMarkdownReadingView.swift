@@ -788,6 +788,13 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
                         .link: URL(string: "gday-time://\(Int(time))")!,
                     ])
                 value.insert(prefix, at: 0)
+                if case .list = block.content {
+                    // The timestamp precedes the marker. A tab stop behind that
+                    // prefix prevents TextKit from laying out the item's text.
+                    let indent = paragraph.headIndent + ceil(prefix.size().width)
+                    paragraph.headIndent = indent
+                    paragraph.tabStops = [NSTextTab(textAlignment: .left, location: indent)]
+                }
             }
             value.append(NSAttributedString(string: "\n"))
             value.addAttribute(

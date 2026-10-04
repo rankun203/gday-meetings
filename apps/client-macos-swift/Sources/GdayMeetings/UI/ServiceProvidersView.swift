@@ -12,7 +12,7 @@ struct ServiceProvidersView: View {
     @ViewState private var signInTask: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: AppTheme.contentSpacing) {
             VStack(spacing: 0) {
                 List(selection: $selection) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -28,7 +28,8 @@ struct ServiceProvidersView: View {
                         .padding(.vertical, 4)
                     }
                 }
-                Divider()
+                .scrollContentBackground(.hidden)
+                .listStyle(.sidebar)
                 HStack {
                     Menu {
                         ForEach(ServiceProviderKind.allCases, id: \.self) { kind in
@@ -55,8 +56,9 @@ struct ServiceProvidersView: View {
                     .accessibilityLabel("Remove Provider").help("Remove Provider")
                     Spacer()
                 }.padding(12)
-            }.frame(width: 300)
-            Divider()
+            }
+            .frame(width: 280)
+            .modifier(AppChromeSurface(shape: RoundedRectangle(cornerRadius: AppTheme.cornerRadius)))
             if selection == ThisMacProvider.id {
                 ThisMacProviderView()
             }
@@ -230,13 +232,11 @@ private struct ServiceProviderPanel: View {
                 }
                 HStack(alignment: .top) {
                     if isChecking { ProgressView().controlSize(.small).accessibilityLabel("Checking Connection") }
-                    Label(
-                        hasChanges ? "Save to check changes." : status,
-                        systemImage: hasChanges ? "pencil.circle" : statusIcon
+                    AppInlineMessage(
+                        text: hasChanges ? "Save to check changes." : status,
+                        systemImage: hasChanges ? "pencil.circle" : statusIcon,
+                        tint: hasChanges ? .secondary : statusColor
                     )
-                    .foregroundStyle(hasChanges ? .secondary : statusColor)
-                    .font(.callout)
-                    .textSelection(.enabled)
                     Spacer()
                     Button {
                         showsConnectionInfo.toggle()
@@ -256,8 +256,7 @@ private struct ServiceProviderPanel: View {
                     }
                 }
                 if let saveError {
-                    Label(saveError, systemImage: "exclamationmark.circle.fill")
-                        .foregroundStyle(.orange)
+                    AppInlineMessage(text: saveError, systemImage: "exclamationmark.circle", tint: .orange)
                 }
             }
             if draft.kind == .runpod {
@@ -268,11 +267,11 @@ private struct ServiceProviderPanel: View {
                             Text(provider.name).tag(Optional(provider.id))
                         }
                     }
-                    Label(
-                        hasChanges ? "Save to check the upload provider." : uploadStatus,
-                        systemImage: hasChanges ? "pencil.circle" : uploadStatusIcon
+                    AppInlineMessage(
+                        text: hasChanges ? "Save to check the upload provider." : uploadStatus,
+                        systemImage: hasChanges ? "pencil.circle" : uploadStatusIcon,
+                        tint: hasChanges ? .secondary : uploadStatusColor
                     )
-                    .foregroundStyle(hasChanges ? .secondary : uploadStatusColor)
                     Text(
                         "Audio is uploaded to the selected Filedrop provider for RunPod to download. RunPod charges apply."
                     )
@@ -298,8 +297,11 @@ private struct ServiceProviderPanel: View {
             Section("Capabilities") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }, id: \.self) {
                     capability in
-                    Toggle(capability.title, isOn: capabilityBinding(capability))
-                    Text(disclosure(capability)).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: AppTheme.compactSpacing) {
+                        Toggle(capability.title, isOn: capabilityBinding(capability))
+                        Text(disclosure(capability)).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             if draft.kind.capabilities.contains(.transcription) {
@@ -368,12 +370,10 @@ private struct ServiceProviderPanel: View {
         case .loading:
             Text("Loading Models…").font(.caption).foregroundStyle(.secondary)
         case .failed(let message):
-            Label(
-                "Couldn’t load the model list. \(message) Type a model name instead.",
-                systemImage: "exclamationmark.circle"
+            AppInlineMessage(
+                text: "Couldn’t load the model list. \(message) Type a model name instead.",
+                systemImage: "exclamationmark.circle", tint: .orange
             )
-            .font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         case .idle, .loaded:
             if !model.isEmpty, !models.isEmpty, !models.contains(where: { $0.id == model }) {
                 Label("\(model) (not listed)", systemImage: "questionmark.circle")
@@ -441,10 +441,7 @@ private struct ServiceProviderPanel: View {
             }
             else {
                 HStack(alignment: .firstTextBaseline) {
-                    Label(languageStatus.text, systemImage: languageStatus.icon)
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                        .textSelection(.enabled)
+                    AppInlineMessage(text: languageStatus.text, systemImage: languageStatus.icon)
                     Spacer()
                     Button("Load Languages") {
                         Task { await store.refreshProviderLanguages(providerID: draft.id) }

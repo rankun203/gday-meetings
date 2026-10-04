@@ -64,6 +64,7 @@ struct MeetingTranscriptView: View {
                         historyMenu
                     }
                 }
+                .controlSize(.small)
                 if showsLiveText {
                     Text(
                         draft?.complete == true
@@ -71,7 +72,10 @@ struct MeetingTranscriptView: View {
                     )
                     .font(.caption).foregroundStyle(.secondary)
                 }
-                if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+                if let failure {
+                    Label(failure, systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 if displayedMeetingID != meetingID {
                     Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }

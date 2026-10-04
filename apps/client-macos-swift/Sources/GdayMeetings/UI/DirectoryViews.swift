@@ -22,7 +22,7 @@ struct PeopleView: View {
             }
     }
     var body: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             HStack(spacing: 8) {
                 Button("Review Voices…") { reviewingVoices = true }
                 if selection.count > 1 {
@@ -35,7 +35,7 @@ struct PeopleView: View {
                 Spacer(minLength: 0)
             }
             .buttonStyle(.bordered).controlSize(.small)
-            .padding(.horizontal).padding(.top)
+            .padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentInset)
             HStack {
                 TextField("Find or Add Person", text: $name).onSubmit(findOrAdd)
                     .accessibilityLabel("Find or Add Person")
@@ -46,7 +46,8 @@ struct PeopleView: View {
                 Button("Add Person", systemImage: "plus", action: add).help("Add Person").labelStyle(.iconOnly)
                     .disabled(
                         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.padding()
+            }.textFieldStyle(.roundedBorder)
+                .padding(.horizontal, AppTheme.contentInset)
             List(selection: $selection) {
                 ForEach(visiblePeople) { person in
                     HStack {
@@ -60,9 +61,10 @@ struct PeopleView: View {
                         ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(person.id)
                 }
-            }
-            Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox).padding(.horizontal).padding(.bottom)
-        }.navigationTitle("People")
+            }.listStyle(.inset)
+            Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox)
+                .padding(.horizontal, AppTheme.contentInset).padding(.bottom, AppTheme.contentSpacing)
+        }.background(AppTheme.readingBackground).navigationTitle("People")
             .onChange(of: visiblePeople.map(\.id)) { _, ids in
                 selection.formIntersection(ids)
             }
@@ -119,17 +121,17 @@ struct TagsView: View {
     @ViewState private var name = ""
     @ViewState private var deleting: MeetingTag?
     var body: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             HStack {
-                TextField("New tag", text: $name).onSubmit(add)
-                Button("Add", systemImage: "plus", action: add).help("Add").labelStyle(.iconOnly).disabled(
+                TextField("New Tag", text: $name).onSubmit(add).accessibilityLabel("New Tag")
+                Button("Add Tag", systemImage: "plus", action: add).help("Add Tag").labelStyle(.iconOnly).disabled(
                     name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.padding()
+            }.textFieldStyle(.roundedBorder).padding(AppTheme.contentInset)
             List(selection: $selection) {
                 ForEach(store.tags) { tag in
                     HStack {
                         TextField(
-                            "Tag name",
+                            "Tag Name",
                             text: Binding(
                                 get: { store.tags.first(where: { $0.id == tag.id })?.name ?? "" },
                                 set: { value in
@@ -146,8 +148,8 @@ struct TagsView: View {
                         ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(tag.id)
                 }
-            }
-        }.navigationTitle("Tags")
+            }.listStyle(.inset)
+        }.background(AppTheme.readingBackground).navigationTitle("Tags")
             .confirmationDialog(
                 "Delete \(deleting?.name ?? "tag")?",
                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),

@@ -53,21 +53,7 @@ struct MeetingContentTabs: View {
 /// One glass surface around a group, never a glass layer for every segment.
 /// https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass
 struct MeetingGlassSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-        }
-        else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: Capsule())
-                // Refresh only this native material when Preview changes appearance;
-                // otherwise AppKit can retain its old glass colors until activation.
-                .id(colorScheme)
-        }
-        else {
-            content.background(.regularMaterial, in: Capsule())
-        }
+    func body(content: Content) -> some View {
+        content.modifier(AppChromeSurface(shape: Capsule()))
     }
 }

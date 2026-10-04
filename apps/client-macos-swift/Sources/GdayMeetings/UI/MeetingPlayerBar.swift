@@ -9,6 +9,7 @@ struct MeetingPlayerBar: View {
     @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
     @ViewState private var tracksExpanded = false
+    @ViewState private var compactOptions = false
     @ViewState private var tracksSpaceExpanded = false
     @ViewState private var tracksVisible = false
     @ViewState private var trackWaveformsMounted = false
@@ -17,122 +18,6 @@ struct MeetingPlayerBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 14) {
-                Button {
-                    guard let id = playback.meetingID else { return }
-                    if NSEvent.modifierFlags.contains(.command) {
-                        revealMeeting()
-                    }
-                    else {
-                        showMeeting(id)
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "waveform")
-                            .font(.title2).foregroundStyle(.tint)
-                            .frame(width: 44, height: 44)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(playback.title).font(.callout.weight(.semibold)).lineLimit(1)
-                            Text(
-                                playback.isLoading
-                                    ? "Preparing audio…"
-                                    : playback.isPlaying ? "Now Playing" : playback.hasEnded ? "Finished" : "Paused"
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }.contentShape(Rectangle())
-                }
-                .buttonStyle(ActionButtonStyle())
-                .frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
-                .help("Show the meeting. Command-click to reveal its folder in Finder.")
-                .accessibilityAction(named: "Reveal in Finder") { revealMeeting() }
-                .accessibilityLabel("Show meeting: \(playback.title)")
-
-                HStack(spacing: 9) {
-                    transportButton("Back 15 Seconds", symbol: "gobackward.15") { playback.skip(by: -15) }
-                    Button {
-                        playback.togglePlayPause()
-                    } label: {
-                        Group {
-                            if playback.isLoading {
-                                ProgressView().controlSize(.small)
-                            }
-                            else {
-                                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2)
-                            }
-                        }.frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(ActionButtonStyle())
-                    .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
-                    .help(playback.isPlaying ? "Pause playback" : "Play recording")
-                    .disabled(playback.isPlaybackBlocked || playback.isLoading)
-                    transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
-                }
-
-                PlaybackPosition(
-                    progress: playback.progress, waveforms: audibleWaveforms,
-                    duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
-                    showsTimes: true, isLoading: playback.isLoadingWaveforms, seek: playback.seek
-                )
-                .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
-                .frame(minWidth: 130, maxWidth: .infinity)
-
-                HStack(spacing: 4) {
-                    Button(action: toggleTracks) {
-                        Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(ActionButtonStyle())
-                    .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
-                    .help(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
-                    Menu {
-                        Picker(
-                            "Playback Speed",
-                            selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })
-                        ) {
-                            ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
-                                Text("\(rate.formatted())×").tag(rate)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("\(playback.playbackRate.formatted())×").monospacedDigit()
-                            Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
-                        }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                    }
-                    .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
-                    .accessibilityLabel("Playback speed")
-                    .help("Playback speed")
-
-                    Menu {
-                        Picker(
-                            "Audio Track",
-                            selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })
-                        ) {
-                            Text("All Tracks").tag(-1)
-                            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
-                                Text(name).tag(index)
-                            }
-                        }
-                        Divider()
-                        Button("Close Player", systemImage: "xmark") { playback.clear() }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1)
-                            Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
-                        }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                    }
-                    .menuStyle(.button).buttonStyle(ActionButtonStyle()).frame(maxWidth: 140)
-                    .accessibilityLabel("Audio track and player options")
-                    .accessibilityValue(selectedTrackName)
-                    .help("Choose microphone, system audio, or all tracks")
-                }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 18)
             Group {
                 ScrollView {
                     VStack(spacing: 10) {
@@ -183,7 +68,7 @@ struct MeetingPlayerBar: View {
                                 }.transition(.identity)
                             }
                         }
-                    }.padding(.horizontal, 20).padding(.bottom, 12)
+                    }.padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentSpacing)
                 }.frame(height: tracksHeight)
                     .scrollClipDisabled()
                     .opacity(tracksVisible ? 1 : 0)
@@ -195,16 +80,167 @@ struct MeetingPlayerBar: View {
             // Focus rings extend beyond the row and scroll viewport. Reserve
             // drawing overflow only, without changing layout or hit targets.
             .clipShape(Rectangle().inset(by: tracksVisible ? -6 : 0))
+            HStack(spacing: 14) {
+                Button {
+                    guard let id = playback.meetingID else { return }
+                    if NSEvent.modifierFlags.contains(.command) {
+                        revealMeeting()
+                    }
+                    else {
+                        showMeeting(id)
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "waveform")
+                            .font(.title2).foregroundStyle(.tint)
+                            .frame(width: 44, height: 44)
+                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(playback.title).font(.callout.weight(.semibold)).lineLimit(1)
+                            Text(
+                                playback.isLoading
+                                    ? "Preparing audio…"
+                                    : playback.isPlaying ? "Now Playing" : playback.hasEnded ? "Finished" : "Paused"
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(ActionButtonStyle())
+                .frame(minWidth: 80, idealWidth: 180, maxWidth: 220)
+                .help("Show the meeting. Command-click to reveal its folder in Finder.")
+                .accessibilityAction(named: "Reveal in Finder") { revealMeeting() }
+                .accessibilityLabel("Show meeting: \(playback.title)")
+
+                HStack(spacing: 9) {
+                    transportButton("Back 15 Seconds", symbol: "gobackward.15") { playback.skip(by: -15) }
+                    Button {
+                        playback.togglePlayPause()
+                    } label: {
+                        Group {
+                            if playback.isLoading {
+                                ProgressView().controlSize(.small)
+                            }
+                            else {
+                                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2)
+                            }
+                        }.frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(ActionButtonStyle())
+                    .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+                    .help(playback.isPlaying ? "Pause playback" : "Play recording")
+                    .disabled(playback.isPlaybackBlocked || playback.isLoading)
+                    transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
+                }
+
+                PlaybackPosition(
+                    progress: playback.progress, waveforms: audibleWaveforms,
+                    duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
+                    showsTimes: true, isLoading: playback.isLoadingWaveforms, seek: playback.seek
+                )
+                .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                .frame(minWidth: 130, maxWidth: .infinity)
+
+                if !compactOptions {
+                    playerOptions.fixedSize()
+                }
+                else {
+                    Menu {
+                        Button(tracksExpanded ? "Hide Audio Tracks" : "Show Audio Tracks", action: toggleTracks)
+                        speedPicker
+                        trackPicker
+                        Divider()
+                        Button("Close Player", systemImage: "xmark") { playback.clear() }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .frame(width: AppTheme.transportTarget, height: AppTheme.transportTarget)
+                    }
+                    .menuStyle(.button).buttonStyle(ActionButtonStyle())
+                    .accessibilityLabel("Playback Options")
+                    .help("Playback speed, audio tracks, and player options")
+                }
+
+            }
+            .padding(.horizontal, AppTheme.contentInset).padding(.vertical, AppTheme.contentSpacing)
             if let error = playback.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20).padding(.bottom, 10)
             }
         }
-        .background(.bar)
+        .modifier(AppChromeSurface(shape: RoundedRectangle(cornerRadius: AppTheme.cornerRadius)))
+        .padding(AppTheme.chromeInset)
+        .onGeometryChange(for: Bool.self) { geometry in
+            geometry.size.width < 960
+        } action: {
+            compactOptions = $0
+        }
         .onChange(of: playback.meetingID) { _, _ in resetTracks() }
         .onDisappear { resetTracks() }
+    }
+
+    private var playerOptions: some View {
+        HStack(spacing: 4) {
+            Button(action: toggleTracks) {
+                Image(systemName: tracksExpanded ? "chevron.down" : "chevron.up")
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(ActionButtonStyle())
+            .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
+            .help(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
+            Menu {
+                speedPicker
+            } label: {
+                HStack(spacing: 4) {
+                    Text("\(playback.playbackRate.formatted())×").monospacedDigit()
+                    Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+                }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }
+            .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
+            .accessibilityLabel("Playback speed")
+            .help("Playback speed")
+
+            Menu {
+                trackPicker
+                Divider()
+                Button("Close Player", systemImage: "xmark") { playback.clear() }
+            } label: {
+                HStack(spacing: 4) {
+                    Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+                }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }
+            .menuStyle(.button).buttonStyle(ActionButtonStyle()).frame(maxWidth: 140)
+            .accessibilityLabel("Audio track and player options")
+            .accessibilityValue(selectedTrackName)
+            .help("Choose microphone, system audio, or all tracks")
+        }
+    }
+
+    private var speedPicker: some View {
+        Picker(
+            "Playback Speed",
+            selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })
+        ) {
+            ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
+                Text("\(rate.formatted())×").tag(rate)
+            }
+        }
+    }
+
+    private var trackPicker: some View {
+        Picker(
+            "Audio Track",
+            selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })
+        ) {
+            Text("All Tracks").tag(-1)
+            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
+                Text(name).tag(index)
+            }
+        }
     }
 
     private func revealMeeting() {

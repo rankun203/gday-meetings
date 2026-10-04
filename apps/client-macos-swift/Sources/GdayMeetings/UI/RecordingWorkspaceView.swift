@@ -18,14 +18,15 @@ struct RecordingSetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header.padding(.horizontal, 26).padding(.top, 26).padding(.bottom, 20)
+            header.padding(.horizontal, AppTheme.sectionSpacing).padding(.top, AppTheme.sectionSpacing).padding(
+                .bottom, AppTheme.contentInset)
             // HIG Scroll views: make content beyond the available area reachable.
             // Keep the sheet's title and completion actions outside the scrolling
             // region so expanding options or showing an error can't hide them.
             // https://developer.apple.com/design/human-interface-guidelines/scroll-views
             ScrollViewReader { scroll in
                 ScrollView {
-                    form.padding(.horizontal, 26).padding(.bottom, 22)
+                    form.padding(.horizontal, AppTheme.sectionSpacing).padding(.bottom, AppTheme.sectionSpacing)
                 }
                 .scrollIndicators(.visible)
                 .onChange(of: startupError) { _, error in
@@ -37,7 +38,7 @@ struct RecordingSetupView: View {
             }
             .frame(maxHeight: .infinity)
             Divider()
-            actions.padding(.horizontal, 26).padding(.vertical, 16)
+            actions.padding(.horizontal, AppTheme.sectionSpacing).padding(.vertical, 16)
         }
         // A bounded ideal height keeps the sheet stable when options expand.
         // The scroll region yields space when the presenting window is shorter.
@@ -68,7 +69,7 @@ struct RecordingSetupView: View {
     }
 
     private var form: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Meeting Title").font(.subheadline.weight(.medium))
                 TextField("Untitled Meeting", text: $title)
@@ -89,7 +90,7 @@ struct RecordingSetupView: View {
                     name: "System Audio", subtitle: "Record sound from other apps.", symbol: "speaker.wave.2.fill",
                     isOn: $systemAudio)
             }
-            .padding(.horizontal, 14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, AppTheme.contentSpacing).modifier(AppContentSurface())
             .disabled(store.isStartingRecording)
             if !microphone && !systemAudio {
                 Label("Choose at least one audio source.", systemImage: "info.circle")
@@ -121,7 +122,7 @@ struct RecordingSetupView: View {
                 }
                 .font(.callout).foregroundStyle(.secondary)
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .modifier(AppContentSurface())
                 .id("recording-startup-error")
             }
         }
@@ -162,7 +163,7 @@ struct RecordingSetupView: View {
                         }
                     }
                 }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent).tint(.red).keyboardShortcut(.defaultAction)
                 .disabled((!microphone && !systemAudio) || !store.canStartRecording)
             }
         }
@@ -278,7 +279,7 @@ struct RecordingWorkspaceView: View {
                                 store.isFinalizingRecording
                                 ? (store.meetings.first { $0.id == meetingID }?.duration ?? store.recordingDuration)
                                 : (store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
-                            Text(Self.elapsed(elapsed)).font(.system(size: 26, weight: .medium, design: .rounded))
+                            Text(Self.elapsed(elapsed)).font(.title.weight(.medium))
                                 .monospacedDigit()
                                 .accessibilityLabel("Recording duration").accessibilityValue(Self.elapsed(elapsed))
                         }
@@ -315,9 +316,8 @@ struct RecordingWorkspaceView: View {
             RecordingSettingsDisclosure(meetingID: meetingID, status: store.recordingMeter.status)
 
         }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
+        .padding(AppTheme.contentSpacing)
+        .modifier(AppContentSurface())
     }
     /// Names the new device when a source is switching to one. When both
     /// sources switch (usually one event, such as connecting AirPods), a short

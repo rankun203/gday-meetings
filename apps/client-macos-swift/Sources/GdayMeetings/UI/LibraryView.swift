@@ -20,6 +20,9 @@ struct LibraryView: View {
     @ViewState private var selectedPeople: Set<UUID> = []
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
+    @StateObject private var searchSession = LibrarySearchSession()
+    @ViewState private var showsSearchResults = false
+    @ViewState private var openedSearchResult: LibrarySearchResult?
     @FocusState private var searchFocused: Bool
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -38,6 +41,8 @@ struct LibraryView: View {
     }
     private func showMeeting(_ id: UUID) {
         guard store.ensureMeetingLoaded(id: id) else { return }
+        showsSearchResults = false
+        openedSearchResult = nil
         selectedMeeting = id
         destination = .meetings
     }
@@ -49,17 +54,13 @@ struct LibraryView: View {
     }
 
     private var meetingsPlaceholder: some View {
-        let title = search.isEmpty ? "No Meetings" : "No Results"
-        let description = search.isEmpty ? "Record a meeting or import audio to get started." : "Try another search."
-        return ContentUnavailableView {
-            Label(title, systemImage: "waveform")
+        ContentUnavailableView {
+            Label("No Meetings", systemImage: "waveform")
         } description: {
-            Text(description)
+            Text("Record a meeting or import audio to get started.")
         } actions: {
-            if search.isEmpty {
-                Button("New Recording") { store.presentsRecordingSetup = true }
-                    .disabled(!store.canStartRecording)
-            }
+            Button("New Recording") { store.presentsRecordingSetup = true }
+                .disabled(!store.canStartRecording)
         }
     }
 
@@ -94,7 +95,7 @@ struct LibraryView: View {
             if let error = store.meetingPageError {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(error).font(.caption)
-                    Button("Try Again") { Task { await store.searchMeetingPages(search) } }
+                    Button("Try Again") { Task { await store.searchMeetingPages("") } }
                 }.padding(12).background(.regularMaterial)
             }
         }
@@ -109,14 +110,38 @@ struct LibraryView: View {
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                VStack(spacing: 0) {
+                VStack(spacing: AppTheme.compactSpacing) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                        TextField("Search", text: $search)
+                            .textFieldStyle(.plain).focused($searchFocused)
+                            .accessibilityLabel("Search meetings and transcripts")
+                            .help("Search meetings and transcripts. Press Return to search.")
+                            .onSubmit(submitSearch)
+                        if !search.isEmpty {
+                            Button {
+                                search = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .accessibilityLabel("Clear Search").help("Clear Search")
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 8).padding(.top, 10)
+                    .opacity(sidebarRowsVisible ? 1 : 0)
+                    .allowsHitTesting(sidebarRowsVisible).accessibilityHidden(!sidebarRowsVisible)
                     List(
                         selection: Binding(
-                            get: { sidebarRowsVisible ? destination : nil },
+                            get: { sidebarRowsVisible && !showsSearchResults ? destination : nil },
                             set: {
-                                if sidebarRowsVisible {
+                                if sidebarRowsVisible, let chosen = $0 {
                                     focusedTaskID = nil
-                                    destination = $0
+                                    showsSearchResults = false
+                                    openedSearchResult = nil
+                                    destination = chosen
                                 }
                             })
                     ) {
@@ -132,6 +157,7 @@ struct LibraryView: View {
                         .animation(nil, value: sidebarRowsVisible)
                     }
                     .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
                     // The native list already supplies row spacing. An extra scroll margin
                     // alternates between applied/unapplied on focus and state updates.
                     .contentMargins(.top, 0, for: .scrollContent)
@@ -139,11 +165,16 @@ struct LibraryView: View {
                     .allowsHitTesting(sidebarRowsVisible)
                     .accessibilityHidden(!sidebarRowsVisible)
                 }
-                .frame(width: 180)
-                .background(.bar)
+                .frame(width: 156)
+                .modifier(AppChromeSurface(shape: RoundedRectangle(cornerRadius: AppTheme.cornerRadius)))
+                .padding(.horizontal, AppTheme.chromeInset)
+                .padding(.vertical, AppTheme.chromeInset)
                 .frame(width: sidebarExpanded ? 180 : 0, alignment: .leading)
                 .clipped()
-                if destination == .tasks {
+                if showsSearchResults {
+                    LibrarySearchResultsView(session: searchSession, open: openSearchResult, retry: retrySearch)
+                }
+                else if destination == .tasks {
                     TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -165,7 +196,23 @@ struct LibraryView: View {
                             if destination == .meetings, let id = selectedMeeting,
                                 store.meetings.contains(where: { $0.id == id })
                             {
-                                MeetingDetailView(meetingID: id).id(id)
+                                VStack(spacing: 0) {
+                                    if openedSearchResult != nil {
+                                        HStack {
+                                            Button("Back to Search Results", systemImage: "chevron.left") {
+                                                showsSearchResults = true
+                                                search = searchSession.query
+                                            }
+                                            Spacer()
+                                        }.padding(.horizontal, AppTheme.contentInset).padding(
+                                            .top, AppTheme.contentSpacing)
+                                    }
+                                    MeetingDetailView(
+                                        meetingID: id,
+                                        initialTranscriptRowID: openedSearchResult?.segmentID,
+                                        initialContentTab: searchContentTab
+                                    ).id(id)
+                                }
                             }
                             else if destination == .people, selectedPeople.count == 1, let id = selectedPeople.first,
                                 let person = store.people.first(where: { $0.id == id })
@@ -210,7 +257,7 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .navigation) {
                     HStack(spacing: 6) {
-                        if destination == .meetings {
+                        if destination == .meetings && !showsSearchResults {
                             Image(nsImage: MenuBarArtwork.normal)
                                 .renderingMode(.template)
                                 .accessibilityHidden(true)
@@ -272,36 +319,15 @@ struct LibraryView: View {
                         Label("Library Actions", systemImage: "ellipsis")
                     }
                     .help("New notes and library imports").disabled(!store.libraryWritable)
-                    if destination == .meetings {
-                        HStack(spacing: 4) {
-                            Button {
-                                searchFocused = true
-                            } label: {
-                                Image(systemName: "magnifyingglass")
-                            }
-                            .buttonStyle(ActionButtonStyle()).help("Search meetings and transcripts")
-                            .accessibilityLabel("Search meetings and transcripts")
-                            .keyboardShortcut("f", modifiers: .command)
-                            TextField("Search meetings and transcripts", text: $search)
-                                .textFieldStyle(.plain).focused($searchFocused)
-                                .accessibilityLabel("Search meetings and transcripts")
-                            if !search.isEmpty {
-                                Button {
-                                    search = ""
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                }
-                                .buttonStyle(ActionButtonStyle()).accessibilityLabel("Clear search").help(
-                                    "Clear search")
-                            }
-                        }
-                        .padding(6)
-                        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
-                        .frame(width: 220)
+                    Button(action: focusLibrarySearch) {
+                        Label("Search", systemImage: "magnifyingglass")
                     }
+                    .help("Search meetings and transcripts")
+                    .keyboardShortcut("f", modifiers: .command)
                 }
                 ToolbarItem(id: "meeting-actions", placement: .automatic) {
-                    if destination == .meetings, let meeting = store.meetings.first(where: { $0.id == selectedMeeting })
+                    if !showsSearchResults, destination == .meetings,
+                        let meeting = store.meetings.first(where: { $0.id == selectedMeeting })
                     {
                         MeetingActionsMenu(meeting: meeting)
                     }
@@ -313,7 +339,8 @@ struct LibraryView: View {
             // Allocate actual layout height so detail overlays cannot extend beneath playback.
             VStack(spacing: 0) {
                 if recordingActive
-                    && (store.isStartingRecording || destination != .meetings || selectedMeeting != store.recordingID)
+                    && (store.isStartingRecording || showsSearchResults || destination != .meetings
+                        || selectedMeeting != store.recordingID)
                 {
                     recordingStrip
                 }
@@ -324,6 +351,8 @@ struct LibraryView: View {
                     if store.showsTaskQueueStatus {
                         TaskQueueStatusButton {
                             focusedTaskID = nil
+                            showsSearchResults = false
+                            openedSearchResult = nil
                             destination = .tasks
                         }
                         .transition(.opacity)
@@ -338,6 +367,8 @@ struct LibraryView: View {
         .background(PlaybackSpaceKey(playback: playback))
         .environment(\.showManagedTask) { id in
             focusedTaskID = id
+            showsSearchResults = false
+            openedSearchResult = nil
             destination = .tasks
         }
         .onAppear {
@@ -345,8 +376,8 @@ struct LibraryView: View {
             sidebarControl?.connect(
                 expanded: $sidebarExpanded, rows: $sidebarRowsVisible, toggle: toggleSidebar(reduceMotion:))
         }
-        .task(id: search) { await store.searchMeetingPages(search) }
         .onChange(of: selectedMeeting) { _, id in
+            if openedSearchResult?.meetingID != id { openedSearchResult = nil }
             if let id { _ = store.ensureMeetingLoaded(id: id) }
         }
         .onDisappear { sidebarControl?.disconnect() }
@@ -397,8 +428,53 @@ struct LibraryView: View {
         }
     }
 
+    private var searchContentTab: MeetingContentTab? {
+        switch openedSearchResult?.kind {
+        case .notes: .notes
+        case .summary: .summary
+        case .transcript: .transcript
+        default: nil
+        }
+    }
+
+    private func submitSearch() {
+        if searchSession.submit(search, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs) {
+            showsSearchResults = true
+            openedSearchResult = nil
+            searchFocused = false
+        }
+    }
+
+    private func retrySearch() {
+        if searchSession.results.isEmpty {
+            _ = searchSession.submit(
+                searchSession.query, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs)
+        }
+        else {
+            searchSession.retry()
+        }
+    }
+
+    private func openSearchResult(_ result: LibrarySearchResult) {
+        guard store.ensureMeetingLoaded(id: result.meetingID) else { return }
+        selectedMeeting = result.meetingID
+        destination = .meetings
+        openedSearchResult = result
+        showsSearchResults = false
+    }
+
+    private func focusLibrarySearch() {
+        if !sidebarExpanded {
+            sidebarTransition = UUID()
+            sidebarExpanded = true
+            sidebarRowsVisible = true
+        }
+        searchFocused = true
+    }
+
     private var destinationTitle: String {
-        switch destination {
+        if showsSearchResults { return "Search Results" }
+        return switch destination {
         case .people: "People"
         case .tags: "Tags"
         case .tasks: "Tasks"

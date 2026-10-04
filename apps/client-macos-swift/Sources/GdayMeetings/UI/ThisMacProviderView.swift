@@ -35,8 +35,7 @@ struct ThisMacProviderView: View {
             }
             Section("Readiness") {
                 let result = health.state(providerID: ThisMacProvider.id, capability: .liveTranscription)
-                LabeledContent("Live Transcription", value: result.title)
-                if let reason = result.reason { Text(reason).font(.caption).foregroundStyle(.orange) }
+                ProviderHealthSummary(title: "Live Transcription", health: result)
             }
             Section("Speech Models") {
                 if models.isEmpty { Text(message).foregroundStyle(.secondary) }
@@ -136,7 +135,7 @@ private struct SpeechModelRow: View {
                         .accessibilityLabel("Speech model download")
                 }
                 else if model.readiness == .installed {
-                    Text("Installed").foregroundStyle(.secondary)
+                    Label("Installed", systemImage: "checkmark.circle").foregroundStyle(.secondary)
                 }
                 else if model.readiness == .available {
                     Button("Download") { Task { await download() } }
@@ -145,7 +144,9 @@ private struct SpeechModelRow: View {
                     Text("Unavailable on this Mac").foregroundStyle(.secondary)
                 }
             }
-            if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+            if let failure {
+                AppInlineMessage(text: failure, systemImage: "exclamationmark.circle", tint: .orange)
+            }
         }
     }
     private func download() async {

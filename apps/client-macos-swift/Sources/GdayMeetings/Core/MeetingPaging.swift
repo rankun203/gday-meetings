@@ -71,18 +71,6 @@ enum MeetingFolderStorage {
         }
         return meeting
     }
-    static func searchText(id: UUID, directory: URL) throws -> String {
-        let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
-        var text = ""
-        for name in ["notes.md", "summary.md"] {
-            let file = folder.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: file.path) {
-                text += try String(contentsOf: file, encoding: .utf8) + " "
-            }
-        }
-        text += try TranscriptStorage.read(at: folder).map(\.text).joined(separator: " ")
-        return text
-    }
     static func write(_ meeting: Meeting, directory: URL, writeTranscript: Bool = true) throws {
         let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: directory, date: meeting.createdAt)
         MeetingFolderLocation.remember(folder, id: meeting.id, directory: directory)

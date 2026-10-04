@@ -22,12 +22,14 @@ struct MeetingDataPrivacyView: View {
             .frame(maxWidth: .infinity)
             Text("File changes and data transfers, grouped by file, action, and destination.")
                 .font(.callout).foregroundStyle(.secondary)
-            if let message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
+            if let message {
+                AppInlineMessage(text: message, systemImage: "exclamationmark.circle", tint: .red)
+            }
             if unreadableLines > 0 {
-                Text(
-                    "\(unreadableLines) event records couldn’t be read. Other events are shown. Reveal the meeting folder to inspect data-events.jsonl."
-                )
-                .font(.callout).foregroundStyle(.secondary)
+                AppInlineMessage(
+                    text:
+                        "\(unreadableLines) event records couldn’t be read. Other events are shown. Reveal the meeting folder to inspect data-events.jsonl.",
+                    systemImage: "exclamationmark.triangle", tint: .orange)
             }
             if groups.isEmpty && message == nil {
                 ContentUnavailableView(

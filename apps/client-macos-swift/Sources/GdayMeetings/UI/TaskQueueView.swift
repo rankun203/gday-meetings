@@ -9,13 +9,13 @@ struct TaskQueueView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Tasks").font(.largeTitle.bold())
+                Text("Tasks").font(.title.weight(.semibold))
                 Spacer()
                 Text(store.taskQueueSummary)
                     .foregroundStyle(store.taskAttentionCount > 0 ? Color.accentColor : Color.secondary)
             }
             if let error = store.managedTaskJournalError {
-                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
             }
             if store.managedTasks.isEmpty && store.voiceLibrary.jobs.isEmpty && store.taskQueueOtherJobs.isEmpty {
                 ContentUnavailableView(
@@ -29,7 +29,7 @@ struct TaskQueueView: View {
             else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 20) {
+                        LazyVStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
                             if store.managedTasks.contains(where: { $0.state.isActive })
                                 || !store.taskQueueOtherJobs.isEmpty
                                 || store.voiceLibrary.jobs.contains(where: {
@@ -96,7 +96,7 @@ struct TaskQueueView: View {
                     }
                 }
             }
-        }.padding(24)
+        }.padding(AppTheme.contentInset)
             .sheet(isPresented: $reviewingVoices) {
                 VoiceLibraryView(library: store.voiceLibrary).environmentObject(store)
             }
@@ -113,23 +113,28 @@ struct TaskQueueView: View {
             Text(job.providerName).font(.subheadline).foregroundStyle(.secondary)
             Text(job.progress).font(.callout)
             ForEach(Array(Set(job.failures.values)).sorted(), id: \.self) { failure in
-                Text(failure).font(.callout).textSelection(.enabled)
+                AppInlineMessage(text: failure, systemImage: "exclamationmark.circle", tint: .orange)
             }
-            HStack {
-                if job.state == .running || job.state == .queued {
-                    Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
-                }
-                if job.state == .paused || job.state == .failed {
-                    Button(job.state == .failed ? "Retry" : "Resume") {
-                        store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
-                    }
-                    .disabled(
-                        !store.libraryWritable || store.recordingID != nil
-                            || store.voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued })
-                }
-                Button("Open Voice Review") { reviewingVoices = true }
+            ViewThatFits(in: .horizontal) {
+                HStack { voiceTaskActions(job) }
+                VStack(alignment: .leading, spacing: AppTheme.compactSpacing) { voiceTaskActions(job) }
             }
         }.padding(14).taskQueueCard().id(job.id)
+    }
+
+    @ViewBuilder private func voiceTaskActions(_ job: VoicePreparationJob) -> some View {
+        if job.state == .running || job.state == .queued {
+            Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
+        }
+        if job.state == .paused || job.state == .failed {
+            Button(job.state == .failed ? "Retry" : "Resume") {
+                store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
+            }
+            .disabled(
+                !store.libraryWritable || store.recordingID != nil
+                    || store.voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued })
+        }
+        Button("Open Voice Review") { reviewingVoices = true }
     }
 
     private func taskRow(_ record: ManagedTaskRecord) -> some View {
@@ -183,7 +188,7 @@ struct TaskQueueView: View {
         }.padding(14).taskQueueCard()
             .overlay {
                 if record.id == focusedTaskID {
-                    RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 2)
+                    RoundedRectangle(cornerRadius: AppTheme.cornerRadius).stroke(Color.accentColor, lineWidth: 2)
                         .allowsHitTesting(false)
                 }
             }
@@ -346,7 +351,6 @@ extension MeetingStore {
 
 extension View {
     fileprivate func taskQueueCard() -> some View {
-        self.background(.background, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
+        self.modifier(AppContentSurface())
     }
 }

@@ -456,8 +456,14 @@ final class MeetingStore: ObservableObject {
             }
             do {
                 if !libraryDataStatus.isBuilding {
-                    for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting)) }
-                    for entry in mergedEntries { try libraryIndex?.upsert(entry) }
+                    for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting), refreshSearch: false) }
+                    for entry in mergedEntries { try libraryIndex?.upsert(entry, refreshSearch: false) }
+                    let paths = (changed.map(\.id) + mergedEntries.map(\.id)).map {
+                        directory(for: $0).appendingPathComponent("metadata.json")
+                    }
+                    if !paths.isEmpty {
+                        libraryMonitor?.process(.init(paths: paths, requiresScan: false, eventID: 0))
+                    }
                 }
             }
             catch { libraryDataStatus.error = "Couldn’t refresh the index. Rebuild it in Data settings." }

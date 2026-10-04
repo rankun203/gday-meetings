@@ -36,7 +36,7 @@ struct DataPrivacyForm: View {
                 Text(
                     "Each transmission is logged with its provider, address, data type, and size. Logs don’t include meeting content or credentials."
                 )
-                HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: AppTheme.compactSpacing) {
                     Button("Export Logs", action: exportLogs)
                     Text("Saves this session’s logs from the last hour to ~/Library/Logs/Gday Meetings.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -51,13 +51,13 @@ private struct DataPrivacyRowView: View {
     let row: PrivacyRow
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: AppTheme.contentSpacing) {
             Image(systemName: row.type.systemImage)
                 .foregroundStyle(.secondary)
                 .frame(width: 20)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(row.type.title).font(.body)
+            VStack(alignment: .leading, spacing: AppTheme.compactSpacing) {
+                Text(row.type.title).font(.headline)
                 if let contents = row.type.contents {
                     Text(contents).font(.caption).foregroundStyle(.secondary)
                 }
@@ -83,7 +83,7 @@ private struct DataPrivacyRowView: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, AppTheme.compactSpacing)
         // One VoiceOver element per data type: name, contents, status, then note.
         .accessibilityElement(children: .combine)
     }

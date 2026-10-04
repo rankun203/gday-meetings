@@ -28,7 +28,9 @@ struct SettingsView: View {
                 .tabItem { Label("Data Privacy", systemImage: "hand.raised") }
                 .tag("privacy")
         }
-        .formStyle(.grouped).padding(16).frame(width: 960, height: 720)
+        .formStyle(.grouped)
+        .padding(AppTheme.contentSpacing)
+        .frame(width: 960, height: 720)
         .onAppear { settingsTab = Self.currentTab(for: settingsTab) }
     }
 }
