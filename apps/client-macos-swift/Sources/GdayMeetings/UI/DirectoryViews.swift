@@ -7,6 +7,7 @@ struct PeopleView: View {
     @ViewState private var deleting: Person?
     @ViewState private var showExcluded = false
     @ViewState private var reviewingVoices = false
+    @ViewState private var merging: Person?
     private var visiblePeople: [Person] {
         let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return (showExcluded ? store.people : store.listedPeople)
@@ -21,6 +22,11 @@ struct PeopleView: View {
             Button("Review Voices…", systemImage: "waveform") { reviewingVoices = true }
                 .buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal).padding(.top)
+            Button("Merge Person…", systemImage: "person.2") {
+                merging = store.people.first { $0.id == selection }
+            }
+            .disabled(selection == nil || store.people.count < 2)
+            .padding(.horizontal)
             HStack {
                 TextField("Find or Add Person", text: $name).onSubmit(findOrAdd)
                     .accessibilityLabel("Find or Add Person")
@@ -44,10 +50,25 @@ struct PeopleView: View {
                             "Delete person"
                         ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(person.id)
+                        .contextMenu {
+                            Button("Merge Person…") { merging = person }
+                                .disabled(store.people.count < 2)
+                        }
                 }
             }
             Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox).padding(.horizontal).padding(.bottom)
         }.navigationTitle("People")
+            .sheet(item: $merging) { person in
+                PersonMergeView(sourceID: person.id) { keptID in
+                    name = ""
+                    if let kept = store.people.first(where: { $0.id == keptID }),
+                        !store.excludedTagIDs.isDisjoint(with: kept.tagIDs)
+                    {
+                        showExcluded = true
+                    }
+                    selection = keptID
+                }
+            }
             .sheet(isPresented: $reviewingVoices) {
                 VoiceLibraryView(library: store.voiceLibrary)
             }

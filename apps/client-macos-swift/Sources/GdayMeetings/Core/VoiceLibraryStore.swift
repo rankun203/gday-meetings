@@ -760,6 +760,40 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     @discardableResult
+    func mergePerson(id: UUID, into targetID: UUID, staged: Bool = false) -> Bool {
+        guard id != targetID, readable, canWrite(), persistence != nil,
+            !document.deletedPersonIDs.contains(targetID)
+        else { return false }
+        var next = document
+        if !next.deletedPersonIDs.contains(id) { next.deletedPersonIDs.append(id) }
+        for index in next.examples.indices {
+            if next.examples[index].personID == id { next.examples[index].personID = targetID }
+            if next.examples[index].suggestedPersonID == id { next.examples[index].suggestedPersonID = targetID }
+            next.examples[index].rejectedPersonIDs = PersonMerge(sourceID: id, targetID: targetID)
+                .replacing(next.examples[index].rejectedPersonIDs)
+            if next.examples[index].personID == targetID {
+                next.examples[index].rejectedPersonIDs.removeAll { $0 == targetID }
+            }
+            if next.examples[index].rejectedPersonIDs.contains(targetID),
+                next.examples[index].suggestedPersonID == targetID
+            {
+                next.examples[index].suggestedPersonID = nil
+                if next.examples[index].review == .suggested { next.examples[index].review = .rejected }
+            }
+        }
+        for index in next.decisions.indices where next.decisions[index].personID == id {
+            next.decisions[index].personID = targetID
+        }
+        // Review undo must not restore the removed directory identity.
+        next.undo.removeAll()
+        if staged {
+            pendingDocument = next
+            return true
+        }
+        return commit(next)
+    }
+
+    @discardableResult
     func removePerson(id: UUID, staged: Bool = false) -> Bool {
         guard readable, canWrite(), persistence != nil else { return false }
         var next = document

@@ -309,7 +309,7 @@ final class MeetingStore: ObservableObject {
         if canSave { startLibraryMonitoring() }
     }
 
-    @discardableResult private func save() -> Bool {
+    @discardableResult private func save(personMerge: PersonMerge? = nil) -> Bool {
         guard canSave else {
             errorMessage = "Library is read-only because loading failed. Check the data folder before saving changes."
             return false
@@ -321,6 +321,7 @@ final class MeetingStore: ObservableObject {
             }
         }
         var transaction = LibraryFileTransaction(root: dataDirectory)
+        var mergedEntries: [MeetingListEntry] = []
         do {
             try voiceLibrary.writePending(transaction: &transaction)
             let changed = meetings.filter { meeting in
@@ -405,8 +406,38 @@ final class MeetingStore: ObservableObject {
                 try JSONEncoder().encode(contextualChats).write(
                     to: dataDirectory.appendingPathComponent("context-chats.json"), options: .atomic)
             }
+            if let personMerge, let libraryIndex {
+                var cursor: MeetingListEntry?
+                let loadedIDs = Set(meetings.map(\.id))
+                while true {
+                    let page = try libraryIndex.page(after: cursor, limit: 20)
+                    guard !page.isEmpty else { break }
+                    for entry in page where !loadedIDs.contains(entry.id) {
+                        if let updated = try personMerge.rewriteStoredMeeting(
+                            id: entry.id, directory: dataDirectory, transaction: &transaction)
+                        {
+                            mergedEntries.append(updated)
+                        }
+                    }
+                    cursor = page.last
+                }
+            }
             try transaction.commit()
             voiceLibrary.completePending(committed: true)
+            for entry in mergedEntries {
+                do {
+                    let folder = directory(for: entry.id)
+                    for name in ["metadata.json", "content.json"]
+                    where FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
+                        try DataEventJournal.fileSaved(
+                            folder.appendingPathComponent(name), action: .modified, directory: folder)
+                    }
+                }
+                catch {
+                    errorMessage =
+                        "People were merged, but their data events couldn’t be saved. \(error.localizedDescription)"
+                }
+            }
             for meeting in changed {
                 do {
                     let folder = directory(for: meeting.id)
@@ -426,6 +457,7 @@ final class MeetingStore: ObservableObject {
             do {
                 if !libraryDataStatus.isBuilding {
                     for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting)) }
+                    for entry in mergedEntries { try libraryIndex?.upsert(entry) }
                 }
             }
             catch { libraryDataStatus.error = "Couldn’t refresh the index. Rebuild it in Data settings." }
@@ -672,6 +704,43 @@ final class MeetingStore: ObservableObject {
             save()
         }
     }
+    var canMergePeople: Bool {
+        canSave && canChangeLibraryFolder && !libraryDataStatus.isBuilding && !indexNeedsInitialRebuild
+            && libraryIndex != nil
+    }
+
+    @discardableResult
+    func mergePerson(id: UUID, into targetID: UUID) -> Bool {
+        guard canMergePeople else {
+            errorMessage = "Wait for recording, processing, and indexing to finish before merging people."
+            return false
+        }
+        guard id != targetID, let source = people.first(where: { $0.id == id }),
+            let targetIndex = people.firstIndex(where: { $0.id == targetID })
+        else {
+            errorMessage = "Select two different people to merge."
+            return false
+        }
+        let merge = PersonMerge(sourceID: id, targetID: targetID)
+        guard voiceLibrary.mergePerson(id: id, into: targetID, staged: true) else {
+            errorMessage = voiceLibrary.errorMessage ?? "Couldn’t update voice samples."
+            return false
+        }
+        people[targetIndex] = PersonMerge.combining(source, into: people[targetIndex])
+        people.removeAll { $0.id == id }
+        for index in meetings.indices { merge.apply(to: &meetings[index]) }
+        let sourceKey = Self.contextChatKey(personID: id)
+        let targetKey = Self.contextChatKey(personID: targetID)
+        if let messages = contextualChats.removeValue(forKey: sourceKey) {
+            var combined = contextualChats[targetKey] ?? []
+            for message in messages where !combined.contains(where: { $0.id == message.id }) {
+                combined.append(message)
+            }
+            contextualChats[targetKey] = combined.sorted { $0.createdAt < $1.createdAt }
+        }
+        return save(personMerge: merge)
+    }
+
     func deletePerson(id: UUID) {
         guard canSave, removeRelationships(personID: id) else { return }
         guard voiceLibrary.removePerson(id: id, staged: true) else {
