@@ -147,6 +147,7 @@ enum UIPreview {
                 live.savedSegments = conversation.transcript
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
+                try seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
@@ -246,6 +247,18 @@ enum UIPreview {
                 seedTasks(store)
             }
             try seedPagedTasks(store)
+            if UIPreviewPerformanceFixtures.flag(
+                "--synthetic-pending-transcription", infoKey: "GdaySyntheticPendingTranscription"),
+                var meeting = store.meetings.first(where: { $0.title == "Synthetic single track" })
+            {
+                meeting.transcript = [.init(start: 0, end: 2, text: "Original synthetic passage")]
+                guard store.updateMeeting(meeting) else {
+                    throw ServiceError(store.errorMessage ?? "Couldn’t save the preview transcript.")
+                }
+                var attempt = ProviderTranscriptionAttempt(provider: ServiceProvider(kind: .runpod), meeting: meeting)
+                attempt.result = [.init(start: 0, end: 2, text: "Replacement synthetic passage")]
+                try store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
+            }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {
@@ -602,6 +615,16 @@ struct PreviewContainer<Content: View>: View {
         return history
     }
     var body: some View {
+        if UIPreview.enabled
+            && !UIPreviewPerformanceFixtures.flag("--preview-chrome-only", infoKey: "GdayPreviewChromeOnly")
+        {
+            previewContent
+        }
+        else {
+            content()
+        }
+    }
+    private var previewContent: some View {
         VStack(spacing: 0) {
             if UIPreview.enabled {
                 HStack {

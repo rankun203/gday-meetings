@@ -40,7 +40,7 @@ import Foundation
                     }
                     try Data().write(to: marker, options: .atomic)
                 }.value
-                store.reloadExternalLibraryDocuments()
+                store.requestExternalLibraryReload(paths: [], rebuild: true)
                 store.refreshDirectoryIndex(rebuild: true)
                 store.libraryMonitor?.rebuild()
             }

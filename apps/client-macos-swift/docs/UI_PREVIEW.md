@@ -1,7 +1,7 @@
 ---
 title: UI Preview
 date: 2026-09-26
-updated: 2026-10-04
+updated: 2026-10-05
 status: active
 scope: swift-app-testing
 ---
@@ -20,6 +20,8 @@ The bundle is `apps/client-macos-swift/.build/preview/Gday Meetings UI Preview.a
 For full mode, use `make build-macos` or `make start-macos`; `make install-macos` stages the full app for installation. See the [mode comparison](../README.md#choose-a-run-mode). Quit Preview and the full `.build/macos` development copy before rebuilding Preview, because packaging reuses the full build. Copies running from Applications or `.build/installer` can remain open.
 
 The preview banner identifies the mode and provides an Appearance selector for UI testing. The selector shares the System, Light, and Dark preference in **Settings → General**. Changes apply across preview windows and persist between launches, separately from the full app’s preference.
+
+For native window-layout checks, launch the Preview executable with `--preview-chrome-only`, or set the Boolean bundle key `GdayPreviewChromeOnly`. This hides the Preview banner and visualization controls without changing synthetic data, silent playback, or recording restrictions. Appearance remains available in **Settings → General**. Packaging leaves this flag off by default; capture notes must identify Preview mode and the fixture flags when its banner is hidden.
 
 The banner also shows the packaged revision; hover over it for the build time. `preview-macos.sh` records these in `GdayPreviewRevision` and `GdayPreviewBuiltAt`. Set `GDAY_BUILD_REVISION` when a build includes uncommitted changes, and retain the source diff with the capture notes. A revision label alone does not identify a dirty source tree.
 
@@ -46,6 +48,8 @@ Person details show voice samples above contact fields. Confirm that samples rem
 Expand **Speaker Association** to inspect supported providers and preparation progress. Preparation and discovery are real local operations when explicitly started; synthetic fixture audio does not establish model accuracy. Missing models and unavailable audio must produce actionable errors. No remote upload starts from opening this view.
 
 ## Task queue
+
+Use `--synthetic-pending-transcription`, or the `GdaySyntheticPendingTranscription` Boolean bundle flag, to give **Synthetic single track** an original transcript and an unapplied saved result. Open **Apply Saved Transcript…** or **Discard Pending Request…**, then choose **Cancel** to check confirmation presentation without changing the transcript. This opt-in fixture saves only synthetic local data; it does not create a processing task or submit a provider request.
 
 Launch the Preview executable with `--synthetic-tasks`, or set its `GdaySyntheticTasks` bundle flag, to add running, queued, failed, and completed processing tasks, plus paused, failed, and completed voice preparation jobs. These rows are synthetic and never submit provider work. Choose the bottom task status or **Tasks** in the sidebar to inspect active work before history. The conversation includes speaker-labeling history and voice examples with model details. Review the recoverable example to check automatic source recovery, then use **Open Recording** to verify transcript navigation without playback.
 
@@ -78,7 +82,7 @@ This option is for UI Preview. The file supplies `RUNPOD_ENDPOINT_URL`, `RUNPOD_
 
 To fill **Settings → Data Privacy** without credentials, launch the executable with `--synthetic-providers`, or set the `GdaySyntheticProviders` Boolean bundle flag. It adds RunPod, Filedrop, and OpenAI-compatible providers with `.invalid` addresses, selects them for transcription and summaries, and turns on **Automatically Transcribe**. `.invalid` names never resolve, so checks and model lists started by opening a provider panel fail on this Mac and nothing is uploaded. Website sign-in cannot be simulated; website rows are covered by unit tests.
 
-Use `--synthetic-multiple-transcription-providers` to add a second eligible RunPod connection with an `.invalid` address. The saved Transcript action becomes a provider menu; inspect its choices without starting a job. The ordinary `--synthetic-providers` fixture shows the single-provider action, and no provider flag shows setup.
+Use `--synthetic-multiple-transcription-providers` to add a second eligible RunPod connection with an `.invalid` address. The saved Transcript action offers both providers in its menu; inspect the choices without starting a job. The ordinary `--synthetic-providers` fixture offers one provider in that menu, and no provider flag shows setup.
 
 Connection checks use real services. Starting a RunPod transcription uploads the selected audio to the configured Filedrop provider and can incur RunPod charges. Use generated speech when validating recognition; the default waveform fixtures exercise layout and playback controls. See the [file-transfer contract](../../../docs/protocols/file-transfer.md) and the [optional live test](../README.md#optional-live-provider-test).
 
@@ -100,7 +104,7 @@ The synthetic conversation has timed headings and list items, a task checkbox, a
 
 ## Live transcription and recording card
 
-The synthetic conversation includes a saved live checkpoint. Open its Transcript tab to check timeline playback, provider-specific re-transcription actions, and **Transcript History**. Restoring the live transcript keeps the previous text as a revision. Recognition accuracy is not simulated.
+The synthetic conversation includes a saved live checkpoint. Open its Transcript tab to check timeline playback, provider-specific re-transcription actions, and **Transcripts**. Restoring the live transcript keeps the previous text as a revision. Recognition accuracy is not simulated.
 
 Launch Preview with `--synthetic-live-recording` to show the production recording card for the synthetic conversation. It includes 18 finalized phrases, a wrapped passage, two provisional phrases, and one assigned person. This flag does not open audio hardware, download a model, or start SpeechAnalyzer. Check the 32-point Recording Settings disclosure and folded language/processing/tag summary. Live text and its switch appear in the Transcript tab, with status and **Follow Live** above the text viewport. Settings and meters do not scroll with new text. The synthetic recording’s duration advances, but its audio files remain fixture audio.
 
