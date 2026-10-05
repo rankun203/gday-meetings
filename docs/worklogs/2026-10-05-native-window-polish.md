@@ -71,6 +71,8 @@ The first pushed run, `37280958588`, passed on macOS 27 but failed on macOS 26 w
 
 The same runner exposed a non-Sendable audio-buffer capture in the existing excerpt converter. A Sendable reference owner now stores the one-shot input in `Synchronization.Mutex`; the callback takes and clears that input under the lock. No `@unchecked Sendable` or `@preconcurrency` suppression was added. An isolated SDK 26.5 compile passed strict concurrency with warnings treated as errors. The combined local build and 20 ranking/audio tests pass; the exact macOS 26 CI rerun remains pending.
 
+The second run, `37283081817`, cleared those diagnostics but exposed an SDK declaration difference: [`visibilityPriority(_:)`](https://developer.apple.com/documentation/swiftui/toolbarcontent/visibilitypriority(_:)) is declared in SDK 27 with macOS 26.1 runtime availability, but is absent from SDK 26.5. A compiler guard retains priority with the Xcode 27 toolchain and native default overflow with Xcode 26. The runtime check alone cannot make the declaration available to an older SDK. This narrow toolchain bridge can be removed when Xcode 27 becomes the minimum build toolchain; until then, recording-button overflow behavior can differ in Xcode 26 builds.
+
 ## Cleanup
 
 A cleanup agent removed 20 obsolete generated directories before the later instruction to use Trash. Their pre-removal allocated sizes total 54,078,070,784 bytes (about 50.36 GiB), not a measured APFS free-space delta. Those generated files can be rebuilt but cannot be restored from Trash. Source, user libraries, the active isolated build, current production candidate, evidence, and current model/worker caches were preserved. Exact paths and sizes are in `cleanup-manifest.json`.

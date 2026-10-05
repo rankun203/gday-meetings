@@ -322,13 +322,18 @@ struct LibraryView: View {
     }
 
     @ToolbarContentBuilder private var recordingToolbar: some ToolbarContent {
-        if #available(macOS 26.1, *) {
+        // The API is back-deployed to macOS 26.1 but declared only by the Xcode 27 SDK.
+        #if compiler(>=6.4)
+            if #available(macOS 26.1, *) {
+                ToolbarItem(placement: .primaryAction) { recordButton }
+                    .visibilityPriority(.high)
+            }
+            else {
+                ToolbarItem(placement: .primaryAction) { recordButton }
+            }
+        #else
             ToolbarItem(placement: .primaryAction) { recordButton }
-                .visibilityPriority(.high)
-        }
-        else {
-            ToolbarItem(placement: .primaryAction) { recordButton }
-        }
+        #endif
         ToolbarSpacer(.fixed, placement: .primaryAction)
         DefaultToolbarItem(kind: .search, placement: .primaryAction)
     }
