@@ -13,9 +13,9 @@ web UI shows it as an unconfirmed speaker you can assign with one click.
 
 Usage:
     uv run --no-project apps/client-macos-rust/scripts/import_teams_transcript.py TRANSCRIPT.json \\
-        --name "Engineering Solution Discussion" \\
-        --started-at 2026-07-28T07:11:51Z \\
-        [--duration-secs 6075] [--tags work,cms] [--language zh] \\
+        --name "Weekly Planning Review" \\
+        --started-at 2026-01-15T09:00:00Z \\
+        [--duration-secs 3600] [--tags work,planning] [--language zh] \\
         [--data-dir ~/.local/share/com.gdaymeetings.macos.rust] [--dry-run]
 
 TRANSCRIPT.json is the Stream transcript document — the one with
@@ -82,13 +82,13 @@ def offset_to_seconds(offset: str) -> float:
 # ── Speaker mapping ──
 
 def name_tokens(display_name: str) -> set:
-    """Comparable name parts. 'Gu, Frank' and 'Frank Gu' both -> {gu, frank}."""
+    """Comparable name parts. 'Lee, Alex' and 'Alex Lee' both -> {lee, alex}."""
     cleaned = SUFFIX_RE.sub("", display_name)
     return {t.lower() for t in re.split(r"[,\s]+", cleaned) if t}
 
 
 def readable_name(display_name: str) -> str:
-    """'Yuan, Quan (SP)' -> 'Quan Yuan'."""
+    """'Park, Jordan (SP)' -> 'Jordan Park'."""
     cleaned = SUFFIX_RE.sub("", display_name).strip()
     if "," in cleaned:
         surname, given = cleaned.split(",", 1)
@@ -119,8 +119,8 @@ def match_person(display_name: str, people: list, overrides: dict):
     tokens = name_tokens(display_name)
     for p in people:
         # A person matches when their whole display name appears in the Teams
-        # name: "Frank" ⊂ {gu, frank}, "Quan Yuan" ⊂ {yuan, quan}. Requiring
-        # containment rather than overlap keeps "Will Chen" off "Chen, Peng".
+        # name: "Alex" ⊂ {lee, alex}, "Jordan Park" ⊂ {park, jordan}. Requiring
+        # containment rather than overlap keeps "Sam Kim" off "Kim, Robin".
         p_tokens = name_tokens(p["name"])
         if p_tokens and p_tokens <= tokens:
             return p["id"], p["name"]
@@ -224,7 +224,7 @@ def main() -> int:
     ap.add_argument("transcript", type=Path, help="Stream transcript JSON")
     ap.add_argument("--name", required=True, help="Meeting name")
     ap.add_argument("--started-at", required=True,
-                    help="Meeting start, ISO 8601 (e.g. 2026-07-28T07:11:51Z)")
+                    help="Meeting start, ISO 8601 (e.g. 2026-01-15T09:00:00Z)")
     ap.add_argument("--duration-secs", type=float,
                     help="Meeting duration; defaults to the last segment's end")
     ap.add_argument("--language", default="en", help="Language code (default: en)")
