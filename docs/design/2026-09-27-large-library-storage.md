@@ -16,6 +16,7 @@ Before 1.0, format changes use a temporary, verified migration script. Do not sh
 ```text
 com.gdaymeetings.macos/
   index.db
+  index.db.md
   settings.json
   meetings/YYYYMMDD_<base36-id>/
     metadata.json
@@ -97,7 +98,7 @@ Implementation and measured limitations are recorded in the associated worklogs.
 
 # Task history and execution
 
-`tasks.jsonl` remains authoritative. `tasks-index.sqlite` lives in the local `indexDirectory`, outside a cloud-backed data folder. It stores each task's latest event offset, length, digest, identity, creation time, state, meeting, kind, and scheduler priority. It contains no copied task payloads. Deleting it loses no task history.
+`tasks.jsonl` remains authoritative. The task module in the shared `index.db` stores each task's latest event offset, length, digest, identity, creation time, state, meeting, kind, and scheduler priority. It contains no copied task payloads. The database stays in the local `indexDirectory`, outside a custom or cloud-backed data folder. Deleting a stopped app's index loses no task history. The [shared database contract](2026-10-05-shared-library-database.md) covers module versions, staged rebuilds, recovery, and the generated schema guide.
 
 A cold rebuild streams committed events into a SQLite transaction with bounded memory. It validates the source revision before and after replay; only an incomplete final line may be removed before a later append. A warm open reuses the index when the file size, modification time, and identity still match. Page reads verify indexed event identities and digests. A damaged disposable index is rebuilt from the source; malformed committed source events block writes and leave the journal unchanged.
 

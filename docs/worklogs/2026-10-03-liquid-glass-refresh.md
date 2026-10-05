@@ -14,6 +14,8 @@ The [October 4 worklog](2026-10-04-liquid-glass-implementation.md) records the i
 
 The [October 5 workspace redesign](2026-10-05-workspace-redesign.md) follows the user's Voice Memos reference and supersedes the original shell and player geometry: native split navigation, scoped list actions, compact detail headers, and a quiet waveform surface with a separate transport capsule. It also adds continuous People, Tags, associated-meeting, and Tasks paging, and indexes task history. That worklog records the SDK-linking correction, synthetic comparisons, measured storage performance, and remaining validation limits.
 
+The subsequent [native macOS 26 polish](2026-10-05-native-window-polish.md) tracks the raised platform minimum, native column toolbars and meeting tabs, independent Claude/Codex audits, provider draft protection, speaker colors, playback labels, and remaining header acceptance. [Shared index and search providers](2026-10-05-search-provider-index.md) tracks database consolidation and the optional audio-search prototype. These current worklogs distinguish implemented changes from unresolved validation; the original matrix below remains historical.
+
 ## Problem and evidence
 
 The current layout makes navigation, meeting selection, reading, and playback available together. Preserve that work. The supplied screenshots show a visually heavy sidebar, strong column boundaries, broad control backgrounds, and a full-width player attached to the window edge. A clicked content tab retains a rectangular focus outline. These details make the chrome compete with meeting content.

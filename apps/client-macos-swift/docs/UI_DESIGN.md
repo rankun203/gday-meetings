@@ -12,7 +12,8 @@ Liquid Glass is the design standard for all future UI work in the Swift macOS cl
 ## Appearance and hierarchy
 
 - Use Apple's native Liquid Glass presentation for navigation and controls where supported. Keep meeting text, notes, transcripts, and waveform content on quiet, readable surfaces. Do not put glass behind every card or stack translucent layers unnecessarily.
-- Voice Memos informs the navigation, list, detail, and playback hierarchy; compact capsule tabs retain the earlier Apple Music reference. Use native sidebar selection and Gday's accent color. Retain a visible selected state when the window is inactive.
+- Voice Memos informs the navigation, list, detail, and playback hierarchy. Put the native segmented meeting-content selector in the window toolbar, where macOS 26 supplies its capsule group and neutral selected state. Inline tab views retain a legacy bezel on the supported system and do not provide this appearance. Use native sidebar selection and Gday's accent color. Retain a visible selected state when the window is inactive.
+- Meeting sheets retain a standard inline segmented selector. This preserves their existing modal workflow; a nested navigation toolbar does not render in these sheets. Do not imitate window-toolbar glass inside the sheet.
 - Prefer standard SwiftUI/AppKit controls, SF Symbols, semantic colors, system typography, and system spacing. Use supported customization only when the native component cannot express the required interaction or visual hierarchy.
 - Keep labels direct and concise: “Play,” “Recording transcript,” and meaningful source names. Avoid decorative explanatory text that repeats what the controls already communicate.
 - Make recording actions easy to find and distinguish recording, saving, playing, and paused states through symbols and accessible labels as well as color.
@@ -24,6 +25,7 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 
 - Use one main Meetings window. **Show App**, recording setup, and reopening the app reveal that window instead of creating another. A closed main window can be reopened without restarting the app.
 - Use native split navigation for the library sidebar and let the system coordinate its toolbar and column transition. Keep sidebar content available during expansion; do not add a second row-hiding animation. Rapid reversal and Reduce Motion must leave search and destination selection usable.
+- Open with the sidebar collapsed and the meeting list visible. List titles and scoped actions belong in the native column toolbar rather than a second heading row. Keep the circular recording control immediately before the upper-right search field. Selected meeting content retains its own title, tabs, and reading layout.
 - Preserve native list spacing. Do not add compensating scroll insets or offsets to hide a layout issue; reproduce the cause and verify navigation, playback changes, and window activation.
 - Keep playback updates local to the transport. Menus, text editing, selection, and the main content layout must remain stable while time advances.
 - Center waveform and primary playback controls together, with time labels below. Every track shares one playback/scrubbing timeline.
@@ -56,6 +58,7 @@ Use a brief opacity transition when the bar appears or disappears, respecting Re
 
 ## Transcript playback feedback
 
+- Keep provider names inside the Transcribe or Re-transcribe menu. Label the history controls **Labelings** and **Transcripts** with distinct symbols and descriptive help. Native transcript scrollbars follow the system preference, including always-visible scrollers when requested.
 - Highlight every transcript segment whose interval contains the current playback position, including overlapping sources and waveform seeking or scrubbing. Include the start and exclude the end; show no highlight during gaps. Keep the position highlights when paused; remove them when another meeting owns playback.
 - Use an accent-tinted row for the playback position and a quieter neutral background for pointer hover. Clicking a row must not leave a persistent selection background that looks like the playback position.
 - Use compact rounded speaker chips with a stable color for each person (or speaker label when unassigned). Fit the chip to its name inside the speaker column. Unassigned speakers have a dotted outline; automatically matched people count as assigned. Keep names readable and expose assignment state without relying on color alone. Badge colors do not indicate playback.
@@ -82,7 +85,7 @@ A custom folder retains authoritative files; its disposable index stays local to
 ## API and compatibility policy
 
 - Use the latest stable public APIs supported by the app's toolchain and target OS. Check Apple documentation and SDK availability before adoption; a newer SDK does not make an API available on an older running system.
-- Preserve the deployment target declared in `Package.swift` (currently macOS 14.2). Use availability checks and native older-system appearances where Liquid Glass APIs are unavailable. Do not imitate glass with private APIs or require a developer account for local builds.
+- Preserve the deployment target declared in `Package.swift` (currently macOS 26). Use availability checks for APIs introduced after that minimum. Retain hardware, language, and accessibility checks independently of OS availability. Do not imitate glass with private APIs or require a developer account for local builds.
 - There is no single public “Apple Music style.” Prefer native behavior; document any necessary custom control and its keyboard/accessibility obligations. A newer tab-picker API must not be presented as a way to change the appearance on an OS that cannot run it.
 - Follow the repository's deprecation policy. Record necessary compatibility fallbacks and a concrete future removal condition in the implementation worklog.
 
