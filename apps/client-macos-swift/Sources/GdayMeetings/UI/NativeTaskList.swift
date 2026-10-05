@@ -7,6 +7,7 @@ struct NativeTaskList: NSViewRepresentable {
     var revealID: UUID?
     var revealToken: UUID? = nil
     var retainedViewport: NativeListViewport? = nil
+    var totalCount: Int? = nil
     var viewport: (UUID, UUID, Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -66,7 +67,7 @@ struct NativeTaskList: NSViewRepresentable {
                 ? scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
                 : value.retainedViewport?.anchor?.offset ?? 0
             updating = true
-            let changed = rows != value.rows
+            let changed = rows != value.rows || parent.totalCount != value.totalCount
             parent = value
             if changed {
                 rows = value.rows
@@ -127,15 +128,24 @@ struct NativeTaskList: NSViewRepresentable {
             retained.anchor = .init(
                 id: rows[first].id, offset: scroll.contentView.bounds.minY - table.rect(ofRow: first).minY)
         }
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.totalCount == nil ? 0 : 1) }
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            rows.indices.contains(row) ? 64 : 40
+        }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-            MeetingSelectionRow()
+            rows.indices.contains(row) ? MeetingSelectionRow() : NSTableRowView()
         }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table, rows.indices.contains(table.selectedRow) else { return }
             parent.selection = rows[table.selectedRow].id
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            if row == rows.count, let count = parent.totalCount {
+                return NativeListCountCell.make(
+                    in: tableView,
+                    text: ListCountFooter.text(count: count, singular: "Task", plural: "Tasks"))
+            }
             let identifier = NSUserInterfaceItemIdentifier("task-cell")
             let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? TaskCell ?? TaskCell()
             cell.identifier = identifier

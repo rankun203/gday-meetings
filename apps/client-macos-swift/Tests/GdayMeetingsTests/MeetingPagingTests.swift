@@ -50,7 +50,28 @@ import Testing
         await store.searchMeetingPages("uniquepastpage")
         #expect(store.visibleMeetingIDs == [original[44].id])
         #expect(store.meetings.isEmpty)
+        #expect(await store.ensureMeetingLoaded(id: original[44].id))
         #expect(store.meeting(id: original[44].id)?.transcript == original[44].transcript)
+    }
+    @Test func totalCountMatchesAllFilteredPages() throws {
+        let (root, original) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let index = try LibraryIndex(directory: root)
+        let hiddenTag = UUID()
+        let person = UUID()
+        var hidden = original[44]
+        hidden.tagIDs = [hiddenTag]
+        hidden.personIDs = [person]
+        try MeetingFolderStorage.write(hidden, directory: root)
+        try index.rebuild()
+        #expect(try index.page(limit: 20).count == 20)
+        #expect(try index.count() == 45)
+        #expect(try index.count(excludingTagIDs: [hiddenTag]) == 44)
+        #expect(try index.count(query: "uniquepastpage") == 1)
+        #expect(try index.count(excludingTagIDs: [hiddenTag], query: "uniquepastpage") == 0)
+        #expect(try index.count(personID: person, query: "uniquepastpage") == 1)
+        #expect(try index.count(personID: person, excludingTagIDs: [hiddenTag], query: "uniquepastpage") == 0)
+        #expect(try index.count(query: "no matching phrase") == 0)
     }
     @Test func rebuildRecoversFilesAndRelationships() throws {
         let (root, original) = try fixture()
@@ -119,7 +140,7 @@ import Testing
         #expect(try index.entry(id: meetings[0].id)?.title == meetings[0].title)
     }
 
-    @Test func speakerRelationshipsDoNotCauseFalseExternalConflict() throws {
+    @Test func speakerRelationshipsDoNotCauseFalseExternalConflict() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -127,9 +148,9 @@ import Testing
         var speaker = MeetingSpeaker(label: "Speaker", track: "microphone", providerName: "Fixture")
         speaker.personID = UUID()
         meeting.speakers = [speaker]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         meeting.summary = "Updated summary"
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         #expect(store.errorMessage == nil)
         #expect(store.directory(for: meeting.id).deletingLastPathComponent().lastPathComponent == "meetings")
     }

@@ -19,6 +19,7 @@ struct VoiceLibraryView: View {
     }
     @ViewState private var selectedRecording: RecordingTarget?
     @ViewState private var localError: String?
+    @ViewState private var recordingOpenRequest = UUID()
     @ViewState private var meetingEntries: [UUID: MeetingListEntry] = [:]
     @ViewState private var attemptedRecovery = Set<UUID>()
     @ViewState private var recovering = Set<UUID>()
@@ -87,6 +88,14 @@ struct VoiceLibraryView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }.padding(.vertical, 5).tag(group.id)
                         }
+                        if !groups.isEmpty {
+                            ListCountFooter(
+                                text: ListCountFooter.text(
+                                    count: groups.count,
+                                    singular: "Voice Group", plural: "Voice Groups")
+                            )
+                            .selectionDisabled()
+                        }
                     }.listStyle(.inset)
                     Text("Select individual examples to change their assignments.")
                         .font(.caption).foregroundStyle(.secondary).padding(12)
@@ -100,6 +109,10 @@ struct VoiceLibraryView: View {
                                 ForEach(current.examples.sorted { ($0.start ?? 0) < ($1.start ?? 0) }) { example in
                                     exampleCard(example)
                                 }
+                                ListCountFooter(
+                                    text: ListCountFooter.text(
+                                        count: current.examples.count,
+                                        singular: "Example", plural: "Examples"))
                             }.padding(16)
                         }
                         Divider()
@@ -399,18 +412,33 @@ struct VoiceLibraryView: View {
     }
 
     private func open(_ example: VoiceExample, playAtStart: Bool = false) {
-        guard store.ensureMeetingLoaded(id: example.meetingID),
-            let meeting = store.meeting(id: example.meetingID)
-        else {
-            localError = "Couldn’t open this recording."
-            return
+        let request = UUID()
+        recordingOpenRequest = request
+        let load: @MainActor () async -> Meeting? = {
+            let loaded = await store.ensureMeetingLoaded(id: example.meetingID)
+            guard recordingOpenRequest == request else { return nil }
+            guard loaded, let meeting = store.meeting(id: example.meetingID) else {
+                localError = "Couldn’t open this recording."
+                return nil
+            }
+            selectedRecording = RecordingTarget(
+                id: meeting.id, rowID: VoiceExampleTranscriptNavigation.rowID(for: example, meeting: meeting))
+            localError = nil
+            return meeting
         }
-        selectedRecording = RecordingTarget(
-            id: meeting.id, rowID: VoiceExampleTranscriptNavigation.rowID(for: example, meeting: meeting))
-        localError = nil
-        if playAtStart, let start = example.start, let file = example.audioFile {
-            playback.play(
-                meeting: meeting, files: [store.directory(for: meeting.id).appendingPathComponent(file)], at: start)
+        if playAtStart {
+            playback.requestPlayback(
+                load: load,
+                play: { meeting in
+                    if let start = example.start, let file = example.audioFile {
+                        playback.play(
+                            meeting: meeting, files: [store.directory(for: meeting.id).appendingPathComponent(file)],
+                            at: start)
+                    }
+                })
+        }
+        else {
+            Task { _ = await load() }
         }
     }
 }
@@ -617,13 +645,19 @@ private struct VoiceExamplePlaybackButton: View {
                 playback.pause()
                 return
             }
-            guard store.ensureMeetingLoaded(id: example.meetingID),
-                let meeting = store.meeting(id: example.meetingID), let file = example.audioFile,
-                let start = example.start, let end = example.end
-            else { return }
-            playback.playExcerpt(
-                meeting: meeting, directory: store.directory(for: meeting.id), audioFile: file,
-                start: start, end: end)
+            playback.requestPlayback(
+                load: {
+                    guard await store.ensureMeetingLoaded(id: example.meetingID), !playback.isPlaybackBlocked,
+                        let meeting = store.meeting(id: example.meetingID)
+                    else { return nil }
+                    return meeting
+                },
+                play: { meeting in
+                    guard let file = example.audioFile, let start = example.start, let end = example.end else { return }
+                    playback.playExcerpt(
+                        meeting: meeting, directory: store.directory(for: meeting.id), audioFile: file,
+                        start: start, end: end)
+                })
         } label: {
             Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 44, height: 44)
         }
@@ -670,12 +704,15 @@ private struct VoicePersonAssignmentView: View {
                     && !store.people.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame })
                 {
                     Button("Create Person") {
-                        let id = store.addPerson(name: name)
-                        if store.people.contains(where: { $0.id == id }) {
-                            error = nil
-                        }
-                        else {
-                            error = store.errorMessage ?? "Couldn’t save this person. Try again."
+                        let requestedName = name
+                        Task {
+                            let id = await store.addPerson(name: requestedName)
+                            if store.people.contains(where: { $0.id == id }) {
+                                error = nil
+                            }
+                            else {
+                                error = store.errorMessage ?? "Couldn’t save this person. Try again."
+                            }
                         }
                     }
                 }

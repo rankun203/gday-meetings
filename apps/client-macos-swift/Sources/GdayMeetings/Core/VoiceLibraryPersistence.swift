@@ -8,6 +8,16 @@ struct VoiceLibraryRepresentations: Codable, Equatable {
 /// Authoritative JSON records, with one durable redo transaction. A job update
 /// touches its own record; it never serializes example vectors or the library.
 final class VoiceLibraryPersistence {
+    struct Snapshot: Sendable {
+        var revision: UUID?
+        var fileRevisions: [String: String]
+        var write: (@Sendable (Data, URL) throws -> Void)?
+    }
+    func snapshot() -> Snapshot { Snapshot(revision: revision, fileRevisions: fileRevisions, write: writeOverride) }
+    func adopt(_ value: Snapshot) {
+        revision = value.revision
+        fileRevisions = value.fileRevisions
+    }
     private struct Header: Codable {
         var version = 1
         var revision: UUID
@@ -31,12 +41,14 @@ final class VoiceLibraryPersistence {
     private var externalPaths: [String] = []
     private var externalOriginalRevision: UUID?
     private var externalNextRevision: UUID?
-    private let writeOverride: ((Data, URL) throws -> Void)?
+    private let writeOverride: (@Sendable (Data, URL) throws -> Void)?
     private(set) var maintenanceWarning: String?
     /// Test seam at the last reversible point, before the durable commit marker.
     var beforeCommit: (() throws -> Void)?
 
-    init(directory libraryDirectory: URL, writable: Bool = true, write: ((Data, URL) throws -> Void)? = nil) throws {
+    init(directory libraryDirectory: URL, writable: Bool = true, write: (@Sendable (Data, URL) throws -> Void)? = nil)
+        throws
+    {
         writeOverride = write
         directory = libraryDirectory.appendingPathComponent("voice-library", isDirectory: true)
         self.writable = writable

@@ -39,6 +39,12 @@ struct ServiceProvidersView: View {
                         .tag(provider.id)
                         .padding(.vertical, 4)
                     }
+                    ListCountFooter(
+                        text: ListCountFooter.text(
+                            count: store.settings.serviceProviders.count + 2,
+                            singular: "Provider", plural: "Providers")
+                    )
+                    .selectionDisabled()
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.sidebar)

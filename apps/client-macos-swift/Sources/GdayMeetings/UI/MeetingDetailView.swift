@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum MeetingContentTab: Int {
-    case transcript, notes, summary, dataPrivacy
+    case transcript, notes, summary
 }
 
 struct MeetingDetailView: View {
@@ -27,15 +27,25 @@ struct MeetingDetailView: View {
     }
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
-    private func change(_ edit: (inout Meeting) -> Void) {
-        guard var value = meeting else { return }
-        edit(&value)
-        store.updateMeeting(value)
+    private func change(_ edit: @escaping (inout Meeting) -> Void) {
+        Task {
+            guard var value = meeting else { return }
+            edit(&value)
+            await store.updateMeeting(value)
+        }
     }
     private func text(_ path: WritableKeyPath<Meeting, String>) -> Binding<String> {
         Binding(get: { meeting?[keyPath: path] ?? "" }, set: { value in change { $0[keyPath: path] = value } })
     }
-    var body: some View { meetingBody }
+    @ViewState private var loadingMeeting = true
+    @ViewState private var loadRequest = UUID()
+    var body: some View {
+        meetingBody.task(id: "\(meetingID)|\(loadRequest)") {
+            loadingMeeting = true
+            _ = await store.ensureMeetingLoaded(id: meetingID)
+            if !Task.isCancelled { loadingMeeting = false }
+        }
+    }
 
     @ViewBuilder private var meetingBody: some View {
         if let meeting {
@@ -58,6 +68,18 @@ struct MeetingDetailView: View {
                 .onChange(of: store.recordingID) { _, id in
                     if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
                 }
+        }
+        else if loadingMeeting {
+            ProgressView("Loading Meeting…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        else {
+            ContentUnavailableView {
+                Label("Couldn’t Open Meeting", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(store.meetingPageError ?? "The meeting may have been moved or deleted.")
+            } actions: {
+                Button("Try Again") { loadRequest = UUID() }
+            }
         }
     }
 
@@ -190,12 +212,7 @@ struct MeetingDetailView: View {
                 HStack {
                     Text("Summary").font(.headline)
                     Spacer()
-                    Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles")
-                    { Task { await store.summarize(id: meetingID) } }
-                    .modifier(MarkdownControlCursor())
-                    .disabled(
-                        store.isJobRunning(.summary, .meeting(meetingID))
-                            || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
+                    SummaryGenerationButton(meeting: meeting)
                 }
                 SummaryReadingView(
                     drafts: store.summaryDrafts, meetingID: meetingID, summary: meeting.summary,
@@ -206,10 +223,83 @@ struct MeetingDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
 
             }
-        default: MeetingDataPrivacyView(meetingID: meetingID)
+        default: EmptyView()
         }
     }
 
+}
+
+private struct SummaryGenerationButton: View {
+    @EnvironmentObject private var store: MeetingStore
+    let meeting: Meeting
+    @ViewState private var optionPressed = false
+    @ViewState private var showsInstructions = false
+    @ViewState private var instructions = ""
+    @FocusState private var instructionsFocused: Bool
+
+    private var actionTitle: String { meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary" }
+    private var unavailable: Bool {
+        !store.libraryWritable || store.isJobRunning(.summary, .meeting(meeting.id))
+            || (meeting.transcript.isEmpty && meeting.notes.isEmpty)
+    }
+
+    private func editInstructions() {
+        guard !unavailable else { return }
+        instructions = ""
+        showsInstructions = true
+    }
+
+    var body: some View {
+        Button(optionPressed ? actionTitle + " with Notes…" : actionTitle, systemImage: "sparkles") {
+            if optionPressed || NSEvent.modifierFlags.contains(.option) {
+                editInstructions()
+            }
+            else {
+                Task { await store.queueSummary(id: meeting.id) }
+            }
+        }
+        .onModifierKeysChanged(mask: .option) { _, modifiers in
+            optionPressed = modifiers.contains(.option)
+        }
+        .modifier(MarkdownControlCursor())
+        .disabled(unavailable)
+        .help("Hold Option to add instructions for this summary.")
+        .accessibilityAction(named: Text(actionTitle + " with Notes…")) { editInstructions() }
+        .sheet(isPresented: $showsInstructions) {
+            VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
+                Text(actionTitle + " with Notes").font(.headline)
+                Text("Add instructions for this summary, such as “Write the summary in English.”")
+                    .foregroundStyle(.secondary)
+                Text("User Instructions").font(.headline)
+                TextEditor(text: $instructions)
+                    .font(.body)
+                    .frame(height: 140)
+                    .border(.separator)
+                    .accessibilityLabel("User Instructions")
+                    .focused($instructionsFocused)
+                Text("These instructions apply only to this request. Meeting notes stay unchanged.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsInstructions = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button(actionTitle) {
+                        let requestedInstructions = instructions
+                        Task {
+                            if await store.queueSummary(id: meeting.id, instructions: requestedInstructions) != nil {
+                                showsInstructions = false
+                            }
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(unavailable || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(AppTheme.contentInset)
+            .frame(width: 480)
+            .onAppear { instructionsFocused = true }
+        }
+    }
 }
 
 /// Only the document observes partial text; the header and library stay independent.
@@ -240,12 +330,17 @@ struct MeetingActionsMenu: View {
     @ObservedObject private var server = GdayServerService.shared
     let meeting: Meeting
     @ViewState private var transcriptionConfirmation: TranscriptionConfirmation?
+    @ViewState private var showsDataPrivacy = false
 
     var body: some View {
         Menu {
             TranscriptionActionButton(meeting: meeting, requestConfirmation: { transcriptionConfirmation = $0 })
             if meeting.transcriptionAttempt != nil {
                 PendingTranscriptionActions(meeting: meeting, requestConfirmation: { transcriptionConfirmation = $0 })
+            }
+            Divider()
+            Button("Data Privacy…", systemImage: "hand.raised") {
+                showsDataPrivacy = true
             }
             Divider()
             Button("Export Meeting Text…", systemImage: "square.and.arrow.up") {
@@ -261,7 +356,20 @@ struct MeetingActionsMenu: View {
         } label: {
             Label("Meeting Actions", systemImage: "ellipsis.circle")
         }
-        .help("Transcribe, export, or archive this meeting")
+        .help("Transcribe, review data privacy, export, or archive this meeting")
         .modifier(TranscriptionConfirmationPresenter(meeting: meeting, confirmation: $transcriptionConfirmation))
+        .sheet(isPresented: $showsDataPrivacy) {
+            VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
+                MeetingDataPrivacyView(meetingID: meeting.id)
+                HStack {
+                    Spacer()
+                    Button("Done") { showsDataPrivacy = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(AppTheme.contentInset)
+            .frame(width: 680, height: 520)
+            .onExitCommand { showsDataPrivacy = false }
+        }
     }
 }

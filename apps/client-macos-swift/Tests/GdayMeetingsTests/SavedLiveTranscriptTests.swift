@@ -218,7 +218,7 @@ struct SavedLiveTranscriptTests {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Synthetic recording")
+        let id = await store.createMeeting(title: "Synthetic recording")
         store.recordingID = id
         let folder = store.directory(for: id)
         let storage = LiveTranscriptProjectionStorage()
@@ -231,7 +231,7 @@ struct SavedLiveTranscriptTests {
         let checkpoint = try Data(contentsOf: folder.appendingPathComponent(LiveTranscriptProjection.checkpointName))
         var meeting = try #require(store.meeting(id: id))
         meeting.title = "Renamed recording"
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         #expect(try Data(contentsOf: folder.appendingPathComponent(TranscriptStorage.filename)) == before)
         #expect(
             try Data(contentsOf: folder.appendingPathComponent(LiveTranscriptProjection.checkpointName)) == checkpoint)
@@ -241,7 +241,7 @@ struct SavedLiveTranscriptTests {
         try Data("Blocked entity directory".utf8).write(to: people)
         store.people.append(Person(name: "Synthetic Person"))
         meeting.title = "Uncommitted title"
-        #expect(!store.updateMeeting(meeting))
+        #expect(!(await store.updateMeeting(meeting)))
         #expect(try Data(contentsOf: folder.appendingPathComponent(TranscriptStorage.filename)) == before)
         #expect(
             try Data(contentsOf: folder.appendingPathComponent(LiveTranscriptProjection.checkpointName)) == checkpoint)

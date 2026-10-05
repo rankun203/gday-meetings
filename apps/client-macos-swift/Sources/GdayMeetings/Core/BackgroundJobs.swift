@@ -21,13 +21,13 @@ struct BackgroundJob: Identifiable, Equatable {
             try container.encode(rawValue)
         }
     }
-    enum Scope: Hashable {
+    enum Scope: Hashable, Sendable {
         case meeting(UUID)
         /// A person, tag, or library chat, keyed by MeetingStore.contextChatKey.
         case context(String)
         case library
     }
-    struct Key: Hashable {
+    struct Key: Hashable, Sendable {
         let kind: Kind
         let scope: Scope
     }
@@ -45,7 +45,7 @@ extension MeetingStore {
     /// scope; callers check and begin without suspending, so the check can't race.
     func beginJob(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, progress: String) -> Bool {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
-        guard !isChangingLibrary else { return false }
+        guard !isChangingLibrary, !isPreparingToQuit else { return false }
         guard !backgroundJobs.contains(where: { $0.key == key }) else { return false }
         backgroundJobs.append(BackgroundJob(key: key, progress: progress))
         return true
@@ -61,12 +61,11 @@ extension MeetingStore {
         backgroundJobs.removeAll { $0.key == key }
     }
     func isJobRunning(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) -> Bool {
-        if backgroundJobs.contains(where: { $0.key == BackgroundJob.Key(kind: kind, scope: scope) }) { return true }
-        guard managedTaskStateCounts[.queued, default: 0] > 0, case .meeting(let id) = scope else { return false }
-        return
-            !((try? managedTaskJournal.query(
-                where: "state='queued' AND meeting=" + ManagedTaskIndex.literal(id.uuidString) + " AND kind="
-                    + ManagedTaskIndex.literal(kind.rawValue), limit: 1)) ?? []).isEmpty
+        let key = BackgroundJob.Key(kind: kind, scope: scope)
+        return backgroundJobs.contains { $0.key == key }
+            || managedTaskReservations.contains(key)
+            || managedTaskActiveCounts[key, default: 0] > 0
+            || managedTasks.contains { $0.key == key && $0.state.isActive }
     }
     var isImportingAudio: Bool { backgroundJobs.contains { $0.key.kind == .importAudio } }
 

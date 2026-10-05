@@ -1,5 +1,7 @@
 import Foundation
 
+enum MeetingLoadResult { case loaded, superseded, failed }
+
 /// Small catalog records are safe to keep in memory; content stays in each meeting folder.
 struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
@@ -104,29 +106,75 @@ extension MeetingStore {
     var pendingMeetingTranscriptions: [PrivacyContext.PendingTranscription] {
         (try? libraryIndex?.pendingTranscriptions()) ?? []
     }
-    @discardableResult func ensureMeetingLoaded(id: UUID) -> Bool {
-        if meetings.contains(where: { $0.id == id }) { return true }
+    @discardableResult func ensureMeetingLoaded(id: UUID) async -> Bool {
+        let generation = externalReloadGeneration
+        while !Task.isCancelled, generation == externalReloadGeneration,
+            !deletingMeetingIDs.contains(id), !isChangingLibrary
+        {
+            if meetings.contains(where: { $0.id == id }) { return true }
+            let task: Task<MeetingLoadResult, Never>
+            if let operation = meetingLoadOperations[id], meetingLoadRequests[id] == operation.id {
+                task = operation.task
+            }
+            else {
+                let request = UUID()
+                meetingLoadRequests[id] = request
+                let root = dataDirectory
+                task = Task { @MainActor [weak self] in
+                    guard let self else { return .failed }
+                    defer {
+                        if meetingLoadOperations[id]?.id == request { meetingLoadOperations.removeValue(forKey: id) }
+                        if meetingLoadRequests[id] == request { meetingLoadRequests.removeValue(forKey: id) }
+                    }
+                    return await loadMeetingSnapshot(id: id, request: request, root: root, generation: generation)
+                }
+                meetingLoadOperations[id] = (request, task)
+            }
+            switch await task.value {
+            case .loaded: return !Task.isCancelled
+            case .failed: return false
+            case .superseded: continue
+            }
+        }
+        return false
+    }
+
+    private func loadMeetingSnapshot(id: UUID, request: UUID, root: URL, generation: UUID) async -> MeetingLoadResult {
+        let reader = meetingLoadReader
         do {
-            let value = try MeetingFolderStorage.read(id: id, directory: dataDirectory)
+            // A selected cold meeting must not observe a partially committed local transaction.
+            _ = await flushCanonicalWrites()
+            guard meetingLoadRequests[id] == request, generation == externalReloadGeneration,
+                !deletingMeetingIDs.contains(id), !isChangingLibrary
+            else { return .superseded }
+            let value = try await Task.detached(priority: .utility) {
+                try reader(id, root)
+            }.value
+            guard !Task.isCancelled, generation == externalReloadGeneration, meetingLoadRequests[id] == request,
+                !deletingMeetingIDs.contains(id), !isChangingLibrary
+            else { return .superseded }
+            if meetings.contains(where: { $0.id == id }) { return .loaded }
             meetings.append(value)
             rememberLoadedMeeting(value)
             evictLoadedMeetings(keeping: id)
-            recoverUnadoptedLiveTranscript(value)
-            return true
+            await recoverUnadoptedLiveTranscript(value)
+            guard generation == externalReloadGeneration, !deletingMeetingIDs.contains(id),
+                let latest = meeting(id: id)
+            else { return .failed }
+            let resolved = voiceLibrary.applyingDecisions(to: latest)
+            if resolved != latest, libraryWritable, recordingID != id {
+                return await updateMeeting(resolved) ? .loaded : .failed
+            }
+            return .loaded
         }
         catch {
+            guard generation == externalReloadGeneration, meetingLoadRequests[id] == request, !isChangingLibrary
+            else { return .superseded }
             meetingPageError = "Couldn’t load this meeting. \(error.localizedDescription)"
-            return false
+            return .failed
         }
     }
-    func meeting(id: UUID) -> Meeting? {
-        guard ensureMeetingLoaded(id: id) else { return nil }
-        guard let value = meetings.first(where: { $0.id == id }) else { return nil }
-        guard recordingID != id else { return value }
-        let resolved = voiceLibrary.applyingDecisions(to: value)
-        if resolved != value, libraryWritable { _ = updateMeeting(resolved) }
-        return resolved
-    }
+    func meeting(id: UUID) -> Meeting? { meetings.first { $0.id == id } }
     func resetMeetingPages(evictLoaded: Bool = false) {
         meetingPrefetch.reset()
         isLoadingMeetingPage = false
@@ -206,28 +254,35 @@ extension MeetingStore {
         meetingSearch = query
         resetMeetingPages()
     }
-    func refreshMeetingPagesAfterSave(previousIDs: Set<UUID>) {
+    func refreshMeetingPagesAfterSave(previousIDs: Set<UUID>) async {
         meetingPrefetch.reset()
-        isLoadingMeetingPage = false
+        let generation = meetingSearchGeneration
+        let rootGeneration = externalReloadGeneration
+        let originalIDs = visibleMeetingIDs
+        let index = libraryIndex
         let count = max(Self.meetingPageSize, meetingCatalog.count)
+        let first = meetingPageHasPrevious ? meetingCatalog.first : nil
+        let query = meetingSearch
+        let excluded = excludedTagIDs
         do {
-            let first = meetingCatalog.first
-            if meetingPageHasPrevious, let first {
-                let following =
-                    try libraryIndex?.page(
-                        after: first, limit: count, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? []
-                let updated = try libraryIndex?.entry(id: first.id)
-                meetingCatalog = Array(
-                    (updated.flatMap { excludedTagIDs.isDisjoint(with: $0.tagIDs) ? [$0] + following : nil }
-                        ?? following).prefix(count))
-            }
-            else {
-                meetingCatalog =
-                    try libraryIndex?.page(limit: count, query: meetingSearch, excludingTagIDs: excludedTagIDs) ?? []
-            }
-            visibleMeetingIDs = meetingCatalog.map(\.id)
-            meetingPageHasMore = meetingCatalog.count == count
+            let entries = try await Task.detached(priority: .utility) {
+                if let first {
+                    let following =
+                        try index?.page(after: first, limit: count, query: query, excludingTagIDs: excluded) ?? []
+                    let updated = try index?.entry(id: first.id)
+                    return Array(
+                        (updated.flatMap { excluded.isDisjoint(with: $0.tagIDs) ? [$0] + following : nil } ?? following)
+                            .prefix(count))
+                }
+                return try index?.page(limit: count, query: query, excludingTagIDs: excluded) ?? []
+            }.value
+            guard generation == meetingSearchGeneration, rootGeneration == externalReloadGeneration,
+                originalIDs == visibleMeetingIDs, query == meetingSearch, excluded == excludedTagIDs
+            else { return }
+            meetingCatalog = entries
+            visibleMeetingIDs = entries.map(\.id)
+            meetingPageHasMore = entries.count == count
         }
-        catch { meetingPageError = error.localizedDescription }
+        catch { if generation == meetingSearchGeneration { meetingPageError = error.localizedDescription } }
     }
 }

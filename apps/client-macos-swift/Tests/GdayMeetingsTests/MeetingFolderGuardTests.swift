@@ -13,7 +13,7 @@ import Testing
         return folder
     }
 
-    @Test func duplicateRebuildBlocksBothCopiesAndRecoversAfterRemoval() throws {
+    @Test func duplicateRebuildBlocksBothCopiesAndRecoversAfterRemoval() async throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = Meeting(title: "First copy")
@@ -34,7 +34,9 @@ import Testing
             try MeetingFolderStorage.write(first, directory: root)
         }
         let notes = NotesStorage(directory: root)
-        #expect(throws: MeetingFolderLocation.AccessError.self) { try notes.write(first.id, text: "Must not write") }
+        await #expect(throws: MeetingFolderLocation.AccessError.self) {
+            try await notes.write(first.id, text: "Must not write")
+        }
         let blocked = MeetingFolderStorage.folder(id: first.id, directory: root)
         #expect(blocked.path.hasPrefix("/dev/null/"))
         #expect(throws: (any Error).self) {
@@ -97,11 +99,11 @@ import Testing
         #expect(try Data(contentsOf: folder.appendingPathComponent("metadata.json")) == original)
     }
 
-    @Test func duplicateEventCannotReplaceIndexedOrCachedMeeting() throws {
+    @Test func duplicateEventCannotReplaceIndexedOrCachedMeeting() async throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Original")
+        let id = await store.createMeeting(title: "Original")
         let original = try #require(store.meeting(id: id))
         let folder = store.directory(for: id)
         let originalBytes = try Data(contentsOf: folder.appendingPathComponent("metadata.json"))
@@ -112,7 +114,7 @@ import Testing
         #expect(throws: MeetingFolderLocation.AccessError.self) { try index.reconcile(paths: [copied]) }
         var edit = original
         edit.title = "Must not write"
-        #expect(!store.updateMeeting(edit))
+        #expect(await store.updateMeeting(edit) == false)
         #expect(store.errorMessage?.contains("Multiple folders") == true)
         #expect(try Data(contentsOf: folder.appendingPathComponent("metadata.json")) == originalBytes)
         #expect(
@@ -150,7 +152,7 @@ import Testing
         #expect(try Data(contentsOf: external.appendingPathComponent("metadata.json")) == bytes)
     }
 
-    @Test func symlinkedMeetingsRootCannotCreateRecordingOrNotes() throws {
+    @Test func symlinkedMeetingsRootCannotCreateRecordingOrNotes() async throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
         let external = root.appendingPathComponent("external")
@@ -162,7 +164,9 @@ import Testing
             try MeetingFolderStorage.write(meeting, directory: root)
         }
         let notes = NotesStorage(directory: root)
-        #expect(throws: MeetingFolderLocation.AccessError.self) { try notes.write(meeting.id, text: "Blocked") }
+        await #expect(throws: MeetingFolderLocation.AccessError.self) {
+            try await notes.write(meeting.id, text: "Blocked")
+        }
         #expect(throws: MeetingFolderLocation.AccessError.self) {
             try MeetingFolderLocation.newFolder(id: meeting.id, date: meeting.createdAt, directory: root)
         }

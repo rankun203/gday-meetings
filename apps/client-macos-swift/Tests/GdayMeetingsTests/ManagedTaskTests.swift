@@ -24,6 +24,23 @@ private final class QueueProviderState: @unchecked Sendable {
     }
 }
 
+private final class SummaryQueueResponseGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let signal = DispatchSemaphore(value: 0)
+    private var receivedFirst = false
+
+    func waitForReleaseOnFirstResponse() {
+        let first = lock.withLock {
+            guard !receivedFirst else { return false }
+            receivedFirst = true
+            return true
+        }
+        if first { signal.wait() }
+    }
+
+    func release() { signal.signal() }
+}
+
 @MainActor struct ManagedTaskTests {
     private func directory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -38,15 +55,15 @@ private final class QueueProviderState: @unchecked Sendable {
         store.transcriptionPollDelay = .milliseconds(5)
         return provider
     }
-    private func savedAttempt(_ store: MeetingStore, provider: ServiceProvider, title: String) throws -> UUID {
-        let id = store.createMeeting(title: title)
+    private func savedAttempt(_ store: MeetingStore, provider: ServiceProvider, title: String) async throws -> UUID {
+        let id = await store.createMeeting(title: title)
         let meeting = try #require(store.meetings.first { $0.id == id })
         var attempt = ProviderTranscriptionAttempt(provider: provider, meeting: meeting)
         attempt.taskID = id.uuidString
         attempt.inputs = [
             .init(url: URL(string: "https://audio.example/mic.wav")!, trackName: "mic", sourceType: "mic", channels: 1)
         ]
-        try store.saveTranscriptionAttempt(attempt, meetingID: id)
+        try await store.saveTranscriptionAttempt(attempt, meetingID: id)
         return id
     }
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -64,18 +81,22 @@ private final class QueueProviderState: @unchecked Sendable {
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
         let provider = configure(store, origin: server.origin)
-        let meetings = try (0..<4).map { try savedAttempt(store, provider: provider, title: "Meeting \($0)") }
-        let tasks = try meetings.map { try #require(store.queueTranscription(id: $0)) }
+        var meetings: [UUID] = []
+        for index in 0..<4 {
+            meetings.append(try await savedAttempt(store, provider: provider, title: "Meeting \(index)"))
+        }
+        var tasks: [UUID] = []
+        for meeting in meetings { tasks.append(try #require(await store.queueTranscription(id: meeting))) }
         #expect(store.managedTasks.filter { $0.state == .running }.count == 2)
         #expect(store.managedTasks.filter { $0.state == .queued }.count == 2)
-        #expect(store.queueTranscription(id: meetings[0]) == nil)
-        #expect(store.queueTranscription(id: meetings[2]) == nil)
+        #expect(await store.queueTranscription(id: meetings[0]) == nil)
+        #expect(await store.queueTranscription(id: meetings[2]) == nil)
         #expect(store.isJobRunning(.transcription, .meeting(meetings[2])))
-        store.prioritizeManagedTask(id: tasks[3])
+        await store.prioritizeManagedTask(id: tasks[3])
         #expect(
             store.managedTasks.filter { $0.state == .queued }.max(by: { $0.queuePriority < $1.queuePriority })?.id
                 == tasks[3])
-        store.removeManagedTask(id: tasks[2])
+        await store.removeManagedTask(id: tasks[2])
         #expect(!store.managedTasks.contains { $0.id == tasks[2] })
         try await waitUntil { state.count >= 2 }
         state.finish()
@@ -96,7 +117,7 @@ private final class QueueProviderState: @unchecked Sendable {
         let store = MeetingStore(dataDirectory: root)
         let provider = configure(store, origin: server.origin)
         store.transcriptionPollDelay = .zero
-        let id = try savedAttempt(store, provider: provider, title: "Long provider queue")
+        let id = try await savedAttempt(store, provider: provider, title: "Long provider queue")
         await store.transcribe(id: id)
         #expect(state.count == 156)
         #expect(store.managedTasks.last?.state == .completed)
@@ -113,17 +134,17 @@ private final class QueueProviderState: @unchecked Sendable {
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
         let provider = configure(store, origin: server.origin)
-        let id = try savedAttempt(store, provider: provider, title: "Resume existing job")
-        let taskID = try #require(store.queueTranscription(id: id))
+        let id = try await savedAttempt(store, provider: provider, title: "Resume existing job")
+        let taskID = try #require(await store.queueTranscription(id: id))
         try await waitUntil { state.count > 0 }
-        store.cancelManagedTask(id: taskID)
+        await store.cancelManagedTask(id: taskID)
         await store.waitForManagedTask(taskID)
         let cancelled = try #require(store.managedTasks.first { $0.id == taskID })
         #expect(cancelled.state == .cancelled)
         #expect(store.meetings.first?.transcriptionAttempt?.taskID == id.uuidString)
         #expect(store.canRetryManagedTask(cancelled))
         state.finish()
-        store.retryManagedTask(id: taskID)
+        await store.retryManagedTask(id: taskID)
         try await waitUntil { store.backgroundJobs.isEmpty }
         #expect(store.managedTasks.count == 1)
         #expect(store.managedTasks.first?.state == .completed)
@@ -134,7 +155,7 @@ private final class QueueProviderState: @unchecked Sendable {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Missing provider")
+        let id = await store.createMeeting(title: "Missing provider")
         await store.transcribe(id: id)
         #expect(store.managedTasks.last?.state == .failed)
         #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → General.")
@@ -143,15 +164,17 @@ private final class QueueProviderState: @unchecked Sendable {
         var attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: meeting)
         attempt.submissionUncertain = true
         meeting.transcriptionAttempt = attempt
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         #expect(!store.canRetryManagedTask(try #require(store.managedTasks.last)))
     }
 
     @Test func disablingQueuedAutomaticSummaryDoesNotExceedSummaryLimit() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
+        let gate = SummaryQueueResponseGate()
+        defer { gate.release() }
         let server = try HTTPFixture { _ in
-            Thread.sleep(forTimeInterval: 0.03)
+            gate.waitForReleaseOnFirstResponse()
             return .init(body: #"{"choices":[{"message":{"content":"Summary"}}]}"#)
         }
         try await server.start()
@@ -164,17 +187,22 @@ private final class QueueProviderState: @unchecked Sendable {
         store.settings.serviceProviders = [provider]
         store.settings.summaryProviderID = provider.id
         store.settings.autoSummarize = true
-        let ids = (0..<4).map { store.createMeeting(title: "Summary \($0)") }
+        var ids: [UUID] = []
+        for index in 0..<4 { ids.append(await store.createMeeting(title: "Summary \(index)")) }
         for id in ids {
             var meeting = try #require(store.meetings.first { $0.id == id })
             meeting.transcript = [.init(text: "Meeting words")]
-            store.updateMeeting(meeting)
+            await store.updateMeeting(meeting)
         }
-        store.queueSummary(id: ids[0])
-        let automatic = try #require(store.queueSummary(id: ids[1], automatically: true))
-        store.queueSummary(id: ids[2])
-        store.queueSummary(id: ids[3])
+        await store.queueSummary(id: ids[0])
+        let automatic = try #require(await store.queueSummary(id: ids[1], automatically: true))
+        await store.queueSummary(id: ids[2])
+        await store.queueSummary(id: ids[3])
+        // Durable admission can take longer than a fixed response delay. Keep
+        // the first request running until this test has disabled queued work.
+        #expect(store.managedTasks.first { $0.id == automatic }?.state == .queued)
         store.settings.autoSummarize = false
+        gate.release()
         let finished = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
             #expect(store.managedTasks.filter { $0.state == .running }.count <= 1)
             return store.managedTaskStateCounts[.queued, default: 0] == 0
@@ -185,15 +213,16 @@ private final class QueueProviderState: @unchecked Sendable {
         #expect(server.requests.count == 3)
     }
 
-    @Test func existingTranscriptionAttemptsDoNotCreateTaskRecords() throws {
+    @Test func existingTranscriptionAttemptsDoNotCreateTaskRecords() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         let provider = configure(store, origin: "https://provider.example.invalid")
-        let id = try savedAttempt(store, provider: provider, title: "Existing attempt")
+        let id = try await savedAttempt(store, provider: provider, title: "Existing attempt")
         let recovered = MeetingStore(dataDirectory: root)
         #expect(recovered.managedTasks.isEmpty)
         #expect(recovered.backgroundJobs.isEmpty)
+        #expect(await recovered.ensureMeetingLoaded(id: id))
         #expect(recovered.meeting(id: id)?.transcriptionAttempt?.taskID == id.uuidString)
     }
 
@@ -205,16 +234,17 @@ private final class QueueProviderState: @unchecked Sendable {
         let server = try HTTPFixture { _ in state.response() }
         try await server.start()
         defer { server.stop() }
-        // Match a relaunch: the original store and its file monitor must stop
-        // before a new owner starts recovering the same journal.
+        // Freeze the previous persistence owner before relaunching. Async
+        // observers may retain it briefly, so deallocation is not the boundary.
         let provider: ServiceProvider
-        weak var originalStore: MeetingStore?
         do {
             let store = MeetingStore(dataDirectory: root)
-            originalStore = store
             provider = configure(store, origin: server.origin)
             store.saveSettings()
-            let ids = try (0..<2).map { try savedAttempt(store, provider: provider, title: "Recover \($0)") }
+            var ids: [UUID] = []
+            for index in 0..<2 {
+                ids.append(try await savedAttempt(store, provider: provider, title: "Recover \(index)"))
+            }
             for id in ids {
                 let attempt = try #require(store.meetings.first { $0.id == id }?.transcriptionAttempt)
                 let row = ManagedTaskRecord(
@@ -223,8 +253,8 @@ private final class QueueProviderState: @unchecked Sendable {
                     remoteJobID: attempt.taskID)
                 try store.managedTaskJournal.upsert(row)
             }
+            #expect(await store.finalizeForQuit())
         }
-        #expect(originalStore == nil)
         let recovered = MeetingStore(dataDirectory: root)
         // Test stores do not load Keychain; restore the synthetic credential before recovery runs.
         recovered.settings.serviceProviders = [provider]

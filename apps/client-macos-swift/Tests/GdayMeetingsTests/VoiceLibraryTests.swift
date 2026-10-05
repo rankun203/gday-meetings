@@ -157,16 +157,16 @@ struct VoiceLibraryTests {
     @Test func failedAtomicWriteDoesNotPublishCorrectionOrUndo() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        var fails = false
+        let fails = VoiceWriteFailureFlag()
         let library = VoiceLibraryStore(
             directory: directory,
             write: { data, url in
-                if fails { throw ServiceError("Synthetic write failure") }
+                if fails.value { throw ServiceError("Synthetic write failure") }
                 try data.write(to: url, options: .atomic)
             })
         let sample = try example(root: directory)
         #expect(library.upsert([sample]))
-        fails = true
+        fails.value = true
         #expect(!library.confirm(ids: [sample.id], personID: UUID()))
         #expect(library.examples[0].review == .unassigned)
         #expect(!library.canUndo && library.errorMessage != nil)
@@ -480,5 +480,14 @@ struct VoiceLibraryTests {
         #expect(library.examples.count == 1)
         #expect(!library.audioIsCurrent(library.examples[0]))
         #expect(library.hydratedExample(id: library.examples[0].id)?.embeddings == sample.embeddings)
+    }
+}
+
+private final class VoiceWriteFailureFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    var value: Bool {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }

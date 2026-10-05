@@ -142,19 +142,19 @@ struct LiveTranscriptEditingTests {
         #expect(decoded.resolvedRows().finalized.first?.isUserEdited == false)
     }
 
-    @Test @MainActor func adoptionPreservesOneRowsPersonWithoutVoiceEnrollment() throws {
+    @Test @MainActor func adoptionPreservesOneRowsPersonWithoutVoiceEnrollment() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let meetingID = store.createMeeting(title: "Synthetic meeting")
-        let personID = store.addPerson(name: "Example person")
+        let meetingID = await store.createMeeting(title: "Synthetic meeting")
+        let personID = await store.addPerson(name: "Example person")
         var draft = LiveTranscriptDraft(meetingID: meetingID, locale: "en")
         let session = UUID()
         let first = phrase(session, start: 0, words: ["First"])
         draft.accept(first)
         draft.accept(phrase(session, start: 1, words: ["Second"]))
         draft.assignPerson(personID, for: first)
-        #expect(store.adoptLiveTranscript(draft))
+        #expect(await store.adoptLiveTranscript(draft))
         let saved = try #require(store.meeting(id: meetingID))
         #expect(saved.speakers.filter { $0.personID == personID }.count == 1)
         #expect(saved.speakers.filter { $0.personID == nil }.count == 1)
@@ -165,13 +165,13 @@ struct LiveTranscriptEditingTests {
 }
 
 extension LiveTranscriptEditingTests {
-    @Test @MainActor func manualLiveEnrollmentPreservesTypesAndClearsReassignedContributions() throws {
+    @Test @MainActor func manualLiveEnrollmentPreservesTypesAndClearsReassignedContributions() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let meetingID = store.createMeeting(title: "Synthetic meeting")
-        let first = store.addPerson(name: "Example person")
-        let second = store.addPerson(name: "Another person")
+        let meetingID = await store.createMeeting(title: "Synthetic meeting")
+        let first = await store.addPerson(name: "Example person")
+        let second = await store.addPerson(name: "Another person")
         let speaker = UUID()
         let unrelatedSpeaker = UUID()
         store.recordingID = meetingID
@@ -181,15 +181,16 @@ extension LiveTranscriptEditingTests {
         otherType.modelID = "synthetic-other-model"
         let other = try #require(
             TypedVoiceEmbedding.normalizing(type: otherType, values: Array(repeating: 1, count: 256)))
-        store.enrollLiveVoice(meetingID: meetingID, personID: first, speakerID: speaker, embedding: embedding)
-        store.enrollLiveVoice(meetingID: meetingID, personID: first, speakerID: speaker, embedding: other)
-        store.enrollLiveVoice(meetingID: meetingID, personID: first, speakerID: unrelatedSpeaker, embedding: embedding)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: first, speakerID: speaker, embedding: embedding)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: first, speakerID: speaker, embedding: other)
+        await store.enrollLiveVoice(
+            meetingID: meetingID, personID: first, speakerID: unrelatedSpeaker, embedding: embedding)
         #expect(store.people.first { $0.id == first }?.voiceSamples.count == 3)
-        store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: nil)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: nil)
         #expect(store.people.first { $0.id == first }?.voiceSamples.map(\.speakerID) == [unrelatedSpeaker])
-        store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: embedding)
-        store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: other)
-        store.enrollLiveVoice(meetingID: meetingID, personID: nil, speakerID: speaker, embedding: nil)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: embedding)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: second, speakerID: speaker, embedding: other)
+        await store.enrollLiveVoice(meetingID: meetingID, personID: nil, speakerID: speaker, embedding: nil)
         #expect(store.people.first { $0.id == second }?.voiceSamples.isEmpty == true)
         #expect(store.people.first { $0.id == first }?.voiceSamples.count == 1)
     }
@@ -274,36 +275,47 @@ extension LiveTranscriptEditingTests {
         controller.begin(
             meetingID: UUID(), language: "en", directory: directory,
             sources: [.microphone, .system], sink: LiveAudioSink(), enabled: false)
-        let token = UUID()
         let session = UUID()
-        controller.finalizeDetachedSession(
-            token: token,
-            work: {
-                controller.receiveTranscriptionFailure("Synthetic microphone recognition failed.", token: token)
-                controller.receive(
-                    .init(
-                        session: session, source: .system, start: 0, end: 1,
-                        text: "First phrase"), final: true, token: token)
-                await controller.flushCheckpoint()
-                #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
-                #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
-                do {
-                    try FileManager.default.removeItem(at: directory)
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                }
-                catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
-                controller.receive(
-                    .init(
-                        session: session, source: .system, start: 1, end: 2,
-                        text: "Second phrase"), final: true, token: token)
-                await controller.flushCheckpoint()
-                // A successful canonical checkpoint clears the failed-write warning.
-                #expect(!controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
-                #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
-                controller.receiveTranscriptionFailure("Synthetic system recognition failed.", token: token)
-                #expect(controller.liveTranscriptIssues.count == 2)
-                return true
-            }, cancel: nil)
+        // Provider delivery has a real deadline. Storage recovery is a separate
+        // operation and must not keep the synthetic provider session open.
+        await withCheckedContinuation { continuation in
+            let token = UUID()
+            controller.finalizeDetachedSession(
+                token: token,
+                work: {
+                    controller.receiveTranscriptionFailure("Synthetic microphone recognition failed.", token: token)
+                    controller.receive(
+                        .init(
+                            session: session, source: .system, start: 0, end: 1,
+                            text: "First phrase"), final: true, token: token)
+                    continuation.resume()
+                    return true
+                }, cancel: nil)
+        }
+        await controller.flushCheckpoint()
+        #expect(controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
+        #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        await withCheckedContinuation { continuation in
+            let token = UUID()
+            controller.finalizeDetachedSession(
+                token: token,
+                work: {
+                    controller.receive(
+                        .init(
+                            session: session, source: .system, start: 1, end: 2,
+                            text: "Second phrase"), final: true, token: token)
+                    controller.receiveTranscriptionFailure("Synthetic system recognition failed.", token: token)
+                    continuation.resume()
+                    return true
+                }, cancel: nil)
+        }
+        await controller.flushCheckpoint()
+        // A successful canonical checkpoint clears the failed-write warning.
+        #expect(!controller.liveTranscriptIssues.contains { $0.contains("Couldn’t save transcript segments") })
+        #expect(controller.liveTranscriptIssues.contains("Synthetic microphone recognition failed."))
+        #expect(controller.liveTranscriptIssues.count == 2)
         await controller.finish()
         #expect(controller.liveTranscriptIssues.count == 2)
         #expect(controller.draft?.segments.map(\.text) == ["First phrase Second phrase"])

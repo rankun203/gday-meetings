@@ -71,11 +71,11 @@ struct RecordingPerformanceTests {
     }
 
     /// The meeting list and the recording meeting's detail, as during a recording.
-    @Test func recordingWindowUpdates() throws {
+    @Test func recordingWindowUpdates() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-perf-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        for index in 0..<26 { store.createMeeting(title: "Meeting \(index)") }
+        for index in 0..<26 { await store.createMeeting(title: "Meeting \(index)") }
         let playback = MeetingPlayback()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),

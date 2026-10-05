@@ -10,7 +10,7 @@ import Testing
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["GDAY_PERFORMANCE"] == "1"))
 struct SummaryPerformanceTests {
     /// Seed size changes between processes; fragment size and delivery cadence stay fixed.
-    @Test func summaryCapacity() throws {
+    @Test func summaryCapacity() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["GDAY_SUMMARY_CAPACITY"] == "1" else { return }
         let operationLimit = Int(environment["GDAY_PERFORMANCE_OPERATIONS"] ?? "250") ?? 250
@@ -26,7 +26,7 @@ struct SummaryPerformanceTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         PerformanceResourceMetrics.prepareApplication()
         let store = MeetingStore(dataDirectory: directory)
-        for index in 0..<26 { store.createMeeting(title: "Synthetic meeting \(index)") }
+        for index in 0..<26 { await store.createMeeting(title: "Synthetic meeting \(index)") }
         let id = store.meetings[0].id
         let playback = MeetingPlayback()
         let fragment =
@@ -91,7 +91,7 @@ struct SummaryPerformanceTests {
                     let actionStarted = ProcessInfo.processInfo.systemUptime
                     payload += fragment
                     store.summaryDrafts.values[id] = payload
-                    RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.001))
+                    try await Task.sleep(for: .milliseconds(1))
                     window.contentView?.layoutSubtreeIfNeeded()
                     window.displayIfNeeded()
                     let duration = ProcessInfo.processInfo.systemUptime - actionStarted
@@ -105,7 +105,7 @@ struct SummaryPerformanceTests {
                     }
                 }
             }
-            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.004))
+            try await Task.sleep(for: .milliseconds(4))
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             if ProcessInfo.processInfo.systemUptime - started >= nextSample {
@@ -135,11 +135,11 @@ struct SummaryPerformanceTests {
             payloadUTF16Units: seededUTF16 + updates * fragmentUTF16, lineCount: seededLines + updates)
     }
 
-    @Test func hiddenSummaryPublication() {
+    @Test func hiddenSummaryPublication() async {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-summary-perf-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        for index in 0..<26 { store.createMeeting(title: "Synthetic meeting \(index)") }
+        for index in 0..<26 { await store.createMeeting(title: "Synthetic meeting \(index)") }
         let id = store.meetings[0].id
         let playback = MeetingPlayback()
         let window = NSWindow(

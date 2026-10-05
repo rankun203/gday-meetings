@@ -5,20 +5,20 @@ import Testing
 
 @MainActor struct PersonMergeTests {
     @Test(arguments: [false, true])
-    func multiplePeopleMergeAsOneTransaction(failSave: Bool) throws {
+    func multiplePeopleMergeAsOneTransaction(failSave: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let first = store.addPerson(name: "Alex One")
-        let second = store.addPerson(name: "Alex Two")
-        let kept = store.addPerson(name: "Alex")
-        let unrelated = store.addPerson(name: "Sam")
-        let older = store.createMeeting(title: "Older synthetic meeting")
-        let newer = store.createMeeting(title: "Newer synthetic meeting")
+        let first = await store.addPerson(name: "Alex One")
+        let second = await store.addPerson(name: "Alex Two")
+        let kept = await store.addPerson(name: "Alex")
+        let unrelated = await store.addPerson(name: "Sam")
+        let older = await store.createMeeting(title: "Older synthetic meeting")
+        let newer = await store.createMeeting(title: "Newer synthetic meeting")
         for id in [older, newer] {
             var meeting = try #require(store.meeting(id: id))
             meeting.personIDs = [first, second, kept, unrelated]
-            #expect(store.updateMeeting(meeting))
+            #expect(await store.updateMeeting(meeting))
         }
         #expect(
             store.voiceLibrary.upsert([
@@ -31,8 +31,8 @@ import Testing
         if failSave {
             try Data("broken".utf8).write(to: store.directory(for: older).appendingPathComponent("content.json"))
         }
-        #expect(!store.mergePeople(ids: [first, second], into: unrelated))
-        #expect(store.mergePeople(ids: [first, second, kept], into: kept) == !failSave)
+        #expect(!(await store.mergePeople(ids: [first, second], into: unrelated)))
+        #expect(await store.mergePeople(ids: [first, second, kept], into: kept) == !failSave)
         let diskPeople = try FileEntityStorage.load(Person.self, kind: "people", directory: root)
         #expect(Set(diskPeople.map(\.id)) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
         let meeting = try MeetingFolderStorage.read(id: newer, directory: root)
@@ -41,31 +41,31 @@ import Testing
         #expect(Set(voices.examples.compactMap(\.personID)) == (failSave ? [first, second] : [kept]))
     }
 
-    @Test func metadataOnlyMeetingAndLoadedMeetingBothMerge() throws {
+    @Test func metadataOnlyMeetingAndLoadedMeetingBothMerge() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let source = store.addPerson(name: "Alex")
-        let target = store.addPerson(name: "Alex")
-        let unloaded = store.createMeeting(title: "Metadata only")
+        let source = await store.addPerson(name: "Alex")
+        let target = await store.addPerson(name: "Alex")
+        let unloaded = await store.createMeeting(title: "Metadata only")
         var first = try #require(store.meeting(id: unloaded))
         first.personIDs = [source]
-        #expect(store.updateMeeting(first))
+        #expect(await store.updateMeeting(first))
         let contentURL = store.directory(for: unloaded).appendingPathComponent("content.json")
         store.clearLoadedMeetingCache()
         try FileManager.default.removeItem(at: contentURL)
-        let loaded = store.createMeeting(title: "Loaded meeting")
+        let loaded = await store.createMeeting(title: "Loaded meeting")
         var second = try #require(store.meeting(id: loaded))
         second.personIDs = [source]
-        #expect(store.updateMeeting(second))
-        #expect(!store.mergePerson(id: source, into: source))
-        #expect(store.mergePerson(id: source, into: target))
+        #expect(await store.updateMeeting(second))
+        #expect(!(await store.mergePerson(id: source, into: source)))
+        #expect(await store.mergePerson(id: source, into: target))
         #expect(store.meeting(id: loaded)?.personIDs == [target])
         #expect(try MeetingFolderStorage.read(id: unloaded, directory: root).personIDs == [target])
         #expect(!FileManager.default.fileExists(atPath: contentURL.path))
     }
 
-    @Test func voiceMergeKeepsReviewStateAndResolvesConflictingRejections() throws {
+    @Test func voiceMergeKeepsReviewStateAndResolvesConflictingRejections() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = VoiceLibraryStore(directory: root)
@@ -87,13 +87,13 @@ import Testing
         #expect(pending.review != .confirmed && pending.rejectedPersonIDs == [target])
     }
 
-    @Test func mergePreservesRelationshipsAcrossPagesAndRestart() throws {
+    @Test func mergePreservesRelationshipsAcrossPagesAndRestart() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let sourceID = store.addPerson(name: "Alex")
-        let targetID = store.addPerson(name: "Alex")
-        let tag = store.addTag(name: "Team")
+        let sourceID = await store.addPerson(name: "Alex")
+        let targetID = await store.addPerson(name: "Alex")
+        let tag = await store.addTag(name: "Team")
         var source = try #require(store.people.first { $0.id == sourceID })
         source.email = "alex.old@example.invalid"
         source.notes = "Source note"
@@ -102,11 +102,11 @@ import Testing
         var target = try #require(store.people.first { $0.id == targetID })
         target.email = "alex@example.invalid"
         target.notes = "Target note"
-        store.updatePerson(source)
-        store.updatePerson(target)
+        await store.updatePerson(source)
+        await store.updatePerson(target)
         var ids: [UUID] = []
         for index in 0..<25 {
-            let id = store.createMeeting(title: "Synthetic meeting \(index)")
+            let id = await store.createMeeting(title: "Synthetic meeting \(index)")
             ids.append(id)
             var meeting = try #require(store.meeting(id: id))
             meeting.personIDs = [sourceID, targetID]
@@ -116,7 +116,7 @@ import Testing
                     confirmed: true, manuallyAssigned: true)
             ]
             meeting.transcript = [.init(start: 0, end: 1, speaker: "Speaker 1", text: "Synthetic passage")]
-            #expect(store.updateMeeting(meeting))
+            #expect(await store.updateMeeting(meeting))
         }
         let example = VoiceExample(
             meetingID: ids[0], speakerID: UUID(), source: "system", personID: sourceID,
@@ -124,17 +124,18 @@ import Testing
         #expect(store.voiceLibrary.upsert([example]))
         #expect(store.voiceLibrary.assign(meetingID: ids[0], speakerID: example.speakerID, personID: sourceID))
         // Install the projection after voice review has reconciled its assignments.
-        #expect(store.ensureMeetingLoaded(id: ids[0]))
+        await store.flushVoiceAssignmentRefresh()
+        #expect(await store.ensureMeetingLoaded(id: ids[0]))
         var projected = try #require(store.meetings.first { $0.id == ids[0] })
         projected.personIDs = [targetID]
         projected.speakers[0].personID = targetID
         projected.speakers[0].manuallyAssigned = true
         projected.speakers[0].voiceReviewOrigin = .init(speakerID: UUID(), personID: sourceID)
-        #expect(store.updateMeeting(projected))
+        #expect(await store.updateMeeting(projected))
         let chat = ChatMessage(content: "Synthetic question")
-        store.saveContextChat(key: MeetingStore.contextChatKey(personID: sourceID), messages: [chat])
+        await store.saveContextChat(key: MeetingStore.contextChatKey(personID: sourceID), messages: [chat])
         store.clearLoadedMeetingCache()
-        #expect(store.mergePerson(id: sourceID, into: targetID))
+        #expect(await store.mergePerson(id: sourceID, into: targetID))
         #expect(store.meetings.isEmpty)
         let reopened = MeetingStore(dataDirectory: root)
         #expect(reopened.people.count == 1)
@@ -159,18 +160,18 @@ import Testing
         #expect(try reopened.libraryIndex?.count(personID: targetID) == 25)
     }
 
-    @Test func failedMergeRollsBackPeopleVoicesAndMeetingFiles() throws {
+    @Test func failedMergeRollsBackPeopleVoicesAndMeetingFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let sourceID = store.addPerson(name: "Alex")
-        let targetID = store.addPerson(name: "Alex")
-        let older = store.createMeeting(title: "Older")
-        let newer = store.createMeeting(title: "Newer")
+        let sourceID = await store.addPerson(name: "Alex")
+        let targetID = await store.addPerson(name: "Alex")
+        let older = await store.createMeeting(title: "Older")
+        let newer = await store.createMeeting(title: "Newer")
         for id in [older, newer] {
             var meeting = try #require(store.meeting(id: id))
             meeting.personIDs = [sourceID]
-            #expect(store.updateMeeting(meeting))
+            #expect(await store.updateMeeting(meeting))
         }
         let example = VoiceExample(
             meetingID: newer, speakerID: UUID(), source: "system", personID: sourceID,
@@ -179,7 +180,7 @@ import Testing
         store.clearLoadedMeetingCache()
         let brokenURL = store.directory(for: older).appendingPathComponent("content.json")
         try Data("broken".utf8).write(to: brokenURL)
-        #expect(!store.mergePerson(id: sourceID, into: targetID))
+        #expect(!(await store.mergePerson(id: sourceID, into: targetID)))
         #expect(store.people.count == 2)
         #expect(store.voiceLibrary.examples.first?.personID == sourceID)
         #expect(try MeetingFolderStorage.read(id: newer, directory: root).personIDs == [sourceID])

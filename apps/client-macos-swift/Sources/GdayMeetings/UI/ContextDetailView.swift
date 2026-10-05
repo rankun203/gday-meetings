@@ -77,10 +77,10 @@ struct ContextDetailView: View {
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting
         ) { meeting in
             Button("Move to Trash", role: .destructive) {
-                if store.deleteMeeting(id: meeting.id) {
-                    if listSelection == meeting.id { listSelection = nil }
-                }
                 deleting = nil
+                Task {
+                    if await store.deleteMeeting(id: meeting.id), listSelection == meeting.id { listSelection = nil }
+                }
             }
             Button("Cancel", role: .cancel) { deleting = nil }
         } message: { _ in
@@ -135,18 +135,22 @@ struct ContextDetailView: View {
                         text: Binding(
                             get: { self.tag?.name ?? tag.name },
                             set: { value in
-                                guard var updated = self.tag else { return }
-                                updated.name = value
-                                store.updateTag(updated)
+                                Task {
+                                    guard var updated = self.tag else { return }
+                                    updated.name = value
+                                    await store.updateTag(updated)
+                                }
                             }))
                     Toggle(
                         "Exclude from Main Lists",
                         isOn: Binding(
                             get: { self.tag?.isExcluded ?? false },
                             set: { value in
-                                guard var updated = self.tag else { return }
-                                updated.isExcluded = value
-                                store.updateTag(updated)
+                                Task {
+                                    guard var updated = self.tag else { return }
+                                    updated.isExcluded = value
+                                    await store.updateTag(updated)
+                                }
                             }))
                     Text("Hide associated meetings and people from the main lists and meeting search.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -164,12 +168,32 @@ struct ContextDetailView: View {
             archiveStatuses: store.archiveStatuses,
             viewportChanged: { loader.observe($0, index: store.libraryIndex, personID: personID, tagID: tagID) },
             play: { id in
-                guard !recordingActive, let meeting = store.meeting(id: id) else { return }
-                playback.play(meeting: meeting, files: store.audioURLs(for: meeting))
+                playback.requestPlayback(
+                    load: {
+                        guard await store.ensureMeetingLoaded(id: id), !recordingActive,
+                            let meeting = store.meeting(id: id)
+                        else { return nil }
+                        return meeting
+                    },
+                    play: { meeting in
+                        playback.play(meeting: meeting, files: store.audioURLs(for: meeting))
+                    })
             },
             reveal: { id in NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)]) },
-            export: { id in if let meeting = store.meeting(id: id) { MeetingPanels.export(meeting, store: store) } },
-            delete: { id in deleting = store.meeting(id: id) }, open: open
+            export: { id in
+                Task {
+                    guard await store.ensureMeetingLoaded(id: id), let meeting = store.meeting(id: id) else { return }
+                    MeetingPanels.export(meeting, store: store)
+                }
+            },
+            delete: { id in
+                Task {
+                    guard await store.ensureMeetingLoaded(id: id) else { return }
+                    deleting = store.meeting(id: id)
+                }
+            }, open: open,
+            totalCount: !loader.loading && loader.error == nil && !loader.window.page.hasOlder
+                && !loader.window.page.entries.isEmpty ? loader.window.page.total : nil
         )
         .frame(minHeight: 120, maxHeight: .infinity)
         .overlay {
@@ -225,16 +249,17 @@ struct ContextDetailView: View {
     }
 
     private func open(_ id: UUID) {
-        guard store.ensureMeetingLoaded(id: id) else { return }
         selectedMeeting = id
     }
     private func personBinding(_ person: Person, _ path: WritableKeyPath<Person, String>) -> Binding<String> {
         Binding(
             get: { self.person?[keyPath: path] ?? "" },
             set: { value in
-                guard var updated = self.person else { return }
-                updated[keyPath: path] = value
-                store.updatePerson(updated)
+                Task {
+                    guard var updated = self.person else { return }
+                    updated[keyPath: path] = value
+                    await store.updatePerson(updated)
+                }
             })
     }
     private var canSend: Bool {

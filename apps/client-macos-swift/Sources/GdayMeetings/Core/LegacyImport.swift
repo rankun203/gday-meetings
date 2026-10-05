@@ -2,7 +2,7 @@ import Foundation
 
 extension MeetingStore {
     /// Copies selected legacy recordings. Never opens the Rust library for writing.
-    @discardableResult func importLegacyLibrary(url: URL) throws -> Int {
+    @discardableResult func importLegacyLibrary(url: URL) async throws -> Int {
         guard libraryWritable else { throw MeetingError.message("The library is read-only because loading failed.") }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -45,7 +45,7 @@ extension MeetingStore {
                     let profile = try JSONSerialization.jsonObject(with: Data(contentsOf: profileURL))
                         as? [String: Any], let name = profile["name"] as? String
                 else { continue }
-                let personID = addPerson(name: name)
+                let personID = await addPerson(name: name)
                 if var person = people.first(where: { $0.id == personID }) {
                     person.notes = profile["notes"] as? String ?? ""
                     let samplesURL = folder.appendingPathComponent("embeddings.json")
@@ -66,7 +66,7 @@ extension MeetingStore {
                                 scope: "legacy:rust", embedding: $0.embedding)
                         }
                     }
-                    updatePerson(person)
+                    await updatePerson(person)
                 }
                 personMap[folder.lastPathComponent] = personID
             }
@@ -85,7 +85,13 @@ extension MeetingStore {
             meeting.notes = metadata["notes"] as? String ?? ""
             meeting.duration = metadata["duration_secs"] as? Double ?? 0
             for name in metadata["tags"] as? [String] ?? [] {
-                let id = tags.first(where: { $0.name == name })?.id ?? addTag(name: name)
+                let id: UUID
+                if let existing = tags.first(where: { $0.name == name })?.id {
+                    id = existing
+                }
+                else {
+                    id = await addTag(name: name)
+                }
                 meeting.tagIDs.append(id)
             }
             if let date = metadata["created_at"] as? String {
@@ -169,7 +175,7 @@ extension MeetingStore {
                     try fm.copyItem(at: file, to: destination.appendingPathComponent(file.lastPathComponent))
                     meeting.audioFiles.append(file.lastPathComponent)
                 }
-                try insertImportedMeeting(meeting)
+                try await insertImportedMeeting(meeting)
                 imported += 1
             }
             catch {

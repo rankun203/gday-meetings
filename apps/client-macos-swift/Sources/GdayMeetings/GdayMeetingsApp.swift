@@ -16,11 +16,14 @@ struct GdayMeetingsApp: App {
         Window("Meetings", id: "main") {
             PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
                 .environmentObject(appearance)
-                .disabled(store.isChangingLibrary)
+                .disabled(store.isChangingLibrary || store.isPreparingToQuit)
                 .onAppear {
                     delegate.store = store
                     delegate.providerDrafts = providerDrafts
                     delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
+                }
+                .task {
+                    await store.previewPreparation?.value
                     if UIPreview.enabled,
                         !UIPreviewPerformanceFixtures.flag("--preview-chrome-only", infoKey: "GdayPreviewChromeOnly"),
                         !playback.hasSelection, let meeting = store.meetings.first

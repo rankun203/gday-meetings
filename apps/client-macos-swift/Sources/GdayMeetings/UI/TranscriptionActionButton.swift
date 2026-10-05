@@ -110,12 +110,16 @@ struct TranscriptionConfirmationPresenter: ViewModifier {
         ) {
             if confirmation == .discardPendingRequest {
                 Button("Discard Pending Request", role: .destructive) {
-                    do { try store.clearTranscriptionAttempt(meetingID: meeting.id) }
-                    catch { store.errorMessage = error.localizedDescription }
+                    Task {
+                        do { try await store.clearTranscriptionAttempt(meetingID: meeting.id) }
+                        catch { store.errorMessage = error.localizedDescription }
+                    }
                 }
             }
             else {
-                Button("Replace Transcript") { store.applySavedTranscriptionResult(meetingID: meeting.id) }
+                Button("Replace Transcript") {
+                    Task { await store.applySavedTranscriptionResult(meetingID: meeting.id) }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

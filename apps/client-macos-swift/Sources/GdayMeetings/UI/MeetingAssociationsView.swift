@@ -63,19 +63,29 @@ struct MeetingTagsView: View {
     }
 
     private func setTag(_ id: UUID, selected: Bool) {
-        guard var meeting else { return }
-        meeting.tagIDs.removeAll { $0 == id }
-        if selected { meeting.tagIDs.append(id) }
-        store.updateMeeting(meeting)
+        Task {
+            guard var meeting else { return }
+            meeting.tagIDs.removeAll { $0 == id }
+            if selected { meeting.tagIDs.append(id) }
+            await store.updateMeeting(meeting)
+        }
     }
     private func addTag() {
         let name = tagName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        let id =
-            store.tags.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }?.id
-            ?? store.addTag(name: name)
-        setTag(id, selected: true)
         addingTag = false
+        Task {
+            let id: UUID
+            if let existing = store.tags.first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame })
+            {
+                id = existing.id
+            }
+            else {
+                id = await store.addTag(name: name)
+            }
+            guard store.tags.contains(where: { $0.id == id }) else { return }
+            setTag(id, selected: true)
+        }
     }
 }
 
@@ -135,7 +145,7 @@ struct MeetingSpeakersView: View {
     @ViewBuilder private func actions(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
         if !speaker.canAssignPerson {
             Button("Remove Assignment") {
-                store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
+                Task { await store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil) }
             }
         }
         else {
@@ -143,7 +153,10 @@ struct MeetingSpeakersView: View {
                 Menu {
                     ForEach(store.people) { person in
                         Button(person.name) {
-                            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: person.id)
+                            Task {
+                                await store.assignSpeaker(
+                                    meetingID: meetingID, speakerID: speaker.id, personID: person.id)
+                            }
                         }
                     }
                     Divider()
@@ -153,7 +166,9 @@ struct MeetingSpeakersView: View {
                     }
                     if speaker.personID != nil {
                         Button("Remove Assignment") {
-                            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
+                            Task {
+                                await store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
+                            }
                         }
                     }
                 } label: {
@@ -188,9 +203,12 @@ struct MeetingSpeakersView: View {
     private func createPerson(_ speaker: MeetingSpeaker) {
         let name = personName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        let personID = store.addPerson(name: name)
-        store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
         newPersonSpeaker = nil
+        Task {
+            let personID = await store.addPerson(name: name)
+            guard store.people.contains(where: { $0.id == personID }) else { return }
+            await store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
+        }
     }
 }
 

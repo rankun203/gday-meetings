@@ -37,18 +37,18 @@ struct NotesPhraseTests {
 }
 
 @MainActor struct NotesWatchTests {
-    @Test func externalReplacementAndPendingConflict() throws {
+    @Test func externalReplacementAndPendingConflict() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let storage = NotesStorage(directory: folder)
         let id = UUID()
-        try storage.write(id, text: "Original")
+        try await storage.write(id, text: "Original")
         try Data("External".utf8).write(to: storage.url(id), options: .atomic)
-        #expect(try storage.reloadExternal(id) == "External")
-        #expect(try storage.reloadExternal(id) == nil)
+        #expect(try await storage.reloadExternal(id) == "External")
+        #expect(try await storage.reloadExternal(id) == nil)
         storage.schedule(id, text: "App draft")
         try Data("Another external edit".utf8).write(to: storage.url(id), options: .atomic)
-        #expect(try storage.reloadExternal(id) == nil)
+        #expect(try await storage.reloadExternal(id) == nil)
         #expect(try String(contentsOf: storage.url(id), encoding: .utf8) == "App draft")
         let backup = storage.url(id).deletingLastPathComponent().appendingPathComponent("notes (changed on disk).md")
         #expect(try String(contentsOf: backup, encoding: .utf8) == "Another external edit")
@@ -58,9 +58,9 @@ struct NotesPhraseTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let storage = NotesStorage(directory: folder)
         let id = UUID()
-        try storage.write(id, text: "Original")
+        try await storage.write(id, text: "Original")
         var updates: [String] = []
-        try storage.watch(id) { updates.append($0) }
+        try await storage.watch(id) { updates.append($0) }
         try Data("Atomic".utf8).write(to: storage.url(id), options: .atomic)
         for _ in 0..<30 where updates.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
         #expect(updates == ["Atomic"])
@@ -146,13 +146,13 @@ extension NotesWatchTests {
         let storage = NotesStorage(directory: folder)
         let old = UUID()
         let current = UUID()
-        try storage.write(old, text: "Old")
-        try storage.write(current, text: "Current")
+        try await storage.write(old, text: "Old")
+        try await storage.write(current, text: "Current")
         var oldEvents = 0
         var currentEvents: [String] = []
-        try storage.watch(old) { _ in oldEvents += 1 }
+        try await storage.watch(old) { _ in oldEvents += 1 }
         try Data("Queued old edit".utf8).write(to: storage.url(old), options: .atomic)
-        try storage.watch(current) { currentEvents.append($0) }
+        try await storage.watch(current) { currentEvents.append($0) }
         try Data("New meeting edit".utf8).write(to: storage.url(current), options: .atomic)
         for _ in 0..<30 where currentEvents.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
         #expect(oldEvents == 0)

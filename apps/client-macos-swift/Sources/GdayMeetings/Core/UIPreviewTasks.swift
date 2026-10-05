@@ -2,7 +2,7 @@ import Foundation
 
 extension UIPreview {
     /// Opt-in fixture exercises multiple disk pages without starting provider work.
-    @MainActor static func seedPagedTasks(_ store: MeetingStore) throws {
+    @MainActor static func seedPagedTasks(_ store: MeetingStore) async throws {
         let requested =
             ProcessInfo.processInfo.environment["GDAY_PREVIEW_TASK_HISTORY_COUNT"].flatMap(Int.init)
             ?? (Bundle.main.object(forInfoDictionaryKey: "GdayPreviewTaskHistoryCount") as? Int) ?? 0
@@ -20,7 +20,7 @@ extension UIPreview {
             try store.managedTaskJournal.upsert(row)
         }
         let previews = store.managedTasks.filter(\.isPreview)
-        try store.restoreManagedTasks()
+        try await store.restoreManagedTasks()
         store.managedTasks += previews
     }
 }

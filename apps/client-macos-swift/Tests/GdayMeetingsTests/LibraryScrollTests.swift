@@ -12,7 +12,7 @@ struct LibraryScrollTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-list-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        for index in 0..<26 { store.createMeeting(title: "Meeting \(index)") }
+        for index in 0..<26 { await store.createMeeting(title: "Meeting \(index)") }
         let indexingDeadline = ContinuousClock.now.advanced(by: .seconds(10))
         while store.libraryDataStatus.isBuilding && ContinuousClock.now < indexingDeadline {
             try await Task.sleep(for: .milliseconds(20))
@@ -35,7 +35,7 @@ struct LibraryScrollTests {
                 ($0.documentView?.frame.height ?? 0) > $0.contentView.bounds.height
             })
         let initialTop = list.contentView.bounds.minY
-        store.createMeeting(title: "Added at the top")
+        await store.createMeeting(title: "Added at the top")
         settle(window)
         #expect(abs(list.contentView.bounds.minY - initialTop) < 0.5)
 
@@ -43,7 +43,7 @@ struct LibraryScrollTests {
         document.scroll(NSPoint(x: 0, y: 300))
         settle(window)
         #expect(list.contentView.bounds.minY > initialTop + 100)
-        store.createMeeting(title: "Added while browsing older meetings")
+        await store.createMeeting(title: "Added while browsing older meetings")
         settle(window)
         #expect(abs(list.contentView.bounds.minY - initialTop) < 0.5)
 

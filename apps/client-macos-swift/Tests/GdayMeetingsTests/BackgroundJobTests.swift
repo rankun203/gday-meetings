@@ -43,10 +43,10 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         provider.enabledCapabilities = [.summarization]
         store.settings.serviceProviders = [provider]
         store.settings.summaryProviderID = provider.id
-        let id = store.createMeeting(title: "Provider request")
+        let id = await store.createMeeting(title: "Provider request")
         var meeting = try #require(store.meetings.first { $0.id == id })
         meeting.notes = "Original notes"
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         let operation = Task {
             if chat {
                 await store.sendChat(id: id, message: "What did we decide?")
@@ -72,7 +72,7 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         var edited = try #require(store.meetings.first { $0.id == id })
         edited.title = "Edited while waiting"
         edited.notes = "Notes added while waiting"
-        store.updateMeeting(edited)
+        await store.updateMeeting(edited)
         gate.resume()
         await operation.value
         #expect(!gate.timedOut)
@@ -80,7 +80,9 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(store.backgroundJobs.isEmpty)
         #expect(store.canStartRecording)
         #expect(store.errorMessage == nil)
-        let saved = try #require(MeetingStore(dataDirectory: root).meeting(id: id))
+        let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: id))
+        let saved = try #require(reopened.meeting(id: id))
         #expect(saved.title == edited.title)
         #expect(saved.notes == edited.notes)
         if chat {
@@ -93,12 +95,23 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         }
     }
 
-    @Test func independentJobsKeepRecordingAvailableAndRetainTheirProgress() throws {
+    @Test func quitRejectsNewNonmanagedJobs() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let first = store.createMeeting(title: "Planning")
-        let second = store.createMeeting(title: "Review")
+        store.isPreparingToQuit = true
+        for kind in [BackgroundJob.Kind.chat, .contextChat, .archive, .importAudio] {
+            #expect(!store.beginJob(kind, .library, progress: "Starting"))
+        }
+        #expect(store.backgroundJobs.isEmpty)
+    }
+
+    @Test func independentJobsKeepRecordingAvailableAndRetainTheirProgress() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        let first = await store.createMeeting(title: "Planning")
+        let second = await store.createMeeting(title: "Review")
         #expect(store.beginJob(.transcription, .meeting(first), progress: "Uploading audio…"))
         #expect(!store.beginJob(.transcription, .meeting(first), progress: "Duplicate"))
         #expect(store.beginJob(.transcription, .meeting(second), progress: "Transcribing…"))
@@ -124,11 +137,11 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let first = store.createMeeting(title: "Transcribing")
-        let second = store.createMeeting(title: "Summary")
+        let first = await store.createMeeting(title: "Transcribing")
+        let second = await store.createMeeting(title: "Summary")
         var meeting = try #require(store.meetings.first { $0.id == second })
         meeting.notes = "Discuss delivery."
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         #expect(store.beginJob(.transcription, .meeting(first), progress: "Transcribing…"))
         await store.summarize(id: second)
         #expect(store.errorMessage == nil)
@@ -142,8 +155,8 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let first = store.createMeeting(title: "Importing")
-        let second = store.createMeeting(title: "Other meeting")
+        let first = await store.createMeeting(title: "Importing")
+        let second = await store.createMeeting(title: "Other meeting")
         #expect(store.beginJob(.importAudio, .meeting(first), progress: "Importing audio…"))
         #expect(store.isImportingAudio)
         #expect(store.canStartRecording)
@@ -158,7 +171,7 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(!store.isImportingAudio)
     }
 
-    @Test func corruptSettingsCannotStartRecording() throws {
+    @Test func corruptSettingsCannotStartRecording() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -167,23 +180,23 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(!store.canStartRecording)
     }
 
-    @Test func runningMeetingJobProtectsDeletionAndPendingRequest() throws {
+    @Test func runningMeetingJobProtectsDeletionAndPendingRequest() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Pending transcription")
+        let id = await store.createMeeting(title: "Pending transcription")
         let attempt = ProviderTranscriptionAttempt(
             providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: "Pending transcription")
-        try store.saveTranscriptionAttempt(attempt, meetingID: id)
+        try await store.saveTranscriptionAttempt(attempt, meetingID: id)
         #expect(store.beginJob(.transcription, .meeting(id), progress: "Transcribing…"))
-        #expect(!store.deleteMeeting(id: id))
+        #expect(!(await store.deleteMeeting(id: id)))
         #expect(store.meetings.contains { $0.id == id })
-        #expect(throws: (any Error).self) { try store.clearTranscriptionAttempt(meetingID: id) }
+        await #expect(throws: (any Error).self) { try await store.clearTranscriptionAttempt(meetingID: id) }
         #expect(store.meetings.first?.transcriptionAttempt == attempt)
         store.endJob(.transcription, .meeting(id))
-        try store.clearTranscriptionAttempt(meetingID: id)
+        try await store.clearTranscriptionAttempt(meetingID: id)
         #expect(store.meetings.first?.transcriptionAttempt == nil)
-        #expect(store.deleteMeeting(id: id))
+        #expect(await store.deleteMeeting(id: id))
         #expect(store.meetings.isEmpty)
         #expect(!store.containsMeeting(id: id))
         #expect(store.meetingPageError == nil)

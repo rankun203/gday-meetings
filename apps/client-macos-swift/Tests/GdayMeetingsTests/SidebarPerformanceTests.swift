@@ -40,15 +40,15 @@ struct SidebarPerformanceTests {
         let store = MeetingStore(dataDirectory: directory)
         var fixtureID: UUID?
         if let path = ProcessInfo.processInfo.environment["GDAY_SIDEBAR_FIXTURE"] {
-            try store.importLegacyLibrary(url: URL(fileURLWithPath: path))
+            try await store.importLegacyLibrary(url: URL(fileURLWithPath: path))
             fixtureID = try #require(store.meetings.first?.id)
             print("PERF sidebar fixture: \(store.meetings.first?.transcript.count ?? 0) segments")
         }
         for index in 0..<40 {
-            let id = store.createMeeting(title: "Meeting \(index)")
+            let id = await store.createMeeting(title: "Meeting \(index)")
             if var meeting = store.meetings.first(where: { $0.id == id }) {
                 meeting.notes = String(repeating: "Discuss delivery dates and project owners.\n", count: 50)
-                store.updateMeeting(meeting)
+                await store.updateMeeting(meeting)
             }
         }
         let sidebar = LibrarySidebarControl()

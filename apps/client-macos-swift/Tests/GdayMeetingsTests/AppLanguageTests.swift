@@ -51,7 +51,7 @@ struct AppLanguageTests {
         let store = MeetingStore(dataDirectory: directory)
         let provider = ServiceProvider(kind: .runpod)
         store.settings.serviceProviders = [provider]
-        let id = store.createMeeting(title: "Italian", language: "it")
+        let id = await store.createMeeting(title: "Italian", language: "it")
         await #expect(throws: (any Error).self) { try await store.transcribeWithProvider(id: id, provider: provider) }
         #expect(store.meetings.first?.transcriptionAttempt == nil)
         #expect(store.meetings.first?.language == "it")

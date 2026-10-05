@@ -41,13 +41,19 @@ enum SummaryPrompt {
         """
 
     static func messages(
-        provider: ServiceProvider, meeting: Meeting, people: [Person], now: Date = Date()
+        provider: ServiceProvider, meeting: Meeting, people: [Person], now: Date = Date(), instructions: String? = nil
     ) -> [LLMMessage] {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEEE, yyyy-MM-dd HH:mm z"
-        let system =
+        var system =
             provider.summaryPrompt + "\n\nLanguage: \(meeting.language)\nCurrent time: \(formatter.string(from: now))"
+        if let instructions = instructions?.trimmingCharacters(in: .whitespacesAndNewlines), !instructions.isEmpty {
+            system += "\n\n## User Instructions\n\n"
+            system +=
+                "For this summary, these instructions take precedence over the default language and format above.\n\n"
+            system += instructions
+        }
         let names = Set(meeting.transcript.map { meeting.speakerName(for: $0, people: people) }.filter { !$0.isEmpty })
         let duration = max(0, Int(meeting.duration))
         var context = "Here is the meeting transcript:\n\nMeeting info\nMeeting: \(meeting.title)\n"

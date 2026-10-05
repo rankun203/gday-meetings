@@ -9,7 +9,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         for language in ["auto", " AUTO ", "", " "] {
-            let id = store.createMeeting(title: "Choose language", language: language)
+            let id = await store.createMeeting(title: "Choose language", language: language)
             for kind in [ServiceProviderKind.runpod, .gdayWebsite] {
                 do {
                     try await store.transcribeWithProvider(id: id, provider: ServiceProvider(kind: kind))
@@ -28,19 +28,20 @@ import Testing
         #expect(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)).defaultLanguage == "en")
     }
 
-    @Test func defaultAppliesOnlyToNewMeetingsAndSurvivesRestart() throws {
+    @Test func defaultAppliesOnlyToNewMeetingsAndSurvivesRestart() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         store.settings.defaultLanguage = "zh-cn"
-        let chinese = store.createMeeting(title: "Chinese meeting")
+        let chinese = await store.createMeeting(title: "Chinese meeting")
         store.settings.defaultLanguage = "ja"
-        let japanese = store.createMeeting(title: "Japanese meeting")
+        let japanese = await store.createMeeting(title: "Japanese meeting")
         #expect(store.meetings.first { $0.id == chinese }?.language == "zh-cn")
         #expect(store.meetings.first { $0.id == japanese }?.language == "ja")
         #expect(store.saveSettings())
         let restored = MeetingStore(dataDirectory: root)
         #expect(restored.settings.defaultLanguage == "ja")
+        #expect(await restored.ensureMeetingLoaded(id: chinese))
         #expect(restored.meeting(id: chinese)?.language == "zh-cn")
     }
 
@@ -70,7 +71,7 @@ import Testing
         #expect(!encoded.contains("language"))
     }
 
-    @Test func rustImportPreservesMeetingLanguage() throws {
+    @Test func rustImportPreservesMeetingLanguage() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let recording = root.appendingPathComponent("rust/recordings/meeting")
@@ -79,7 +80,7 @@ import Testing
             to: recording.appendingPathComponent("metadata.json"))
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("swift"))
         store.settings.defaultLanguage = "ja"
-        #expect(try store.importLegacyLibrary(url: root.appendingPathComponent("rust")) == 1)
+        #expect(try await store.importLegacyLibrary(url: root.appendingPathComponent("rust")) == 1)
         #expect(store.meetings.first?.language == "zh-tw")
     }
 }

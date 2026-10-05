@@ -174,4 +174,19 @@ import Testing
         #expect(page.entries.first?.name == "Person 0")
         #expect(page.total == 1200)
     }
+    @Test func footerAppearsOnlyAtEndAndKeepsFilteredTotal() async throws {
+        let (root, index, _) = try fixture(count: 75)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let page = DirectoryPaging()
+        page.configure(index: index, kind: .people, query: "", showExcluded: false)
+        #expect(try await waitForMainActorTestCondition(timeout: .seconds(5)) { !page.loading })
+        #expect(page.footerTotal == nil)
+        page.viewport(first: try #require(page.entries.suffix(5).first?.id), last: try #require(page.entries.last?.id))
+        #expect(try await waitForMainActorTestCondition(timeout: .seconds(5)) { !page.loading })
+        #expect(page.footerTotal == 75)
+        page.configure(index: index, kind: .people, query: "Person 74", showExcluded: false)
+        #expect(page.footerTotal == nil)
+        #expect(try await waitForMainActorTestCondition(timeout: .seconds(5)) { !page.loading })
+        #expect(page.footerTotal == 1)
+    }
 }

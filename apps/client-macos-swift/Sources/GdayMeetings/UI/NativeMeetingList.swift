@@ -20,6 +20,7 @@ struct NativeMeetingList: NSViewRepresentable {
     var delete: (UUID) -> Void
     var open: ((UUID) -> Void)? = nil
     var retainedViewport: NativeListViewport? = nil
+    var totalCount: Int? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -104,7 +105,9 @@ struct NativeMeetingList: NSViewRepresentable {
                 rows.indices.contains(anchorIndex)
                 ? bounds.minY - table.rect(ofRow: anchorIndex).minY
                 : value.retainedViewport?.anchor?.offset ?? 0
-            let changed = rows != value.entries || parent.displaySummaryTitle != value.displaySummaryTitle
+            let changed =
+                rows != value.entries || parent.displaySummaryTitle != value.displaySummaryTitle
+                || parent.totalCount != value.totalCount
             let appearanceChanged =
                 parent.recordingID != value.recordingID || parent.isFinalizing != value.isFinalizing
                 || parent.playingID != value.playingID || parent.isPlaying != value.isPlaying
@@ -168,11 +171,18 @@ struct NativeMeetingList: NSViewRepresentable {
             bounds.size.height = max(0, bounds.height - scroll.contentInsets.top - scroll.contentInsets.bottom)
             return bounds
         }
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.totalCount == nil ? 0 : 1) }
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            MeetingSummaryPreview.rowHeight(rows[row].summary, enabled: parent.displaySummaryTitle)
+            rows.indices.contains(row)
+                ? MeetingSummaryPreview.rowHeight(rows[row].summary, enabled: parent.displaySummaryTitle) : 40
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            if row == rows.count, let count = parent.totalCount {
+                return NativeListCountCell.make(
+                    in: tableView,
+                    text: ListCountFooter.text(count: count, singular: "Meeting", plural: "Meetings"))
+            }
             let identifier = NSUserInterfaceItemIdentifier("meeting-row")
             let cell =
                 tableView.makeView(withIdentifier: identifier, owner: nil) as? MeetingNativeCell ?? MeetingNativeCell()
@@ -196,6 +206,7 @@ struct NativeMeetingList: NSViewRepresentable {
             return cell
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            guard rows.indices.contains(row) else { return NSTableRowView() }
             let identifier = NSUserInterfaceItemIdentifier("meeting-selection-row")
             let view =
                 tableView.makeView(withIdentifier: identifier, owner: nil) as? MeetingSelectionRow
@@ -339,7 +350,10 @@ final class MeetingNativeTable: NSTableView {
     }
 
     func updatePointer(at point: NSPoint, modifiers: NSEvent.ModifierFlags) {
-        let canReveal = visibleRect.contains(point) && row(at: point) >= 0 && modifiers.contains(.command)
+        let row = row(at: point)
+        let canReveal =
+            visibleRect.contains(point) && row >= 0
+            && delegate?.tableView?(self, shouldSelectRow: row) != false && modifiers.contains(.command)
         (canReveal ? NSCursor.pointingHand : NSCursor.arrow).set()
     }
 

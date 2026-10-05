@@ -87,7 +87,7 @@ struct SummaryImageTests {
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Image discussion")
+        let id = await store.createMeeting(title: "Image discussion")
         var meeting = try #require(store.meeting(id: id))
         let path = try NotesImageStore.write(helper.png(), filename: "diagram.png", directory: store.directory(for: id))
         meeting.notes = "![Diagram](\(path)) <!-- gday:t=0:12 -->"

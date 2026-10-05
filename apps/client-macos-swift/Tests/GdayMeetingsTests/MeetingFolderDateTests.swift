@@ -72,7 +72,7 @@ import Testing
         }
     }
 
-    @Test func archiveImportUsesOriginalMeetingDateAndNewIdentity() throws {
+    @Test func archiveImportUsesOriginalMeetingDateAndNewIdentity() async throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -80,13 +80,47 @@ import Testing
         let file = root.appendingPathComponent("archive.json")
         try JSONEncoder().encode(original).write(to: file)
         let store = MeetingStore(dataDirectory: root)
-        try store.importArchive(url: file)
+        try await store.importArchive(url: file)
         let imported = try #require(store.meetings.first)
         #expect(imported.id != original.id)
         #expect(imported.createdAt == original.createdAt)
         #expect(
             store.directory(for: imported.id).lastPathComponent
                 == MeetingFolderLocation.name(id: imported.id, date: original.createdAt))
+    }
+
+    @Test func archiveDateSurvivesReservationEvictionWhileWaitingForSave() async throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let existingID = await store.createMeeting(title: "Existing meeting")
+        let gate = ArchiveSaveGate()
+        defer { gate.release() }
+        store.canonicalWriteHook = { gate.enter() }
+        var existing = try #require(store.meeting(id: existingID))
+        existing.title = "Updated meeting"
+        let earlierSave = Task { await store.updateMeeting(existing) }
+        try #require(try await waitForMainActorTestCondition { gate.started })
+        store.canonicalWriteHook = nil
+        var original = Meeting(title: "Imported archive", createdAt: Date(timeIntervalSince1970: 1_500_000_000))
+        original.notes = "Imported notes"
+        let file = root.appendingPathComponent("archive.json")
+        try JSONEncoder().encode(original).write(to: file)
+        let importing = Task { try await store.importArchive(url: file) }
+        try #require(try await waitForMainActorTestCondition { store.meetings.contains { $0.id != existingID } })
+        let imported = try #require(store.meetings.first { $0.id != existingID })
+        let expected = root.appendingPathComponent("meetings").appendingPathComponent(
+            MeetingFolderLocation.name(id: imported.id, date: original.createdAt))
+        #expect(FileManager.default.fileExists(atPath: expected.path))
+        MeetingFolderLocation.forget(id: imported.id, directory: root)
+        gate.release()
+        #expect(await earlierSave.value)
+        try await importing.value
+        #expect(store.directory(for: imported.id) == expected)
+        #expect(try String(contentsOf: expected.appendingPathComponent("notes.md"), encoding: .utf8) == original.notes)
+        #expect(try MeetingFolderStorage.read(id: imported.id, directory: root).createdAt == original.createdAt)
     }
 
     @Test func reservedRecordingPathStaysStableAcrossMidnight() throws {
@@ -117,7 +151,7 @@ import Testing
         try transaction.commit()
     }
 
-    @Test func legacyImportUsesSourceMeetingDate() throws {
+    @Test func legacyImportUsesSourceMeetingDate() async throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("legacy/session")
@@ -127,11 +161,23 @@ import Testing
         ])
         try metadata.write(to: source.appendingPathComponent("metadata.json"))
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("native"))
-        #expect(try store.importLegacyLibrary(url: source) == 1)
+        #expect(try await store.importLegacyLibrary(url: source) == 1)
         let meeting = try #require(store.meetings.first)
         #expect(
             store.directory(for: meeting.id).lastPathComponent
                 == MeetingFolderLocation.name(id: meeting.id, date: meeting.createdAt))
         #expect(try Data(contentsOf: source.appendingPathComponent("metadata.json")) == metadata)
     }
+}
+
+private final class ArchiveSaveGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var entered = false
+    var started: Bool { lock.withLock { entered } }
+    func enter() {
+        lock.withLock { entered = true }
+        semaphore.wait()
+    }
+    func release() { semaphore.signal() }
 }

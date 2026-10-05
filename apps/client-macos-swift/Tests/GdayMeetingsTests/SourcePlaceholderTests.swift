@@ -63,29 +63,30 @@ import Testing
         }
     }
 
-    @Test func savedSourcesKeepProvenanceAndRejectNewAssignments() throws {
+    @Test func savedSourcesKeepProvenanceAndRejectNewAssignments() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Source example")
-        let person = store.addPerson(name: "Alex")
+        let id = await store.createMeeting(title: "Source example")
+        let person = await store.addPerson(name: "Alex")
         var draft = LiveTranscriptDraft(meetingID: id, locale: "en")
         draft.phrases = [.init(session: UUID(), source: .microphone, start: 0, end: 1, text: "Sample words")]
-        #expect(store.adoptLiveTranscript(draft))
+        #expect(await store.adoptLiveTranscript(draft))
         let speaker = try #require(store.meeting(id: id)?.speakers.first)
         #expect(speaker.sourcePlaceholder == .microphone)
-        store.assignSpeaker(meetingID: id, speakerID: speaker.id, personID: person)
+        await store.assignSpeaker(meetingID: id, speakerID: speaker.id, personID: person)
         #expect(store.meeting(id: id)?.speakers.first?.personID == nil)
         let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: id))
         #expect(reopened.meeting(id: id)?.speakers.first?.sourcePlaceholder == .microphone)
     }
 
-    @Test func legacyCheckpointRecoversSourcesWithoutGuessingFromLabelOrEmbedding() throws {
+    @Test func legacyCheckpointRecoversSourcesWithoutGuessingFromLabelOrEmbedding() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Legacy example")
-        let person = store.addPerson(name: "Alex")
+        let id = await store.createMeeting(title: "Legacy example")
+        let person = await store.addPerson(name: "Alex")
         var draft = LiveTranscriptDraft(meetingID: id, locale: "en")
         draft.phrases = [
             .init(session: UUID(), source: .system, start: 0, end: 1, text: "First passage"),
@@ -95,21 +96,21 @@ import Testing
         ]
         store.recordingID = id
         try draft.save(at: store.directory(for: id))
-        #expect(store.adoptLiveTranscript(draft))
+        #expect(await store.adoptLiveTranscript(draft))
         store.recordingID = nil
         var meeting = try #require(store.meeting(id: id))
         meeting.speakers[0].sourcePlaceholder = nil
         meeting.speakers[0].label = "sys_01"
         meeting.speakers[0].personID = person
-        store.updateMeeting(meeting)
-        store.recoverUnadoptedLiveTranscript(meeting)
+        await store.updateMeeting(meeting)
+        await store.recoverUnadoptedLiveTranscript(meeting)
         let restored = try #require(store.meeting(id: id))
         #expect(restored.speakers[0].sourcePlaceholder == .system)
         #expect(restored.speakers[0].personID == person)
         #expect(restored.speakers[1].canAssignPerson)
-        store.assignSpeaker(meetingID: id, speakerID: restored.speakers[0].id, personID: nil)
+        await store.assignSpeaker(meetingID: id, speakerID: restored.speakers[0].id, personID: nil)
         #expect(store.meeting(id: id)?.speakers[0].personID == nil)
-        store.assignSpeaker(meetingID: id, speakerID: restored.speakers[1].id, personID: person)
+        await store.assignSpeaker(meetingID: id, speakerID: restored.speakers[1].id, personID: person)
         #expect(store.meeting(id: id)?.speakers[1].personID == person)
     }
 }

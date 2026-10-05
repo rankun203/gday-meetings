@@ -2,7 +2,7 @@ import Foundation
 
 extension MeetingStore {
     func transcribe(id: UUID, providerID: UUID? = nil) async {
-        guard let taskID = queueTranscription(id: id, providerID: providerID) else { return }
+        guard let taskID = await queueTranscription(id: id, providerID: providerID) else { return }
         await waitForManagedTask(taskID)
     }
 
@@ -81,16 +81,16 @@ extension MeetingStore {
             guard !self.isJobRunning(.summary, .meeting(id)),
                 self.pendingAutomaticSummaries.remove(id) != nil
             else { return }
-            self.queueSummary(id: id, automatically: true)
+            await self.queueSummary(id: id, automatically: true)
         }
     }
 
     func summarize(id: UUID) async {
-        guard let taskID = queueSummary(id: id) else { return }
+        guard let taskID = await queueSummary(id: id) else { return }
         await waitForManagedTask(taskID)
     }
 
-    func performSummary(id: UUID, providerID: UUID?) async throws {
+    func performSummary(id: UUID, providerID: UUID?, instructions: String? = nil) async throws {
         guard let meeting = self.meeting(id: id) else {
             throw ServiceError("This meeting no longer exists.")
         }
@@ -101,9 +101,14 @@ extension MeetingStore {
         let provider = try summaryProvider(providerID: providerID)
         summaryDrafts.values[id] = ""
         defer { summaryDrafts.values.removeValue(forKey: id) }
-        let messages = try await summaryMessages(provider: provider.provider, meeting: meeting)
+        let messages = try await summaryMessages(
+            provider: provider.provider, meeting: meeting, instructions: instructions)
+        var bodies = summaryDataBodies(meeting, messages: messages)
+        if instructions?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            bodies.append("User Instructions")
+        }
         let response = try await provider.complete(
-            messages: messages, bodies: summaryDataBodies(meeting, messages: messages),
+            messages: messages, bodies: bodies,
             filePaths: summaryDataFilePaths(meeting, messages: messages), purpose: "Summary",
             onPartial: { [weak self] text in
                 guard !Task.isCancelled else { return }
@@ -127,19 +132,19 @@ extension MeetingStore {
                 current.todos += Self.actionItems(from: result).filter { !known.contains($0.title.lowercased()) }
             }
             markManagedTaskCompletion(on: &current, kind: .summary)
-            guard updateMeeting(current) else {
+            guard await updateMeeting(current) else {
                 throw ServiceError(errorMessage ?? "Couldn’t save the summary.")
             }
         }
     }
     func sendChat(id: UUID, message: String) async {
         let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, var meeting = self.meeting(id: id),
-            beginJob(.chat, .meeting(id), progress: "Thinking…")
+        guard !message.isEmpty, beginJob(.chat, .meeting(id), progress: "Thinking…")
         else { return }
         defer { endJob(.chat, .meeting(id)) }
+        guard await ensureMeetingLoaded(id: id), var meeting = self.meeting(id: id) else { return }
         meeting.chat.append(ChatMessage(role: "user", content: message))
-        updateMeeting(meeting)
+        guard await updateMeeting(meeting) else { return }
         do {
             let messages =
                 [
@@ -156,7 +161,7 @@ extension MeetingStore {
             let result = response.value
             if var current = self.meeting(id: id) {
                 current.chat.append(ChatMessage(role: "assistant", content: result))
-                updateMeeting(current)
+                await updateMeeting(current)
             }
         }
         catch {
@@ -165,25 +170,34 @@ extension MeetingStore {
     }
     func sendContextChat(personID: UUID? = nil, tagID: UUID? = nil, message: String) async -> String? {
         let key = Self.contextChatKey(personID: personID, tagID: tagID)
-        guard !isJobRunning(.contextChat, .context(key)) else { return nil }
+        guard beginJob(.contextChat, .context(key), progress: "Thinking…") else { return nil }
+        defer { endJob(.contextChat, .context(key)) }
         let entries: [MeetingListEntry]
         do {
-            entries = try libraryIndex?.page(limit: 20, personID: personID, tagID: tagID) ?? []
+            let index = libraryIndex
+            entries = try await Task.detached(priority: .utility) {
+                try index?.page(limit: 20, personID: personID, tagID: tagID) ?? []
+            }.value
         }
         catch {
             errorMessage = error.localizedDescription
             return nil
         }
-        let selected = entries.compactMap { self.meeting(id: $0.id) }
+        var selected: [Meeting] = []
+        for entry in entries {
+            guard await ensureMeetingLoaded(id: entry.id), let meeting = self.meeting(id: entry.id) else {
+                errorMessage = meetingPageError ?? "Couldn’t load the meetings for this chat. Try again."
+                return nil
+            }
+            selected.append(meeting)
+        }
         guard !selected.isEmpty else {
             errorMessage = "No meetings match this context."
             return nil
         }
-        guard beginJob(.contextChat, .context(key), progress: "Thinking…") else { return nil }
-        defer { endJob(.contextChat, .context(key)) }
         var history = contextualChats[key] ?? []
         history.append(ChatMessage(role: "user", content: message))
-        saveContextChat(key: key, messages: history)
+        guard await saveContextChat(key: key, messages: history) else { return nil }
         do {
             let response = try await summaryProvider().complete(
                 messages: [
@@ -202,7 +216,7 @@ extension MeetingStore {
             }
             var current = contextualChats[key] ?? []
             current.append(ChatMessage(role: "assistant", content: response.value))
-            saveContextChat(key: key, messages: current)
+            guard await saveContextChat(key: key, messages: current) else { return nil }
             return response.value
         }
         catch {

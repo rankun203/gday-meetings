@@ -41,15 +41,16 @@ struct NotesDocumentTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
-        let id = store.createMeeting(title: "Notes")
+        let id = await store.createMeeting(title: "Notes")
         store.editNotes(id: id, text: "Original <!-- gday:t=0:12 -->")
-        #expect(store.flushNotes())
+        #expect(await store.flushNotes())
         let metadataURL = store.directory(for: id).appendingPathComponent("metadata.json")
         let metadataBefore = try Data(contentsOf: metadataURL)
         store.editNotes(id: id, text: "Edited")
         #expect(try Data(contentsOf: metadataURL) == metadataBefore)
         #expect(await store.finalizeForQuit())
         let restored = MeetingStore(dataDirectory: folder)
+        #expect(await restored.ensureMeetingLoaded(id: id))
         let meeting = try #require(restored.meeting(id: id))
         #expect(meeting.notes == "Edited")
         let exported = try JSONEncoder().encode(meeting)
@@ -58,20 +59,20 @@ struct NotesDocumentTests {
             try FileManager.default.attributesOfItem(atPath: store.notesStorage.url(id).path)[.posixPermissions] as? Int
                 == 0o600)
     }
-    @Test func externalEditsReloadAndConflictsArePreserved() throws {
+    @Test func externalEditsReloadAndConflictsArePreserved() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
-        let id = store.createMeeting()
+        let id = await store.createMeeting()
         store.editNotes(id: id, text: "Initial")
-        #expect(store.flushNotes())
+        #expect(await store.flushNotes())
         let file = store.notesStorage.url(id)
         try Data("External".utf8).write(to: file)
-        store.openNotes(id: id)
+        await store.openNotes(id: id)
         #expect(store.meetings[0].notes == "External")
         store.editNotes(id: id, text: "App changes")
         try Data("Another external edit".utf8).write(to: file)
-        #expect(store.flushNotes())
+        #expect(await store.flushNotes())
         #expect(try String(contentsOf: file, encoding: .utf8) == "App changes")
         #expect(
             try String(
@@ -102,7 +103,7 @@ extension NotesStorageTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
-        let id = store.createMeeting()
+        let id = await store.createMeeting()
         let meetingFolder = store.directory(for: id)
         try FileManager.default.removeItem(at: meetingFolder)
         try Data("Blocks folder creation".utf8).write(to: meetingFolder)
@@ -110,25 +111,25 @@ extension NotesStorageTests {
         #expect(await store.finalizeForQuit() == false)
         #expect(store.notesStorage.pending[id] == "Keep this draft")
         #expect(store.meetings[0].notes == "Keep this draft")
-        store.deleteMeeting(id: id)
+        await store.deleteMeeting(id: id)
         #expect(store.meetings.count == 1)
         #expect(store.notesStorage.pending[id] == "Keep this draft")
         try FileManager.default.removeItem(at: meetingFolder)
-        #expect(store.flushNotes())
+        #expect(await store.flushNotes())
         #expect(try String(contentsOf: store.notesStorage.url(id), encoding: .utf8) == "Keep this draft")
     }
-    @Test func metadataFailureDoesNotRollBackDurableNotes() throws {
+    @Test func metadataFailureDoesNotRollBackDurableNotes() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
-        let id = store.createMeeting()
+        let id = await store.createMeeting()
         let index = store.directory(for: id).appendingPathComponent("metadata.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false)
         var meeting = store.meetings[0]
         meeting.title = "Can't save title"
         meeting.notes = "Durable notes"
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         #expect(store.errorMessage != nil)
         #expect(store.meetings[0].title == "Untitled Meeting")
         #expect(store.meetings[0].notes == "Durable notes")
@@ -243,7 +244,7 @@ extension NotesStorageTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
-        let id = store.createMeeting()
+        let id = await store.createMeeting()
         let index = store.directory(for: id).appendingPathComponent("metadata.json")
         let metadata = try Data(contentsOf: index)
         store.editNotes(id: id, text: "First edit")

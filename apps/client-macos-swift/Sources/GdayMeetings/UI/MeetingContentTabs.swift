@@ -10,7 +10,6 @@ struct MeetingContentTabs: View {
             Text("Transcript").tag(0)
             Text("Notes").tag(1)
             Text("Summary").tag(2)
-            Text("Data Privacy").tag(3)
         }
         .pickerStyle(.segmented)
         .focusedValue(\.directoryControlFocus, true)

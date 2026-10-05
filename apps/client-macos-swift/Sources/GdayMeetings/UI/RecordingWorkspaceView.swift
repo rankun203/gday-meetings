@@ -565,13 +565,19 @@ struct RecordingSettingsDisclosure: View {
                                 selection: Binding(
                                     get: { meeting.language },
                                     set: { language in
-                                        guard var latest = store.meetings.first(where: { $0.id == meetingID }) else {
-                                            return
-                                        }
-                                        latest.language = language
-                                        store.updateMeeting(latest)
-                                        if store.meetings.first(where: { $0.id == meetingID })?.language == language {
-                                            store.liveTranscript.changeLanguage(language)
+                                        Task {
+                                            guard var latest = store.meetings.first(where: { $0.id == meetingID })
+                                            else {
+                                                return
+                                            }
+                                            latest.language = language
+                                            if await store.updateMeeting(latest),
+                                                store.recordingID == meetingID,
+                                                store.meetings.first(where: { $0.id == meetingID })?.language
+                                                    == language
+                                            {
+                                                store.liveTranscript.changeLanguage(language)
+                                            }
                                         }
                                     }))
                             if status.levels.microphone.enabled && !store.isFinalizingRecording {

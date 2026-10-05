@@ -114,17 +114,17 @@ struct AgentGuideTests {
         #expect(AgentGuides.displayBody("---\ntitle: Guide\n...\nBody") == "Body")
     }
 
-    @MainActor @Test func startupCreatesOnlyRootGuideAndMeetingHistoryRemainsIntact() throws {
+    @MainActor @Test func startupCreatesOnlyRootGuideAndMeetingHistoryRemainsIntact() async throws {
         let folder = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MeetingStore(dataDirectory: folder)
         let root = folder.appendingPathComponent("AGENTS.md")
         #expect(FileManager.default.fileExists(atPath: root.path))
         #expect(try AgentGuides.read(directory: folder).contains(AgentGuides.command(directory: folder, claude: false)))
-        let id = store.createMeeting(title: "Synthetic meeting")
+        let id = await store.createMeeting(title: "Synthetic meeting")
         var meeting = try #require(store.meeting(id: id))
         meeting.chat = [.init(role: "user", content: "Synthetic earlier question")]
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         #expect(
             !FileManager.default.fileExists(atPath: store.directory(for: id).appendingPathComponent("AGENTS.md").path))
         #expect(store.meeting(id: id)?.chat == meeting.chat)

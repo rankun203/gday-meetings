@@ -45,10 +45,8 @@ struct WaveformTimeline: View {
         }
         .frame(height: 24)
         .background {
-            WaveformScrollInput(time: time, duration: duration, seek: seek) { value in
-                if value != nil { focused = true }
-                scrub(value)
-            }
+            // Panning adjusts playback without moving keyboard focus.
+            WaveformScrollInput(time: time, duration: duration, seek: seek, scrub: scrub)
         }
         .modifier(ActionHover(pressed: isScrubbing, cornerRadius: 4))
         .overlay(alignment: .center) {

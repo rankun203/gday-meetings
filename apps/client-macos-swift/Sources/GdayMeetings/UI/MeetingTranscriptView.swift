@@ -8,6 +8,8 @@ struct MeetingTranscriptView: View {
     @ObservedObject private var localModels = LocalModelManager.shared
     let meetingID: UUID
     var initialRowID: UUID? = nil
+    @StateObject private var historyReader = TranscriptHistoryReader()
+    @ViewState private var historyOwner: TranscriptHistoryReadKey?
     @ViewState private var draft: LiveTranscriptDraft?
     @ViewState private var revisions: [TranscriptRevision] = []
     @ViewState private var transcriptChoices: [TranscriptRevision] = []
@@ -22,6 +24,11 @@ struct MeetingTranscriptView: View {
     @ViewState private var labelingHistory: SpeakerLabelingHistory?
     @ViewState private var showsLabelingHistory = false
 
+    private var historyReadKey: TranscriptHistoryReadKey {
+        .init(
+            directory: store.dataDirectory, meetingID: meetingID,
+            source: meeting?.transcriptSource, labelingSource: meeting?.speakerLabelSource)
+    }
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private var usesCheckpoint: Bool {
         meeting?.transcript.isEmpty == true && meeting?.liveTranscriptAdopted != true && draft?.hasUsableText == true
@@ -130,9 +137,11 @@ struct MeetingTranscriptView: View {
                                         meetingID: meeting.id, speaker: speaker, completed: completed,
                                         assignment: { personID in
                                             if let editableCheckpoint {
-                                                guard store.adoptLiveTranscript(editableCheckpoint) else { return }
+                                                guard await store.adoptLiveTranscript(editableCheckpoint) else {
+                                                    return
+                                                }
                                             }
-                                            store.assignSpeaker(
+                                            await store.assignSpeaker(
                                                 meetingID: meeting.id, speakerID: id, personID: personID)
                                         }
                                     )
@@ -150,10 +159,7 @@ struct MeetingTranscriptView: View {
                     }
                 }
             }
-            .task(id: meetingID) {
-                loadHistory()
-                refreshRows()
-            }
+            .task(id: historyReadKey) { await loadHistory() }
             .task(id: labelingHistoryKey) { await loadLabelingHistory() }
             .onChange(of: meeting.transcript) { _, _ in
                 refreshHistoryChoices()
@@ -163,26 +169,23 @@ struct MeetingTranscriptView: View {
                 refreshHistoryChoices()
                 refreshRows()
             }
-            .onChange(of: meeting.speakerLabelSource) { _, _ in loadHistory() }
-            .onChange(of: meeting.transcriptSource) { _, _ in
-                loadHistory()
-                refreshRows()
-            }
             .onChange(of: store.people) { _, _ in refreshRows() }
             .onChange(of: playbackVisibility) { _, _ in refreshVisibleRows() }
         }
     }
     @ViewBuilder private var speakerLabelAction: some View {
         if store.isJobRunning(.diarization, .meeting(meetingID)) {
-            Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
+            Button("Cancel Speaker Labeling") { Task { await store.cancelLocalDiarization(id: meetingID) } }
                 .help(labelingHistoryHelp)
         }
         else if store.settings.serviceProviders.contains(where: {
             $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
         }) {
             Button("Label Speakers") {
-                if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
-                Task { await store.diarizeLocally(id: meetingID) }
+                Task {
+                    if usesCheckpoint, let draft, !(await store.adoptLiveTranscript(draft)) { return }
+                    await store.diarizeLocally(id: meetingID)
+                }
             }
             .disabled(
                 !canRestore
@@ -202,10 +205,10 @@ struct MeetingTranscriptView: View {
         .accessibilityLabel("Labelings")
         .popover(isPresented: $showsLabelingHistory) {
             SpeakerLabelingHistoryView(
-                history: labelingHistory, restoreChoices: labelChoices,
+                history: $labelingHistory, restoreChoices: labelChoices,
                 currentSnapshotID: meeting.map { TranscriptRevisions.current($0).id }, canRestore: canRestore
             ) { revision in
-                if store.restoreSpeakerLabels(revision, meetingID: meetingID) { loadHistory() }
+                Task { if await store.restoreSpeakerLabels(revision, meetingID: meetingID) { await loadHistory() } }
             }
         }
     }
@@ -264,15 +267,19 @@ struct MeetingTranscriptView: View {
                     Button(
                         "\(liveSource.providerName) · \(liveSource.generatedAt.formatted(date: .abbreviated, time: .standard))"
                     ) {
-                        _ = store.adoptLiveTranscript(draft, replacing: true)
-                        loadHistory()
+                        Task {
+                            _ = await store.adoptLiveTranscript(draft, replacing: true)
+                            await loadHistory()
+                        }
                     }
                 }
                 ForEach(choices) { revision in
                     let selected = revision.id == TranscriptRevisions.current(meeting).id
                     Button {
-                        store.restoreTranscript(revision, meetingID: meetingID)
-                        loadHistory()
+                        Task {
+                            await store.restoreTranscript(revision, meetingID: meetingID)
+                            await loadHistory()
+                        }
                     } label: {
                         let name = transcriptChoiceTitle(revision, meeting: meeting)
                         let title = "\(name) · \(revision.savedAt.formatted(date: .abbreviated, time: .standard))"
@@ -294,16 +301,18 @@ struct MeetingTranscriptView: View {
         playback.play(meeting: meeting, files: store.audioURLs(for: meeting), at: time)
     }
     private func updateSegment(_ id: UUID, meetingID: UUID, text: String, checkpoint: LiveTranscriptDraft?) {
-        if let checkpoint {
-            guard checkpoint.meetingID == meetingID, store.adoptLiveTranscript(checkpoint) else { return }
+        Task {
+            if let checkpoint {
+                guard checkpoint.meetingID == meetingID, await store.adoptLiveTranscript(checkpoint) else { return }
+            }
+            guard var meeting = store.meeting(id: meetingID),
+                let index = meeting.transcript.firstIndex(where: { $0.id == id })
+            else {
+                return
+            }
+            meeting.transcript[index].text = text
+            await store.updateMeeting(meeting)
         }
-        guard var meeting = store.meeting(id: meetingID),
-            let index = meeting.transcript.firstIndex(where: { $0.id == id })
-        else {
-            return
-        }
-        meeting.transcript[index].text = text
-        store.updateMeeting(meeting)
     }
     private func refreshRows() {
         displayedMeetingID = meetingID
@@ -363,16 +372,23 @@ struct MeetingTranscriptView: View {
         displayGeneration += 1
     }
 
-    private func loadHistory() {
-        draft = nil
-        revisions = []
-        failure = nil
-        do {
-            draft = try LiveTranscriptDraft.read(at: store.directory(for: meetingID), meetingID: meetingID)
-            revisions = try TranscriptRevisions.read(at: store.directory(for: meetingID)).revisions
+    private func loadHistory() async {
+        let key = historyReadKey
+        if historyOwner?.meetingID != key.meetingID || historyOwner?.directory != key.directory {
+            draft = nil
+            revisions = []
+            transcriptChoices = []
+            labelChoices = []
+            failure = nil
+            historyOwner = key
         }
-        catch { failure = error.localizedDescription }
+        refreshRows()
+        guard let result = await historyReader.load(key), !Task.isCancelled, key == historyReadKey else { return }
+        draft = result.draft
+        revisions = result.revisions
+        failure = result.failure
         refreshHistoryChoices()
+        refreshRows()
     }
 
     private func refreshHistoryChoices() {

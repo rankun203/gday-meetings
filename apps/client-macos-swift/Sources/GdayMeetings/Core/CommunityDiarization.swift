@@ -230,7 +230,7 @@ extension MeetingStore {
     }
 
     func diarizeLocally(id: UUID) async {
-        guard let taskID = queueSpeakerLabeling(id: id) else { return }
+        guard let taskID = await queueSpeakerLabeling(id: id) else { return }
         await waitForManagedTask(taskID)
         if let task = managedTasks.first(where: { $0.id == taskID }), task.state == .failed {
             errorMessage = task.errorMessage
@@ -288,16 +288,8 @@ extension MeetingStore {
         guard !result.ranges.isEmpty else {
             throw ServiceError("No speech was found for speaker labeling. The current transcript was kept.")
         }
-        guard let current = self.meeting(id: id), self.libraryWritable,
-            current.audioFiles == meeting.audioFiles, current.transcriptSource == meeting.transcriptSource,
-            current.transcript == meeting.transcript, current.speakers == meeting.speakers,
-            try LocalDiarizationInputPolicy.revisions(for: files) == sourceRevisions
-        else {
-            throw ServiceError(
-                "The meeting changed while speaker labeling was running. Run it again for the current transcript."
-            )
-        }
-        try bindSpeakerLabelingResult(result.id, meetingID: id)
+        let current = try await validatedMeetingForSpeakerLabeling(
+            resultID: result.id, original: meeting, files: files, sourceRevisions: sourceRevisions)
         try PrivateTranscriptFile.write(
             try JSONEncoder().encode(result), name: "speaker-labels-\(result.id).json",
             at: self.directory(for: id))
@@ -318,13 +310,31 @@ extension MeetingStore {
         updated.speakerLabelSource = .init(
             resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
         self.markManagedTaskCompletion(on: &updated, kind: .diarization)
-        guard self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
+        guard await self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
     }
 
-    func cancelLocalDiarization(id: UUID) {
+    /// Binding is durable before applying the result. Read the current meeting
+    /// after that suspension so unrelated edits are kept and changed inputs reject
+    /// the stale labels before any transcript or voice-library mutation.
+    func validatedMeetingForSpeakerLabeling(
+        resultID: UUID, original: Meeting, files: [URL], sourceRevisions: [URL: String]
+    ) async throws -> Meeting {
+        try await bindSpeakerLabelingResult(resultID, meetingID: original.id)
+        guard let current = meeting(id: original.id), libraryWritable,
+            current.audioFiles == original.audioFiles, current.transcriptSource == original.transcriptSource,
+            current.transcript == original.transcript, current.speakers == original.speakers,
+            try LocalDiarizationInputPolicy.revisions(for: files) == sourceRevisions
+        else {
+            throw ServiceError(
+                "The meeting changed while speaker labeling was running. Run it again for the current transcript.")
+        }
+        return current
+    }
+
+    func cancelLocalDiarization(id: UUID) async {
         if let task = managedTasks.first(where: { $0.kind == .diarization && $0.meetingID == id && $0.state.isActive })
         {
-            cancelManagedTask(id: task.id)
+            await cancelManagedTask(id: task.id)
         }
     }
 }

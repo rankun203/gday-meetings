@@ -125,11 +125,59 @@ struct DataEventTests {
         #expect(!text.contains("Synthetic updated note"))
     }
 
-    @MainActor @Test func failedMeetingSaveDoesNotRecordProposedChanges() throws {
+    @Test func documentReceiptsOnlyInspectFilesOwnedByTheSave() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let summary = directory.appendingPathComponent("summary.md")
+        let transcript = directory.appendingPathComponent(TranscriptStorage.filename)
+        try Data("Synthetic summary".utf8).write(to: summary)
+        try Data("Synthetic transcript".utf8).write(to: transcript)
+        let names = ["summary.md"]
+        let snapshot = DataEventJournal.documentSnapshot(directory: directory, names: names)
+        #expect(snapshot[TranscriptStorage.filename] == nil)
+        // A separate writer can advance its transcript without this save claiming that change.
+        try Data("Synthetic live transcript update".utf8).write(to: transcript)
+        let updated = Data("Synthetic revised summary".utf8)
+        try updated.write(to: summary)
+        try DataEventJournal.recordDocuments(directory: directory, names: names, previous: snapshot)
+        let events = try DataEventJournal.read(directory: directory)
+        #expect(events.count == 1)
+        #expect(events.first?.dataFlow.filePaths == ["summary.md"])
+        #expect(events.first?.dataFlow.responseBytes == updated.count)
+    }
+
+    @MainActor @Test func meetingSaveRecordsChangedTranscriptButNotSummaryOnlyTranscript() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let id = store.createMeeting(title: "Synthetic meeting")
+        let id = await store.createMeeting(title: "Synthetic meeting")
+        let folder = store.directory(for: id)
+        var meeting = try #require(store.meeting(id: id))
+        let initial = try DataEventJournal.read(directory: folder)
+        meeting.transcript = [.init(speaker: "sys", text: "Synthetic passage")]
+        #expect(await store.updateMeeting(meeting))
+        let changed = try DataEventJournal.read(directory: folder)
+        let transcriptEvents = changed.dropFirst(initial.count).filter {
+            $0.dataFlow.filePaths == [TranscriptStorage.filename]
+        }
+        #expect(!transcriptEvents.isEmpty)
+        let transcriptBytes = try Data(contentsOf: folder.appendingPathComponent(TranscriptStorage.filename)).count
+        #expect(transcriptEvents.allSatisfy { $0.action == .modified })
+        #expect(transcriptEvents.allSatisfy { $0.dataFlow.responseBytes == transcriptBytes })
+        meeting = try #require(store.meeting(id: id))
+        meeting.summary = "Synthetic summary"
+        #expect(await store.updateMeeting(meeting))
+        let summaryEvents = try DataEventJournal.read(directory: folder).dropFirst(changed.count)
+        #expect(summaryEvents.contains { $0.dataFlow.filePaths == ["summary.md"] })
+        #expect(!summaryEvents.contains { $0.dataFlow.filePaths == [TranscriptStorage.filename] })
+    }
+
+    @MainActor @Test func failedMeetingSaveDoesNotRecordProposedChanges() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(dataDirectory: directory)
+        let id = await store.createMeeting(title: "Synthetic meeting")
         let folder = store.directory(for: id)
         let before = try DataEventJournal.read(directory: folder)
         var meeting = try #require(store.meeting(id: id))
@@ -137,7 +185,7 @@ struct DataEventTests {
         try FileManager.default.moveItem(at: metadata, to: directory.appendingPathComponent("metadata-backup.json"))
         try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: false)
         meeting.summary = "Synthetic proposed summary"
-        #expect(!store.updateMeeting(meeting))
+        #expect(!(await store.updateMeeting(meeting)))
         #expect(try DataEventJournal.read(directory: folder) == before)
     }
 

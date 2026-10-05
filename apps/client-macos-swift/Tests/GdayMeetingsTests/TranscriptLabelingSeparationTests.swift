@@ -54,29 +54,29 @@ import Testing
         #expect(TranscriptRevisions.choices([original], current: meeting).count == 2)
     }
 
-    @Test func labelRestorePreservesTextAndRejectsLaterEdits() throws {
+    @Test func labelRestorePreservesTextAndRejectsLaterEdits() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let id = store.createMeeting(title: "Synthetic labeling")
+        let id = await store.createMeeting(title: "Synthetic labeling")
         var meeting = try #require(store.meeting(id: id))
         meeting.transcriptSource = source()
         meeting.transcript = [.init(start: 0, end: 1, speaker: "Original", text: "A synthetic line")]
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         let baseline = TranscriptRevisions.current(meeting)
         #expect(store.preserveTranscript(meeting))
         meeting.transcript[0].speaker = "speaker_1"
         meeting.speakerLabelSource = .init(resultID: UUID(), providerName: "Local Labeler", generatedAt: Date())
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         let labeled = TranscriptRevisions.current(meeting)
-        #expect(store.restoreSpeakerLabels(baseline, meetingID: id))
+        #expect(await store.restoreSpeakerLabels(baseline, meetingID: id))
         #expect(store.meeting(id: id)?.transcript[0].text == "A synthetic line")
         #expect(store.meeting(id: id)?.speakerLabelSource == nil)
-        #expect(store.restoreSpeakerLabels(labeled, meetingID: id))
+        #expect(await store.restoreSpeakerLabels(labeled, meetingID: id))
         var edited = try #require(store.meeting(id: id))
         edited.transcript[0].text = "Keep this edit"
-        #expect(store.updateMeeting(edited))
-        #expect(!store.restoreSpeakerLabels(baseline, meetingID: id))
+        #expect(await store.updateMeeting(edited))
+        #expect(!(await store.restoreSpeakerLabels(baseline, meetingID: id)))
         #expect(store.meeting(id: id)?.transcript[0].text == "Keep this edit")
         #expect(store.meeting(id: id)?.speakerLabelSource == labeled.speakerLabelSource)
     }

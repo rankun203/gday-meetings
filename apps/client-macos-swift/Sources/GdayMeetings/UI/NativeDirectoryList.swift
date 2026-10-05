@@ -9,6 +9,7 @@ struct NativeDirectoryList: NSViewRepresentable {
     var label: String
     var reveal: DirectoryReveal? = nil
     var retainedViewport: NativeListViewport? = nil
+    var footerText: String? = nil
     var viewport: (UUID, UUID) -> Void
     var delete: (DirectoryEntry) -> Void
 
@@ -73,7 +74,7 @@ struct NativeDirectoryList: NSViewRepresentable {
                 ? scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
                 : parent.retainedViewport?.anchor?.offset ?? 0
             updating = true
-            let changed = rows != parent.entries
+            let changed = rows != parent.entries || self.parent.footerText != parent.footerText
             self.parent = parent
             if changed {
                 rows = parent.entries
@@ -119,7 +120,11 @@ struct NativeDirectoryList: NSViewRepresentable {
             retained.anchor = .init(
                 id: rows[first].id, offset: scroll.contentView.bounds.minY - table.rect(ofRow: first).minY)
         }
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.footerText == nil ? 0 : 1) }
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            rows.indices.contains(row) ? 48 : 40
+        }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
             let selected = Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
@@ -128,8 +133,13 @@ struct NativeDirectoryList: NSViewRepresentable {
             let offscreen = keepsOffscreen ? parent.selection.subtracting(rows.map(\.id)) : []
             parent.selection = selected.union(offscreen)
         }
-        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { MeetingSelectionRow() }
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            rows.indices.contains(row) ? MeetingSelectionRow() : NSTableRowView()
+        }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            if row == rows.count, let text = parent.footerText {
+                return NativeListCountCell.make(in: tableView, text: text)
+            }
             let id = NSUserInterfaceItemIdentifier("directory-row")
             let cell = tableView.makeView(withIdentifier: id, owner: nil) as? DirectoryCell ?? DirectoryCell()
             cell.identifier = id

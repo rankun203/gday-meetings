@@ -4,7 +4,7 @@ extension UIPreview {
     /// Reproduce old label-only snapshots without running a model or reading a library.
     @MainActor static func seedTranscriptLabelingHistory(
         store: MeetingStore, meeting: Meeting, live: LiveTranscriptDraft
-    ) throws {
+    ) async throws {
         guard
             ProcessInfo.processInfo.arguments.contains("--synthetic-labeling-history")
                 || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLabelingHistory") as? Bool == true
@@ -21,6 +21,6 @@ extension UIPreview {
         try PrivateTranscriptFile.write(
             JSONEncoder().encode(result), name: "speaker-labels-\(result.id).json", at: store.directory(for: meeting.id)
         )
-        _ = store.updateMeeting(labeled)
+        _ = await store.updateMeeting(labeled)
     }
 }

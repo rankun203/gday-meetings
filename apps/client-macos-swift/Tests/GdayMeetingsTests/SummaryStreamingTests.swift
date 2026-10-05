@@ -13,18 +13,18 @@ import Testing
     private func directory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     }
-    private func setup(_ store: MeetingStore, origin: String) -> UUID {
+    private func setup(_ store: MeetingStore, origin: String) async -> UUID {
         var provider = ServiceProvider(kind: .openAICompatible)
         provider.endpoint = origin + "/v1"
         provider.model = "fixture"
         provider.enabledCapabilities = [.summarization]
         store.settings.serviceProviders = [provider]
         store.settings.summaryProviderID = provider.id
-        let id = store.createMeeting(title: "Streaming summary")
+        let id = await store.createMeeting(title: "Streaming summary")
         var meeting = store.meetings[0]
         meeting.notes = "Send the report."
         meeting.summary = "Saved summary"
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         return id
     }
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -44,6 +44,37 @@ import Testing
         #expect(updates == ["### Summary\n\n", "### Summary\n\n- [ ] Send résumé 👋"])
         #expect(try parser.result() == updates.last)
         #expect(parser.done)
+    }
+
+    @Test func retryRetainsInstructionsAndNewOrdinaryRequestClearsThem() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = try HTTPFixture { _ in
+            .init(headers: ["Content-Type": "text/event-stream"], body: Self.first + Self.end)
+        }
+        try await server.start()
+        defer { server.stop() }
+        let store = MeetingStore(dataDirectory: root)
+        let id = await setup(store, origin: server.origin)
+        store.settings.serviceProviders[0].enabledCapabilities = []
+        let taskID = try #require(await store.queueSummary(id: id, instructions: "Write in English."))
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTask(id: taskID)?.state == .failed)
+        #expect(server.requests.isEmpty)
+        #expect(store.managedTaskJournal.record(id: taskID)?.summaryInstructions == "Write in English.")
+        store.settings.serviceProviders[0].enabledCapabilities = [.summarization]
+        await store.retryManagedTask(id: taskID)
+        await store.waitForManagedTask(taskID)
+        #expect(store.managedTask(id: taskID)?.state == .completed)
+        let request = try #require(server.requests.first)
+        let json = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+        let messages = try #require(json["messages"] as? [[String: Any]])
+        #expect((messages.first?["content"] as? String)?.hasSuffix("Write in English.") == true)
+        let ordinaryID = try #require(await store.queueSummary(id: id))
+        await store.waitForManagedTask(ordinaryID)
+        #expect(store.managedTask(id: ordinaryID)?.summaryInstructions == nil)
+        let ordinary = try #require(server.requests.last)
+        #expect(!String(decoding: ordinary.body, as: UTF8.self).contains("## User Instructions"))
     }
 
     @Test func partialErrorAndLengthLimitNeverCountAsComplete() throws {
@@ -76,9 +107,9 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
+        let id = await setup(store, origin: server.origin)
         store.settings.autoExtractTodos = extract
-        let taskID = try #require(store.queueSummary(id: id))
+        let taskID = try #require(await store.queueSummary(id: id, instructions: "Write in English."))
         try await waitUntil { store.summaryDrafts.values[id]?.contains("### Summary") == true }
         #expect(store.meetings[0].summary == "Saved summary")
         #expect(store.meetings[0].todos.isEmpty)
@@ -87,17 +118,24 @@ import Testing
         #expect(store.summaryDrafts.values[id] == nil)
         #expect(store.meetings[0].summary == "### Summary\n\n- [ ] Send résumé 👋")
         #expect(store.meetings[0].todos.count == (extract ? 1 : 0))
-        #expect(MeetingStore(dataDirectory: root).meeting(id: id)?.summary == store.meetings[0].summary)
+        let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: id))
+        #expect(reopened.meeting(id: id)?.summary == store.meetings[0].summary)
         #expect(server.requests.count == 1)
         let request = try #require(server.requests.first)
         let json = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
         #expect(json["stream"] as? Bool == true)
+        let messages = try #require(json["messages"] as? [[String: Any]])
+        #expect((messages.first?["content"] as? String)?.contains("## User Instructions") == true)
+        #expect((messages.first?["content"] as? String)?.hasSuffix("Write in English.") == true)
+        #expect(store.managedTask(id: taskID)?.summaryInstructions == "Write in English.")
         let transfers = try DataEventJournal.read(directory: store.directory(for: id)).filter { $0.action == .sent }
         #expect(transfers.count == 1)
         let receipt = try #require(transfers.first?.dataFlow)
         #expect(receipt.requestBytes == request.body.count)
         #expect(receipt.responseBytes == (Self.first + Self.second + Self.end).utf8.count)
         #expect(receipt.bodies.contains("notes.md"))
+        #expect(receipt.bodies.contains("User Instructions"))
     }
 
     @Test(arguments: [false, true]) func cancellationAndTruncationKeepSavedSummary(cancel: Bool) async throws {
@@ -111,10 +149,10 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
-        let taskID = try #require(store.queueSummary(id: id))
+        let id = await setup(store, origin: server.origin)
+        let taskID = try #require(await store.queueSummary(id: id))
         try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
-        if cancel { store.cancelManagedTask(id: taskID) }
+        if cancel { await store.cancelManagedTask(id: taskID) }
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == (cancel ? .cancelled : .failed))
         #expect(store.summaryDrafts.values[id] == nil)
@@ -134,12 +172,12 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
-        let taskID = try #require(store.queueSummary(id: id))
+        let id = await setup(store, origin: server.origin)
+        let taskID = try #require(await store.queueSummary(id: id))
         try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         var changed = store.meetings[0]
         changed.summary = "Changed elsewhere"
-        store.updateMeeting(changed)
+        await store.updateMeeting(changed)
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
         #expect(store.meetings[0].summary == "Changed elsewhere")
@@ -166,7 +204,7 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
+        let id = await setup(store, origin: server.origin)
         await store.summarize(id: id)
         #expect(store.managedTasks.last?.state == .failed)
         #expect(store.meeting(id: id)?.summary == "Saved summary")
@@ -185,7 +223,7 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
+        let id = await setup(store, origin: server.origin)
         let caller = Task { await store.summarize(id: id) }
         try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         let taskID = try #require(store.managedTasks.last?.id)
@@ -219,8 +257,8 @@ import Testing
         try await server.start()
         defer { server.stop() }
         let store = MeetingStore(dataDirectory: root)
-        let id = setup(store, origin: server.origin)
-        let taskID = try #require(store.queueSummary(id: id))
+        let id = await setup(store, origin: server.origin)
+        let taskID = try #require(await store.queueSummary(id: id))
         try await waitUntil { store.summaryDrafts.values[id]?.isEmpty == false }
         var changed = try #require(store.meeting(id: id))
         if changeTranscript {
@@ -229,7 +267,7 @@ import Testing
         else {
             changed.notes += " Additional notes."
         }
-        store.updateMeeting(changed)
+        await store.updateMeeting(changed)
         await store.waitForManagedTask(taskID)
         #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
         #expect(store.meeting(id: id)?.summary == "Saved summary")

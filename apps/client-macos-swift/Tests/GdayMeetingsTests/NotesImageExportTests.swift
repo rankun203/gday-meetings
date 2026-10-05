@@ -74,7 +74,7 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent("blocked-assets").path))
     }
 
-    @Test func jsonSidecarRoundTripsThroughMeetingImportAndAvoidsExistingAssets() throws {
+    @Test func jsonSidecarRoundTripsThroughMeetingImportAndAvoidsExistingAssets() async throws {
         let (root, meeting) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("meeting.json")
@@ -85,7 +85,7 @@ import Testing
         let renamed = root.appendingPathComponent("renamed.json")
         try FileManager.default.moveItem(at: file, to: renamed)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
-        try store.importArchive(url: renamed)
+        try await store.importArchive(url: renamed)
         let imported = try #require(store.meetings.first)
         #expect(imported.notes == meeting.notes)
         #expect(imported.audioFiles.isEmpty)
@@ -114,7 +114,7 @@ import Testing
                 == Data(contentsOf: root.appendingPathComponent(path)))
     }
 
-    @Test func importRejectsSidecarTraversalAndSymlinksWithoutAddingMeeting() throws {
+    @Test func importRejectsSidecarTraversalAndSymlinksWithoutAddingMeeting() async throws {
         let (root, meeting) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("meeting.json")
@@ -125,7 +125,7 @@ import Testing
         ]
         try JSONSerialization.data(withJSONObject: object).write(to: file)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
-        #expect(throws: (any Error).self) { try store.importArchive(url: file) }
+        await #expect(throws: (any Error).self) { try await store.importArchive(url: file) }
         #expect(store.meetings.isEmpty)
         try MeetingExport.write(meeting, directory: root, to: file)
         let sidecar = root.appendingPathComponent("meeting-assets-2")
@@ -133,22 +133,22 @@ import Testing
         try FileManager.default.createSymbolicLink(
             at: sidecar.appendingPathComponent("display.png"),
             withDestinationURL: root.appendingPathComponent("assets/display.png"))
-        #expect(throws: (any Error).self) { try store.importArchive(url: file) }
+        await #expect(throws: (any Error).self) { try await store.importArchive(url: file) }
         #expect(store.meetings.isEmpty)
     }
 
-    @Test func legacyImageJSONKeepsTextAndReportsMissingAttachments() throws {
+    @Test func legacyImageJSONKeepsTextAndReportsMissingAttachments() async throws {
         let (root, meeting) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("legacy.json")
         try JSONEncoder().encode(meeting).write(to: file)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
-        try store.importArchive(url: file)
+        try await store.importArchive(url: file)
         #expect(store.meetings.first?.notes == meeting.notes)
         #expect(store.errorMessage?.contains("images linked from Notes or Summary were not imported") == true)
     }
 
-    @Test func legacySummaryOnlyJSONReportsMissingAttachments() throws {
+    @Test func legacySummaryOnlyJSONReportsMissingAttachments() async throws {
         let (root, original) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         var meeting = original
@@ -157,7 +157,7 @@ import Testing
         let file = root.appendingPathComponent("legacy-summary.json")
         try JSONEncoder().encode(meeting).write(to: file)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-library"))
-        try store.importArchive(url: file)
+        try await store.importArchive(url: file)
         let imported = try #require(store.meetings.first)
         #expect(imported.summary == meeting.summary)
         #expect(store.errorMessage?.contains("images linked from Notes or Summary were not imported") == true)
@@ -196,7 +196,7 @@ import Testing
         #expect(legacy.omittedNoteImages == nil)
     }
 
-    @Test func summaryOnlyImagesSurviveCleanupAndExportRoundTrip() throws {
+    @Test func summaryOnlyImagesSurviveCleanupAndExportRoundTrip() async throws {
         let (root, original) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         var meeting = original
@@ -220,7 +220,7 @@ import Testing
         let json = root.appendingPathComponent("summary-export.json")
         try MeetingExport.write(meeting, directory: root, to: json)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("imported-summary-library"))
-        try store.importArchive(url: json)
+        try await store.importArchive(url: json)
         let imported = try #require(store.meetings.first)
         #expect(imported.summary == meeting.summary)
         #expect(

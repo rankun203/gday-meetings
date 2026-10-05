@@ -94,6 +94,16 @@ final class LibrarySearchSession: ObservableObject {
     @Published private(set) var total: Int?
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
+    @Published private(set) var peopleResolution = PeopleNameResolution.empty("")
+    @Published private(set) var contentQuery = ""
+    @Published private(set) var peopleError: String?
+    private let peopleResolver: PeopleNameResolver
+    private let resolveNames: @Sendable (String, [PeopleNameRecord]) async throws -> PeopleNameResolution
+    private var nameTask: Task<Void, Never>?
+    private var nameRequest = UUID()
+    private var completedNameRequest: UUID?
+    private var people: [PeopleNameRecord] = []
+    private var preparingProviders = false
     @Published private(set) var mode: SearchMode = .text
     @Published private(set) var rankedResults: [FusedSearchResult] = []
     @Published private(set) var providerFailures: [UUID: String] = [:]
@@ -108,6 +118,7 @@ final class LibrarySearchSession: ObservableObject {
     private let loadPage: @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage
 
     init(
+        resolvePeople: (@Sendable (String, [PeopleNameRecord]) async throws -> PeopleNameResolution)? = nil,
         loadPage: @escaping @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage = {
             index, query, cursor, excludingTagIDs in
             try await LocalTextSearchProvider(index: index).page(
@@ -115,6 +126,95 @@ final class LibrarySearchSession: ObservableObject {
         }
     ) {
         self.loadPage = loadPage
+        let resolver = PeopleNameResolver()
+        peopleResolver = resolver
+        resolveNames = resolvePeople ?? { query, people in try await resolver.resolve(query, people: people) }
+    }
+    func updatePeople(_ records: [PeopleNameRecord], refreshSearch: Bool = true) {
+        guard people != records else { return }
+        people = records
+        Task { await peopleResolver.update(records) }
+        if refreshSearch && !query.isEmpty {
+            task?.cancel()
+            generation = UUID()
+            results = []
+            rankedResults = []
+            total = nil
+            exhausted = false
+            resolvePeopleAndLoad()
+        }
+    }
+    private func resolvePeopleAndLoad() {
+        nameTask?.cancel()
+        nameRequest = UUID()
+        completedNameRequest = nil
+        isLoading = true
+        peopleError = nil
+        peopleResolution = .empty(query)
+        contentQuery = query
+        if people.isEmpty {
+            completedNameRequest = nameRequest
+            nameTask = nil
+            contentQuery = query
+            if !preparingProviders {
+                if coordinator != nil {
+                    loadRanked()
+                }
+                else {
+                    load()
+                }
+            }
+            return
+        }
+        let current = generation
+        let query = query
+        let people = people
+        let resolver = resolveNames
+        let request = nameRequest
+        nameTask = Task {
+            let resolution: PeopleNameResolution
+            do { resolution = try await resolver(query, people) }
+            catch {
+                guard !Task.isCancelled, current == generation else { return }
+                peopleError = "Couldn’t match People names. \(error.localizedDescription)"
+                resolution = .empty(query)
+            }
+            guard !Task.isCancelled, current == generation else { return }
+            guard request == nameRequest else { return }
+            completedNameRequest = request
+            peopleResolution = resolution
+            contentQuery = resolution.confident.isEmpty ? query : resolution.residualQuery
+            guard !preparingProviders else {
+                if error != nil { isLoading = false }
+                return
+            }
+            guard !contentQuery.isEmpty else {
+                isLoading = false
+                exhausted = true
+                total = 0
+                return
+            }
+            if coordinator != nil {
+                loadRanked()
+            }
+            else {
+                load()
+            }
+        }
+    }
+    func waitForPeopleResolution() async {
+        while !Task.isCancelled {
+            let request = nameRequest
+            await nameTask?.value
+            if request == nameRequest, completedNameRequest == request { return }
+        }
+    }
+    func finishPeopleOnly() {
+        preparingProviders = false
+        error = nil
+        isLoading = false
+        exhausted = true
+        total = 0
     }
     var canLoadMore: Bool { !isLoading && error == nil && !exhausted }
     func beginPreparation(_ draft: String, mode: SearchMode) {
@@ -122,6 +222,7 @@ final class LibrarySearchSession: ObservableObject {
         generation = UUID()
         query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         self.mode = mode
+        preparingProviders = true
         coordinator = nil
         results = []
         rankedResults = []
@@ -132,6 +233,7 @@ final class LibrarySearchSession: ObservableObject {
         selection = nil
         scrollOffset = 0
         isLoading = true
+        resolvePeopleAndLoad()
     }
     func preparationFailed(_ message: String) {
         error = message
@@ -167,6 +269,7 @@ final class LibrarySearchSession: ObservableObject {
         self.excludingTagIDs = excludingTagIDs
         query = trimmed
         mode = .text
+        preparingProviders = false
         coordinator = nil
         rankedResults = []
         providerFailures = [:]
@@ -176,7 +279,7 @@ final class LibrarySearchSession: ObservableObject {
         error = nil
         selection = nil
         scrollOffset = 0
-        load()
+        resolvePeopleAndLoad()
         return true
     }
 
@@ -191,6 +294,7 @@ final class LibrarySearchSession: ObservableObject {
         generation = UUID()
         query = trimmed
         self.mode = mode
+        preparingProviders = false
         self.excludingTagIDs = excludingTagIDs
         coordinator = SearchCoordinator(providers: providers)
         results = []
@@ -201,7 +305,7 @@ final class LibrarySearchSession: ObservableObject {
         error = nil
         selection = nil
         scrollOffset = 0
-        loadRanked()
+        resolvePeopleAndLoad()
         return true
     }
 
@@ -221,7 +325,7 @@ final class LibrarySearchSession: ObservableObject {
         generation = UUID()
         let generation = generation
         let request = ProviderSearchRequest(
-            id: generation, query: query, mode: mode, limit: 100,
+            id: generation, query: contentQuery, mode: mode, limit: 100,
             excludingTagIDs: excludingTagIDs, ranked: true)
         isLoading = true
         error = nil
@@ -256,7 +360,7 @@ final class LibrarySearchSession: ObservableObject {
         isLoading = true
         error = nil
         let generation = generation
-        let query = query
+        let query = contentQuery
         let cursor = results.last?.id ?? 0
         let excludingTagIDs = excludingTagIDs
         task = Task {

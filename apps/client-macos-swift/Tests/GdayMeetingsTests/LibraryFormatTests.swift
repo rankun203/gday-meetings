@@ -33,13 +33,13 @@ import Testing
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
-    @Test func archiveStatusFollowsCheckpoint() throws {
+    @Test func archiveStatusFollowsCheckpoint() async throws {
         let url = try directory()
         defer { try? FileManager.default.removeItem(at: url) }
         let store = MeetingStore(dataDirectory: url)
-        let archived = store.createMeeting(title: "Archived")
-        let incomplete = store.createMeeting(title: "Incomplete")
-        let none = store.createMeeting(title: "Local only")
+        let archived = await store.createMeeting(title: "Archived")
+        let incomplete = await store.createMeeting(title: "Incomplete")
+        let none = await store.createMeeting(title: "Local only")
         for id in [archived, incomplete] {
             try FileManager.default.createDirectory(at: store.directory(for: id), withIntermediateDirectories: true)
         }
@@ -49,8 +49,8 @@ import Testing
             #"{"origin":"https://archive.example.com","externalID":"x","importKey":"k","snapshot":"e30=","audio":[]}"#
         try Data(legacy.utf8).write(to: store.archiveCheckpointURL(for: incomplete))
         let reopened = MeetingStore(dataDirectory: url)
-        _ = reopened.ensureMeetingLoaded(id: archived)
-        _ = reopened.ensureMeetingLoaded(id: incomplete)
+        _ = await reopened.ensureMeetingLoaded(id: archived)
+        _ = await reopened.ensureMeetingLoaded(id: incomplete)
         reopened.refreshArchiveStatuses()
         guard case .archived(let host, let date) = reopened.archiveStatuses[archived] else {
             Issue.record("Expected an archived status")

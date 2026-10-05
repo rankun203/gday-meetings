@@ -16,6 +16,7 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var meetingTitle: String
     var providerID: UUID?
     var providerName: String?
+    var summaryInstructions: String?
     var state: ManagedTaskState = .queued
     var progress = "Waiting to start"
     var errorMessage: String?
@@ -53,10 +54,10 @@ extension MeetingStore {
     var managedTaskCount: Int { managedTaskStateCounts.values.reduce(0, +) + managedTasks.filter(\.isPreview).count }
 
     func managedTask(id: UUID) -> ManagedTaskRecord? {
-        managedTasks.first { $0.id == id } ?? managedTaskJournal.record(id: id)
+        managedTasks.first { $0.id == id }
     }
 
-    private func cacheManagedTask(_ task: ManagedTaskRecord) {
+    func cacheManagedTask(_ task: ManagedTaskRecord) {
         if let index = managedTasks.firstIndex(where: { $0.id == task.id }) {
             managedTasks[index] = task
         }
@@ -73,25 +74,29 @@ extension MeetingStore {
 
     var tasksNewestFirst: [ManagedTaskRecord] { managedTasks.sorted(by: ManagedTaskJournal.newestFirst) }
 
-    @discardableResult func queueTranscription(id: UUID, providerID: UUID? = nil) -> UUID? {
-        guard ensureMeetingLoaded(id: id), recordingID != id, !isJobRunning(.importAudio, .meeting(id)),
+    @discardableResult func queueTranscriptionCommand(id: UUID, providerID: UUID? = nil) async -> UUID? {
+        guard await ensureMeetingLoaded(id: id), recordingID != id, !isJobRunning(.importAudio, .meeting(id)),
             let meeting = meetings.first(where: { $0.id == id })
         else { return nil }
-        return enqueueManagedTask(
+        return await enqueueManagedTask(
             kind: .transcription, meeting: meeting,
             providerID: providerID ?? meeting.transcriptionAttempt?.providerID ?? settings.transcriptionProviderID)
     }
 
-    @discardableResult func queueSummary(id: UUID, providerID: UUID? = nil, automatically: Bool = false) -> UUID? {
-        guard ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id }) else { return nil }
-        return enqueueManagedTask(
+    @discardableResult func queueSummaryCommand(
+        id: UUID, providerID: UUID? = nil, automatically: Bool = false, instructions: String? = nil
+    ) async -> UUID? {
+        guard await ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return await enqueueManagedTask(
             kind: .summary, meeting: meeting, providerID: providerID ?? settings.summaryProviderID,
-            automatically: automatically)
+            automatically: automatically, summaryInstructions: instructions)
     }
 
-    @discardableResult func queueSpeakerLabeling(id: UUID, providerID: UUID? = nil) -> UUID? {
+    @discardableResult func queueSpeakerLabelingCommand(id: UUID, providerID: UUID? = nil) async -> UUID? {
         let selectedID = providerID ?? settings.diarizationProviderID
-        guard libraryWritable, ensureMeetingLoaded(id: id), recordingID != id,
+        guard libraryWritable, await ensureMeetingLoaded(id: id), recordingID != id,
             !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
             let meeting = meetings.first(where: { $0.id == id }), meeting.transcriptionAttempt == nil,
             settings.serviceProviders.contains(where: {
@@ -101,25 +106,50 @@ extension MeetingStore {
             errorMessage = "Choose Community-1 for Speaker Labeling in Settings before labeling a saved transcript."
             return nil
         }
-        return enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
+        return await enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
     }
 
     private func enqueueManagedTask(
-        kind: BackgroundJob.Kind, meeting: Meeting, providerID: UUID?, automatically: Bool = false
-    ) -> UUID? {
-        guard !isChangingLibrary, !managedTasksLoading, !isJobRunning(kind, .meeting(meeting.id)) else { return nil }
-        let existing =
-            (try? managedTaskJournal.query(
-                where: "meeting=" + ManagedTaskIndex.literal(meeting.id.uuidString) + " AND kind="
-                    + ManagedTaskIndex.literal(kind.rawValue) + " AND state IN ('queued','running')", limit: 1)) ?? []
-        guard existing.isEmpty else { return nil }
+        kind: BackgroundJob.Kind, meeting: Meeting, providerID: UUID?, automatically: Bool = false,
+        summaryInstructions: String? = nil
+    ) async -> UUID? {
+        let key = BackgroundJob.Key(kind: kind, scope: .meeting(meeting.id))
+        guard !isChangingLibrary, !isPreparingToQuit, !managedTasksLoading,
+            managedTaskActiveCounts[key, default: 0] == 0,
+            !backgroundJobs.contains(where: { $0.key == key })
+        else { return nil }
+        let journal = managedTaskJournal
+        do {
+            let existing = try await managedTaskIO.perform {
+                try journal.query(
+                    where: "meeting=" + ManagedTaskIndex.literal(meeting.id.uuidString)
+                        + " AND kind=" + ManagedTaskIndex.literal(kind.rawValue)
+                        + " AND state IN ('queued','running')", limit: 1)
+            }
+            guard existing.isEmpty else { return nil }
+        }
+        catch {
+            managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+            return nil
+        }
         // Retry/resume represents the same intent, so it updates the original row.
         // Only an explicitly new request after completion creates another row.
-        var task =
-            previousManagedIntent(kind: kind, meeting: meeting)
-            ?? ManagedTaskRecord(kind: kind, meetingID: meeting.id, meetingTitle: meeting.title)
+        var task: ManagedTaskRecord
+        do {
+            task =
+                try await previousManagedIntent(kind: kind, meeting: meeting)
+                ?? ManagedTaskRecord(kind: kind, meetingID: meeting.id, meetingTitle: meeting.title)
+        }
+        catch {
+            managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+            return nil
+        }
         if task.recovery == .restartRequired || task.restartRequested { return nil }
         task.providerID = providerID
+        if kind == .summary {
+            let instructions = summaryInstructions?.trimmingCharacters(in: .whitespacesAndNewlines)
+            task.summaryInstructions = instructions?.isEmpty == false ? instructions : nil
+        }
         task.providerName = settings.serviceProviders.first { $0.id == providerID }?.name
         task.meetingTitle = meeting.title
         task.state = .queued
@@ -132,56 +162,77 @@ extension MeetingStore {
         task.interrupted = false
         if kind == .diarization { task.speakerLabelingResultID = nil }
         if kind == .transcription, let attempt = meeting.transcriptionAttempt { task.capture(attempt) }
-        guard saveManagedTask(task) else { return nil }
-        startManagedTasks()
+        guard await saveManagedTask(task) else { return nil }
+        await startManagedTasks()
         return task.id
     }
 
-    private func previousManagedIntent(kind: BackgroundJob.Kind, meeting: Meeting) -> ManagedTaskRecord? {
+    private func previousManagedIntent(kind: BackgroundJob.Kind, meeting: Meeting) async throws -> ManagedTaskRecord? {
         let predicate =
             "meeting=" + ManagedTaskIndex.literal(meeting.id.uuidString) + " AND kind="
             + ManagedTaskIndex.literal(kind.rawValue) + " AND state!='completed'"
-        var cursor: ManagedTaskJournal.Cursor?
-        while true {
-            let page = managedTaskJournal.page(after: cursor, limit: 50, predicate: predicate)
-            if let existing = page.first(where: {
-                !$0.dismissRequested
-                    && (kind != .transcription || $0.attemptKey == meeting.transcriptionAttempt?.idempotencyKey)
-            }) {
-                return existing
+        let journal = managedTaskJournal
+        return try await managedTaskIO.perform {
+            var cursor: ManagedTaskJournal.Cursor?
+            while true {
+                let page = journal.page(after: cursor, limit: 50, predicate: predicate)
+                if let failure = journal.readFailure { throw failure }
+                if let existing = page.first(where: {
+                    !$0.dismissRequested
+                        && (kind != .transcription || $0.attemptKey == meeting.transcriptionAttempt?.idempotencyKey)
+                }) {
+                    return existing
+                }
+                guard page.count == 50, let last = page.last else { return nil }
+                cursor = .init(createdAt: last.createdAt, id: last.id)
             }
-            guard page.count == 50, let last = page.last else { return nil }
-            cursor = .init(createdAt: last.createdAt, id: last.id)
         }
     }
 
     /// Journal first: provider work must not start from an uncommitted intent.
-    @discardableResult private func saveManagedTask(_ task: ManagedTaskRecord) -> Bool {
+    @discardableResult private func saveManagedTask(_ task: ManagedTaskRecord) async -> Bool {
         do {
             guard libraryWritable else { throw ServiceError("The meeting library is read-only.") }
             if !task.isPreview {
-                let previous = managedTaskJournal.record(id: task.id)
-                try managedTaskJournal.upsert(task)
-                if let previous { managedTaskStateCounts[previous.state, default: 0] -= 1 }
+                let journal = managedTaskJournal
+                let previous = try await managedTaskIO.perform {
+                    let previous = try journal.query(
+                        where: "id=" + ManagedTaskIndex.literal(task.id.uuidString), limit: 1
+                    ).first
+                    try journal.upsert(task)
+                    return previous
+                }
+                if let previous {
+                    managedTaskStateCounts[previous.state, default: 0] -= 1
+                    if previous.state.isActive {
+                        let remaining = managedTaskActiveCounts[previous.key, default: 0] - 1
+                        if remaining > 0 {
+                            managedTaskActiveCounts[previous.key] = remaining
+                        }
+                        else {
+                            managedTaskActiveCounts.removeValue(forKey: previous.key)
+                        }
+                    }
+                }
                 managedTaskStateCounts[task.state, default: 0] += 1
+                if task.state.isActive { managedTaskActiveCounts[task.key, default: 0] += 1 }
             }
             cacheManagedTask(task)
             managedTaskRevision += 1
+            if !task.state.isActive && managedTaskOperations[task.id] == nil {
+                for waiter in managedTaskWaiters.removeValue(forKey: task.id) ?? [] { waiter.resume() }
+            }
             return true
         }
         catch {
             managedTaskJournalError = "Couldn’t save tasks. \(error.localizedDescription)"
+            if isPreparingToQuit { managedTaskShutdownError = managedTaskJournalError }
             return false
         }
     }
 
-    func waitForManagedTask(_ id: UUID) async {
-        guard managedTask(id: id)?.state.isActive == true else { return }
-        await withCheckedContinuation { managedTaskWaiters[id, default: []].append($0) }
-    }
-
-    private func startManagedTasks() {
-        guard !isChangingLibrary, !isSchedulingManagedTasks, !managedTasksLoading else { return }
+    private func startManagedTasks() async {
+        guard !isChangingLibrary, !isPreparingToQuit, !isSchedulingManagedTasks, !managedTasksLoading else { return }
         isSchedulingManagedTasks = true
         defer { isSchedulingManagedTasks = false }
         for kind in [BackgroundJob.Kind.transcription, .summary, .diarization] {
@@ -192,28 +243,59 @@ extension MeetingStore {
             while true {
                 let running = managedTasks.filter { $0.kind == kind && $0.state == .running && !$0.isPreview }.count
                 guard running < limit else { break }
-                let candidates =
-                    (try? managedTaskJournal.query(
-                        where: "kind=" + ManagedTaskIndex.literal(kind.rawValue) + " AND state='queued'",
-                        order: "priority DESC,created,id", limit: limit - running)) ?? []
+                let journal = managedTaskJournal
+                let candidates: [ManagedTaskRecord]
+                do {
+                    candidates = try await managedTaskIO.perform {
+                        try journal.query(
+                            where: "kind=" + ManagedTaskIndex.literal(kind.rawValue) + " AND state='queued'",
+                            order: "priority DESC,created,id", limit: limit - running)
+                    }
+                }
+                catch {
+                    managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+                    for task in managedTasks where task.state == .queued {
+                        failUncommittedTask(task)
+                    }
+                    return
+                }
+                guard !isPreparingToQuit else { return }
                 guard !candidates.isEmpty else { break }
                 for candidate in candidates {
                     let id = candidate.id
                     var task = candidate
                     cacheManagedTask(task)
-                    if task.kind == .summary && task.isAutomatic && !settings.autoSummarize {
-                        cancelManagedTask(id: id)
+                    if managedTaskStopRequests.contains(id)
+                        || (task.kind == .summary && task.isAutomatic && !settings.autoSummarize)
+                    {
+                        await cancelManagedTaskCommand(id: id)
                         // A rejected durable transition must not retry the same head forever.
-                        guard managedTaskJournal.record(id: id)?.state != .queued else { return }
+                        guard managedTaskActiveCounts[task.key, default: 0] == 0 else { return }
                         continue
                     }
                     task.state = .running
                     task.progress = "Starting…"
-                    guard saveManagedTask(task) else {
+                    guard await saveManagedTask(task) else {
                         failUncommittedTask(task)
                         return
                     }
-                    _ = beginJob(task.kind, .meeting(task.meetingID), progress: "Starting…")
+                    if managedTaskStopRequests.contains(id) {
+                        await finishManagedTask(
+                            id, state: .cancelled, recovery: .manual, message: "Removed before it started.")
+                        continue
+                    }
+                    if isPreparingToQuit {
+                        task.state = .queued
+                        task.progress = "Waiting to start"
+                        _ = await saveManagedTask(task)
+                        return
+                    }
+                    guard beginJob(task.kind, .meeting(task.meetingID), progress: "Starting…") else {
+                        task.state = .queued
+                        task.progress = "Waiting to start"
+                        _ = await saveManagedTask(task)
+                        return
+                    }
                     managedTaskOperations[id] = Task { [weak self] in await self?.runManagedTask(id) }
                 }
             }
@@ -224,13 +306,14 @@ extension MeetingStore {
         guard let task = managedTask(id: id) else { return }
         do {
             try Task.checkCancellation()
-            guard ensureMeetingLoaded(id: task.meetingID),
+            guard await ensureMeetingLoaded(id: task.meetingID),
                 let meeting = meetings.first(where: { $0.id == task.meetingID })
             else {
                 throw ServiceError("This meeting no longer exists.")
             }
+            try Task.checkCancellation()
             if meeting.completedTaskIDs[task.kind.rawValue] == task.id {
-                finishManagedTask(id, state: .completed, recovery: .none)
+                await completeManagedTask(id, state: .completed, recovery: .none)
                 return
             }
             switch task.kind {
@@ -238,30 +321,43 @@ extension MeetingStore {
                 try await performTranscription(id: task.meetingID, providerID: task.providerID)
             case .summary:
                 if task.kind == .summary && task.isAutomatic && !settings.autoSummarize {
-                    finishManagedTask(
+                    await completeManagedTask(
                         id, state: .cancelled, recovery: .none, message: "Automatically Summarize is turned off.")
                     return
                 }
                 pendingAutomaticSummaries.remove(task.meetingID)
-                try await performSummary(id: task.meetingID, providerID: task.providerID)
+                try await performSummary(
+                    id: task.meetingID, providerID: task.providerID, instructions: task.summaryInstructions)
             case .diarization:
                 try await performLocalDiarization(id: task.meetingID, providerID: task.providerID)
             default: throw ServiceError("This task type cannot run from Tasks yet.")
             }
             try Task.checkCancellation()
-            finishManagedTask(id, state: .completed, recovery: .none)
+            await completeManagedTask(id, state: .completed, recovery: .none)
             if task.kind == .transcription { scheduleAutomaticSpeakerLabeling(id: task.meetingID) }
         }
         catch {
             if Task.isCancelled || error is CancellationError {
-                finishManagedTask(
-                    id, state: .cancelled, recovery: .manual,
-                    message: task.kind == .diarization
-                        ? "Speaker labeling cancelled. The current transcript was kept."
-                        : "Stopped waiting on this Mac. The provider may still be processing the request.")
+                if isPreparingToQuit && !managedTaskStopRequests.contains(id) {
+                    let hasReceipt =
+                        meetings.first(where: { $0.id == task.meetingID })?
+                        .completedTaskIDs[task.kind.rawValue] == id
+                    await completeManagedTask(
+                        id, state: hasReceipt ? .completed : .failed,
+                        recovery: hasReceipt ? .none : task.kind == .transcription ? .automatic : .manual,
+                        message: hasReceipt ? nil : "Interrupted when the app closed.")
+                }
+                else {
+                    await completeManagedTask(
+                        id, state: .cancelled, recovery: .manual,
+                        message: task.kind == .diarization
+                            ? "Speaker labeling cancelled. The current transcript was kept."
+                            : "Stopped waiting on this Mac. The provider may still be processing the request.")
+                }
             }
             else if error is MissingTranscriptionJob {
-                finishManagedTask(id, state: .failed, recovery: .restartRequired, message: error.localizedDescription)
+                await completeManagedTask(
+                    id, state: .failed, recovery: .restartRequired, message: error.localizedDescription)
             }
             else {
                 let latest = managedTasks.first { $0.id == id } ?? task
@@ -269,31 +365,43 @@ extension MeetingStore {
                     latest.kind == .transcription && latest.remoteJobID != nil
                     && !latest.providerFailed && !latest.hasSavedResult
                     && (error is URLError || (error as? ServiceHTTPStatusError).map { $0.statusCode >= 500 } == true)
-                finishManagedTask(
+                await completeManagedTask(
                     id, state: .failed, recovery: retryOnWake ? .automatic : .manual,
                     message: error.localizedDescription)
             }
         }
     }
 
+    private func completeManagedTask(
+        _ id: UUID, state: ManagedTaskState, recovery: ManagedTaskRecovery, message: String? = nil
+    ) async {
+        await managedTaskCommands.run {
+            await self.finishManagedTask(id, state: state, recovery: recovery, message: message)
+        }
+    }
+
     private func finishManagedTask(
         _ id: UUID, state: ManagedTaskState, recovery: ManagedTaskRecovery, message: String? = nil
-    ) {
+    ) async {
         guard var task = managedTask(id: id) else { return }
         task.state = state
         task.recovery = recovery
         task.finishedAt = Date()
         task.errorMessage = message
         task.progress = state == .completed ? "Completed" : state == .cancelled ? "Stopped" : "Needs attention"
-        if !saveManagedTask(task) {
+        let committed = await saveManagedTask(task)
+        if committed {
+            managedTaskStopRequests.remove(id)
+        }
+        else {
             // The result receipt, committed with meeting content, protects recovery.
             if let index = managedTasks.firstIndex(where: { $0.id == id }) { managedTasks[index] = task }
         }
         managedTaskOperations.removeValue(forKey: id)
         endJob(task.kind, .meeting(task.meetingID))
         for waiter in managedTaskWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
-        reloadExternalManagedTasks()
-        startManagedTasks()
+        await reloadExternalManagedTasksCommand()
+        await startManagedTasks()
         if task.kind == .summary { startPendingAutomaticSummary(id: task.meetingID) }
     }
 
@@ -307,15 +415,21 @@ extension MeetingStore {
         for waiter in managedTaskWaiters.removeValue(forKey: task.id) ?? [] { waiter.resume() }
     }
 
-    func cancelManagedTask(id: UUID) {
-        guard var task = managedTask(id: id), task.state.isActive else { return }
+    func cancelManagedTaskCommand(id: UUID) async {
+        guard var task = managedTask(id: id), task.state.isActive else {
+            managedTaskStopRequests.remove(id)
+            return
+        }
         if task.kind == .summary { pendingAutomaticSummaries.remove(task.meetingID) }
         task.userStopped = true
         task.recovery = .manual
         task.progress = "Stopping…"
-        guard saveManagedTask(task) else { return }
+        guard await saveManagedTask(task) else {
+            if task.state == .queued { failUncommittedTask(task) }
+            return
+        }
         if task.state == .queued || task.isPreview {
-            finishManagedTask(
+            await finishManagedTask(
                 id, state: .cancelled, recovery: .manual,
                 message: task.state == .queued ? "Removed before it started." : "Stopped waiting on this Mac.")
         }
@@ -325,7 +439,7 @@ extension MeetingStore {
     }
 
     func canRetryManagedTask(_ task: ManagedTaskRecord) -> Bool {
-        guard task.state == .failed || task.state == .cancelled, containsMeeting(id: task.meetingID),
+        guard task.state == .failed || task.state == .cancelled,
             !isJobRunning(task.kind, .meeting(task.meetingID)), !task.dismissRequested, !task.restartRequested,
             task.recovery != .restartRequired && task.recovery != .blocked
         else { return false }
@@ -349,54 +463,56 @@ extension MeetingStore {
 
     func canRestartManagedTask(_ task: ManagedTaskRecord) -> Bool {
         task.recovery == .restartRequired && task.kind == .transcription && !task.state.isActive
-            && containsMeeting(id: task.meetingID) && !isJobRunning(.transcription, .meeting(task.meetingID))
+            && !isJobRunning(.transcription, .meeting(task.meetingID))
     }
 
     func managedTaskActionTitle(_ task: ManagedTaskRecord) -> String {
         task.kind == .transcription && (task.interrupted || task.attemptKey != nil) ? "Resume" : "Retry"
     }
 
-    func retryManagedTask(id: UUID) {
+    func retryManagedTaskCommand(id: UUID) async {
         guard let task = managedTask(id: id), canRetryManagedTask(task) else { return }
         if task.isPreview {
-            finishManagedTask(id, state: .completed, recovery: .none)
+            await finishManagedTask(id, state: .completed, recovery: .none)
             return
         }
-        guard ensureMeetingLoaded(id: task.meetingID), canRetryManagedTask(task) else { return }
+        guard await ensureMeetingLoaded(id: task.meetingID), canRetryManagedTask(task) else { return }
         if task.kind == .transcription {
-            _ = queueTranscription(id: task.meetingID, providerID: task.providerID)
+            _ = await queueTranscriptionCommand(id: task.meetingID, providerID: task.providerID)
         }
         else if task.kind == .diarization {
-            _ = queueSpeakerLabeling(id: task.meetingID, providerID: task.providerID)
+            _ = await queueSpeakerLabelingCommand(id: task.meetingID, providerID: task.providerID)
         }
         else {
-            _ = queueSummary(id: task.meetingID, providerID: task.providerID)
+            _ = await queueSummaryCommand(
+                id: task.meetingID, providerID: task.providerID, instructions: task.summaryInstructions)
         }
     }
 
-    func restartManagedTask(id: UUID) {
+    func restartManagedTaskCommand(id: UUID) async {
         if let preview = managedTasks.first(where: { $0.id == id && $0.isPreview }), canRestartManagedTask(preview) {
-            finishManagedTask(id, state: .completed, recovery: .none)
+            await finishManagedTask(id, state: .completed, recovery: .none)
             return
         }
         guard var task = managedTask(id: id), canRestartManagedTask(task),
-            ensureMeetingLoaded(id: task.meetingID), let meeting = meetings.first(where: { $0.id == task.meetingID }),
+            await ensureMeetingLoaded(id: task.meetingID),
+            let meeting = meetings.first(where: { $0.id == task.meetingID }),
             let attempt = meeting.transcriptionAttempt, attempt.idempotencyKey == task.attemptKey,
             attempt.remoteJobExpired == true
         else { return }
         task.restartRequested = true
-        guard saveManagedTask(task) else { return }
-        finishRequestedRestart(task)
+        guard await saveManagedTask(task) else { return }
+        await finishRequestedRestart(task)
     }
 
-    private func finishRequestedRestart(_ original: ManagedTaskRecord) {
-        guard ensureMeetingLoaded(id: original.meetingID),
+    private func finishRequestedRestart(_ original: ManagedTaskRecord) async {
+        guard await ensureMeetingLoaded(id: original.meetingID),
             var meeting = meetings.first(where: { $0.id == original.meetingID })
         else { return }
         if let attempt = meeting.transcriptionAttempt {
             guard attempt.idempotencyKey == original.attemptKey && attempt.remoteJobExpired == true else { return }
             meeting.transcriptionAttempt = nil
-            guard updateMeeting(meeting) else { return }
+            guard await updateMeeting(meeting) else { return }
         }
         var task = original
         task.restartRequested = false
@@ -411,43 +527,53 @@ extension MeetingStore {
         task.errorMessage = nil
         task.finishedAt = nil
         task.progress = "Waiting to restart"
-        guard saveManagedTask(task) else { return }
-        startManagedTasks()
+        guard await saveManagedTask(task) else { return }
+        await startManagedTasks()
     }
 
-    func prioritizeManagedTask(id: UUID) {
+    func prioritizeManagedTaskCommand(id: UUID) async {
         guard var task = managedTask(id: id), task.state == .queued else { return }
-        task.queuePriority =
-            ((try? managedTaskJournal.query(order: "priority DESC", limit: 1).first?.queuePriority) ?? 0) + 1
-        guard saveManagedTask(task) else { return }
-        startManagedTasks()
+        let journal = managedTaskJournal
+        do {
+            task.queuePriority = try await managedTaskIO.perform {
+                (try journal.query(order: "priority DESC", limit: 1).first?.queuePriority ?? 0) + 1
+            }
+        }
+        catch {
+            managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+            return
+        }
+        guard await saveManagedTask(task) else { return }
+        await startManagedTasks()
     }
 
-    func removeManagedTask(id: UUID) {
+    func removeManagedTaskCommand(id: UUID) async {
         guard var task = managedTask(id: id), task.state != .running else { return }
-        if task.state == .queued { cancelManagedTask(id: id) }
+        if task.state == .queued { await cancelManagedTaskCommand(id: id) }
         guard !isJobRunning(task.kind, .meeting(task.meetingID)) else { return }
         task.state = task.state == .queued ? .cancelled : task.state
         task.dismissRequested = true
         task.userStopped = true
-        guard saveManagedTask(task) else { return }
-        finishRequestedDismiss(task)
+        guard await saveManagedTask(task) else { return }
+        await finishRequestedDismiss(task)
     }
 
-    private func finishRequestedDismiss(_ task: ManagedTaskRecord) {
-        if task.kind == .transcription, let attemptKey = task.attemptKey, ensureMeetingLoaded(id: task.meetingID),
+    private func finishRequestedDismiss(_ task: ManagedTaskRecord) async {
+        if task.kind == .transcription, let attemptKey = task.attemptKey, await ensureMeetingLoaded(id: task.meetingID),
             var meeting = meetings.first(where: { $0.id == task.meetingID }),
             meeting.transcriptionAttempt?.idempotencyKey == attemptKey
         {
             meeting.transcriptionAttempt = nil
-            guard updateMeeting(meeting) else { return }
+            guard await updateMeeting(meeting) else { return }
         }
         do {
             if !task.isPreview {
-                try managedTaskJournal.delete(task.id)
+                let journal = managedTaskJournal
+                try await managedTaskIO.perform { try journal.delete(task.id) }
                 managedTaskStateCounts[task.state, default: 0] -= 1
             }
             managedTasks.removeAll { $0.id == task.id }
+            managedTaskStopRequests.remove(task.id)
             managedTaskRevision += 1
         }
         catch { managedTaskJournalError = "Couldn’t dismiss this task. \(error.localizedDescription)" }
@@ -455,20 +581,31 @@ extension MeetingStore {
 
     /// External task edits are displayed after current operations finish. Changed active rows
     /// require a deliberate Resume so editing a file cannot silently submit new provider work.
-    func reloadExternalManagedTasks() {
-        guard !isChangingLibrary, managedTaskOperations.isEmpty, managedTaskJournal.hasExternalChanges else { return }
+    func reloadExternalManagedTasksCommand() async {
+        guard !isChangingLibrary, !isPreparingToQuit, managedTaskOperations.isEmpty else { return }
+        let journal = managedTaskJournal
         do {
-            try managedTaskJournal.prepare()
+            let changed = try await managedTaskIO.perform { journal.hasExternalChanges }
+            guard changed else { return }
+            let initial = try await managedTaskIO.perform {
+                try journal.prepare()
+                return try ManagedTaskSnapshot.read(journal)
+            }
+            applyManagedTaskSnapshot(initial)
             var cursor: ManagedTaskJournal.Cursor?
             while true {
-                let batch = managedTaskJournal.page(
-                    after: cursor, limit: 50, predicate: "state IN ('queued','running')")
-                if let failure = managedTaskJournal.readFailure { throw failure }
-                guard let last = batch.last else { break }
-                cursor = .init(createdAt: last.createdAt, id: last.id)
-                for var record in batch
-                where try record.state == .running || managedTaskJournal.changedSinceRebuild(record.id) {
-                    if record.state == .running, ensureMeetingLoaded(id: record.meetingID),
+                let nextCursor = cursor
+                let (batch, next) = try await managedTaskIO.perform {
+                    let records = journal.page(after: nextCursor, limit: 50, predicate: "state IN ('queued','running')")
+                    if let failure = journal.readFailure { throw failure }
+                    let changed = try records.filter { try $0.state == .running || journal.changedSinceRebuild($0.id) }
+                    let next = records.last.map { ManagedTaskJournal.Cursor(createdAt: $0.createdAt, id: $0.id) }
+                    return (changed, next)
+                }
+                guard let next else { break }
+                cursor = next
+                for var record in batch {
+                    if record.state == .running, await ensureMeetingLoaded(id: record.meetingID),
                         let meeting = meetings.first(where: { $0.id == record.meetingID }),
                         meeting.completedTaskIDs[record.kind.rawValue] == record.id
                     {
@@ -477,21 +614,19 @@ extension MeetingStore {
                         record.progress = "Completed"
                         record.errorMessage = nil
                         record.finishedAt = record.finishedAt ?? Date()
-                        try managedTaskJournal.upsert(record)
-                        continue
                     }
-                    record.state = .failed
-                    record.recovery = .manual
-                    record.progress = "Needs attention"
-                    record.errorMessage = "This task changed outside the app. Resume to continue."
-                    try managedTaskJournal.upsert(record)
+                    else {
+                        record.state = .failed
+                        record.recovery = .manual
+                        record.progress = "Needs attention"
+                        record.errorMessage = "This task changed outside the app. Resume to continue."
+                    }
+                    guard await saveManagedTask(record) else {
+                        throw ServiceError(managedTaskJournalError ?? "Couldn’t save tasks.")
+                    }
                 }
             }
-            let recent = managedTaskJournal.page(limit: 100)
-            if let failure = managedTaskJournal.readFailure { throw failure }
-            managedTasks = recent + managedTasks.filter(\.isPreview)
-            refreshManagedTaskCounts()
-            managedTaskRevision += 1
+            applyManagedTaskSnapshot(try await managedTaskIO.perform { try ManagedTaskSnapshot.read(journal) })
             managedTaskJournalError = nil
         }
         catch {
@@ -500,92 +635,104 @@ extension MeetingStore {
         }
     }
 
-    private func refreshManagedTaskCounts() {
-        managedTaskStateCounts = Dictionary(
-            uniqueKeysWithValues: ManagedTaskState.allCases.map {
-                ($0, managedTaskJournal.count(where: "state=" + ManagedTaskIndex.literal($0.rawValue)))
-            })
-    }
-
-    func prepareManagedTasks() async {
-        managedTasksLoading = true
-        let journal = managedTaskJournal
-        do {
-            try await Task.detached(priority: .utility) { try journal.prepare() }.value
-            let recent = journal.page(limit: 100)
-            if let failure = journal.readFailure { throw failure }
-            managedTasks = recent + managedTasks.filter(\.isPreview)
-            refreshManagedTaskCounts()
-            managedTaskRevision += 1
-            managedTasksLoading = false
-            recoverUnfinishedManagedTasks()
+    private func applyManagedTaskSnapshot(_ snapshot: ManagedTaskSnapshot) {
+        let recentIDs = Set(snapshot.recent.map(\.id))
+        let pinned = managedTasks.filter {
+            !recentIDs.contains($0.id) && ($0.isPreview || managedTaskOperations[$0.id] != nil)
         }
-        catch {
-            managedTasksLoading = false
-            managedTaskJournalError = "Couldn’t load tasks. \(error.localizedDescription)"
+        managedTasks = snapshot.recent + pinned
+        managedTaskStateCounts = snapshot.counts
+        managedTaskActiveCounts = snapshot.activeCounts
+        for id in Array(managedTaskWaiters.keys)
+        where !snapshot.activeIDs.contains(id) && managedTaskOperations[id] == nil {
+            for waiter in managedTaskWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         }
-    }
-
-    func restoreManagedTasks() throws {
-        try managedTaskJournal.prepare()
-        let recent = managedTaskJournal.page(limit: 100)
-        if let failure = managedTaskJournal.readFailure { throw failure }
-        managedTasks = recent
-        refreshManagedTaskCounts()
         managedTaskRevision += 1
     }
 
-    /// Launch and wake share this path. Existing local operations are never duplicated.
-    func recoverUnfinishedManagedTasks() {
-        guard !isChangingLibrary, !isSchedulingManagedTasks, !managedTasksLoading else { return }
-        isSchedulingManagedTasks = true
-        recoverManagedTaskBatch(after: nil)
+    func prepareManagedTasks() async {
+        await managedTaskCommands.run {
+            self.managedTasksLoading = true
+            do {
+                try await self.restoreManagedTasksCommand()
+                self.managedTasksLoading = false
+                await self.recoverUnfinishedManagedTasksCommand()
+            }
+            catch {
+                self.managedTasksLoading = false
+                self.managedTaskJournalError = "Couldn’t load tasks. \(error.localizedDescription)"
+            }
+        }
     }
 
-    private func recoverManagedTaskBatch(after cursor: ManagedTaskJournal.Cursor?) {
+    func restoreManagedTasksCommand() async throws {
+        let journal = managedTaskJournal
+        let snapshot = try await managedTaskIO.perform {
+            try journal.prepare()
+            return try ManagedTaskSnapshot.read(journal)
+        }
+        applyManagedTaskSnapshot(snapshot)
+    }
+
+    /// Launch and wake share this path. Existing local operations are never duplicated.
+    func recoverUnfinishedManagedTasksCommand() async {
+        guard !isChangingLibrary, !isPreparingToQuit, !isSchedulingManagedTasks, !managedTasksLoading else { return }
+        isSchedulingManagedTasks = true
+        await recoverManagedTaskBatch(after: nil)
+    }
+
+    private func recoverManagedTaskBatch(after cursor: ManagedTaskJournal.Cursor?) async {
         guard !isChangingLibrary else {
             isSchedulingManagedTasks = false
             return
         }
-        let batch = managedTaskJournal.page(after: cursor, limit: 50, predicate: "state!='completed'")
-        if let failure = managedTaskJournal.readFailure {
-            managedTaskJournalError = "Couldn’t recover tasks. \(failure.localizedDescription)"
+        let journal = managedTaskJournal
+        let batch: [ManagedTaskRecord]
+        do {
+            batch = try await managedTaskIO.perform {
+                let records = journal.page(after: cursor, limit: 50, predicate: "state!='completed'")
+                if let failure = journal.readFailure { throw failure }
+                return records
+            }
+        }
+        catch {
+            managedTaskJournalError = "Couldn’t recover tasks. \(error.localizedDescription)"
             isSchedulingManagedTasks = false
             return
         }
         guard let last = batch.last else {
             isSchedulingManagedTasks = false
-            startManagedTasks()
+            await startManagedTasks()
             return
         }
         for original in batch {
             cacheManagedTask(original)
             guard managedTaskOperations[original.id] == nil else { continue }
             if original.dismissRequested {
-                finishRequestedDismiss(original)
+                await finishRequestedDismiss(original)
                 continue
             }
             if original.restartRequested {
-                finishRequestedRestart(original)
+                await finishRequestedRestart(original)
                 continue
             }
             guard original.state != .completed else { continue }
-            guard ensureMeetingLoaded(id: original.meetingID),
+            guard await ensureMeetingLoaded(id: original.meetingID),
                 let meeting = meetings.first(where: { $0.id == original.meetingID })
             else {
-                finishManagedTask(
+                await finishManagedTask(
                     original.id, state: .failed, recovery: .blocked, message: "This meeting no longer exists.")
                 continue
             }
             if meeting.completedTaskIDs[original.kind.rawValue] == original.id {
-                finishManagedTask(original.id, state: .completed, recovery: .none)
+                await finishManagedTask(original.id, state: .completed, recovery: .none)
                 continue
             }
             guard original.state.isActive || (original.state == .failed && original.recovery == .automatic) else {
                 continue
             }
             guard [.transcription, .summary, .diarization].contains(original.kind) else {
-                finishManagedTask(
+                await finishManagedTask(
                     original.id, state: .failed, recovery: .blocked,
                     message: "This app cannot run this task type. The saved task has been kept.")
                 continue
@@ -593,24 +740,24 @@ extension MeetingStore {
             var task = original
             task.interrupted = true
             if task.userStopped {
-                finishManagedTask(
+                await finishManagedTask(
                     task.id, state: .cancelled, recovery: .manual, message: "Stopped waiting on this Mac.")
                 continue
             }
             if task.kind == .diarization {
-                finishManagedTask(
+                await finishManagedTask(
                     task.id, state: .failed, recovery: .manual,
                     message: "Speaker labeling was interrupted. Retry starts analysis again.")
                 continue
             }
             if task.kind == .summary && task.state != .queued {
-                finishManagedTask(
+                await finishManagedTask(
                     task.id, state: .failed, recovery: .manual,
                     message: "The provider may have processed the summary. Retry starts a new request.")
                 continue
             }
             if task.kind == .transcription && task.attemptKey != nil && meeting.transcriptionAttempt == nil {
-                finishManagedTask(
+                await finishManagedTask(
                     task.id, state: .failed, recovery: .blocked,
                     message:
                         "The saved transcription request is missing. Dismiss this task before starting another transcription."
@@ -619,20 +766,20 @@ extension MeetingStore {
             }
             if task.kind == .transcription, let attempt = meeting.transcriptionAttempt {
                 guard task.attemptKey == attempt.idempotencyKey else {
-                    finishManagedTask(
+                    await finishManagedTask(
                         task.id, state: .failed, recovery: .blocked,
                         message: "This meeting has a different transcription request. Open the meeting to review it.")
                     continue
                 }
                 task.capture(attempt)
                 if attempt.remoteJobExpired == true {
-                    finishManagedTask(
+                    await finishManagedTask(
                         task.id, state: .failed, recovery: .restartRequired,
                         message: MissingTranscriptionJob().localizedDescription)
                     continue
                 }
                 if attempt.failure != nil || (attempt.submissionUncertain && attempt.taskID == nil) {
-                    finishManagedTask(
+                    await finishManagedTask(
                         task.id, state: .failed, recovery: .blocked,
                         message: attempt.failure
                             ?? "The provider may have accepted this request. Check its job history before submitting again."
@@ -644,18 +791,15 @@ extension MeetingStore {
             task.progress = "Waiting to resume"
             task.errorMessage = nil
             task.finishedAt = nil
-            guard saveManagedTask(task) else { continue }
+            guard await saveManagedTask(task) else { continue }
         }
         if batch.count < 50 {
             isSchedulingManagedTasks = false
-            startManagedTasks()
+            await startManagedTasks()
         }
         else {
             let next = ManagedTaskJournal.Cursor(createdAt: last.createdAt, id: last.id)
-            Task { [weak self] in
-                await Task.yield()
-                self?.recoverManagedTaskBatch(after: next)
-            }
+            await recoverManagedTaskBatch(after: next)
         }
     }
 
@@ -669,33 +813,33 @@ extension MeetingStore {
     }
 
     /// Persist the binding before a provider can receive any audio or request.
-    func bindManagedTranscriptionAttempt(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) throws {
+    func bindManagedTranscriptionAttemptCommand(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) async throws {
         guard
             var task = managedTasks.first(where: {
                 $0.kind == .transcription && $0.meetingID == meetingID && $0.state.isActive
             })
         else { return }
         task.capture(attempt)
-        guard saveManagedTask(task) else {
+        guard await saveManagedTask(task) else {
             throw ServiceError(managedTaskJournalError ?? "Couldn’t save the transcription task.")
         }
     }
 
-    func reconcileManagedTaskCompletion(for meeting: Meeting, kind: BackgroundJob.Kind) {
+    func reconcileManagedTaskCompletionCommand(for meeting: Meeting, kind: BackgroundJob.Kind) async {
         guard let id = meeting.completedTaskIDs[kind.rawValue],
             let record = managedTask(id: id), !record.state.isActive, record.state != .completed
         else { return }
-        finishManagedTask(id, state: .completed, recovery: .none)
+        await finishManagedTask(id, state: .completed, recovery: .none)
     }
 
-    func bindSpeakerLabelingResult(_ resultID: UUID, meetingID: UUID) throws {
+    func bindSpeakerLabelingResultCommand(_ resultID: UUID, meetingID: UUID) async throws {
         guard
             var task = managedTasks.first(where: {
                 $0.kind == .diarization && $0.meetingID == meetingID && $0.state.isActive
             })
         else { return }
         task.speakerLabelingResultID = resultID
-        guard saveManagedTask(task) else {
+        guard await saveManagedTask(task) else {
             throw ServiceError(managedTaskJournalError ?? "Couldn’t save the speaker-labeling task.")
         }
     }

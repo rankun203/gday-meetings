@@ -71,7 +71,7 @@ struct LocalProviderConfigurationTests {
         let store = MeetingStore(dataDirectory: folder)
         var meeting = Meeting(title: "Synthetic speaker check")
         meeting.transcript = [TranscriptSegment(start: 0, end: 1, speaker: "", text: "Example passage")]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         var disabled = ServiceProvider(kind: .community1)
         disabled.isEnabled = false
         var labelsOff = ServiceProvider(kind: .community1)

@@ -46,6 +46,8 @@ struct MeetingDataPrivacyView: View {
                             groupRow(group)
                             Divider().padding(.vertical, 10)
                         }
+                        ListCountFooter(
+                            text: ListCountFooter.text(count: groups.count, singular: "Group", plural: "Groups"))
                     }.padding(.trailing, 8)
                 }
             }

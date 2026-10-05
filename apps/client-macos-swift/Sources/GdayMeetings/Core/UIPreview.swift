@@ -10,7 +10,7 @@ enum UIPreview {
         ProcessInfo.processInfo.arguments.contains("--ui-preview")
         || Bundle.main.object(forInfoDictionaryKey: "GdayUIPreview") as? Bool == true
 
-    @MainActor static func startSyntheticRecording(_ store: MeetingStore) {
+    @MainActor static func startSyntheticRecording(_ store: MeetingStore) async {
         guard enabled, store.recordingID == nil else { return }
         do {
             var meeting = Meeting(title: "Synthetic recording")
@@ -20,7 +20,7 @@ enum UIPreview {
             for (index, name) in meeting.audioFiles.enumerated() {
                 try writeFixture(to: folder.appendingPathComponent(name), source: index)
             }
-            try store.insertImportedMeeting(meeting)
+            try await store.insertImportedMeeting(meeting)
             store.recordingID = meeting.id
             store.recordingStartedAt = Date()
             store.recordingMeter.deliver(
@@ -42,6 +42,11 @@ enum UIPreview {
         }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Gday-UI-Preview-\(UUID())")
         let store = MeetingStore(dataDirectory: directory)
+        store.previewPreparation = Task { await prepare(store, directory: directory) }
+        return store
+    }
+
+    @MainActor private static func prepare(_ store: MeetingStore, directory: URL) async {
         LocalModelManager.configureShared(
             dataDirectory: directory, available: store.libraryWritable, migrateLegacy: false)
         do {
@@ -54,14 +59,14 @@ enum UIPreview {
                 for (index, name) in meeting.audioFiles.enumerated() {
                     try writeFixture(to: folder.appendingPathComponent(name), source: index)
                 }
-                try store.insertImportedMeeting(meeting)
+                try await store.insertImportedMeeting(meeting)
                 try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
                 try writeDataEventFixtures(directory: folder)
             }
-            let person = store.addPerson(name: "Alex Morgan")
-            let matched = store.addPerson(name: "Sam Chen")
-            let previewTag = store.addTag(name: "Preview")
-            let projectTag = store.addTag(name: "Planning")
+            let person = await store.addPerson(name: "Alex Morgan")
+            let matched = await store.addPerson(name: "Sam Chen")
+            let previewTag = await store.addTag(name: "Preview")
+            let projectTag = await store.addTag(name: "Planning")
             if var conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }) {
                 let first = MeetingSpeaker(
                     label: "sys_SPEAKER_00", track: "system", providerName: "RunPod",
@@ -139,7 +144,7 @@ enum UIPreview {
                 }
                 conversation.transcriptSource = TranscriptSource(
                     id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
-                store.updateMeeting(conversation)
+                await store.updateMeeting(conversation)
                 try seedVoiceExamples(store: store, meeting: conversation, firstPerson: person, secondPerson: matched)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 // The checkpoint shares the canonical segment store with the
@@ -147,7 +152,7 @@ enum UIPreview {
                 live.savedSegments = conversation.transcript
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
-                try seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
+                try await seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
@@ -160,7 +165,7 @@ enum UIPreview {
                             recording.language = "zh-Hans"
                         }
                         recording.replaceSpeakers([])
-                        store.updateMeeting(recording)
+                        await store.updateMeeting(recording)
                     }
                     store.recordingID = conversation.id
                     store.recordingStartedAt = Date()
@@ -221,7 +226,7 @@ enum UIPreview {
                                 : "Keep the meeting notes up to date."),
                         speakerID: meeting.speakers.first(where: { $0.label == label })?.id)
                 }
-                store.updateMeeting(meeting)
+                await store.updateMeeting(meeting)
             }
             if UIPreviewPerformanceFixtures.librarySize == nil,
                 UIPreviewPerformanceFixtures.flag("--synthetic-pagination", infoKey: "GdaySyntheticPagination")
@@ -231,7 +236,7 @@ enum UIPreview {
                     meeting.createdAt = Date().addingTimeInterval(-Double(index) * 3_600)
                     meeting.notes = index == 45 ? "Unique last-page search phrase" : "Synthetic notes for pagination."
                     meeting.transcript = [.init(text: "Synthetic transcript \(index)")]
-                    try store.insertImportedMeeting(meeting)
+                    try await store.insertImportedMeeting(meeting)
                 }
                 store.resetMeetingPages(evictLoaded: true)
             }
@@ -244,20 +249,20 @@ enum UIPreview {
             if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks")
                 || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
             {
-                seedTasks(store)
+                await seedTasks(store)
             }
-            try seedPagedTasks(store)
+            try await seedPagedTasks(store)
             if UIPreviewPerformanceFixtures.flag(
                 "--synthetic-pending-transcription", infoKey: "GdaySyntheticPendingTranscription"),
                 var meeting = store.meetings.first(where: { $0.title == "Synthetic single track" })
             {
                 meeting.transcript = [.init(start: 0, end: 2, text: "Original synthetic passage")]
-                guard store.updateMeeting(meeting) else {
+                guard await store.updateMeeting(meeting) else {
                     throw ServiceError(store.errorMessage ?? "Couldn’t save the preview transcript.")
                 }
                 var attempt = ProviderTranscriptionAttempt(provider: ServiceProvider(kind: .runpod), meeting: meeting)
                 attempt.result = [.init(start: 0, end: 2, text: "Replacement synthetic passage")]
-                try store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
+                try await store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
             }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
@@ -291,7 +296,6 @@ enum UIPreview {
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         configureGeneralScenario(store)
         UIPreviewPerformanceFixtures.schedule(store)
-        return store
     }
 
     @MainActor private static func seedVoiceExamples(
@@ -378,13 +382,13 @@ enum UIPreview {
     }
 
     /// Explicit fixtures exercise queue controls without starting provider work.
-    @MainActor private static func seedTasks(_ store: MeetingStore) {
+    @MainActor private static func seedTasks(_ store: MeetingStore) async {
         guard let conversation = store.meetings.first(where: { $0.title == "Synthetic conversation" }),
             let single = store.meetings.first(where: { $0.title == "Synthetic single track" })
         else { return }
-        let queuedID = store.createMeeting(title: "Synthetic queued recording")
-        let failedID = store.createMeeting(title: "Synthetic summary retry")
-        let expiredID = store.createMeeting(title: "Synthetic expired transcription")
+        let queuedID = await store.createMeeting(title: "Synthetic queued recording")
+        let failedID = await store.createMeeting(title: "Synthetic summary retry")
+        let expiredID = await store.createMeeting(title: "Synthetic expired transcription")
         let now = Date()
         store.managedTasks = [
             ManagedTaskRecord(
@@ -639,7 +643,7 @@ struct PreviewContainer<Content: View>: View {
                     Button("Components…") { showsComponents = true }
                         .popover(isPresented: $showsComponents) { PreviewComponents() }
                     if ProcessInfo.processInfo.arguments.contains("--synthetic-recording-start") {
-                        Button("Start Synthetic Recording") { UIPreview.startSyntheticRecording(store) }
+                        Button("Start Synthetic Recording") { Task { await UIPreview.startSyntheticRecording(store) } }
                             .disabled(store.recordingID != nil)
                     }
                     Picker("Appearance", selection: $appearance.selection) {

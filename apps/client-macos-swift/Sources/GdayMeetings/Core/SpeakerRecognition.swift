@@ -210,7 +210,9 @@ extension Meeting {
 extension MeetingStore {
     /// Save the assignment and explicitly assigned sample together through the library's
     /// atomic save/rollback path. Reassignment removes its earlier training sample.
-    func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) {
+    func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async {
+        guard await ensureMeetingLoaded(id: meetingID) else { return }
+        guard await flushCanonicalWrites() else { return }
         guard libraryWritable, var meeting = self.meeting(id: meetingID),
             let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }),
             meeting.speakers[index].canAssignPerson || personID == nil,
@@ -248,7 +250,7 @@ extension MeetingStore {
                 PersonVoiceSample(meetingID: meetingID, speakerID: speakerID, scope: scope, embedding: embedding))
         }
         meeting.replaceSpeakers(replacement)
-        updateMeeting(meeting)
+        await updateMeeting(meeting)
     }
 }
 

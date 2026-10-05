@@ -21,7 +21,7 @@ struct TranscriptSpeakerPicker: View {
     let meetingID: UUID
     let speaker: MeetingSpeaker
     var completed: (() -> Void)? = nil
-    var assignment: ((UUID?) -> Void)? = nil
+    var assignment: ((UUID?) async -> Void)? = nil
     var lineAssignment: ((UUID?) -> Void)? = nil
     @ViewState private var appliesToSpeaker = true
     @ViewState private var query = ""
@@ -58,7 +58,10 @@ struct TranscriptSpeakerPicker: View {
                 }
             }.frame(maxHeight: 220)
             if !newName.isEmpty && !hasExactMatch {
-                Button("Create and Assign \(newName)") { assign(store.addPerson(name: newName)) }
+                Button("Create and Assign \(newName)") {
+                    let name = newName
+                    Task { assign(await store.addPerson(name: name)) }
+                }
             }
             if speaker.personID != nil {
                 Button("Remove Assignment") { assign(nil) }
@@ -69,16 +72,18 @@ struct TranscriptSpeakerPicker: View {
     }
 
     private func assign(_ personID: UUID?) {
-        if !appliesToSpeaker, let lineAssignment {
-            lineAssignment(personID)
+        Task {
+            if !appliesToSpeaker, let lineAssignment {
+                lineAssignment(personID)
+            }
+            else if let assignment {
+                await assignment(personID)
+            }
+            else {
+                await store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
+            }
+            completed?()
+            dismiss()
         }
-        else if let assignment {
-            assignment(personID)
-        }
-        else {
-            store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
-        }
-        completed?()
-        dismiss()
     }
 }

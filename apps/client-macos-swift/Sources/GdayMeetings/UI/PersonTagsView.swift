@@ -45,9 +45,11 @@ struct PersonTagsView: View {
     }
 
     private func setTag(_ id: UUID, selected: Bool) {
-        guard var person else { return }
-        person.tagIDs.removeAll { $0 == id }
-        if selected { person.tagIDs.append(id) }
-        store.updatePerson(person)
+        Task {
+            guard var person else { return }
+            person.tagIDs.removeAll { $0 == id }
+            if selected { person.tagIDs.append(id) }
+            await store.updatePerson(person)
+        }
     }
 }

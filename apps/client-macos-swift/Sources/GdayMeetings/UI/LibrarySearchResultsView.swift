@@ -6,6 +6,18 @@ struct LibrarySearchResultsView: View {
     @Binding var mode: SearchMode
     var open: (SearchDisplayResult) -> Void
     var retry: () -> Void
+    var openPerson: (UUID) -> Void = { _ in }
+
+    private var footerText: String? {
+        guard !session.isLoading, session.error == nil, !session.canLoadMore,
+            !session.displayResults.isEmpty, let total = session.total
+        else { return nil }
+        if session.usesRankedSearch {
+            return ListCountFooter.text(
+                count: session.displayResults.count, singular: "Result Shown", plural: "Results Shown")
+        }
+        return ListCountFooter.text(count: total, singular: "Match", plural: "Matches")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,7 +27,26 @@ struct LibrarySearchResultsView: View {
                     Spacer()
                     SearchModePicker(selection: $mode)
                 }
-                if let total = session.total {
+                if let message = session.peopleError {
+                    Text(message).font(.callout).foregroundStyle(.secondary)
+                }
+                if !session.peopleResolution.candidates.isEmpty {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            peopleSection("People Matches", candidates: session.peopleResolution.confident)
+                            peopleSection(
+                                "People Suggestions",
+                                candidates: session.peopleResolution.candidates.filter { !$0.isConfident })
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 176)
+                }
+                if !session.contentQuery.isEmpty {
+                    Text("Content Results").font(.headline)
+                    if session.contentQuery != session.query {
+                        Text("Topic: \(session.contentQuery)").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                if let total = session.total, !session.contentQuery.isEmpty {
                     Text(
                         (session.usesRankedSearch ? "Top " : "")
                             + "\(total.formatted()) \(total == 1 ? "match" : "matches")"
@@ -32,14 +63,15 @@ struct LibrarySearchResultsView: View {
                 }.padding(.horizontal, AppTheme.contentInset).padding(.bottom, AppTheme.contentSpacing)
             }
             NativeSearchResults(
-                session: session, results: session.displayResults, generation: session.generation, open: open
+                session: session, results: session.displayResults, generation: session.generation,
+                footerText: footerText, open: open
             )
             .overlay {
                 if session.isLoading && session.displayResults.isEmpty {
                     ProgressView("Searching…")
                 }
-                else if session.total == 0 && session.error == nil {
-                    ContentUnavailableView.search(text: session.query)
+                else if session.total == 0 && session.error == nil && !session.contentQuery.isEmpty {
+                    ContentUnavailableView.search(text: session.contentQuery)
                 }
                 else if let error = session.error, session.displayResults.isEmpty {
                     ContentUnavailableView {
@@ -66,6 +98,28 @@ struct LibrarySearchResultsView: View {
         .background(AppTheme.readingBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    @ViewBuilder private func peopleSection(_ title: String, candidates: [PeopleNameCandidate]) -> some View {
+        if !candidates.isEmpty {
+            Text(title).font(.headline)
+            ForEach(candidates) { candidate in
+                Button {
+                    openPerson(candidate.personID)
+                } label: {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(candidate.name).font(.body)
+                        Text("Matched “\(candidate.matchedPhrase)”").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(candidate.name)")
+                .accessibilityHint(candidate.isConfident ? "People name match" : "Possible People name match")
+            }
+            ListCountFooter(text: ListCountFooter.text(count: candidates.count, singular: "Person", plural: "People"))
+        }
+    }
+
 }
 
 /// Reusable native cells retain a pixel viewport and selection when returning from a meeting.
@@ -73,6 +127,7 @@ private struct NativeSearchResults: NSViewRepresentable {
     let session: LibrarySearchSession
     let results: [SearchDisplayResult]
     let generation: UUID
+    let footerText: String?
     let open: (SearchDisplayResult) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -96,7 +151,7 @@ private struct NativeSearchResults: NSViewRepresentable {
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
         table.target = context.coordinator
-        table.doubleAction = #selector(Coordinator.activate)
+        table.doubleAction = #selector(Coordinator.doubleClicked)
         table.activate = { [weak coordinator = context.coordinator] in coordinator?.activate() }
         table.setAccessibilityLabel("Search Results")
         scroll.documentView = table
@@ -128,11 +183,12 @@ private struct NativeSearchResults: NSViewRepresentable {
         func update(_ value: NativeSearchResults) {
             guard let table, let scroll else { return }
             updating = true
+            let footerChanged = parent.footerText != value.footerText
             parent = value
             let reset = generation != value.generation
             if reset { announced = false }
             generation = value.generation
-            if rows != value.results || reset {
+            if rows != value.results || reset || footerChanged {
                 let offset = value.session.scrollOffset
                 rows = value.results
                 table.reloadData()
@@ -177,7 +233,11 @@ private struct NativeSearchResults: NSViewRepresentable {
                 Task { @MainActor in session.loadMore() }
             }
         }
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.footerText == nil ? 0 : 1) }
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            rows.indices.contains(row) ? 78 : 40
+        }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
             parent.session.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
@@ -186,7 +246,14 @@ private struct NativeSearchResults: NSViewRepresentable {
             guard let table, rows.indices.contains(table.selectedRow) else { return }
             parent.open(rows[table.selectedRow])
         }
+        @objc func doubleClicked() {
+            guard let table, rows.indices.contains(table.clickedRow) else { return }
+            parent.open(rows[table.clickedRow])
+        }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            if row == rows.count, let text = parent.footerText {
+                return NativeListCountCell.make(in: tableView, text: text)
+            }
             let identifier = NSUserInterfaceItemIdentifier("search-result")
             let cell =
                 tableView.makeView(withIdentifier: identifier, owner: nil) as? SearchResultCell ?? SearchResultCell()

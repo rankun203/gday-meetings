@@ -257,21 +257,26 @@ final class LibraryIndex: @unchecked Sendable {
         String(decoding: try JSONEncoder().encode(ids.map(\.uuidString).sorted()), as: UTF8.self)
     }
 
-    func count(personID: UUID? = nil, tagID: UUID? = nil, excludingTagIDs: Set<UUID> = []) throws -> Int {
+    func count(personID: UUID? = nil, tagID: UUID? = nil, excludingTagIDs: Set<UUID> = [], query: String = "") throws
+        -> Int
+    {
         lock.lock()
         defer { lock.unlock() }
         let target = personID ?? tagID
         let sql: String
-        if excludingTagIDs.isEmpty {
+        if excludingTagIDs.isEmpty && query.isEmpty {
             sql =
                 target == nil
                 ? "SELECT count(*) FROM meetings" : "SELECT count(*) FROM relations WHERE kind=? AND target=?"
         }
         else {
-            sql =
-                "SELECT count(*) FROM meetings m WHERE "
-                + (target == nil ? "" : "m.id IN (SELECT meeting FROM relations WHERE kind=? AND target=?) AND ")
-                + Self.exclusionClause
+            var clauses: [String] = []
+            if target != nil { clauses.append("m.id IN (SELECT meeting FROM relations WHERE kind=? AND target=?)") }
+            if !excludingTagIDs.isEmpty { clauses.append(Self.exclusionClause) }
+            if !query.isEmpty {
+                clauses.append("m.id IN (SELECT meeting FROM search_passages WHERE search_passages MATCH ?)")
+            }
+            sql = "SELECT count(*) FROM meetings m WHERE " + clauses.joined(separator: " AND ")
         }
         let stmt = try statement(sql)
         defer { release(stmt) }
@@ -280,6 +285,10 @@ final class LibraryIndex: @unchecked Sendable {
             bind(target.uuidString, 2, stmt)
         }
         if !excludingTagIDs.isEmpty { bind(try encodedTagIDs(excludingTagIDs), target == nil ? 1 : 3, stmt) }
+        if !query.isEmpty {
+            let position: Int32 = (target == nil ? 1 : 3) + (excludingTagIDs.isEmpty ? 0 : 1)
+            bind("\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\"", position, stmt)
+        }
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw failure() }
         return Int(sqlite3_column_int64(stmt, 0))
     }

@@ -215,6 +215,10 @@ struct NativeTranscriptView: NSViewRepresentable {
             activeRow = nil
             activeRows.removeAll(keepingCapacity: true)
             withoutLayoutAnimation {
+                let width = table.tableColumns.first?.width ?? table.bounds.width
+                // A source update can cache heights at an intermediate width,
+                // even when the next layout returns to the previously settled width.
+                if settledWidth != width { settledWidth = nil }
                 if sourceChanged || presentationChanged || liveReset {
                     table.reloadData()
                 }
@@ -465,7 +469,8 @@ struct NativeTranscriptView: NSViewRepresentable {
             let visibleRow = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
             let offset = visibleRow >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: visibleRow).minY : 0
             withoutLayoutAnimation {
-                let width = table.bounds.width.rounded(.down)
+                // Columns can settle to a new width while document bounds stay unchanged.
+                let width = table.tableColumns.first?.width ?? table.bounds.width
                 if settledWidth != width {
                     // noteHeightOfRows schedules per-row geometry transitions inside
                     // AppKit. A synchronous reload has no row movement animation.
@@ -652,6 +657,7 @@ struct NativeTranscriptView: NSViewRepresentable {
         var speaker: String
         var width: CGFloat
         var height: CGFloat
+        var unwrapped: CGSize?
     }
     private var values: [UUID: Entry] = [:]
     private(set) var measurements = 0
@@ -661,22 +667,42 @@ struct NativeTranscriptView: NSViewRepresentable {
         if let value = values[row.id], value.text == row.text, value.speaker == speaker, value.width == textWidth {
             return value.height
         }
-        let text = Self.measure(row.text, width: textWidth - 4, font: .systemFont(ofSize: 13)) + 2
+        let font = NSFont.systemFont(ofSize: 13)
+        let previous = values[row.id]
+        let unwrapped: CGSize?
+        if row.text.contains(where: { $0.isNewline }) {
+            unwrapped = nil
+        }
+        else if let previous, previous.text == row.text {
+            unwrapped = previous.unwrapped
+        }
+        else {
+            unwrapped = Self.measure(row.text, width: .greatestFiniteMagnitude, font: font)
+            measurements += 1
+        }
+        let text: CGFloat
+        // The same native metrics remain valid at every width that fits the
+        // complete line. Keep a conservative point of slack at the wrap boundary.
+        if let unwrapped, textWidth - 4 >= ceil(unwrapped.width) + 1 {
+            text = ceil(unwrapped.height) + 2
+        }
+        else {
+            text = ceil(Self.measure(row.text, width: textWidth - 4, font: font).height) + 2
+            measurements += 1
+        }
         let name =
             showsSpeakers ? 20.0 : 0
         let result = max(20, text, name) + 8
-        measurements += 1
-        values[row.id] = Entry(text: row.text, speaker: speaker, width: textWidth, height: result)
+        values[row.id] = Entry(text: row.text, speaker: speaker, width: textWidth, height: result, unwrapped: unwrapped)
         return result
     }
     func remove(id: UUID) { values.removeValue(forKey: id) }
     func removeMissingIDs(_ ids: Set<UUID>) { values = values.filter { ids.contains($0.key) } }
-    private static func measure(_ text: String, width: CGFloat, font: NSFont) -> CGFloat {
-        ceil(
-            (text as NSString).boundingRect(
-                with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]
-            ).height)
+    private static func measure(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
+        (text as NSString).boundingRect(
+            with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]
+        ).size
     }
 }
 
@@ -768,7 +794,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
     override func layout() {
         super.layout()
-        let width = bounds.width.rounded(.down)
+        let width = tableColumns.first?.width ?? bounds.width
         guard width > 0, width != lastWidth else { return }
         lastWidth = width
         DispatchQueue.main.async { [weak self] in self?.widthChanged?() }

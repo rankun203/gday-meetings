@@ -28,7 +28,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         await store.libraryMonitor?.stop()
-        let id = store.createMeeting(title: "Original title")
+        let id = await store.createMeeting(title: "Original title")
         var meeting = try #require(store.meeting(id: id))
         meeting.title = "External title"
         try MeetingFolderStorage.write(meeting, directory: root)
@@ -78,7 +78,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         await store.libraryMonitor?.stop()
-        let id = store.createMeeting(title: "Original title")
+        let id = await store.createMeeting(title: "Original title")
         var meeting = try #require(store.meeting(id: id))
         meeting.title = "External title"
         try MeetingFolderStorage.write(meeting, directory: root)

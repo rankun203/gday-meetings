@@ -50,32 +50,33 @@ import Testing
         #expect(recognized.speakers.allSatisfy { $0.personID == nil && !$0.confirmed })
     }
 
-    @Test func assigningReassigningAndRemovingPersistWithoutDuplicatingSamples() throws {
+    @Test func assigningReassigningAndRemovingPersistWithoutDuplicatingSamples() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let first = store.addPerson(name: "Alex")
-        let second = store.addPerson(name: "Sam")
+        let first = await store.addPerson(name: "Alex")
+        let second = await store.addPerson(name: "Sam")
         var meeting = Meeting(title: "Speaker assignment")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
             voiceScope: "runpod:test", embedding: [1, 0])
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
-        try store.insertImportedMeeting(meeting)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
+        try await store.insertImportedMeeting(meeting)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
         #expect(store.people.first { $0.id == first }?.voiceSamples.count == 1)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: second)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: second)
         #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
         #expect(store.people.first { $0.id == second }?.voiceSamples.count == 1)
         let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
         #expect(saved.personIDs == [second])
         #expect(saved.speakerName(for: saved.transcript[0], people: reopened.people) == "Sam")
         #expect(saved.transcript[0].speaker == "SPEAKER_00")
-        reopened.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: nil)
+        await reopened.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: nil)
         #expect(reopened.meetings.first?.personIDs.isEmpty == true)
         #expect(reopened.people.allSatisfy { $0.voiceSamples.isEmpty })
         #expect(reopened.meetings.first?.speakers[0].personID == nil)
@@ -108,11 +109,11 @@ import Testing
         #expect(SpeakerRecognition.similarity([.infinity], [1]) == nil)
     }
 
-    @Test func existingAutomaticMatchLoadsAsAssignedWithoutLearningItsVoice() throws {
+    @Test func existingAutomaticMatchLoadsAsAssignedWithoutLearningItsVoice() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let personID = store.addPerson(name: "Alex")
+        let personID = await store.addPerson(name: "Alex")
         var meeting = Meeting(title: "Automatic match")
         let speaker = MeetingSpeaker(
             label: "sys_SPEAKER_01", track: "system", providerName: "RunPod",
@@ -121,8 +122,9 @@ import Testing
         // meeting association. Loading normalizes the association.
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
         #expect(saved.personIDs == [personID])
@@ -130,38 +132,39 @@ import Testing
         #expect(saved.speakerName(for: saved.transcript[0], people: reopened.people) == "Alex")
         #expect(reopened.people[0].voiceSamples.isEmpty)
         let markdown = root.appendingPathComponent("automatic.md")
-        try reopened.exportMeeting(id: meeting.id, to: markdown)
+        try await reopened.exportMeeting(id: meeting.id, to: markdown)
         #expect(try String(contentsOf: markdown, encoding: .utf8).contains("**Alex:** Hello"))
-        reopened.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: nil)
+        await reopened.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: nil)
         #expect(reopened.meetings[0].personIDs.isEmpty)
         #expect(reopened.people[0].voiceSamples.isEmpty)
     }
 
-    @Test func assigningWhileTranscribingPreservesSavedResultForExplicitReplacement() throws {
+    @Test func assigningWhileTranscribingPreservesSavedResultForExplicitReplacement() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let person = store.addPerson(name: "Alex")
+        let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let speaker = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod")
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: "A", text: "Original", speakerID: speaker.id)]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         var attempt = ProviderTranscriptionAttempt(provider: provider(), meeting: meeting)
         let replacement = SpeakerRecognition.result(
             [.init(start: 0, end: 2, text: "Replacement", speaker: "B", track: "system", embedding: [1, 0])],
             attempt: attempt, people: store.people)
         attempt.result = replacement.segments
         attempt.resultSpeakers = replacement.speakers
-        try store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
-        #expect(throws: (any Error).self) {
-            try store.saveTranscriptionResult(replacement.segments, attempt: attempt, meetingID: meeting.id)
+        try await store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
+        await #expect(throws: (any Error).self) {
+            try await store.saveTranscriptionResult(replacement.segments, attempt: attempt, meetingID: meeting.id)
         }
         #expect(store.meetings[0].transcript[0].text == "Original")
         let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
-        reopened.applySavedTranscriptionResult(meetingID: meeting.id)
+        await reopened.applySavedTranscriptionResult(meetingID: meeting.id)
         #expect(reopened.meetings[0].transcript[0].text == "Replacement")
         var expectedReplacement = meeting
         expectedReplacement.speakers = replacement.speakers
@@ -171,39 +174,39 @@ import Testing
         #expect(reopened.meetings[0].personIDs.isEmpty)
     }
 
-    @Test func exportsResolveNamesAndExcludeVoiceDataAndPersonDeletionClearsLinks() throws {
+    @Test func exportsResolveNamesAndExcludeVoiceDataAndPersonDeletionClearsLinks() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let person = store.addPerson(name: "Alex")
+        let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let speaker = MeetingSpeaker(
             label: "raw_label", track: "system", providerName: "RunPod",
             voiceScope: "runpod:test", embedding: [1, 0])
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
-        try store.insertImportedMeeting(meeting)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
+        try await store.insertImportedMeeting(meeting)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
         let json = root.appendingPathComponent("export.json")
-        try store.exportMeeting(id: meeting.id, to: json)
+        try await store.exportMeeting(id: meeting.id, to: json)
         let exported = try JSONDecoder().decode(Meeting.self, from: Data(contentsOf: json))
         #expect(exported.speakers.isEmpty)
         #expect(exported.transcript[0].speaker == "Alex")
         #expect(exported.transcript[0].speakerID == nil)
         let markdown = root.appendingPathComponent("export.md")
-        try store.exportMeeting(id: meeting.id, to: markdown)
+        try await store.exportMeeting(id: meeting.id, to: markdown)
         #expect(try String(contentsOf: markdown, encoding: .utf8).contains("**Alex:** Hello"))
-        store.deletePerson(id: person)
+        await store.deletePerson(id: person)
         #expect(store.meetings[0].speakers[0].personID == nil)
         #expect(!store.meetings[0].speakers[0].confirmed)
         #expect(store.meetings[0].personIDs.isEmpty)
     }
 
-    @Test func importingTextRestoresLabelsAndNeverReusesForeignPersonLinks() throws {
+    @Test func importingTextRestoresLabelsAndNeverReusesForeignPersonLinks() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let person = store.addPerson(name: "Local Person")
+        let person = await store.addPerson(name: "Local Person")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
             voiceEmbedding: .init(type: .community1, values: [1] + Array(repeating: 0, count: 255)),
@@ -214,7 +217,7 @@ import Testing
         archive.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
         let file = root.appendingPathComponent("input.json")
         try JSONEncoder().encode(archive).write(to: file)
-        try store.importArchive(url: file)
+        try await store.importArchive(url: file)
         #expect(store.meetings[0].speakers[0].personID == nil)
         #expect(store.meetings[0].speakers[0].voiceEmbedding == nil)
         #expect(!store.meetings[0].speakers[0].confirmed)
@@ -222,27 +225,27 @@ import Testing
         archive.speakers = []
         archive.transcript[0].speakerID = UUID()
         try JSONEncoder().encode(archive).write(to: file)
-        try store.importArchive(url: file)
+        try await store.importArchive(url: file)
         #expect(store.meetings[0].speakers.count == 1)
         #expect(store.meetings[0].speakers[0].id == store.meetings[0].transcript[0].speakerID)
         #expect(store.meetings[0].speakers[0].embedding == nil)
     }
 
-    @Test func failedAssignmentSaveRollsBackVoiceSampleAndPersonLinkTogether() throws {
+    @Test func failedAssignmentSaveRollsBackVoiceSampleAndPersonLinkTogether() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let person = store.addPerson(name: "Alex")
+        let person = await store.addPerson(name: "Alex")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
             voiceScope: "runpod:test", embedding: [1, 0])
         var meeting = Meeting()
         meeting.speakers = [speaker]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         let file = store.directory(for: meeting.id).appendingPathComponent("metadata.json")
         try FileManager.default.moveItem(at: file, to: root.appendingPathComponent("before.json"))
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: person)
         #expect(store.errorMessage != nil)
         #expect(store.people[0].voiceSamples.isEmpty)
         #expect(store.meetings[0].speakers[0].personID == nil)
@@ -251,7 +254,7 @@ import Testing
         #expect(VoiceLibraryStore(directory: root).decisions.isEmpty)
     }
 
-    @Test func oldSavedResultRestoresSpeakerIdentitiesOnBothApplyPaths() throws {
+    @Test func oldSavedResultRestoresSpeakerIdentitiesOnBothApplyPaths() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -263,12 +266,12 @@ import Testing
             attempt.resultSpeakers = nil
             attempt.result = result
             meeting.transcriptionAttempt = attempt
-            try store.insertImportedMeeting(meeting)
+            try await store.insertImportedMeeting(meeting)
             if explicit {
-                store.applySavedTranscriptionResult(meetingID: meeting.id)
+                await store.applySavedTranscriptionResult(meetingID: meeting.id)
             }
             else {
-                try store.saveTranscriptionResult(result, attempt: attempt, meetingID: meeting.id)
+                try await store.saveTranscriptionResult(result, attempt: attempt, meetingID: meeting.id)
             }
             let saved = try #require(store.meetings.first { $0.id == meeting.id })
             #expect(saved.speakers.count == 1)
@@ -278,17 +281,17 @@ import Testing
         }
     }
 
-    @Test func removingAssignmentRemovesSpeakerPersonAssociation() throws {
+    @Test func removingAssignmentRemovesSpeakerPersonAssociation() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let person = store.addPerson(name: "Alex")
+        let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let match = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod", personID: person)
         meeting.personIDs = [person]
         meeting.speakers = [match]
-        try store.insertImportedMeeting(meeting)
-        store.assignSpeaker(meetingID: meeting.id, speakerID: match.id, personID: nil)
+        try await store.insertImportedMeeting(meeting)
+        await store.assignSpeaker(meetingID: meeting.id, speakerID: match.id, personID: nil)
         #expect(store.meetings[0].personIDs.isEmpty)
         #expect(store.meetings[0].speakers[0].personID == nil)
         meeting.replaceSpeakers([])

@@ -10,7 +10,7 @@ import Testing
 
     @Test func noProviderDoesNotStartTranscription() async throws {
         let store = try store()
-        let id = store.createMeeting(title: "Offline recording")
+        let id = await store.createMeeting(title: "Offline recording")
         await store.transcribe(id: id)
         #expect(store.errorMessage == nil)
         #expect(store.managedTasks.last?.errorMessage == "Choose a transcription provider in Settings → General.")
@@ -18,7 +18,7 @@ import Testing
         #expect(store.backgroundJobs.isEmpty)
     }
 
-    @Test func missingSummaryProviderPointsToGeneral() throws {
+    @Test func missingSummaryProviderPointsToGeneral() async throws {
         let store = try store()
         #expect {
             _ = try store.summaryProvider()
@@ -27,7 +27,7 @@ import Testing
         }
     }
 
-    @Test func runpodRequiresExplicitEnabledUploadProvider() throws {
+    @Test func runpodRequiresExplicitEnabledUploadProvider() async throws {
         let store = try store()
         var runpod = ServiceProvider(kind: .runpod)
         runpod.enabledCapabilities = [.transcription]
@@ -44,7 +44,7 @@ import Testing
         #expect(throws: (any Error).self) { try store.transcriptionProvider(for: Meeting()) }
     }
 
-    @Test func pendingJobRetainsProviderAndEndpoint() throws {
+    @Test func pendingJobRetainsProviderAndEndpoint() async throws {
         let store = try store()
         var old = ServiceProvider(kind: .runpod)
         old.endpoint = "https://old.example/v2/endpoint"
@@ -62,24 +62,24 @@ import Testing
         #expect(throws: (any Error).self) { try store.transcriptionProvider(for: meeting) }
     }
 
-    @Test func editedTranscriptRetainsCompletedResultForExplicitReplacement() throws {
+    @Test func editedTranscriptRetainsCompletedResultForExplicitReplacement() async throws {
         let store = try store()
-        let id = store.createMeeting(title: "Edited transcript")
+        let id = await store.createMeeting(title: "Edited transcript")
         let meeting = try #require(store.meetings.first { $0.id == id })
         let generated = [TranscriptSegment(start: 1.5, end: 3.0, speaker: "Speaker A", text: "Generated text")]
         let attempt = ProviderTranscriptionAttempt(
             providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: meeting.title,
             originalTranscript: [], result: generated)
-        try store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
+        try await store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
         var edited = try #require(store.meetings.first)
         edited.transcript = [TranscriptSegment(text: "An edit made during processing")]
-        store.updateMeeting(edited)
-        #expect(throws: (any Error).self) {
-            try store.saveTranscriptionResult(generated, attempt: attempt, meetingID: meeting.id)
+        await store.updateMeeting(edited)
+        await #expect(throws: (any Error).self) {
+            try await store.saveTranscriptionResult(generated, attempt: attempt, meetingID: meeting.id)
         }
         #expect(store.meetings.first?.transcript == edited.transcript)
         #expect(store.meetings.first?.transcriptionAttempt?.result == generated)
-        store.applySavedTranscriptionResult(meetingID: meeting.id)
+        await store.applySavedTranscriptionResult(meetingID: meeting.id)
         let applied = try #require(store.meetings.first)
         #expect(applied.transcript.count == generated.count)
         let segment = try #require(applied.transcript.first)
@@ -94,22 +94,22 @@ import Testing
         #expect(applied.transcriptionAttempt == nil)
     }
 
-    @Test func completedProviderResultSelectsNewSourceAndPreservesLiveVersion() throws {
+    @Test func completedProviderResultSelectsNewSourceAndPreservesLiveVersion() async throws {
         let store = try store()
-        let id = store.createMeeting(title: "Live then provider")
+        let id = await store.createMeeting(title: "Live then provider")
         var meeting = try #require(store.meeting(id: id))
         let liveSource = TranscriptSource(id: UUID(), providerName: "This Mac", generatedAt: Date())
         meeting.transcript = [.init(text: "Live words")]
         meeting.transcriptSource = liveSource
         meeting.liveTranscriptAdopted = true
-        store.updateMeeting(meeting)
-        let otherID = store.createMeeting(title: "Another meeting")
+        await store.updateMeeting(meeting)
+        let otherID = await store.createMeeting(title: "Another meeting")
         let other = try #require(store.meeting(id: otherID))
         let result = [TranscriptSegment(text: "Provider words")]
         let attempt = ProviderTranscriptionAttempt(
             providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: meeting.title,
             originalTranscript: meeting.transcript, result: result)
-        try store.saveTranscriptionResult(result, attempt: attempt, meetingID: id)
+        try await store.saveTranscriptionResult(result, attempt: attempt, meetingID: id)
         let applied = try #require(store.meeting(id: id))
         #expect(applied.transcript.map(\.text) == ["Provider words"])
         #expect(applied.transcriptSource?.id != liveSource.id)

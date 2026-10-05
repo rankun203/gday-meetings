@@ -9,7 +9,7 @@ import Testing
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Synthetic capture")
+        let id = await store.createMeeting(title: "Synthetic capture")
         let folder = store.directory(for: id)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let source = folder.appendingPathComponent("microphone.opus")
@@ -17,7 +17,7 @@ import Testing
         try original.write(to: source)
         var meeting = try #require(store.meetings.first)
         meeting.audioFiles = [source.lastPathComponent]
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         try await store.finalizeRecordingAudio(id: id, format: .opus)
         #expect(try Data(contentsOf: source) == original)
         #expect(store.meeting(id: id)?.audioFiles == ["microphone.opus"])
@@ -27,17 +27,18 @@ import Testing
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Synthetic capture")
+        let id = await store.createMeeting(title: "Synthetic capture")
         let folder = store.directory(for: id)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let source = folder.appendingPathComponent("microphone.wav")
         try writeFixture(source)
         var meeting = try #require(store.meetings.first)
         meeting.audioFiles = [source.lastPathComponent]
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         try await store.finalizeRecordingAudio(id: id, format: .m4a)
         #expect(!FileManager.default.fileExists(atPath: source.path))
         let reloaded = MeetingStore(dataDirectory: root)
+        #expect(await reloaded.ensureMeetingLoaded(id: id))
         #expect(reloaded.meeting(id: id)?.audioFiles == ["microphone.m4a"])
         let result = try AVAudioFile(forReading: folder.appendingPathComponent("microphone.m4a"))
         #expect(abs(Double(result.length) / result.fileFormat.sampleRate - 0.1) < 0.05)
@@ -48,7 +49,7 @@ import Testing
         let root = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? files.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Synthetic capture")
+        let id = await store.createMeeting(title: "Synthetic capture")
         let folder = store.directory(for: id)
         try files.createDirectory(at: folder, withIntermediateDirectories: true)
         let source = folder.appendingPathComponent("microphone.wav")
@@ -56,7 +57,7 @@ import Testing
         let original = try Data(contentsOf: source)
         var meeting = try #require(store.meetings.first)
         meeting.audioFiles = [source.lastPathComponent]
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         let library = store.directory(for: id).appendingPathComponent("metadata.json")
         try files.moveItem(at: library, to: root.appendingPathComponent("saved-library.json"))
         try files.createDirectory(at: library, withIntermediateDirectories: false)

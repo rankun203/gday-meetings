@@ -51,6 +51,7 @@ extension MeetingStore {
     private var showExcluded = false
     private var hasPrevious = false
     private var hasNext = true
+    var footerTotal: Int? { !loading && error == nil && !hasNext && !entries.isEmpty ? total : nil }
     private var generation = UUID()
     private var task: Task<Void, Never>?
 

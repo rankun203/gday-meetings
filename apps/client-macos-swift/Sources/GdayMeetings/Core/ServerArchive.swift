@@ -57,7 +57,8 @@ extension MeetingStore {
         for meeting in meetings { refreshArchiveStatus(id: meeting.id) }
     }
     func archiveToServer(id: UUID) async {
-        guard flushNotes() else { return }
+        guard await ensureMeetingLoaded(id: id) else { return }
+        guard await flushNotes() else { return }
         // Only this meeting's own recording blocks archiving; its audio is still being written.
         guard recordingID != id, libraryWritable, !isJobRunning(.importAudio, .meeting(id)),
             let meeting = self.meeting(id: id),

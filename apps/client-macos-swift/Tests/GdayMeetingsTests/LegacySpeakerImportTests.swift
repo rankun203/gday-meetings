@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct LegacySpeakerImportTests {
-    @Test func preservesTrackLabelsAssignmentsAndConfirmedSamples() throws {
+    @Test func preservesTrackLabelsAssignmentsAndConfirmedSamples() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-speakers-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("rust")
@@ -48,7 +48,7 @@ struct LegacySpeakerImportTests {
         let destination = root.appendingPathComponent("swift")
         let store = MeetingStore(dataDirectory: destination)
         // A single recording folder must still resolve the Rust people library.
-        #expect(try store.importLegacyLibrary(url: session) == 1)
+        #expect(try await store.importLegacyLibrary(url: session) == 1)
         let meeting = try #require(store.meetings.first)
         let alex = try #require(store.people.first { $0.name == "Alex" })
         let blair = try #require(store.people.first { $0.name == "Blair" })
@@ -84,11 +84,12 @@ struct LegacySpeakerImportTests {
         SpeakerRecognition.match(&current, people: store.people)
         #expect(current[0].personID == nil)
         let reopened = MeetingStore(dataDirectory: destination)
+        #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         #expect(reopened.meeting(id: meeting.id)?.speakers == meeting.speakers)
         #expect(reopened.people.first { $0.id == alex.id }?.voiceSamples == alex.voiceSamples)
     }
 
-    @Test func malformedOptionalVoiceDataDoesNotBlockTextImport() throws {
+    @Test func malformedOptionalVoiceDataDoesNotBlockTextImport() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-optional-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("rust")
@@ -114,7 +115,7 @@ struct LegacySpeakerImportTests {
         try write(["name": "Blair"], to: second.appendingPathComponent("profile.json"))
         try Data("{bad json".utf8).write(to: second.appendingPathComponent("embeddings.json"))
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("swift"))
-        #expect(try store.importLegacyLibrary(url: source) == 1)
+        #expect(try await store.importLegacyLibrary(url: source) == 1)
         #expect(store.meetings.first?.transcript.first?.text == "Keep this")
         #expect(store.meetings.first?.speakers.first?.embedding == [1, 0])
         #expect(store.people.first { $0.name == "Alex" }?.voiceSamples.count == 1)

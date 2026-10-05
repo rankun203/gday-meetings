@@ -75,7 +75,7 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
         let selected = provider("Website")
         let first = MeetingStore(dataDirectory: directory)
         first.settings.serviceProviders = [selected]
-        let meetingID = first.createMeeting(title: "Synthetic meeting")
+        let meetingID = await first.createMeeting(title: "Synthetic meeting")
         let eventsBefore = try DataEventJournal.read(directory: first.directory(for: meetingID))
         var jobs = 0
         first.providerLanguageLoader = { _ in
@@ -149,7 +149,7 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
         let store = makeStore()
         let selected = provider("RunPod", kind: .runpod)
         store.settings.serviceProviders = [selected]
-        let id = store.createMeeting(title: "Welsh meeting", language: "cy")
+        let id = await store.createMeeting(title: "Welsh meeting", language: "cy")
         do {
             try await store.transcribeWithProvider(id: id, provider: selected)
             Issue.record("An unlisted language must stop transcription")
@@ -183,7 +183,7 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
         store.providerLanguageLoader = { _ in
             syntheticLanguageResult(languages: [.init(code: "ja", name: "Japanese")], source: "Worker")
         }
-        let id = store.createMeeting(title: "English meeting", language: "en")
+        let id = await store.createMeeting(title: "English meeting", language: "en")
         do {
             try await store.transcribeWithProvider(id: id, provider: selected)
             Issue.record("Unsupported language must stop transcription")
@@ -217,11 +217,11 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
             Issue.record("A saved result must not discover languages")
             throw ServiceError("Offline")
         }
-        let id = store.createMeeting(title: "Saved result")
+        let id = await store.createMeeting(title: "Saved result")
         var meeting = try #require(store.meetings.first)
         meeting.transcriptionAttempt = ProviderTranscriptionAttempt(provider: selected, meeting: meeting)
         meeting.transcriptionAttempt?.result = [TranscriptSegment(text: "Saved")]
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         try await store.transcribeWithProvider(id: id, provider: selected)
         #expect(store.meetings.first?.transcript.first?.text == "Saved")
     }
@@ -234,11 +234,11 @@ func syntheticLanguageResult(languages: [ProviderLanguage], source: String) -> P
             Issue.record("An existing task must not discover languages")
             throw ServiceError("Unavailable")
         }
-        let id = store.createMeeting(title: "Pending task")
+        let id = await store.createMeeting(title: "Pending task")
         var meeting = try #require(store.meetings.first)
         meeting.transcriptionAttempt = ProviderTranscriptionAttempt(provider: selected, meeting: meeting)
         meeting.transcriptionAttempt?.taskID = "existing-job"
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         do {
             try await store.transcribeWithProvider(id: id, provider: selected)
             Issue.record("Missing poll credentials should fail")

@@ -14,6 +14,7 @@ Liquid Glass is the design standard for all future UI work in the Swift macOS cl
 - Use Apple's native Liquid Glass presentation for navigation and controls where supported. Keep meeting text, notes, transcripts, and waveform content on quiet, readable surfaces. Do not put glass behind every card or stack translucent layers unnecessarily.
 - Voice Memos informs the navigation, list, detail, and playback hierarchy. Put the native segmented meeting-content selector in the window toolbar, where macOS 26 supplies its capsule group and neutral selected state. Inline tab views retain a legacy bezel on the supported system and do not provide this appearance. Use native sidebar selection and Gday's accent color. Retain a visible selected state when the window is inactive.
 - Meeting sheets retain a standard inline segmented selector. This preserves their existing modal workflow; a nested navigation toolbar does not render in these sheets. Do not imitate window-toolbar glass inside the sheet.
+- Meeting content tabs contain Transcript, Notes, and Summary. **Meeting Actions → Data Privacy…** opens the selected meeting's event history in a native sheet with **Done** and Escape dismissal. Opening or closing privacy history preserves the content tab and playback state. Settings retains its separate Data Privacy tab.
 - Prefer standard SwiftUI/AppKit controls, SF Symbols, semantic colors, system typography, and system spacing. Use supported customization only when the native component cannot express the required interaction or visual hierarchy.
 - Keep labels direct and concise: “Play,” “Recording transcript,” and meaningful source names. Avoid decorative explanatory text that repeats what the controls already communicate.
 - Make recording actions easy to find and distinguish recording, saving, playing, and paused states through symbols and accessible labels as well as color.
@@ -25,10 +26,12 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 
 - Use one main Meetings window. **Show App**, recording setup, and reopening the app reveal that window instead of creating another. A closed main window can be reopened without restarting the app.
 - Use native split navigation for the library sidebar and let the system coordinate its toolbar and column transition. Keep sidebar content available during expansion; do not add a second row-hiding animation. Rapid reversal and Reduce Motion must leave search and destination selection usable.
+- Retain the system sidebar-toggle animation. Profile content reflow before replacing its timing curve; diagnostic programmatic visibility changes do not establish the native toggle's frame pacing.
 - Open with the sidebar collapsed and the meeting list visible. List titles and scoped actions belong in the native column toolbar rather than a second heading row. Keep the circular recording control immediately before the upper-right search field. Selected meeting content retains its own title, tabs, and reading layout.
 - Preserve native list spacing. Do not add compensating scroll insets or offsets to hide a layout issue; reproduce the cause and verify navigation, playback changes, and window activation.
 - Keep playback updates local to the transport. Menus, text editing, selection, and the main content layout must remain stable while time advances.
 - Center waveform and primary playback controls together, with time labels below. Every track shares one playback/scrubbing timeline.
+- Two-finger waveform panning seeks without transferring keyboard focus. Keep the focus indicator when the waveform already has keyboard focus; Tab navigation and arrow-key seeking remain available.
 - Muting a playback track also hides its attributed transcript passages for the player’s selected meeting, including while paused. Unmuting restores them. Keep other meetings and passages with unknown source metadata visible. If every passage is hidden, explain that unmuting a track restores its transcript. This is a display filter; saved text, history, and exports stay complete.
 - Support keyboard navigation, visible focus, Space for playback outside text editing, and VoiceOver labels and selection state. Respect Reduce Motion, Reduce Transparency, and increased contrast; do not override system accessibility preferences to preserve an effect.
 
@@ -41,6 +44,8 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 - Normal reading must not expand header height for long titles. Show date and duration below the title; place language, tags, and archive details in **Details**. An incomplete archive must remain visible as an issue indicator on that control.
 
 ## Meeting list
+
+At the end of each collection list, show its total for the current filters as a nonselectable scrolling footer. This includes Meetings, People, Tags, associated meetings, Tasks, search results, voice groups and examples, service providers, privacy groups, and labeling history. Paginated lists show the indexed total only at the actual end; do not show the loaded page's row count as the total. Capped search and history use “Results Shown” or “Entries Shown.” Privacy counts groups, because one event can belong to several groups. Refresh derived counts off the main actor when the index or filters change. Preserve existing empty states; document readers, transcripts, menus, and pickers do not need collection totals.
 
 General settings includes “Display summary title on meetings,” enabled by default. When enabled, meeting rows show only the summary's first line, with leading `#` characters and whitespace removed, on one truncating line. When disabled or the first line is blank, omit that line and its extra row space. Keep the saved summary unchanged and preserve list selection and viewport when toggling.
 
@@ -104,6 +109,8 @@ Report passed, failed, and untested checks accurately. Preserve existing recordi
 
 ## Markdown reading
 
+Hold Option on **Generate Summary** or **Regenerate Summary** to show the **with Notes…** action. It opens a native sheet with a **User Instructions** editor for that request, such as selecting the summary language. Cancel submits nothing. Instructions travel with the queued task and its retries; ordinary generation starts without them. Keep meeting notes and provider preferences unchanged.
+
 Summary and Notes reading mode share one selectable document. Dragging or keyboard selection must cross paragraphs, lists, and table cells; do not split reading content into independently selectable labels. Use the Rust reader's GitHub Markdown hierarchy as the reference: restrained headings, comfortable line height, compact list spacing, light table borders, and quiet code backgrounds. Preserve native semantic colors in light and dark appearances.
 
 Unordered lists use a 15-point bullet glyph beside 14-point body text, with an 18-point text inset. Align wrapped lines with the text, keeping the dot close to its item.
@@ -113,6 +120,14 @@ Render checked and unchecked task markers at the same 14-point size with a 22-po
 Parse only when content or reading configuration changes. Playback progress and scrolling must not rebuild the Markdown document. Single-line meeting summary previews use one line of space; whitespace-only lines do not reserve height.
 
 Render generated bold CJK labels such as `**结论：**正文` as a bold label followed by a space and the body. Preserve the saved source and full-source copy. Keep escaped markers and inline code literal.
+
+## People in library search
+
+Library search shows **People Matches** and **People Suggestions** above **Content Results**. Selecting a person opens their detail and reveals them in People even when a previous list filter hid them. Keep each matched phrase visible so people can assess ambiguous names. Duplicate People remain separate results.
+
+Confident name spans form People matches and are removed once from the content query; display the remaining words as **Topic** when it differs from the original query. Suggestions retain their words in the content query. A name-only query shows People without running an empty content search. Keep the People area bounded and scrollable, with a quiet count after each group. People changes refresh both matching and the content request, including Voice and Fusion provider preparation.
+
+Name matching runs locally, off the main actor, with exact, reversed, pinyin, initials, prefix, and spelling evidence. Common-word checks and native name detection reduce false matches but do not guarantee identity. A partial name beside an unresolved, whitespace-separated noun-like word stays a suggestion; full-name matches and grammatical verb contexts retain stronger evidence. Content results are separate from People matches: this feature does not establish that a person spoke a returned passage or restrict voice retrieval to confirmed speaker intervals.
 
 ## Provider capabilities
 

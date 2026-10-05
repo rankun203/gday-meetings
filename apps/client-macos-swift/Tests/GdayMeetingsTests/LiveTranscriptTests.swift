@@ -127,16 +127,16 @@ struct LiveTranscriptTests {
         #expect(try LiveTranscriptDraft.read(at: directory, meetingID: id)?.phrases.isEmpty == true)
     }
 
-    @Test @MainActor func failedRevisionSaveLeavesExistingTranscript() throws {
+    @Test @MainActor func failedRevisionSaveLeavesExistingTranscript() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
         var meeting = Meeting()
         meeting.transcript = [.init(text: "Original")]
-        try store.insertImportedMeeting(meeting)
+        try await store.insertImportedMeeting(meeting)
         try Data("broken".utf8).write(
             to: store.directory(for: meeting.id).appendingPathComponent("transcript-revisions.json"))
-        store.restoreTranscript(
+        await store.restoreTranscript(
             .init(title: "Other", segments: [.init(text: "Replacement")], speakers: []), meetingID: meeting.id)
         #expect(store.meetings.first?.transcript.first?.text == "Original")
         #expect(store.errorMessage != nil)

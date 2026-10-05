@@ -58,10 +58,10 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let index = try LibraryIndex(directory: root)
         let gate = SearchCompletionGate()
-        let session = LibrarySearchSession { _, query, _, _ in
+        let session = LibrarySearchSession(loadPage: { _, query, _, _ in
             await gate.wait(query)
             return LibrarySearchPage(results: [], total: query == "first" ? 1 : 2)
-        }
+        })
         #expect(session.submit(" first ", index: index))
         await gate.waitUntilStarted("first")
         #expect(session.query == "first")
@@ -97,14 +97,14 @@ import Testing
         #expect(settled)
         let originalID = try #require(try index.searchPage(query: "originalneedle").results.first?.id)
         meeting.title = "Updated search fixture"
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         let updated = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
             (try? index.searchPage(query: "Updated").total) == 1
         }
         #expect(updated)
         #expect(try index.searchPage(query: "originalneedle").results.first?.id == originalID)
         meeting.transcript[0].text = "replacementneedle"
-        #expect(store.updateMeeting(meeting))
+        #expect(await store.updateMeeting(meeting))
         let replaced = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
             (try? index.searchPage(query: "replacementneedle").total) == 1
         }

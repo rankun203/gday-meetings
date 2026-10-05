@@ -17,21 +17,21 @@ extension MeetingStore {
 
     /// Publish speaker and source metadata after an interrupted recording, using
     /// the same canonical segments that were already loaded from disk.
-    func recoverUnadoptedLiveTranscripts() {
+    func recoverUnadoptedLiveTranscripts() async {
         guard libraryWritable else { return }
         for meeting in meetings {
-            recoverUnadoptedLiveTranscript(meeting)
+            await recoverUnadoptedLiveTranscript(meeting)
         }
     }
 
-    func recoverUnadoptedLiveTranscript(_ meeting: Meeting) {
-        recoverLiveSourcePlaceholders(meeting)
+    func recoverUnadoptedLiveTranscript(_ meeting: Meeting) async {
+        await recoverLiveSourcePlaceholders(meeting)
         guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
         else { return }
         do {
             if let draft = try LiveTranscriptDraft.recover(at: directory(for: meeting.id), meetingID: meeting.id) {
-                _ = adoptLiveTranscript(draft)
+                _ = await adoptLiveTranscript(draft)
             }
         }
         catch {
@@ -41,7 +41,7 @@ extension MeetingStore {
 
     /// Source labels overlap detected labels. Recover their meaning only from
     /// the checkpoint's matching identities, never from spelling.
-    private func recoverLiveSourcePlaceholders(_ meeting: Meeting) {
+    private func recoverLiveSourcePlaceholders(_ meeting: Meeting) async {
         guard libraryWritable, meeting.liveTranscriptAdopted,
             meeting.speakers.contains(where: { $0.sourcePlaceholder == nil }),
             let draft = try? LiveTranscriptDraft.read(at: directory(for: meeting.id), meetingID: meeting.id),
@@ -58,13 +58,14 @@ extension MeetingStore {
                 updated.speakers[index].sourcePlaceholder = source
             }
         }
-        if updated.speakers != meeting.speakers { _ = updateMeeting(updated) }
+        if updated.speakers != meeting.speakers { _ = await updateMeeting(updated) }
     }
 
     /// Publish the recording's source and speaker metadata without copying its
     /// already saved segments. Explicit replacement preserves a prior revision.
     @discardableResult
-    func adoptLiveTranscript(_ draft: LiveTranscriptDraft, replacing: Bool = false) -> Bool {
+    func adoptLiveTranscript(_ draft: LiveTranscriptDraft, replacing: Bool = false) async -> Bool {
+        guard await ensureMeetingLoaded(id: draft.meetingID) else { return false }
         guard libraryWritable, draft.hasUsableText,
             var meeting = self.meeting(id: draft.meetingID),
             meeting.transcriptionAttempt == nil,
@@ -100,6 +101,6 @@ extension MeetingStore {
             meeting: meeting, directory: directory(for: meeting.id),
             finalizeLive: recordingID == meeting.id && isFinalizingRecording)
         meeting = voiceLibrary.applyingDecisions(to: meeting)
-        return updateMeeting(meeting)
+        return await updateMeeting(meeting)
     }
 }

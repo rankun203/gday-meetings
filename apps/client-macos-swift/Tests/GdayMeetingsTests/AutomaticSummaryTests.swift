@@ -58,7 +58,7 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         try #require(reached)
     }
 
-    @Test func settingDefaultsOffAndPersists() throws {
+    @Test func settingDefaultsOffAndPersists() async throws {
         #expect(!AppSettings().autoSummarize)
         #expect(!(try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))).autoSummarize)
         var settings = AppSettings()
@@ -80,11 +80,11 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         }
         let store = MeetingStore(dataDirectory: root)
         configure(store, endpoint: server.origin)
-        let id = store.createMeeting(title: "Two transcripts")
+        let id = await store.createMeeting(title: "Two transcripts")
         if manualFirst {
             var meeting = try #require(store.meetings.first)
             meeting.transcript = [.init(text: "Saved live words")]
-            store.updateMeeting(meeting)
+            await store.updateMeeting(meeting)
             Task { await store.summarize(id: id) }
         }
         else {
@@ -95,7 +95,8 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         try await waitUntil { gate.requestCount == 1 }
         let original = try #require(store.meetings.first)
         let attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
-        try store.saveTranscriptionResult([.init(text: "Completed provider words")], attempt: attempt, meetingID: id)
+        try await store.saveTranscriptionResult(
+            [.init(text: "Completed provider words")], attempt: attempt, meetingID: id)
         #expect(store.pendingAutomaticSummaries.contains(id))
         #expect(store.isJobRunning(.summary, .meeting(id)))
         gate.resume()
@@ -107,7 +108,9 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         #expect(!bodies[0].contains("Completed provider words"))
         #expect(bodies[1].contains("Completed provider words"))
         #expect(!bodies[1].contains("Saved live words"))
-        #expect(MeetingStore(dataDirectory: root).meeting(id: id)?.summary == "Summary 2")
+        let reopened = MeetingStore(dataDirectory: root)
+        #expect(await reopened.ensureMeetingLoaded(id: id))
+        #expect(reopened.meeting(id: id)?.summary == "Summary 2")
         #expect(store.pendingAutomaticSummaries.isEmpty)
     }
 
@@ -123,15 +126,16 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         }
         let store = MeetingStore(dataDirectory: root)
         configure(store, endpoint: server.origin)
-        let id = store.createMeeting(title: "Disable queued summary")
+        let id = await store.createMeeting(title: "Disable queued summary")
         await finishLive(store, id: id)
         try await waitUntil { gate.requestCount == 1 }
         let original = try #require(store.meetings.first)
         let attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
-        try store.saveTranscriptionResult([.init(text: "New words")], attempt: attempt, meetingID: id)
+        try await store.saveTranscriptionResult([.init(text: "New words")], attempt: attempt, meetingID: id)
         store.settings.autoSummarize = false
         gate.resume()
         try await waitUntil { store.backgroundJobs.isEmpty }
+        await store.flushManagedTaskCommands()
         #expect(gate.requestCount == 1)
         #expect(store.pendingAutomaticSummaries.isEmpty)
     }
@@ -140,35 +144,35 @@ private final class AutomaticSummaryGate: @unchecked Sendable {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "No automatic request")
+        let id = await store.createMeeting(title: "No automatic request")
         var original = try #require(store.meetings.first)
         var attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
-        try store.saveTranscriptionResult([.init(text: "Batch words")], attempt: attempt, meetingID: id)
+        try await store.saveTranscriptionResult([.init(text: "Batch words")], attempt: attempt, meetingID: id)
         #expect(store.scheduledAutomaticSummaries.isEmpty)
         store.settings.autoSummarize = true
         original = try #require(store.meetings.first)
         attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
-        try store.saveTranscriptionAttempt(attempt, meetingID: id)
-        try store.clearTranscriptionAttempt(meetingID: id)
+        try await store.saveTranscriptionAttempt(attempt, meetingID: id)
+        try await store.clearTranscriptionAttempt(meetingID: id)
         #expect(store.scheduledAutomaticSummaries.isEmpty)
-        try store.saveTranscriptionResult([.init(text: " \n")], attempt: attempt, meetingID: id)
+        try await store.saveTranscriptionResult([.init(text: " \n")], attempt: attempt, meetingID: id)
         #expect(store.scheduledAutomaticSummaries.isEmpty)
         #expect(store.pendingAutomaticSummaries.isEmpty)
     }
 
-    @Test func failedTranscriptSaveDoesNotSchedule() throws {
+    @Test func failedTranscriptSaveDoesNotSchedule() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         store.settings.autoSummarize = true
-        let id = store.createMeeting(title: "Failed save")
+        let id = await store.createMeeting(title: "Failed save")
         let original = try #require(store.meetings.first)
         let attempt = ProviderTranscriptionAttempt(provider: .init(kind: .runpod), meeting: original)
         let index = store.directory(for: id).appendingPathComponent("metadata.json")
         try FileManager.default.removeItem(at: index)
         try FileManager.default.createDirectory(at: index, withIntermediateDirectories: true)
-        #expect(throws: (any Error).self) {
-            try store.saveTranscriptionResult([.init(text: "Unsaved result")], attempt: attempt, meetingID: id)
+        await #expect(throws: (any Error).self) {
+            try await store.saveTranscriptionResult([.init(text: "Unsaved result")], attempt: attempt, meetingID: id)
         }
         #expect(store.pendingAutomaticSummaries.isEmpty)
         #expect(store.scheduledAutomaticSummaries.isEmpty)

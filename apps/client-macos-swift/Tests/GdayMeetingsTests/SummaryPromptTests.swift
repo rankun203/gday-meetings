@@ -4,6 +4,39 @@ import Testing
 @testable import GdayMeetings
 
 struct SummaryPromptTests {
+    @Test func requestInstructionsOverrideLanguageWithoutChangingMeetingOrProvider() throws {
+        let provider = ServiceProvider(kind: .openAICompatible)
+        var meeting = Meeting()
+        meeting.language = "zh"
+        meeting.notes = "Discuss the release."
+        let now = Date(timeIntervalSince1970: 0)
+        let baseline = SummaryPrompt.messages(provider: provider, meeting: meeting, people: [], now: now)
+        let messages = SummaryPrompt.messages(
+            provider: provider, meeting: meeting, people: [], now: now, instructions: "  Write in English.\n")
+        #expect(messages[0].content.contains("## User Instructions"))
+        #expect(messages[0].content.contains("take precedence over the default language"))
+        #expect(messages[0].content.hasSuffix("Write in English."))
+        #expect(messages[1].content == baseline[1].content)
+        #expect(provider.summaryPrompt == SummaryPrompt.defaultInstructions)
+        #expect(meeting.language == "zh")
+        let blank = SummaryPrompt.messages(
+            provider: provider, meeting: meeting, people: [], now: now, instructions: " \n ")
+        #expect(blank[0].content == baseline[0].content)
+    }
+
+    @Test func taskInstructionsRoundTripAndOlderTasksDecode() throws {
+        var task = ManagedTaskRecord(kind: .summary, meetingID: UUID(), meetingTitle: "Planning")
+        task.summaryInstructions = "Write in English."
+        let encoded = try JSONEncoder().encode(task)
+        let restored = try JSONDecoder().decode(ManagedTaskRecord.self, from: encoded)
+        #expect(restored.summaryInstructions == task.summaryInstructions)
+        var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "summaryInstructions")
+        let old = try JSONDecoder().decode(
+            ManagedTaskRecord.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(old.summaryInstructions == nil)
+    }
+
     @Test func providersUseRustDefaultAndRoundTripCustomPrompt() throws {
         var provider = ServiceProvider(kind: .openAICompatible)
         let data = try JSONEncoder().encode(provider)

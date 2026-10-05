@@ -5,6 +5,21 @@ import Testing
 @testable import GdayMeetings
 
 struct ManagedTaskPagingTests {
+    @MainActor @Test func filteredTotalsUseCompleteStateCountsAndPreviewExtras() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        store.managedTaskStateCounts = [.queued: 2, .running: 3, .completed: 900, .failed: 4, .cancelled: 5]
+        store.managedTasks = [
+            .init(kind: .summary, meetingID: UUID(), meetingTitle: "Preview task", state: .failed, isPreview: true),
+            .init(kind: .summary, meetingID: UUID(), meetingTitle: "Retained task", state: .completed),
+        ]
+        #expect(store.taskHistoryCount(scope: .all) == 915)
+        #expect(store.taskHistoryCount(scope: .active) == 5)
+        #expect(store.taskHistoryCount(scope: .attention) == 5)
+        #expect(store.taskHistoryCount(scope: .history) == 905)
+    }
+
     private struct Event: Encodable {
         var schemaVersion = 1
         var eventID = UUID()
@@ -36,7 +51,7 @@ struct ManagedTaskPagingTests {
         try file.synchronize()
         return (url, records)
     }
-    @Test func coldRebuildWarmReuseAndBidirectionalPaging() throws {
+    @Test func coldRebuildWarmReuseAndBidirectionalPaging() async throws {
         let (url, records) = try fixture(tasks: 401, revisions: 3)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let journal = ManagedTaskJournal(url: url)
@@ -61,7 +76,7 @@ struct ManagedTaskPagingTests {
         #expect(warm.replayedEventCount == 0)
         #expect(warm.page(limit: 37).map(\.id) == Array(expected.prefix(37)))
     }
-    @Test func disposableIndexRemovalRebuildsWithoutChangingJournal() throws {
+    @Test func disposableIndexRemovalRebuildsWithoutChangingJournal() async throws {
         let (url, _) = try fixture(tasks: 91, revisions: 4)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let original = try Data(contentsOf: url)
@@ -77,7 +92,7 @@ struct ManagedTaskPagingTests {
         #expect(rebuilt.count() == 91)
         #expect(try Data(contentsOf: url) == original)
     }
-    @Test func sameLengthExternalReplacementBlocksAppend() throws {
+    @Test func sameLengthExternalReplacementBlocksAppend() async throws {
         let (url, records) = try fixture(tasks: 1)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let journal = ManagedTaskJournal(url: url)
@@ -87,7 +102,7 @@ struct ManagedTaskPagingTests {
         #expect(throws: (any Error).self) { try journal.upsert(records[0]) }
         #expect(try Data(contentsOf: url) == changed)
     }
-    @Test func externalAppendOnlyMarksChangedOffsets() throws {
+    @Test func externalAppendOnlyMarksChangedOffsets() async throws {
         let (url, _) = try fixture(tasks: 301)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let journal = ManagedTaskJournal(url: url)
@@ -102,7 +117,7 @@ struct ManagedTaskPagingTests {
         #expect(try journal.changedSinceRebuild(changed.id))
         for row in old.dropLast() { #expect(try !journal.changedSinceRebuild(row.id)) }
     }
-    @Test func samePositionExternalEditChangesDigest() throws {
+    @Test func samePositionExternalEditChangesDigest() async throws {
         let (url, _) = try fixture(tasks: 3)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let journal = ManagedTaskJournal(url: url)
@@ -117,7 +132,7 @@ struct ManagedTaskPagingTests {
         #expect(journal.record(id: target.id)?.meetingTitle == "Work 1")
     }
 
-    @Test @MainActor func progressUpdatesDoNotAppendJournalEvents() throws {
+    @Test @MainActor func progressUpdatesDoNotAppendJournalEvents() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
@@ -138,7 +153,7 @@ struct ManagedTaskPagingTests {
         let (url, _) = try fixture(tasks: 401)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         try FileManager.default.copyItem(at: url, to: store.managedTaskJournal.url)
-        try store.restoreManagedTasks()
+        try await store.restoreManagedTasks()
         #expect(store.managedTasks.count == 100)
         #expect(store.managedTaskCount == 401)
         var cursor: ManagedTaskJournal.Cursor?
@@ -154,11 +169,13 @@ struct ManagedTaskPagingTests {
         #expect(store.managedTasks.count == 100)
     }
 
-    @Test(arguments: [false, true]) @MainActor func externalAppendReconcilesOrphanedRunningTask(receipt: Bool) throws {
+    @Test(arguments: [false, true]) @MainActor func externalAppendReconcilesOrphanedRunningTask(receipt: Bool)
+        async throws
+    {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let meetingID = store.createMeeting(title: "Orphaned operation")
+        let meetingID = await store.createMeeting(title: "Orphaned operation")
         let task = ManagedTaskRecord(
             kind: .summary, meetingID: meetingID, meetingTitle: "Orphaned operation", state: .running)
         try store.managedTaskJournal.upsert(task)
@@ -166,13 +183,13 @@ struct ManagedTaskPagingTests {
         if receipt {
             var meeting = try #require(store.meeting(id: meetingID))
             meeting.completedTaskIDs[task.kind.rawValue] = task.id
-            #expect(store.updateMeeting(meeting))
+            #expect(await store.updateMeeting(meeting))
         }
         let external = ManagedTaskJournal(
             url: store.managedTaskJournal.url, indexURL: directory.appendingPathComponent("external.sqlite"))
         try external.upsert(
             ManagedTaskRecord(kind: .summary, meetingID: UUID(), meetingTitle: "External history", state: .completed))
-        store.reloadExternalManagedTasks()
+        await store.reloadExternalManagedTasks()
         let recovered = try #require(store.managedTask(id: task.id))
         #expect(recovered.state == (receipt ? .completed : .failed))
         #expect(recovered.recovery == (receipt ? .none : .manual))
@@ -180,7 +197,7 @@ struct ManagedTaskPagingTests {
         #expect(store.managedTaskStateCounts[.running, default: 0] == 0)
     }
 
-    @Test func corruptOffsetRebuildsDisposableIndexWithoutRewritingSource() throws {
+    @Test func corruptOffsetRebuildsDisposableIndexWithoutRewritingSource() async throws {
         let (url, _) = try fixture(tasks: 5)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let indexURL = url.deletingLastPathComponent().appendingPathComponent("offsets.sqlite")
@@ -202,7 +219,7 @@ struct ManagedTaskPagingTests {
         #expect(try Data(contentsOf: url) == original)
     }
 
-    @Test func manyEventsDiagnostic() throws {
+    @Test func manyEventsDiagnostic() async throws {
         guard ProcessInfo.processInfo.environment["GDAY_TASK_HISTORY_BENCHMARK"] == "1" else { return }
         let (url, _) = try fixture(tasks: 10_000, revisions: 10)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

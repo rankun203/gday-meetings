@@ -7,11 +7,20 @@ import Foundation
 final class NotesFileWatcher {
     private var source: DispatchSourceFileSystemObject?
     private var task: Task<Void, Never>?
+    private var generation = UUID()
 
-    func start(directory: URL, changed: @escaping @MainActor () -> Void) throws {
+    func start(directory: URL, changed: @escaping @MainActor () -> Void) async throws {
         stop()
-        let descriptor = open(directory.path, O_EVTONLY)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let generation = generation
+        let descriptor = try await Task.detached(priority: .utility) {
+            let descriptor = open(directory.path, O_EVTONLY)
+            guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return descriptor
+        }.value
+        guard generation == self.generation, !Task.isCancelled else {
+            close(descriptor)
+            return
+        }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor, eventMask: [.write, .rename, .delete], queue: .main)
         source.setCancelHandler { close(descriptor) }
@@ -30,6 +39,7 @@ final class NotesFileWatcher {
     }
 
     func stop() {
+        generation = UUID()
         task?.cancel()
         task = nil
         source?.cancel()

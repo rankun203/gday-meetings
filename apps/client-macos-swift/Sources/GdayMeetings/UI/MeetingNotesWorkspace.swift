@@ -5,6 +5,7 @@ struct MeetingNotesWorkspace: View {
     @EnvironmentObject private var store: MeetingStore
     let meetingID: UUID
     @ViewState private var reading = false
+    @ViewState private var viewRequest = UUID()
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -19,7 +20,13 @@ struct MeetingNotesWorkspace: View {
                     "Notes View",
                     selection: Binding(
                         get: { reading },
-                        set: { value in if store.flushNotes() { reading = value } }
+                        set: { value in
+                            let request = UUID()
+                            viewRequest = request
+                            Task {
+                                if await store.flushNotes(), viewRequest == request { reading = value }
+                            }
+                        }
                     )
                 ) {
                     Image(systemName: "pencil").help("Edit notes").accessibilityLabel("Edit Notes").tag(false)
@@ -49,8 +56,11 @@ struct MeetingNotesWorkspace: View {
             .modifier(AppContentSurface())
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
         }
-        .task(id: meetingID) { store.openNotes(id: meetingID) }
-        .onDisappear { store.closeNotes(id: meetingID) }
+        .task(id: meetingID) { await store.openNotes(id: meetingID) }
+        .onDisappear {
+            viewRequest = UUID()
+            Task { await store.closeNotes(id: meetingID) }
+        }
         .id(meetingID)
     }
 }

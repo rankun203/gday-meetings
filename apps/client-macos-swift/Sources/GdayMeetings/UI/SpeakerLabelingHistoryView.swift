@@ -9,7 +9,7 @@ struct SpeakerLabelingHistoryReadKey: Equatable {
 }
 
 struct SpeakerLabelingHistoryView: View {
-    let history: SpeakerLabelingHistory?
+    @Binding var history: SpeakerLabelingHistory?
     var restoreChoices: [TranscriptRevision] = []
     var currentSnapshotID: UUID? = nil
     var canRestore = false
@@ -43,6 +43,7 @@ struct SpeakerLabelingHistoryView: View {
                 if history.entries.isEmpty {
                     Text("No speaker labeling runs or saved analyses were found for this recording.")
                         .foregroundStyle(.secondary)
+                    ListCountFooter(text: "0 Entries Shown")
                 }
                 else {
                     ScrollView {
@@ -68,6 +69,9 @@ struct SpeakerLabelingHistoryView: View {
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 Divider()
                             }
+                            ListCountFooter(
+                                text: ListCountFooter.text(
+                                    count: history.entries.count, singular: "Entry Shown", plural: "Entries Shown"))
                         }
                     }.frame(maxHeight: 360)
                 }

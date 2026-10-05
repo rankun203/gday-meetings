@@ -41,14 +41,14 @@ import Testing
         }
         let mounted = try await waitForMainActorTestCondition {
             controller.view.layoutSubtreeIfNeeded()
-            return toolbarControl()?.segmentCount == 4
+            return toolbarControl()?.segmentCount == 3
         }
         #expect(mounted)
         let control = try #require(toolbarControl())
-        #expect((0..<4).map { control.label(forSegment: $0) } == ["Transcript", "Notes", "Summary", "Data Privacy"])
+        #expect((0..<3).map { control.label(forSegment: $0) } == ["Transcript", "Notes", "Summary"])
         #expect(control.frame.width >= control.fittingSize.width)
         #expect(control.frame.width <= window.contentLayoutRect.width)
-        for index in 0..<4 {
+        for index in 0..<3 {
             control.selectedSegment = index
             #expect(control.sendAction(control.action, to: control.target))
             let selected = try await waitForMainActorTestCondition { selection.value == index }

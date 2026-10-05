@@ -90,7 +90,10 @@ struct TaskQueueView: View {
                 NativeTaskList(
                     rows: rows, selection: $session.selection, revealID: session.revealID,
                     revealToken: session.revealToken,
-                    retainedViewport: session.viewport
+                    retainedViewport: session.viewport,
+                    totalCount: !hasOlder && !loadingPage && !store.managedTasksLoading
+                        && store.managedTaskJournalError == nil && !rows.isEmpty
+                        ? store.taskHistoryCount(scope: scope) : nil
                 ) { first, last, newer in
                     visibleFirst = first
                     visibleLast = last
@@ -172,7 +175,9 @@ struct TaskQueueView: View {
         }
         .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
         .task(id: focusedTaskID) {
-            guard let id = focusedTaskID, session.handledFocusID != id, let record = store.managedTask(id: id) else {
+            guard let id = focusedTaskID, session.handledFocusID != id,
+                let record = await store.loadManagedTask(id: id), !Task.isCancelled, focusedTaskID == id
+            else {
                 return
             }
             if scope != .all {
@@ -247,11 +252,15 @@ struct TaskQueueView: View {
         if let selectedRow {
             switch selectedRow {
             case .managed(let previous):
-                if let record = store.managedTask(id: previous.id) {
-                    select(.managed(record))
-                }
-                else {
-                    self.selectedRow = nil
+                Task {
+                    let record = await store.loadManagedTask(id: previous.id)
+                    guard self.selectedRow?.id == previous.id else { return }
+                    if let record {
+                        select(.managed(record))
+                    }
+                    else {
+                        self.selectedRow = nil
+                    }
                 }
             case .voice(let previous):
                 if let job = store.voiceLibrary.jobs.first(where: { $0.id == previous.id }) {
@@ -416,11 +425,11 @@ struct TaskQueueView: View {
 
     @ViewBuilder private func actions(_ record: ManagedTaskRecord) -> some View {
         if canRestart {
-            Button("Restart") { store.restartManagedTask(id: record.id) }
+            Button("Restart") { Task { await store.restartManagedTask(id: record.id) } }
                 .buttonStyle(.borderedProminent)
         }
         if canRetry {
-            Button(store.managedTaskActionTitle(record)) { store.retryManagedTask(id: record.id) }
+            Button(store.managedTaskActionTitle(record)) { Task { await store.retryManagedTask(id: record.id) } }
                 .buttonStyle(.borderedProminent)
         }
         if canOpen {
@@ -428,16 +437,16 @@ struct TaskQueueView: View {
         }
         if record.state == .queued || record.state == .running {
             if record.state == .queued {
-                Button("Run Next") { store.prioritizeManagedTask(id: record.id) }
+                Button("Run Next") { Task { await store.prioritizeManagedTask(id: record.id) } }
             }
             Button(
                 record.state == .queued ? "Remove from Queue" : record.kind == .diarization ? "Cancel" : "Stop Waiting"
             ) {
-                store.cancelManagedTask(id: record.id)
+                Task { await store.cancelManagedTask(id: record.id) }
             }
         }
         if !record.state.isActive {
-            Button("Dismiss") { store.removeManagedTask(id: record.id) }
+            Button("Dismiss") { Task { await store.removeManagedTask(id: record.id) } }
         }
     }
 

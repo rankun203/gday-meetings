@@ -46,7 +46,11 @@ struct PeopleView: View {
             }
             NativeDirectoryList(
                 entries: page.entries, selection: $selection, label: "People", reveal: page.revealRequest,
-                retainedViewport: session.viewport, viewport: page.viewport
+                retainedViewport: session.viewport,
+                footerText: page.footerTotal.map {
+                    ListCountFooter.text(count: $0, singular: "Person", plural: "People")
+                },
+                viewport: page.viewport
             ) { entry in
                 deleting = store.people.first { $0.id == entry.id }
             }
@@ -59,9 +63,6 @@ struct PeopleView: View {
             HStack {
                 Toggle("Show Excluded", isOn: $session.showExcluded).toggleStyle(.checkbox)
                 Spacer()
-
-                Text(page.total.formatted()).font(.caption).foregroundStyle(.secondary).accessibilityLabel(
-                    "\(page.total) people")
 
                 if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small) }
             }.padding(12)
@@ -94,8 +95,10 @@ struct PeopleView: View {
         ) {
             Button("Delete Person", role: .destructive) {
                 if let deleting {
-                    store.deletePerson(id: deleting.id)
-                    if !store.people.contains(where: { $0.id == deleting.id }) { selection.remove(deleting.id) }
+                    Task {
+                        await store.deletePerson(id: deleting.id)
+                        if !store.people.contains(where: { $0.id == deleting.id }) { selection.remove(deleting.id) }
+                    }
                 }
                 deleting = nil
             }
@@ -141,10 +144,14 @@ struct PeopleView: View {
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        let id = store.addPerson(name: value)
-        selection = [id]
+        let previousSelection = selection
         name = ""
-        page.reveal(id, query: "", expectedName: value)
+        Task {
+            let id = await store.addPerson(name: value)
+            guard store.people.contains(where: { $0.id == id }), selection == previousSelection else { return }
+            selection = [id]
+            page.reveal(id, query: "", expectedName: value)
+        }
     }
 }
 
@@ -179,7 +186,9 @@ struct TagsView: View {
                 .padding(.top, 12)
             NativeDirectoryList(
                 entries: page.entries, selection: selectedIDs, multiple: false, label: "Tags",
-                reveal: page.revealRequest, retainedViewport: session.viewport, viewport: page.viewport
+                reveal: page.revealRequest, retainedViewport: session.viewport,
+                footerText: page.footerTotal.map { ListCountFooter.text(count: $0, singular: "Tag", plural: "Tags") },
+                viewport: page.viewport
             ) { entry in
                 deleting = store.tags.first { $0.id == entry.id }
             }
@@ -191,10 +200,6 @@ struct TagsView: View {
             }
             if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small).padding(12) }
 
-            Text("\(page.total.formatted()) \(page.total == 1 ? "tag" : "tags")").font(.caption).foregroundStyle(
-                .secondary
-            ).padding(12)
-
         }.background(AppTheme.readingBackground, ignoresSafeAreaEdges: []).navigationTitle("Tags")
             .task(id: "\(name)|\(store.directoryRevision)") { refresh() }
             .confirmationDialog(
@@ -204,9 +209,11 @@ struct TagsView: View {
             ) {
                 Button("Delete Tag", role: .destructive) {
                     if let deleting {
-                        store.deleteTag(id: deleting.id)
-                        if !store.tags.contains(where: { $0.id == deleting.id }), selection == deleting.id {
-                            selection = nil
+                        Task {
+                            await store.deleteTag(id: deleting.id)
+                            if !store.tags.contains(where: { $0.id == deleting.id }), selection == deleting.id {
+                                selection = nil
+                            }
                         }
                     }
                     deleting = nil
@@ -239,10 +246,14 @@ struct TagsView: View {
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        let id = store.addTag(name: value, color: "blue")
-        selection = id
+        let previousSelection = selection
         name = ""
-        page.reveal(id, query: "", expectedName: value)
+        Task {
+            let id = await store.addTag(name: value, color: "blue")
+            guard store.tags.contains(where: { $0.id == id }), selection == previousSelection else { return }
+            selection = id
+            page.reveal(id, query: "", expectedName: value)
+        }
     }
 }
 

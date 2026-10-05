@@ -48,9 +48,10 @@ import UniformTypeIdentifiers
         #expect(store.meetings.allSatisfy { $0.audioFiles.count == 1 })
         var meeting = try #require(store.meetings.first)
         meeting.notes = "Keep notes"
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         _ = try await store.importAudioFiles([first, second], into: meeting.id)
         let restored = MeetingStore(dataDirectory: store.dataDirectory)
+        #expect(await restored.ensureMeetingLoaded(id: meeting.id))
         let added = try #require(restored.meeting(id: meeting.id))
         #expect(added.audioFiles == ["voice.wav", "voice-2.wav", "voice-3.wav"])
         #expect(added.duration == 2)
@@ -103,7 +104,7 @@ import UniformTypeIdentifiers
         defer { try? FileManager.default.removeItem(at: root) }
         let source = try fixture(root, name: "voice.wav", seconds: 1)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("library"))
-        let id = store.createMeeting(title: "Existing")
+        let id = await store.createMeeting(title: "Existing")
         store.recordingID = id
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         store.recordingID = nil
@@ -111,7 +112,7 @@ import UniformTypeIdentifiers
         meeting.transcriptionAttempt = ProviderTranscriptionAttempt(
             providerID: UUID(), endpoint: "https://example.com", kind: .gdayWebsite, title: "Existing",
             idempotencyKey: "saved")
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         #expect(store.meetings.first == meeting)
     }
@@ -121,7 +122,7 @@ import UniformTypeIdentifiers
         defer { try? FileManager.default.removeItem(at: root) }
         let source = try fixture(root, name: "voice.wav", seconds: 1)
         let store = MeetingStore(dataDirectory: root.appendingPathComponent("library"))
-        let id = store.createMeeting(title: "Processing audio")
+        let id = await store.createMeeting(title: "Processing audio")
         for kind: BackgroundJob.Kind in [.transcription, .archive] {
             #expect(store.beginJob(kind, .meeting(id), progress: "Processing audio…"))
             await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }

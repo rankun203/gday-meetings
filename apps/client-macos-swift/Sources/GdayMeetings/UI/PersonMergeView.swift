@@ -67,12 +67,14 @@ struct PersonMergeView: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Merge People") {
                     guard let targetID else { return }
-                    if store.mergePeople(ids: selectedIDs, into: targetID) {
-                        didMerge(targetID)
-                        dismiss()
-                    }
-                    else {
-                        failure = store.errorMessage ?? "Couldn’t merge the selected people. Try again."
+                    Task {
+                        if await store.mergePeople(ids: selectedIDs, into: targetID) {
+                            didMerge(targetID)
+                            dismiss()
+                        }
+                        else {
+                            failure = store.errorMessage ?? "Couldn’t merge the selected people. Try again."
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)

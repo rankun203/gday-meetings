@@ -15,11 +15,14 @@ enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
         }
     }
     func includes(_ task: ManagedTaskRecord) -> Bool {
+        includes(task.state)
+    }
+    func includes(_ state: ManagedTaskState) -> Bool {
         switch self {
         case .all: true
-        case .active: task.state.isActive
-        case .attention: task.state == .failed
-        case .history: task.state == .completed || task.state == .cancelled
+        case .active: state.isActive
+        case .attention: state == .failed
+        case .history: state == .completed || state == .cancelled
         }
     }
     func includes(_ job: VoicePreparationJob) -> Bool {
@@ -54,6 +57,13 @@ enum TaskHistoryRow: Identifiable, Equatable, @unchecked Sendable {
 }
 
 extension MeetingStore {
+    /// Use the complete indexed state counts, not the retained task page window.
+    func taskHistoryCount(scope: TaskHistoryScope) -> Int {
+        managedTaskStateCounts.reduce(0) { $0 + (scope.includes($1.key) ? $1.value : 0) }
+            + managedTasks.filter { $0.isPreview && scope.includes($0) }.count
+            + voiceLibrary.jobs.filter(scope.includes).count
+    }
+
     /// Merge at most one disk page with matching voice/preview candidates. Voice payloads
     /// are still hydrated by VoiceLibraryStore; this does not duplicate its full history.
     func taskHistoryPage(

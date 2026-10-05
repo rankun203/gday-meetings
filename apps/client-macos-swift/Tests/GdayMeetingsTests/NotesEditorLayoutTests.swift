@@ -33,8 +33,8 @@ import Testing
         let small = try NotesImageStore.resized(original, width: 80, directory: imageDirectory)
         let initial = "# Notes\n\n" + original.markdown + "\n\n" + small.markdown + "\nEnd"
         store.meetings = [Meeting(id: meetingID, title: "Layout regression", notes: initial)]
-        store.updateMeeting(store.meetings[0])
-        #expect(store.flushNotes())
+        await store.updateMeeting(store.meetings[0])
+        #expect(await store.flushNotes())
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
             styleMask: [.titled], backing: .buffered, defer: false)

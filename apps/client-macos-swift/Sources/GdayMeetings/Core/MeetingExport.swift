@@ -19,8 +19,11 @@ enum MeetingExportFormat: String, CaseIterable {
 }
 
 extension MeetingStore {
-    func exportMeeting(id: UUID, to url: URL) throws {
-        guard flushNotes() else { throw MeetingError.message(errorMessage ?? "Couldn’t save meeting notes.") }
+    func exportMeeting(id: UUID, to url: URL) async throws {
+        guard await ensureMeetingLoaded(id: id) else {
+            throw MeetingError.message(meetingPageError ?? "Couldn’t open the meeting for export.")
+        }
+        guard await flushNotes() else { throw MeetingError.message(errorMessage ?? "Couldn’t save meeting notes.") }
         guard var meeting = self.meeting(id: id) else {
             throw MeetingError.message("Meeting no longer exists.")
         }
@@ -30,7 +33,7 @@ extension MeetingStore {
             meeting.transcript[index].speakerID = nil
         }
         meeting.speakers = []
-        try MeetingExport.write(meeting, directory: directory(for: id), to: url)
+        try await notesStorage.export(meeting, to: url)
     }
 }
 

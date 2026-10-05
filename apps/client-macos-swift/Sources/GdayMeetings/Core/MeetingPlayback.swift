@@ -61,6 +61,7 @@ final class MeetingPlayback: ObservableObject {
     private var generation = UUID()
     private var seekGeneration = UUID()
     private var wantsPlayback = false
+    private var playbackIntent = UUID()
     private var pendingPosition: Double = 0
     private var isSeeking = false
     init(
@@ -81,8 +82,25 @@ final class MeetingPlayback: ObservableObject {
         transport?.close(removing: temporaryURLs)
     }
 
+    /// Resolve a cold meeting without allowing a late load to undo a newer transport action.
+    @discardableResult
+    func requestPlayback(
+        load: @escaping @MainActor () async -> Meeting?,
+        play: @escaping @MainActor (Meeting) -> Void
+    ) -> Task<Void, Never> {
+        let intent = UUID()
+        playbackIntent = intent
+        return Task { @MainActor [weak self] in
+            guard let meeting = await load(), let self, !Task.isCancelled,
+                self.playbackIntent == intent, !self.isPlaybackBlocked
+            else { return }
+            play(meeting)
+        }
+    }
+
     /// Selection prepares a paused item. Browsing elsewhere never needs to call this.
     func select(meeting: Meeting, files: [URL], track: Int = -1) {
+        playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
         let track = Self.validTrack(track, count: files.count)
         if meetingID == meeting.id, sourceFiles == files, selectedTrack == track, errorMessage == nil,
@@ -97,6 +115,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {
+        playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
         excerptRange = nil
         if meetingID == meeting.id, sourceFiles == files, errorMessage == nil, !transportNeedsReload {
@@ -113,6 +132,7 @@ final class MeetingPlayback: ObservableObject {
     /// Review an exact source excerpt through the shared player. The transport
     /// bounds decoding so speech beyond the excerpt never enters its audio ring.
     func playExcerpt(meeting: Meeting, directory: URL, audioFile: String, start: Double, end: Double) {
+        playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
         guard start.isFinite, end.isFinite, start >= 0, end > start,
             meeting.audioFiles.contains(audioFile), URL(fileURLWithPath: audioFile).lastPathComponent == audioFile,
@@ -134,6 +154,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func play() {
+        playbackIntent = UUID()
         guard hasSelection, !isPlaybackBlocked else { return }
         if errorMessage != nil || transportNeedsReload {
             guard let meeting = sourceMeeting else { return }
@@ -154,6 +175,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func pause() {
+        playbackIntent = UUID()
         wantsPlayback = false
         playTask?.cancel()
         transport?.pause()
@@ -170,6 +192,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func seek(to seconds: Double) {
+        playbackIntent = UUID()
         guard hasSelection, seconds.isFinite else { return }
         if let range = excerptRange, seconds < range.lowerBound || seconds > range.upperBound {
             excerptRange = nil
@@ -289,6 +312,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func clear() {
+        playbackIntent = UUID()
         excerptRange = nil
         progress.scrub(to: nil)
         generation = UUID()

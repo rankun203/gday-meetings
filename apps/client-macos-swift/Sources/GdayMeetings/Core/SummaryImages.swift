@@ -70,8 +70,11 @@ enum SummaryImages {
 }
 
 @MainActor extension MeetingStore {
-    func summaryMessages(provider: ServiceProvider, meeting: Meeting) async throws -> [LLMMessage] {
-        var messages = SummaryPrompt.messages(provider: provider, meeting: meeting, people: people)
+    func summaryMessages(provider: ServiceProvider, meeting: Meeting, instructions: String? = nil) async throws
+        -> [LLMMessage]
+    {
+        var messages = SummaryPrompt.messages(
+            provider: provider, meeting: meeting, people: people, instructions: instructions)
         guard !NotesImageReference.parse(in: NotesDocument(meeting.notes).text).isEmpty else { return messages }
         let fingerprint = ProviderModelList.fingerprint(provider)
         var models = providerModelCache.entry(providerID: provider.id, fingerprint: fingerprint)?.value ?? []

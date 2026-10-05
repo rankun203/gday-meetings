@@ -28,7 +28,7 @@ struct MeetingNotesEditor: View {
                 playback.play(
                     meeting: meeting, files: store.audioURLs(for: meeting), at: NotesDocument.playbackStart(time))
             },
-            changed: { store.editNotes(id: meetingID, text: $0) }, flush: { _ = store.flushNotes() },
+            changed: { store.editNotes(id: meetingID, text: $0) }, flush: { Task { await store.flushNotes() } },
             directory: store.directory(for: meetingID), imageError: { store.errorMessage = $0 },
             audioDrop: { urls in
                 Task {
@@ -42,7 +42,7 @@ struct MeetingNotesEditor: View {
             RoundedRectangle(cornerRadius: 10).stroke(
                 Color(nsColor: .separatorColor).opacity(showsPanelBorder ? 0.6 : 0))
         )
-        .onDisappear { _ = store.flushNotes() }
+        .onDisappear { Task { await store.flushNotes() } }
         .id(meetingID)
     }
 }

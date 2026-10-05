@@ -176,7 +176,8 @@ extension MeetingStore {
     /// Restore only assignments from a compatible snapshot. Changed words,
     /// times, or source identity require a full transcript restore instead.
     @discardableResult
-    func restoreSpeakerLabels(_ revision: TranscriptRevision, meetingID: UUID) -> Bool {
+    func restoreSpeakerLabels(_ revision: TranscriptRevision, meetingID: UUID) async -> Bool {
+        guard await ensureMeetingLoaded(id: meetingID) else { return false }
         guard var meeting = self.meeting(id: meetingID), libraryWritable, recordingID != meetingID,
             meeting.transcriptionAttempt == nil,
             !isJobRunning(.transcription, .meeting(meetingID)),
@@ -220,7 +221,7 @@ extension MeetingStore {
                 })
             meeting.transcriptSource = selected.source
             meeting.speakerLabelSource = selected.speakerLabelSource
-            return updateMeeting(meeting)
+            return await updateMeeting(meeting)
         }
         catch {
             errorMessage = "Couldn’t read the saved speaker labels. The current labels were kept."
@@ -228,7 +229,8 @@ extension MeetingStore {
         }
     }
 
-    func restoreTranscript(_ revision: TranscriptRevision, meetingID: UUID) {
+    func restoreTranscript(_ revision: TranscriptRevision, meetingID: UUID) async {
+        guard await ensureMeetingLoaded(id: meetingID) else { return }
         guard var meeting = self.meeting(id: meetingID), preserveTranscript(meeting) else { return }
         meeting.transcript = revision.segments
         meeting.speakerLabelSource = revision.speakerLabelSource
@@ -247,6 +249,6 @@ extension MeetingStore {
                 }
                 return speaker
             })
-        updateMeeting(meeting)
+        await updateMeeting(meeting)
     }
 }

@@ -18,6 +18,7 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var representationsRevision = 0
     private var readable = true
     private var pendingDocument: VoiceLibraryDocument?
+    private var canonicalCommitInFlight = false
     private struct ProjectionCacheEntry {
         var input: Meeting
         var output: Meeting
@@ -29,7 +30,7 @@ final class VoiceLibraryStore: ObservableObject {
 
     init(
         directory: URL, canWrite: @escaping () -> Bool = { true },
-        write: ((Data, URL) throws -> Void)? = nil
+        write: (@Sendable (Data, URL) throws -> Void)? = nil
     ) {
         url = directory.appendingPathComponent("voice-library")
         self.canWrite = canWrite
@@ -48,6 +49,7 @@ final class VoiceLibraryStore: ObservableObject {
     /// Metadata is available immediately. Representations are read only when a
     /// selected example or an explicit association operation needs them.
     func hydratedExample(id: UUID) -> VoiceExample? {
+        guard !canonicalCommitInFlight else { return nil }
         guard let persistence, let index = exampleIndices[id] else { return nil }
         if !hydratedIDs.contains(id) {
             do {
@@ -103,7 +105,8 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     private func commit(_ next: VoiceLibraryDocument, changed: Set<UUID> = []) -> Bool {
-        guard readable, canWrite(), let persistence else {
+        guard admitVoiceWrite() else { return false }
+        guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), let persistence else {
             errorMessage = "The voice library is read-only. Check the data folder before saving changes."
             return false
         }
@@ -259,7 +262,8 @@ final class VoiceLibraryStore: ObservableObject {
     @discardableResult
     func setJobs(_ jobs: [VoicePreparationJob]) -> Bool {
         guard jobs != document.jobs else { return true }
-        guard readable, canWrite(), let persistence else {
+        guard admitVoiceWrite() else { return false }
+        guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), let persistence else {
             errorMessage = "The voice library is read-only. Check the data folder before saving changes."
             return false
         }
@@ -598,7 +602,10 @@ final class VoiceLibraryStore: ObservableObject {
         meetingID: UUID, speakerID: UUID, personID: UUID?, staged: Bool = false,
         previousPersonID: UUID? = nil, exampleID: UUID? = nil
     ) -> Bool {
-        guard readable, canWrite(), persistence != nil else { return false }
+        guard admitVoiceWrite() else { return false }
+        guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), persistence != nil else {
+            return false
+        }
         var next = document
         var previousDecisions = document.decisions
         if exampleID == nil,
@@ -639,24 +646,44 @@ final class VoiceLibraryStore: ObservableObject {
         return commit(next, changed: [meetingID])
     }
 
-    func writePending(transaction: inout LibraryFileTransaction) throws {
-        guard let pendingDocument else { return }
-        guard let persistence else { throw ServiceError("The voice library is unavailable.") }
-        try persistence.commit(previous: document, next: pendingDocument, transaction: &transaction)
+    struct CanonicalCommit: Sendable {
+        var previous: VoiceLibraryDocument
+        var next: VoiceLibraryDocument
+        var persistence: VoiceLibraryPersistence.Snapshot
     }
-
-    func completePending(committed: Bool) {
-        guard let pendingDocument else { return }
+    private func admitVoiceWrite() -> Bool {
+        guard !canonicalCommitInFlight, pendingDocument == nil else {
+            errorMessage = "Voice changes are still saving. Wait for them to finish, then try again."
+            return false
+        }
+        return true
+    }
+    func beginCanonicalCommit() throws -> CanonicalCommit? {
+        guard let pendingDocument else { return nil }
+        guard !canonicalCommitInFlight, let persistence else { throw ServiceError("The voice library is unavailable.") }
+        canonicalCommitInFlight = true
+        return CanonicalCommit(previous: document, next: pendingDocument, persistence: persistence.snapshot())
+    }
+    func finishCanonicalCommit(
+        _ commit: CanonicalCommit?, state: VoiceLibraryPersistence.Snapshot?, committed: Bool,
+        refreshFailed: Bool = false
+    ) {
+        guard let commit else { return }
+        defer {
+            canonicalCommitInFlight = false
+            pendingDocument = nil
+        }
+        if refreshFailed {
+            readable = false
+            errorMessage = "Couldn’t refresh the voice library after saving. Reopen the library before changing voices."
+        }
+        else if let state {
+            persistence?.adopt(state)
+        }
         if committed {
-            document = pendingDocument
+            document = commit.next
             publish()
         }
-        do { try persistence?.reloadRevision(committed: committed) }
-        catch {
-            readable = false
-            errorMessage = "Couldn’t refresh the voice library. \(error.localizedDescription)"
-        }
-        self.pendingDocument = nil
     }
 
     func applyingDecisions(to meeting: Meeting) -> Meeting {
@@ -776,7 +803,9 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func mergePeople(ids: Set<UUID>, into targetID: UUID, staged: Bool = false) -> Bool {
-        guard !ids.isEmpty, !ids.contains(targetID), readable, canWrite(), persistence != nil,
+        guard admitVoiceWrite() else { return false }
+        guard !canonicalCommitInFlight, pendingDocument == nil, !ids.isEmpty, !ids.contains(targetID), readable,
+            canWrite(), persistence != nil,
             !document.deletedPersonIDs.contains(targetID)
         else { return false }
         var next = document
@@ -812,7 +841,10 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func removePerson(id: UUID, staged: Bool = false) -> Bool {
-        guard readable, canWrite(), persistence != nil else { return false }
+        guard admitVoiceWrite() else { return false }
+        guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), persistence != nil else {
+            return false
+        }
         var next = document
         if !next.deletedPersonIDs.contains(id) { next.deletedPersonIDs.append(id) }
         for index in next.examples.indices {

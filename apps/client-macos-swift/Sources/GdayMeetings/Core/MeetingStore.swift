@@ -4,14 +4,24 @@ import Foundation
 
 @MainActor
 final class MeetingStore: ObservableObject {
-    @Published var contextualChats: [String: [ChatMessage]] = [:]
-    @Published var meetings: [Meeting] = []
+    @Published var contextualChats: [String: [ChatMessage]] = [:] {
+        didSet { if oldValue != contextualChats { chatsMutationRevision = UUID() } }
+    }
+    @Published var meetings: [Meeting] = [] {
+        didSet {
+            let previous = Dictionary(uniqueKeysWithValues: oldValue.map { ($0.id, $0) })
+            let current = Dictionary(uniqueKeysWithValues: meetings.map { ($0.id, $0) })
+            invalidateExternalMeetingReloads(
+                ids: Set(previous.keys).union(current.keys).filter { previous[$0] != current[$0] })
+        }
+    }
     @Published var meetingCatalog: [MeetingListEntry] = []
     @Published var visibleMeetingIDs: [UUID] = []
     @Published var latestCreatedMeetingID: UUID?
     @Published var isLoadingMeetingPage = false
     @Published var isSearchingMeetings = false
     @Published var meetingPageError: String?
+    var previewPreparation: Task<Void, Never>?
     let summaryDrafts = SummaryDraftState()
     let meetingPrefetch = MeetingPrefetchState()
     var meetingPageHasMore = true
@@ -24,12 +34,24 @@ final class MeetingStore: ObservableObject {
     var indexNeedsInitialRebuild = false
     let libraryDataStatus = LibraryDataStatus()
     var libraryMonitor: LibraryMonitorCoordinator?
-    private var pendingExternalChanges: ExternalLibraryChanges = []
+    private var pendingExternalChanges: ExternalLibraryChangeBatch?
     private var externalReloadTask: Task<Void, Never>?
+    private var externalMeetingRevisions: [UUID: UUID] = [:]
+    private var externalEventRevisions: [UUID: UUID] = [:]
+    private var externalAncestorRevision = UUID()
+    var externalReloadGeneration = UUID()
+    var meetingLoadRequests: [UUID: UUID] = [:]
+    var meetingLoadOperations: [UUID: (id: UUID, task: Task<MeetingLoadResult, Never>)] = [:]
+    var meetingLoadReader: @Sendable (UUID, URL) throws -> Meeting = { id, directory in
+        try MeetingFolderStorage.read(id: id, directory: directory)
+    }
+    var externalMeetingReader: @Sendable (UUID, URL) throws -> Meeting = {
+        try MeetingFolderStorage.read(id: $0, directory: $1)
+    }
     var meetingSearch = ""
     var meetingSearchGeneration = UUID()
-    @Published var people: [Person] = []
-    @Published var tags: [MeetingTag] = []
+    @Published var people: [Person] = [] { didSet { if oldValue != people { peopleMutationRevision = UUID() } } }
+    @Published var tags: [MeetingTag] = [] { didSet { if oldValue != tags { tagsMutationRevision = UUID() } } }
     @Published var settings = AppSettings()
     @Published var providerLanguageStates: [ProviderLanguageIdentity: ProviderLanguageState] = [:]
     /// Saved language and model lists. providerLanguageStates holds only loading and failure.
@@ -55,6 +77,14 @@ final class MeetingStore: ObservableObject {
     @Published var managedTasksLoading = false
     @Published var managedTaskStateCounts: [ManagedTaskState: Int] = [:]
     @Published var managedTaskJournalError: String?
+    var managedTaskIO = ManagedTaskIO()
+    let managedTaskCommands = ManagedTaskCommands()
+    var managedTaskPreparation: Task<Void, Never>?
+    var managedTaskActiveCounts: [BackgroundJob.Key: Int] = [:]
+    @Published var managedTaskReservations = Set<BackgroundJob.Key>()
+    var managedTaskStopRequests = Set<UUID>()
+    @Published var isPreparingToQuit = false
+    var managedTaskShutdownError: String?
     lazy var managedTaskJournal = ManagedTaskJournal(
         url: dataDirectory.appendingPathComponent("tasks.jsonl"),
         indexURL: indexDirectory.appendingPathComponent("index.db"))
@@ -99,20 +129,24 @@ final class MeetingStore: ObservableObject {
     private var writableBeforeFolderChange = true
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
-        !LocalModelManager.shared.isBusy && !voiceSearch.isBuilding && !isChangingLibrary
+        !isPreparingToQuit && voiceAssignmentRefreshCount == 0
+            && !LocalModelManager.shared.isBusy && !voiceSearch.isBuilding && !isChangingLibrary
             && recordingID == nil && !isStartingRecording
             && !isFinalizingRecording
             && !captureTransition && backgroundJobs.isEmpty && managedTaskOperations.isEmpty
-            && !managedTasksLoading
+            && !managedTasksLoading && managedTaskCommands.isIdle && managedTaskReservations.isEmpty
             && managedTaskStateCounts[.queued, default: 0] + managedTaskStateCounts[.running, default: 0] == 0
             && !managedTasks.contains(where: { $0.state.isActive })
     }
     lazy var notesStorage = NotesStorage(directory: dataDirectory)
+    private var voiceAssignmentRefresh: Task<Void, Never>?
+    private var voiceAssignmentRefreshRevision = UUID()
+    @Published private var voiceAssignmentRefreshCount = 0
     lazy var voiceLibrary: VoiceLibraryStore = {
         let library = VoiceLibraryStore(
             directory: dataDirectory,
             canWrite: { [weak self] in self?.libraryWritable == true })
-        library.didChange = { [weak self] ids in self?.refreshVoiceAssignments(meetingIDs: ids) }
+        library.didChange = { [weak self] ids in self?.scheduleVoiceAssignmentRefresh(meetingIDs: ids) }
         voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
             guard let self else { return }
             self.objectWillChange.send()
@@ -137,6 +171,9 @@ final class MeetingStore: ObservableObject {
     private var recorder: AudioCapture?
     private var captureTransition = false
     private var activeRecordingFormat: RecordingFormat = .opus
+    private var peopleMutationRevision = UUID()
+    private var tagsMutationRevision = UUID()
+    private var chatsMutationRevision = UUID()
     private var canSave = true
     private var lastSavedLibrary = LibrarySnapshot()
     var libraryWritable: Bool { canSave }
@@ -149,7 +186,8 @@ final class MeetingStore: ObservableObject {
     /// Only the recording lifecycle and a read-only library prevent a new
     /// recording; background jobs for other meetings never do.
     var canStartRecording: Bool {
-        recordingID == nil && !isStartingRecording && !isFinalizingRecording && !captureTransition && canSave
+        !isPreparingToQuit && recordingID == nil && !isStartingRecording && !isFinalizingRecording
+            && !captureTransition && canSave
     }
 
     init(dataDirectory: URL? = nil) {
@@ -218,7 +256,7 @@ final class MeetingStore: ObservableObject {
                 where !meetings[index].personIDs.contains(personID) {
                     meetings[index].personIDs.append(personID)
                 }
-                meetings[index].notes = try notesStorage.load(meetings[index].id, fallback: meetings[index].notes)
+                notesStorage.saved[meetings[index].id] = meetings[index].notes
                 // No editor undo session exists during startup. Keep conflict-copy assets too.
                 let folder = directory(for: meetings[index].id)
                 if FileManager.default.fileExists(atPath: folder.appendingPathComponent("notes.md").path) {
@@ -233,7 +271,7 @@ final class MeetingStore: ObservableObject {
             resetMeetingPages()
             refreshDirectoryIndex(rebuild: true)
             startLibraryMonitoring()
-            recoverUnadoptedLiveTranscripts()
+            Task { [weak self] in await self?.recoverUnadoptedLiveTranscripts() }
             refreshArchiveStatuses()
             if usesKeychain {
                 for index in settings.serviceProviders.indices {
@@ -252,14 +290,10 @@ final class MeetingStore: ObservableObject {
             _ = voicePreparation
             if FileManager.default.fileExists(atPath: self.dataDirectory.appendingPathComponent("tasks.jsonl").path) {
                 managedTasksLoading = true
-                Task { [weak self] in await self?.prepareManagedTasks() }
-            }
-            else {
-                do { try restoreManagedTasks() }
-                catch { managedTaskJournalError = "Couldn’t load saved tasks. \(error.localizedDescription)" }
+                managedTaskPreparation = Task { [weak self] in await self?.prepareManagedTasks() }
             }
             managedTaskWakeObserver = ManagedTaskWakeObserver { [weak self] in
-                self?.recoverUnfinishedManagedTasks()
+                Task { await self?.recoverUnfinishedManagedTasks() }
             }
             do { try AgentGuides.ensure(directory: self.dataDirectory) }
             catch { errorMessage = "Couldn’t prepare the library’s AGENTS.md. \(error.localizedDescription)" }
@@ -285,11 +319,15 @@ final class MeetingStore: ObservableObject {
                 throw MeetingError.message("The current data folder is unavailable. Choose an existing library.")
             }
             try LocalModelManager.shared.suspendForLibraryChange()
-            try notesStorage.flushAll()
             writableBeforeFolderChange = canSave
             previousFolderPreference = folderPreferences.data
             canSave = false
+            externalReloadGeneration = UUID()
             isCopyingLibrary = true
+            guard await flushCanonicalWrites() else {
+                throw MeetingError.message("Save changes before changing the data folder.")
+            }
+            try await notesStorage.flushAll()
             copiedLibraryFiles = 0
             await libraryMonitor?.stop()
             libraryMonitor = nil
@@ -319,7 +357,7 @@ final class MeetingStore: ObservableObject {
         catch {
             LocalModelManager.shared.resumeAfterLibraryChange()
             isCopyingLibrary = false
-            canSave = writableBeforeFolderChange
+            canSave = writableBeforeFolderChange && !canonicalRecoveryRequired
             if libraryMonitor == nil && canSave { startLibraryMonitoring() }
             if !(error is CancellationError) { libraryFolderError = error.localizedDescription }
         }
@@ -334,301 +372,280 @@ final class MeetingStore: ObservableObject {
         folderPreferences.data = previousFolderPreference
         pendingLibraryFolder = nil
         LocalModelManager.shared.resumeAfterLibraryChange()
-        canSave = writableBeforeFolderChange
+        canSave = writableBeforeFolderChange && !canonicalRecoveryRequired
         if canSave { startLibraryMonitoring() }
     }
 
-    @discardableResult private func save(personMerge: PersonMerge? = nil) -> Bool {
+    private var canonicalTail: Task<Bool, Never>?
+    private var canonicalPending = 0
+    private var canonicalRecoveryRequired = false
+    var deletingMeetingIDs = Set<UUID>()
+    var canonicalWriteHook: (@Sendable () throws -> Void)?
+
+    private func enqueueCanonical(_ operation: @escaping @MainActor () async -> Bool) async -> Bool {
+        let previous = canonicalTail
+        canonicalPending += 1
+        let task = Task { @MainActor in
+            _ = await previous?.value
+            let result = canonicalRecoveryRequired ? false : await operation()
+            canonicalPending -= 1
+            return result
+        }
+        canonicalTail = task
+        return await task.value
+    }
+    func flushCanonicalWrites() async -> Bool {
+        var succeeded = true
+        while canonicalPending > 0 {
+            let result = await canonicalTail?.value ?? true
+            succeeded = result && succeeded
+        }
+        return succeeded
+    }
+
+    @discardableResult private func save(personMerge: PersonMerge? = nil) async -> Bool {
         guard canSave else {
             errorMessage = "Library is read-only because loading failed. Check the data folder before saving changes."
             return false
         }
+        invalidateExternalMeetingReloads(
+            ids: Set(meetings.filter { !lastSavedLibrary.meetings.contains($0) }.map(\.id)))
+        return await enqueueCanonical { await self.performCanonicalSave(personMerge: personMerge) }
+    }
+
+    private func performCanonicalSave(personMerge: PersonMerge? = nil) async -> Bool {
+        guard !canonicalRecoveryRequired else { return false }
         for index in meetings.indices {
             let previous = lastSavedLibrary.meetings.first { $0.id == meetings[index].id }
             if previous != meetings[index] {
                 meetings[index] = MeetingSpeakerColors.assigning(meetings[index], previous: previous)
             }
         }
-        var transaction = LibraryFileTransaction(root: dataDirectory)
-        var mergedEntries: [MeetingListEntry] = []
+        let captured = LibrarySnapshot(contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
+        let baseline = lastSavedLibrary
+        let revisions = externalMeetingRevisions
+        let peopleRevision = peopleMutationRevision
+        let tagsRevision = tagsMutationRevision
+        let chatsRevision = chatsMutationRevision
+        let noteRevisions = Dictionary(
+            uniqueKeysWithValues: captured.meetings.map { ($0.id, notesStorage.revision($0.id)) })
+        let changed = captured.meetings.filter { !baseline.meetings.contains($0) }
+        var voice: VoiceLibraryStore.CanonicalCommit?
+        var result: CanonicalLibraryResult
         do {
-            try voiceLibrary.writePending(transaction: &transaction)
-            let changed = meetings.filter { meeting in
-                lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting
-            }
-            for meeting in changed {
-                _ = try MeetingFolderLocation.resolve(id: meeting.id, directory: dataDirectory, date: meeting.createdAt)
-            }
-            let dataEventBaselines = Dictionary(
-                uniqueKeysWithValues: changed.map { meeting in
-                    (meeting.id, DataEventJournal.documentSnapshot(directory: directory(for: meeting.id)))
-                })
-            try notesStorage.flushAll()
+            voice = try voiceLibrary.beginCanonicalCommit()
+            try await notesStorage.flushAll()
             for meeting in changed where notesStorage.saved[meeting.id] != meeting.notes {
-                try notesStorage.write(meeting.id, text: meeting.notes)
+                guard notesStorage.revision(meeting.id) == noteRevisions[meeting.id] else { continue }
+                try await notesStorage.write(meeting.id, text: meeting.notes)
             }
-            for meeting in changed {
-                if let baseline = lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) {
-                    var disk = try MeetingFolderStorage.read(id: meeting.id, directory: dataDirectory)
-                    // NotesStorage independently arbitrates Markdown edits and conflict copies.
-                    disk.notes = baseline.notes
-                    // The recording writer owns canonical rows until Stop has
-                    // published its final metadata. Unrelated saves cannot replace them.
-                    if recordingID == meeting.id { disk.transcript = baseline.transcript }
-                    var proposed = meeting
-                    proposed.notes = baseline.notes
-                    var normalizedBaseline = baseline
-                    normalizedBaseline.personIDs = MeetingListEntry(baseline).personIDs
-                    proposed.personIDs = MeetingListEntry(proposed).personIDs
-                    disk.personIDs = MeetingListEntry(disk).personIDs
-                    guard disk == normalizedBaseline || disk == proposed else {
-                        throw MeetingError.message("This meeting changed on disk. Reload it before saving.")
-                    }
-                }
-                let folder = directory(for: meeting.id)
-                var names = ["metadata.json", "content.json", "summary.md"]
-                let prior = lastSavedLibrary.meetings.first { $0.id == meeting.id }
-                if recordingID != meeting.id && (prior == nil || prior?.transcript != meeting.transcript) {
-                    names += [TranscriptStorage.filename, LiveTranscriptProjection.checkpointName]
-                }
-                for name in names {
-                    try transaction.remember(folder.appendingPathComponent(name))
-                }
+            let command = CanonicalLibraryWrite(
+                current: captured, previous: baseline, directory: dataDirectory,
+                recordingID: recordingID, personMerge: personMerge, index: libraryIndex,
+                indexIsBuilding: libraryDataStatus.isBuilding, voice: voice)
+            let hook = canonicalWriteHook
+            result = await Task.detached(priority: .utility) {
+                do { try hook?() }
+                catch { return CanonicalLibraryResult(committed: false, error: error.localizedDescription) }
+                return CanonicalLibraryWriter.write(command)
+            }.value
+        }
+        catch { result = CanonicalLibraryResult(committed: false, error: error.localizedDescription) }
+        voiceLibrary.finishCanonicalCommit(
+            voice, state: result.voiceState, committed: result.committed,
+            refreshFailed: result.voiceStateRefreshFailed || result.requiresRecovery)
+        if result.requiresRecovery {
+            canonicalRecoveryRequired = true
+            canSave = false
+            errorMessage = result.error
+            return false
+        }
+        if result.committed {
+            let loaded = Set(meetings.map(\.id))
+            let changedIDs = Set(changed.map(\.id))
+            lastSavedLibrary.meetings =
+                lastSavedLibrary.meetings.filter {
+                    loaded.contains($0.id) && !changedIDs.contains($0.id)
+                } + changed.filter { loaded.contains($0.id) }
+            if captured.people != baseline.people { lastSavedLibrary.people = captured.people }
+            if captured.tags != baseline.tags { lastSavedLibrary.tags = captured.tags }
+            if captured.contextualChats != baseline.contextualChats {
+                lastSavedLibrary.contextualChats = captured.contextualChats
             }
-            for (kind, ids) in [
-                (
-                    "people",
-                    Set(
-                        people.filter { !lastSavedLibrary.people.contains($0) }.map(\.id)
-                            + lastSavedLibrary.people.filter { !people.contains($0) }.map(\.id))
-                ),
-                (
-                    "tags",
-                    Set(
-                        tags.filter { !lastSavedLibrary.tags.contains($0) }.map(\.id)
-                            + lastSavedLibrary.tags.filter { !tags.contains($0) }.map(\.id))
-                ),
-            ] {
-                for id in ids {
-                    try transaction.remember(
-                        dataDirectory.appendingPathComponent(kind).appendingPathComponent(id.uuidString + ".json"))
-                }
+            if let warning = result.warning { errorMessage = warning }
+            if let error = result.indexError { libraryDataStatus.error = error }
+            if !result.changedPaths.isEmpty {
+                meetingIndexRevision = UUID()
+                libraryMonitor?.process(.init(paths: result.changedPaths, requiresScan: false, eventID: 0))
             }
-            if contextualChats != lastSavedLibrary.contextualChats {
-                try transaction.remember(dataDirectory.appendingPathComponent("context-chats.json"))
-            }
-            try notesStorage.flushAll()
-            for meeting in meetings where lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting {
-                if notesStorage.saved[meeting.id] != meeting.notes {
-                    try notesStorage.write(meeting.id, text: meeting.notes)
-                }
-                let prior = lastSavedLibrary.meetings.first { $0.id == meeting.id }
-                let writeTranscript =
-                    recordingID != meeting.id && (prior == nil || prior?.transcript != meeting.transcript)
-                try MeetingFolderStorage.write(meeting, directory: dataDirectory, writeTranscript: writeTranscript)
-
-            }
-            try FileEntityStorage.save(
-                people, previous: lastSavedLibrary.people, kind: "people", directory: dataDirectory)
-            try FileEntityStorage.save(tags, previous: lastSavedLibrary.tags, kind: "tags", directory: dataDirectory)
-            if contextualChats != lastSavedLibrary.contextualChats {
-                try JSONEncoder().encode(contextualChats).write(
-                    to: dataDirectory.appendingPathComponent("context-chats.json"), options: .atomic)
-            }
-            if let personMerge, let libraryIndex {
-                var cursor: MeetingListEntry?
-                let loadedIDs = Set(meetings.map(\.id))
-                while true {
-                    let page = try libraryIndex.page(after: cursor, limit: 20)
-                    guard !page.isEmpty else { break }
-                    for entry in page where !loadedIDs.contains(entry.id) {
-                        if let updated = try personMerge.rewriteStoredMeeting(
-                            id: entry.id, directory: dataDirectory, transaction: &transaction)
-                        {
-                            mergedEntries.append(updated)
-                        }
-                    }
-                    cursor = page.last
-                }
-            }
-            try transaction.commit()
-            voiceLibrary.completePending(committed: true)
-            for entry in mergedEntries {
-                do {
-                    let folder = directory(for: entry.id)
-                    for name in ["metadata.json", "content.json"]
-                    where FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
-                        try DataEventJournal.fileSaved(
-                            folder.appendingPathComponent(name), action: .modified, directory: folder)
-                    }
-                }
-                catch {
-                    errorMessage =
-                        "People were merged, but their data events couldn’t be saved. \(error.localizedDescription)"
-                }
-            }
-            for meeting in changed {
-                do {
-                    let folder = directory(for: meeting.id)
-                    try DataEventJournal.recordDocuments(
-                        directory: folder, previous: dataEventBaselines[meeting.id] ?? [:])
-                    let previousAudio = lastSavedLibrary.meetings.first { $0.id == meeting.id }?.audioFiles ?? []
-                    for name in meeting.audioFiles where !previousAudio.contains(name) {
-                        try DataEventJournal.fileSaved(
-                            folder.appendingPathComponent(name), action: .created, directory: folder)
-                    }
-                }
-                catch {
-                    errorMessage =
-                        "Files were saved, but their data events couldn’t be saved. \(error.localizedDescription)"
-                }
-            }
-            do {
-                if !libraryDataStatus.isBuilding {
-                    for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting), refreshSearch: false) }
-                    for entry in mergedEntries { try libraryIndex?.upsert(entry, refreshSearch: false) }
-                    if !changed.isEmpty || !mergedEntries.isEmpty { meetingIndexRevision = UUID() }
-                    let paths = (changed.map(\.id) + mergedEntries.map(\.id)).map {
-                        directory(for: $0).appendingPathComponent("metadata.json")
-                    }
-                    if !paths.isEmpty {
-                        libraryMonitor?.process(.init(paths: paths, requiresScan: false, eventID: 0))
-                    }
-                }
-            }
-            catch { libraryDataStatus.error = "Couldn’t refresh the index. Rebuild it in Data settings." }
-            let exclusionChanged = Set(lastSavedLibrary.tags.filter(\.isExcluded).map(\.id)) != excludedTagIDs
-            refreshDirectoryIndex(previousPeople: lastSavedLibrary.people, previousTags: lastSavedLibrary.tags)
-            lastSavedLibrary = LibrarySnapshot(
-                contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
-            if exclusionChanged {
+            refreshDirectoryIndex(previousPeople: baseline.people, previousTags: baseline.tags)
+            if Set(baseline.tags.filter(\.isExcluded).map(\.id)) != excludedTagIDs {
                 resetMeetingPages()
             }
             else {
-                refreshMeetingPagesAfterSave(previousIDs: [])
+                await refreshMeetingPagesAfterSave(previousIDs: [])
             }
             return true
         }
-        catch {
-            try? transaction.restore()
-            voiceLibrary.completePending(committed: false)
-            meetings = lastSavedLibrary.meetings.map { old in
-                var value = old
-                value.notes = notesStorage.pending[old.id] ?? notesStorage.saved[old.id] ?? old.notes
-                return value
+        // Roll back only values still owned by this command. Later edits remain dirty.
+        let proposed = Dictionary(uniqueKeysWithValues: captured.meetings.map { ($0.id, $0) })
+        let previous = Dictionary(uniqueKeysWithValues: baseline.meetings.map { ($0.id, $0) })
+        meetings = meetings.compactMap { current in
+            guard proposed[current.id] == current, revisions[current.id] == externalMeetingRevisions[current.id] else {
+                return current
             }
-            people = lastSavedLibrary.people
-            tags = lastSavedLibrary.tags
-            contextualChats = lastSavedLibrary.contextualChats
-            errorMessage = "Couldn’t save changes. \(error.localizedDescription)"
-            return false
+            guard var old = previous[current.id] else { return nil }
+            old.notes = notesStorage.pending[old.id] ?? notesStorage.saved[old.id] ?? old.notes
+            return old
         }
+        if peopleMutationRevision == peopleRevision { people = baseline.people }
+        if tagsMutationRevision == tagsRevision { tags = baseline.tags }
+        if chatsMutationRevision == chatsRevision { contextualChats = baseline.contextualChats }
+        errorMessage = "Couldn’t save changes. " + (result.error ?? "Try again.")
+        return false
     }
+    /// Call when a persistence command is admitted, before it yields to its worker.
+    func invalidateExternalMeetingReloads(ids: Set<UUID>) {
+        let loaded = Set(meetings.map(\.id))
+        for id in ids where loaded.contains(id) { externalMeetingRevisions[id] = UUID() }
+        externalMeetingRevisions = externalMeetingRevisions.filter { loaded.contains($0.key) }
+        externalEventRevisions = externalEventRevisions.filter { loaded.contains($0.key) }
+    }
+
     func requestExternalLibraryReload(paths: [URL], rebuild: Bool) {
-        pendingExternalChanges.formUnion(.init(paths: paths, root: dataDirectory, rebuild: rebuild))
-        guard externalReloadTask == nil, !pendingExternalChanges.isEmpty else { return }
+        let incoming = ExternalLibraryChangeBatch(paths: paths, root: dataDirectory, rebuild: rebuild)
+        guard !incoming.changes.isEmpty else { return }
+        if let ids = incoming.meetingIDs {
+            for id in ids { meetingLoadRequests.removeValue(forKey: id) }
+            for id in ids where meetings.contains(where: { $0.id == id }) { externalEventRevisions[id] = UUID() }
+        }
+        else {
+            externalAncestorRevision = UUID()
+            meetingLoadRequests.removeAll()
+        }
+        if pendingExternalChanges == nil {
+            pendingExternalChanges = incoming
+        }
+        else {
+            pendingExternalChanges?.formUnion(incoming)
+        }
+        guard externalReloadTask == nil else { return }
         externalReloadTask = Task { [weak self] in
             guard let self else { return }
             defer { externalReloadTask = nil }
-            while !pendingExternalChanges.isEmpty {
-                let changes = pendingExternalChanges
-                pendingExternalChanges = []
-                let root = dataDirectory
-                let originalPeople = people
-                let originalTags = tags
-                do {
-                    let snapshot: ExternalCatalogSnapshot?
-                    do {
-                        snapshot = try await Task.detached(priority: .utility) {
-                            try ExternalCatalogSnapshot.read(changes: changes, directory: root)
-                        }.value
+            while let changes = pendingExternalChanges {
+                pendingExternalChanges = nil
+                guard !isChangingLibrary else { continue }
+                let generation = externalReloadGeneration
+                let completed = await reloadExternalLibraryDocuments(batch: changes)
+                if !completed, !isChangingLibrary {
+                    if pendingExternalChanges == nil {
+                        pendingExternalChanges = changes
                     }
-                    catch {
-                        // A malformed catalog must not block independent meeting
-                        // and task refreshes in a root-level recovery batch.
-                        libraryDataStatus.error = error.localizedDescription
-                        snapshot = ExternalCatalogSnapshot(people: nil, tags: nil)
-                    }
-                    guard root == dataDirectory else { continue }
-                    guard let snapshot,
-                        !FileManager.default.fileExists(
-                            atPath: root.appendingPathComponent(".document-transaction").path)
                     else {
-                        pendingExternalChanges.formUnion(changes)
-                        try await Task.sleep(for: .milliseconds(100))
-                        continue
+                        pendingExternalChanges?.formUnion(changes)
                     }
-                    if let fresh = snapshot.people, people == originalPeople, lastSavedLibrary.people == originalPeople
-                    {
-                        if people != fresh { people = fresh }
-                        lastSavedLibrary.people = fresh
-                    }
-                    let previousExcluded = excludedTagIDs
-                    if let fresh = snapshot.tags, tags == originalTags, lastSavedLibrary.tags == originalTags {
-                        if tags != fresh { tags = fresh }
-                        lastSavedLibrary.tags = fresh
-                    }
-                    if previousExcluded != excludedTagIDs { resetMeetingPages() }
-                    if changes.contains(.meetings) { reloadExternalLibraryDocuments(reloadCatalogs: false) }
-                    if changes.contains(.tasks) { reloadExternalManagedTasks() }
+                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    catch { return }
                 }
-                catch { libraryDataStatus.error = error.localizedDescription }
+                if completed, generation == externalReloadGeneration, !isChangingLibrary,
+                    changes.changes.contains(.tasks)
+                {
+                    await reloadExternalManagedTasks()
+                }
             }
         }
     }
 
-    func reloadExternalLibraryDocuments(reloadCatalogs: Bool = true) {
-        // A file transaction may temporarily remove or replace a document. Its absence
-        // becomes authoritative only after the transaction has committed.
-        guard
-            !FileManager.default.fileExists(atPath: dataDirectory.appendingPathComponent(".document-transaction").path)
-        else { return }
-        do {
-            var removed = Set<UUID>()
-            defer {
-                meetings.removeAll { removed.contains($0.id) }
-                lastSavedLibrary.meetings.removeAll { removed.contains($0.id) }
-                for id in removed {
-                    notesStorage.saved.removeValue(forKey: id)
-                    archiveStatuses.removeValue(forKey: id)
-                }
+    @discardableResult
+    func reloadExternalLibraryDocuments(reloadCatalogs: Bool = true) async -> Bool {
+        var batch = ExternalLibraryChangeBatch(root: dataDirectory, rebuild: true)
+        batch.changes = reloadCatalogs ? [.meetings, .people, .tags] : [.meetings]
+        return await reloadExternalLibraryDocuments(batch: batch)
+    }
+
+    private func canReloadExternalMeeting(_ meeting: Meeting) -> Bool {
+        notesStorage.pending[meeting.id] == nil
+            && lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) == meeting
+            && !backgroundJobs.contains(where: { $0.meetingID == meeting.id })
+            && recordingID != meeting.id
+    }
+
+    private func reloadExternalLibraryDocuments(batch: ExternalLibraryChangeBatch) async -> Bool {
+        guard !isChangingLibrary else { return true }
+        let root = dataDirectory
+        let generation = externalReloadGeneration
+        let ancestorRevision = externalAncestorRevision
+        let eventRevisions = externalEventRevisions
+        let originals = meetings.filter {
+            batch.changes.contains(.meetings) && (batch.meetingIDs?.contains($0.id) ?? true)
+                && canReloadExternalMeeting($0)
+        }
+        let revisions = externalMeetingRevisions
+        let originalPeople = people
+        let originalTags = tags
+        let originalPeopleRevision = peopleMutationRevision
+        let originalTagsRevision = tagsMutationRevision
+        let originalNotes = notesStorage.saved
+        let noteRevisions = Dictionary(uniqueKeysWithValues: originals.map { ($0.id, notesStorage.revision($0.id)) })
+        let reader = externalMeetingReader
+        let result = await Task.detached(priority: .utility) {
+            let catalog: ExternalCatalogSnapshot?
+            var catalogError: String?
+            do { catalog = try ExternalCatalogSnapshot.read(changes: batch.changes, directory: root) }
+            catch {
+                catalogError = error.localizedDescription
+                catalog = ExternalCatalogSnapshot(people: nil, tags: nil)
             }
-            for position in meetings.indices {
-                let current = meetings[position]
-                guard notesStorage.pending[current.id] == nil,
-                    lastSavedLibrary.meetings.first(where: { $0.id == current.id }) == current,
-                    !backgroundJobs.contains(where: { $0.meetingID == current.id }), recordingID != current.id
-                else { continue }
-                let metadata = directory(for: current.id).appendingPathComponent("metadata.json")
-                do { _ = try metadata.resourceValues(forKeys: [.isRegularFileKey]) }
-                catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-                    removed.insert(current.id)
-                    continue
-                }
-                let fresh = try MeetingFolderStorage.read(id: current.id, directory: dataDirectory)
+            let snapshot = ExternalMeetingSnapshot.read(ids: Set(originals.map(\.id)), directory: root, reader: reader)
+            return (catalog, snapshot, catalogError)
+        }.value
+        guard !Task.isCancelled, generation == externalReloadGeneration, root == dataDirectory, !isChangingLibrary
+        else { return true }
+        guard let catalogs = result.0, let snapshot = result.1 else { return false }
+        if let error = result.2 ?? snapshot.errors.first { libraryDataStatus.error = error }
+        if let fresh = catalogs.people, peopleMutationRevision == originalPeopleRevision,
+            people == originalPeople, lastSavedLibrary.people == originalPeople
+        {
+            if people != fresh { people = fresh }
+            lastSavedLibrary.people = fresh
+        }
+        let previousExcluded = excludedTagIDs
+        if let fresh = catalogs.tags, tagsMutationRevision == originalTagsRevision,
+            tags == originalTags, lastSavedLibrary.tags == originalTags
+        {
+            if tags != fresh { tags = fresh }
+            lastSavedLibrary.tags = fresh
+        }
+        for original in originals {
+            let id = original.id
+            guard ancestorRevision == externalAncestorRevision, eventRevisions[id] == externalEventRevisions[id],
+                revisions[id] == externalMeetingRevisions[id],
+                let position = meetings.firstIndex(where: { $0.id == id }), meetings[position] == original,
+                canReloadExternalMeeting(original), notesStorage.saved[id] == originalNotes[id],
+                notesStorage.revision(id) == noteRevisions[id]
+            else { continue }
+            if snapshot.removed.contains(id) {
+                meetings.remove(at: position)
+                lastSavedLibrary.meetings.removeAll { $0.id == id }
+                notesStorage.saved.removeValue(forKey: id)
+                archiveStatuses.removeValue(forKey: id)
+            }
+            else if let fresh = snapshot.meetings[id] {
                 if meetings[position] != fresh { meetings[position] = fresh }
-                if let saved = lastSavedLibrary.meetings.firstIndex(where: { $0.id == current.id }) {
+                if let saved = lastSavedLibrary.meetings.firstIndex(where: { $0.id == id }) {
                     lastSavedLibrary.meetings[saved] = fresh
                 }
             }
-            if reloadCatalogs, people == lastSavedLibrary.people {
-                people = try FileEntityStorage.load(Person.self, kind: "people", directory: dataDirectory)
-                lastSavedLibrary.people = people
-            }
-            let previousExcluded = excludedTagIDs
-            if reloadCatalogs, tags == lastSavedLibrary.tags {
-                tags = try FileEntityStorage.load(MeetingTag.self, kind: "tags", directory: dataDirectory)
-                lastSavedLibrary.tags = tags
-            }
-            if previousExcluded != excludedTagIDs {
-                resetMeetingPages()
-            }
-            else {
-                refreshMeetingPagesAfterSave(previousIDs: [])
-            }
-            refreshMeetingPageAvailabilityAfterIndexCommit()
         }
-        catch { libraryDataStatus.error = error.localizedDescription }
+        if previousExcluded != excludedTagIDs {
+            resetMeetingPages()
+        }
+        else {
+            await refreshMeetingPagesAfterSave(previousIDs: [])
+        }
+        refreshMeetingPageAvailabilityAfterIndexCommit()
+        return true
     }
     func evictLoadedMeetings(keeping id: UUID) {
         guard meetings.count > 24 else { return }
@@ -647,13 +664,14 @@ final class MeetingStore: ObservableObject {
     /// Preview uses this only after saving its synthetic fixtures.
     func clearLoadedMeetingCache() {
         guard recordingID == nil, backgroundJobs.isEmpty else { return }
+        externalReloadGeneration = UUID()
         meetings = []
         lastSavedLibrary.meetings = []
     }
-    func saveContextChat(key: String, messages: [ChatMessage]) {
-        guard canSave else { return }
+    @discardableResult func saveContextChat(key: String, messages: [ChatMessage]) async -> Bool {
+        guard canSave else { return false }
         contextualChats[key] = messages
-        save()
+        return await save()
     }
     @discardableResult func saveSettings() -> Bool {
         guard canSave else {
@@ -705,13 +723,13 @@ final class MeetingStore: ObservableObject {
         ProviderHealthStore.shared.invalidateChangedConfiguration(settings: settings)
         return true
     }
-    func insertImportedMeeting(_ meeting: Meeting) throws {
+    func insertImportedMeeting(_ meeting: Meeting) async throws {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
         meetings.insert(meeting, at: 0)
-        guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
+        guard await save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
         latestCreatedMeetingID = meeting.id
     }
-    @discardableResult func createMeeting(title: String = "Untitled Meeting", language: String? = nil) -> UUID {
+    @discardableResult func createMeeting(title: String = "Untitled Meeting", language: String? = nil) async -> UUID {
         guard canSave else { return UUID() }
         let meeting = Meeting(title: title, language: language ?? settings.defaultLanguage)
         do {
@@ -722,16 +740,18 @@ final class MeetingStore: ObservableObject {
             return meeting.id
         }
         meetings.insert(meeting, at: 0)
-        if save() { latestCreatedMeetingID = meeting.id }
+        if await save() { latestCreatedMeetingID = meeting.id }
         return meeting.id
     }
-    @discardableResult func updateMeeting(_ meeting: Meeting) -> Bool {
-        _ = ensureMeetingLoaded(id: meeting.id)
-        guard canSave, let index = meetings.firstIndex(where: { $0.id == meeting.id }) else { return false }
+    @discardableResult func updateMeeting(_ meeting: Meeting) async -> Bool {
+        _ = await ensureMeetingLoaded(id: meeting.id)
+        guard canSave, !deletingMeetingIDs.contains(meeting.id),
+            let index = meetings.firstIndex(where: { $0.id == meeting.id })
+        else { return false }
         meetings[index] = meeting
-        return save()
+        return await save()
     }
-    @discardableResult func deleteMeeting(id: UUID) -> Bool {
+    @discardableResult func deleteMeeting(id: UUID) async -> Bool {
         guard canSave else { return false }
         guard !voiceSearch.isBuilding || voiceSearch.buildingMeetingID != id else {
             errorMessage = "Stop voice indexing before deleting this meeting."
@@ -757,60 +777,80 @@ final class MeetingStore: ObservableObject {
             errorMessage = "Wait for this meeting’s background tasks to finish before deleting it."
             return false
         }
-        do {
-            try notesStorage.flush(id)
-            let original = meetings
-            let originalCatalog = meetingCatalog
-            meetings.removeAll { $0.id == id }
-            meetingCatalog.removeAll { $0.id == id }
-            let folder = directory(for: id)
+        guard deletingMeetingIDs.insert(id).inserted else { return false }
+        meetingLoadRequests.removeValue(forKey: id)
+        invalidateExternalMeetingReloads(ids: [id])
+        defer { deletingMeetingIDs.remove(id) }
+        return await enqueueCanonical {
+            guard self.notesStorage.reserveDeletion(id) else { return false }
+            defer { self.notesStorage.releaseDeletion(id) }
             do {
-                if FileManager.default.fileExists(atPath: folder.path) {
-                    _ = try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+                try await self.notesStorage.flush(id)
+                let root = self.dataDirectory
+                let index = self.libraryIndex
+                let indexError = try await Task.detached(priority: .utility) {
+                    let folder = try MeetingFolderLocation.resolve(id: id, directory: root)
+                    if FileManager.default.fileExists(atPath: folder.path) {
+                        _ = try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+                    }
+                    do {
+                        try index?.remove(id: id)
+                        return Optional<String>.none
+                    }
+                    catch { return error.localizedDescription }
+                }.value
+                self.meetings.removeAll { $0.id == id }
+                self.lastSavedLibrary.meetings.removeAll { $0.id == id }
+                self.meetingCatalog.removeAll { $0.id == id }
+                self.visibleMeetingIDs.removeAll { $0 == id }
+                self.voiceSearch.invalidateDeletedMeeting(id)
+                do { try await self.notesStorage.discard(id) }
+                catch {
+                    self.errorMessage =
+                        "The meeting was moved to Trash, but its notes state couldn’t be cleared. "
+                        + error.localizedDescription
                 }
-                try libraryIndex?.remove(id: id)
-                voiceSearch.invalidateDeletedMeeting(id)
-                notesStorage.discard(id)
-                return save()
+                if let indexError {
+                    self.libraryDataStatus.error =
+                        "The meeting was moved to Trash, but its index couldn’t be updated. " + indexError
+                }
+                self.meetingIndexRevision = UUID()
+                await self.refreshMeetingPagesAfterSave(previousIDs: [])
+                return true
             }
             catch {
-                meetings = original
-                meetingCatalog = originalCatalog
-                save()
-                throw error
+                self.errorMessage = error.localizedDescription
+                return false
             }
         }
-        catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
     }
-    @discardableResult func addPerson(name: String) -> UUID {
+    @discardableResult func addPerson(name: String) async -> UUID {
         guard canSave else { return UUID() }
         let person = Person(name: name)
         people.append(person)
-        save()
+        await save()
         return person.id
     }
-    func updatePerson(_ person: Person) {
+    func updatePerson(_ person: Person) async {
         guard canSave else { return }
         if let i = people.firstIndex(where: { $0.id == person.id }) {
             people[i] = person
-            save()
+            await save()
         }
     }
     var canMergePeople: Bool {
-        canSave && canChangeLibraryFolder && !libraryDataStatus.isBuilding && !indexNeedsInitialRebuild
+        canSave && canonicalPending == 0 && canChangeLibraryFolder && !libraryDataStatus.isBuilding
+            && !indexNeedsInitialRebuild
             && libraryIndex != nil
     }
 
     @discardableResult
-    func mergePerson(id: UUID, into targetID: UUID) -> Bool {
-        mergePeople(ids: [id, targetID], into: targetID)
+    func mergePerson(id: UUID, into targetID: UUID) async -> Bool {
+        await mergePeople(ids: [id, targetID], into: targetID)
     }
 
     @discardableResult
-    func mergePeople(ids: Set<UUID>, into targetID: UUID) -> Bool {
+    func mergePeople(ids: Set<UUID>, into targetID: UUID) async -> Bool {
         guard canMergePeople else {
             errorMessage = "Wait for recording, processing, and indexing to finish before merging people."
             return false
@@ -842,20 +882,21 @@ final class MeetingStore: ObservableObject {
                 contextualChats[targetKey] = combined.sorted { $0.createdAt < $1.createdAt }
             }
         }
-        return save(personMerge: merge)
+        return await save(personMerge: merge)
     }
 
-    func deletePerson(id: UUID) {
-        guard canSave, removeRelationships(personID: id) else { return }
+    func deletePerson(id: UUID) async {
+        guard await flushCanonicalWrites() else { return }
+        guard canSave, await removeRelationships(personID: id) else { return }
         guard voiceLibrary.removePerson(id: id, staged: true) else {
             errorMessage = voiceLibrary.errorMessage
             return
         }
         people.removeAll { $0.id == id }
         contextualChats.removeValue(forKey: Self.contextChatKey(personID: id))
-        save()
+        await save()
     }
-    private func removeRelationships(personID: UUID? = nil, tagID: UUID? = nil) -> Bool {
+    private func removeRelationships(personID: UUID? = nil, tagID: UUID? = nil) async -> Bool {
         guard !indexNeedsInitialRebuild else {
             errorMessage = "Wait for the initial index build before deleting people or tags."
             return false
@@ -887,7 +928,7 @@ final class MeetingStore: ObservableObject {
                     return true
                 }
                 for entry in page {
-                    guard ensureMeetingLoaded(id: entry.id),
+                    guard await ensureMeetingLoaded(id: entry.id),
                         let position = meetings.firstIndex(where: { $0.id == entry.id })
                     else { return false }
                     if let personID {
@@ -901,7 +942,7 @@ final class MeetingStore: ObservableObject {
                     }
                     if let tagID { meetings[position].tagIDs.removeAll { $0 == tagID } }
                 }
-                guard save() else { return false }
+                guard await save() else { return false }
                 cursor = page.last
             }
         }
@@ -910,11 +951,11 @@ final class MeetingStore: ObservableObject {
             return false
         }
     }
-    @discardableResult func addTag(name: String, color: String = "blue") -> UUID {
+    @discardableResult func addTag(name: String, color: String = "blue") async -> UUID {
         guard canSave else { return UUID() }
         let tag = MeetingTag(name: name, color: color)
         tags.append(tag)
-        save()
+        await save()
         return tag.id
     }
     var excludedTagIDs: Set<UUID> { Set(tags.filter(\.isExcluded).map(\.id)) }
@@ -922,19 +963,19 @@ final class MeetingStore: ObservableObject {
         let excluded = excludedTagIDs
         return people.filter { excluded.isDisjoint(with: $0.tagIDs) }
     }
-    func updateTag(_ tag: MeetingTag) {
+    func updateTag(_ tag: MeetingTag) async {
         guard canSave else { return }
         if let i = tags.firstIndex(where: { $0.id == tag.id }) {
             tags[i] = tag
-            save()
+            await save()
         }
     }
-    func deleteTag(id: UUID) {
-        guard canSave, removeRelationships(tagID: id) else { return }
+    func deleteTag(id: UUID) async {
+        guard canSave, await removeRelationships(tagID: id) else { return }
         tags.removeAll { $0.id == id }
         for index in people.indices { people[index].tagIDs.removeAll { $0 == id } }
         contextualChats.removeValue(forKey: Self.contextChatKey(tagID: id))
-        save()
+        await save()
     }
     func directory(for id: UUID) -> URL { MeetingFolderStorage.folder(id: id, directory: dataDirectory) }
     func audioURLs(for meeting: Meeting) -> [URL] {
@@ -1012,7 +1053,7 @@ final class MeetingStore: ObservableObject {
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
             meetings.insert(recorded, at: 0)
-            guard save() else {
+            guard await save() else {
                 try? await capture.stop()
                 throw MeetingError.message(errorMessage ?? "Could not save recording metadata.")
             }
@@ -1034,9 +1075,11 @@ final class MeetingStore: ObservableObject {
                     },
                 people: { [weak self] in self?.people ?? [] },
                 enrollVoice: { [weak self] personID, speakerID, embedding in
-                    self?.enrollLiveVoice(
-                        meetingID: meeting.id, personID: personID,
-                        speakerID: speakerID, embedding: embedding)
+                    Task {
+                        await self?.enrollLiveVoice(
+                            meetingID: meeting.id, personID: personID,
+                            speakerID: speakerID, embedding: embedding)
+                    }
                 },
                 recordVoice: { [weak self] sample, embedding in
                     self?.recordVoiceExample(meetingID: meeting.id, sample: sample, embedding: embedding)
@@ -1078,7 +1121,7 @@ final class MeetingStore: ObservableObject {
         recordingMeter.deliver(levels)
     }
     func stopRecording(transcribeAfter: Bool = true) async {
-        _ = flushNotes()
+        _ = await flushNotes()
         guard let id = recordingID else { return }
         guard !captureTransition else { return }
         captureTransition = true
@@ -1115,7 +1158,7 @@ final class MeetingStore: ObservableObject {
         if let index = meetings.firstIndex(where: { $0.id == id }) {
             meetings[index].duration = duration
             meetings[index].recordingProfile = profile
-            if !save() { stopFailed = true }
+            if !(await save()) { stopFailed = true }
         }
         if !stopFailed && activeRecordingFormat == .m4a {
             do { try await finalizeRecordingAudio(id: id, format: activeRecordingFormat) }
@@ -1126,7 +1169,13 @@ final class MeetingStore: ObservableObject {
             }
         }
         let finalizedLive = liveTranscript.draft.flatMap { $0.meetingID == id ? $0 : nil }
-        let adoptedLive = finalizedLive.map { adoptLiveTranscript($0) } ?? false
+        let adoptedLive: Bool
+        if let finalizedLive {
+            adoptedLive = await adoptLiveTranscript(finalizedLive)
+        }
+        else {
+            adoptedLive = false
+        }
         recordingID = nil
         recordingStartedAt = nil
         recordingMeter.reset()
@@ -1146,6 +1195,9 @@ final class MeetingStore: ObservableObject {
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {
         guard canSave, format != .wav else { return }
+        guard await ensureMeetingLoaded(id: id) else {
+            throw MeetingError.message("Couldn’t load the recording to finish its audio files.")
+        }
         guard let meeting = self.meeting(id: id) else { return }
         let originals = audioURLs(for: meeting)
         guard !originals.isEmpty, originals.count == meeting.audioFiles.count else {
@@ -1176,7 +1228,7 @@ final class MeetingStore: ObservableObject {
                 }
                 meetings[index].recordingProfile = profile
             }
-            guard save() else {
+            guard await save() else {
                 throw MeetingError.message(errorMessage ?? "Could not save compressed recording metadata.")
             }
         }
@@ -1189,13 +1241,38 @@ final class MeetingStore: ObservableObject {
         for file in originals { try? FileManager.default.removeItem(at: file) }
     }
     @discardableResult func finalizeForQuit() async -> Bool {
+        isPreparingToQuit = true
         await voiceSearch.shutdown()
         libraryCopyTask?.cancel()
         await libraryCopyTask?.value
         RecordingPermissions.cancelPendingStart()
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
         await stopRecording(transcribeAfter: false)
-        return flushNotes()
+        guard await prepareManagedTasksForQuit() else {
+            isPreparingToQuit = false
+            errorMessage = managedTaskShutdownError ?? "Couldn’t save task progress before quitting. Try again."
+            await recoverUnfinishedManagedTasks()
+            return false
+        }
+        await flushVoiceAssignmentRefresh()
+        let wasWritable = canSave
+        canSave = false
+        let saved = await flushCanonicalWrites()
+        let notesSaved: Bool
+        do {
+            try await notesStorage.flushAll()
+            notesSaved = true
+        }
+        catch {
+            errorMessage = "Couldn’t save meeting notes before quitting. \(error.localizedDescription)"
+            notesSaved = false
+        }
+        if !saved || !notesSaved {
+            canSave = wasWritable && !canonicalRecoveryRequired
+            isPreparingToQuit = false
+            await recoverUnfinishedManagedTasks()
+        }
+        return notesSaved && saved
     }
     /// A list drop creates one meeting per file; a detail drop appends aligned
     /// tracks to one meeting. Commit metadata once, or remove all new copies.
@@ -1209,6 +1286,9 @@ final class MeetingStore: ObservableObject {
         }
         guard !urls.isEmpty else { return [] }
         if let target {
+            guard await ensureMeetingLoaded(id: target) else {
+                throw MeetingError.message("Couldn’t load the meeting to import audio.")
+            }
             guard let meeting = self.meeting(id: target) else {
                 throw MeetingError.message("This meeting no longer exists.")
             }
@@ -1304,7 +1384,7 @@ final class MeetingStore: ObservableObject {
                 }
                 meetings.insert(contentsOf: imported, at: 0)
             }
-            guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
+            guard await save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
         }
         catch {
             for file in copied { try? FileManager.default.removeItem(at: file) }
@@ -1317,7 +1397,7 @@ final class MeetingStore: ObservableObject {
         }
         return target.map { [$0] } ?? additions.map(\.id)
     }
-    func importArchive(url: URL) throws {
+    func importArchive(url: URL) async throws {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -1345,6 +1425,10 @@ final class MeetingStore: ObservableObject {
         let importedDirectory = try MeetingFolderLocation.newFolder(
             id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
         do {
+            // The location cache can evict a reservation while this import awaits an earlier save.
+            // Establish the dated folder before notes persistence resolves its path independently.
+            try FileManager.default.createDirectory(
+                at: importedDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try MeetingExport.importAssets(
                 from: archiveData, source: url, notes: meeting.notes, directory: importedDirectory)
             meeting.notes = try NotesImageStore.canonicalizedNotes(in: meeting.notes, directory: importedDirectory)
@@ -1354,7 +1438,7 @@ final class MeetingStore: ObservableObject {
             throw error
         }
         meetings.insert(meeting, at: 0)
-        guard save() else {
+        guard await save() else {
             meetings.removeAll { $0.id == meeting.id }
             try? FileManager.default.removeItem(at: importedDirectory)
             throw MeetingError.message(errorMessage ?? "Could not save imported meeting.")
@@ -1370,30 +1454,35 @@ final class MeetingStore: ObservableObject {
 extension MeetingStore {
     /// Only an explicit live assignment enrolls a clean, typed voice sample.
     /// Refresh this speaker's contribution without removing other model types.
-    func enrollLiveVoice(meetingID: UUID, personID: UUID?, speakerID: UUID, embedding: TypedVoiceEmbedding?) {
+    func enrollLiveVoice(meetingID: UUID, personID: UUID?, speakerID: UUID, embedding: TypedVoiceEmbedding?) async {
         guard libraryWritable, recordingID == meetingID,
             personID == nil || people.contains(where: { $0.id == personID })
         else { return }
-        guard voiceLibrary.assign(meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true) else {
-            errorMessage = voiceLibrary.errorMessage
-            return
-        }
-        let previous = people
-        for personIndex in people.indices {
-            let isAssignedPerson = people[personIndex].id == personID
-            people[personIndex].voiceSamples.removeAll {
-                guard $0.meetingID == meetingID && $0.speakerID == speakerID else { return false }
-                return !isAssignedPerson
-                    || (embedding != nil && $0.voiceEmbedding?.type == embedding?.type)
+        _ = await enqueueCanonical { [self] in
+            guard meeting(id: meetingID) != nil,
+                personID == nil || people.contains(where: { $0.id == personID })
+            else { return false }
+            guard voiceLibrary.assign(meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true)
+            else {
+                errorMessage = voiceLibrary.errorMessage
+                return false
             }
+            for personIndex in people.indices {
+                let isAssignedPerson = people[personIndex].id == personID
+                people[personIndex].voiceSamples.removeAll {
+                    guard $0.meetingID == meetingID && $0.speakerID == speakerID else { return false }
+                    return !isAssignedPerson
+                        || (embedding != nil && $0.voiceEmbedding?.type == embedding?.type)
+                }
+            }
+            if let personID, let embedding, embedding.isValid,
+                let index = people.firstIndex(where: { $0.id == personID })
+            {
+                people[index].voiceSamples.append(
+                    .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
+            }
+            return await performCanonicalSave()
         }
-        if let personID, let embedding, embedding.isValid,
-            let index = people.firstIndex(where: { $0.id == personID })
-        {
-            people[index].voiceSamples.append(
-                .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
-        }
-        if !save() { people = previous }
     }
 
     func recordVoiceExample(meetingID: UUID, sample: LiveSpeakerAudioSample, embedding: TypedVoiceEmbedding) {
@@ -1419,12 +1508,32 @@ extension MeetingStore {
         }
     }
 
-    func refreshVoiceAssignments(meetingIDs: Set<UUID>) {
+    func refreshVoiceAssignments(meetingIDs: Set<UUID>) async {
         for id in meetingIDs where id != recordingID {
+            guard await ensureMeetingLoaded(id: id) else { continue }
             guard let meeting = meeting(id: id) else { continue }
             let updated = voiceLibrary.applyingDecisions(to: meeting)
-            if updated != meeting { _ = updateMeeting(updated) }
+            if updated != meeting { _ = await updateMeeting(updated) }
         }
         voiceLibrary.suggestReviewedPeople(from: people)
+    }
+
+    private func scheduleVoiceAssignmentRefresh(meetingIDs: Set<UUID>) {
+        let previous = voiceAssignmentRefresh
+        voiceAssignmentRefreshRevision = UUID()
+        voiceAssignmentRefreshCount += 1
+        voiceAssignmentRefresh = Task { [weak self] in
+            await previous?.value
+            await self?.refreshVoiceAssignments(meetingIDs: meetingIDs)
+            self?.voiceAssignmentRefreshCount -= 1
+        }
+    }
+
+    func flushVoiceAssignmentRefresh() async {
+        var revision: UUID
+        repeat {
+            revision = voiceAssignmentRefreshRevision
+            await voiceAssignmentRefresh?.value
+        } while revision != voiceAssignmentRefreshRevision
     }
 }

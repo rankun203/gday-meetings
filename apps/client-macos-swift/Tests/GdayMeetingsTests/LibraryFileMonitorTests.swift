@@ -72,6 +72,7 @@ import Testing
         #expect(store.managedTasks.isEmpty)
         #expect(store.libraryDataStatus.meetingCount == 1)
         let discoveredID = try #require(store.visibleMeetingIDs.first)
+        #expect(await store.ensureMeetingLoaded(id: discoveredID))
         #expect(store.meeting(id: discoveredID) != nil)
         let staging = root.appendingPathComponent("staging", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -84,23 +85,23 @@ import Testing
         #expect(store.libraryDataStatus.meetingCount == 0)
     }
 
-    @MainActor @Test func externalQueuedTaskRequiresResumeAndOwnWritesDoNotReload() throws {
+    @MainActor @Test func externalQueuedTaskRequiresResumeAndOwnWritesDoNotReload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "External task")
+        let id = await store.createMeeting(title: "External task")
         let external = ManagedTaskJournal(url: root.appendingPathComponent("tasks.jsonl"))
         let record = ManagedTaskRecord(kind: .transcription, meetingID: id, meetingTitle: "External task")
         try external.upsert(record)
         #expect(store.managedTaskJournal.hasExternalChanges)
-        store.reloadExternalManagedTasks()
+        await store.reloadExternalManagedTasks()
         #expect(store.managedTasks.first?.state == .failed)
         #expect(store.managedTasks.first?.recovery == .manual)
         #expect(store.managedTaskOperations.isEmpty)
         #expect(!store.managedTaskJournal.hasExternalChanges)
     }
 
-    @MainActor @Test func initialIndexGrowthPreservesRowsAndReopensPaging() throws {
+    @MainActor @Test func initialIndexGrowthPreservesRowsAndReopensPaging() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -124,12 +125,12 @@ import Testing
         #expect(store.meetingPageHasPrevious)
     }
 
-    @MainActor @Test func externalDeletionRemovesOnlyCleanInactiveLoadedMeetings() throws {
+    @MainActor @Test func externalDeletionRemovesOnlyCleanInactiveLoadedMeetings() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let removed = store.createMeeting(title: "Delete externally")
-        let dirty = store.createMeeting(title: "Keep unsaved edit")
+        let removed = await store.createMeeting(title: "Delete externally")
+        let dirty = await store.createMeeting(title: "Keep unsaved edit")
         let dirtyPosition = try #require(store.meetings.firstIndex { $0.id == dirty })
         store.meetings[dirtyPosition].title = "Unsaved change"
         for id in [removed, dirty] {
@@ -137,21 +138,21 @@ import Testing
         }
         let transaction = root.appendingPathComponent(".document-transaction")
         try FileManager.default.createDirectory(at: transaction, withIntermediateDirectories: true)
-        store.reloadExternalLibraryDocuments()
+        await store.reloadExternalLibraryDocuments()
         #expect(store.meetings.contains { $0.id == removed })
         try FileManager.default.removeItem(at: transaction)
-        store.reloadExternalLibraryDocuments()
+        await store.reloadExternalLibraryDocuments()
         #expect(!store.meetings.contains { $0.id == removed })
         #expect(store.meetings.first { $0.id == dirty }?.title == "Unsaved change")
     }
 
-    @MainActor @Test func malformedExternalMetadataKeepsLoadedMeetingAndReportsError() throws {
+    @MainActor @Test func malformedExternalMetadataKeepsLoadedMeetingAndReportsError() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
-        let id = store.createMeeting(title: "Keep malformed metadata")
+        let id = await store.createMeeting(title: "Keep malformed metadata")
         try Data("{broken".utf8).write(to: store.directory(for: id).appendingPathComponent("metadata.json"))
-        store.reloadExternalLibraryDocuments()
+        await store.reloadExternalLibraryDocuments()
         #expect(store.meetings.contains { $0.id == id })
         #expect(store.libraryDataStatus.error != nil)
     }

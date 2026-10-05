@@ -393,13 +393,56 @@ import Testing
             text: String(repeating: "Words that wrap across transcript lines. ", count: 8))
         let wide = cache.height(row, width: 800, showsSpeakers: true)
         for _ in 0..<1_000 { #expect(cache.height(row, width: 800, showsSpeakers: true) == wide) }
-        #expect(cache.measurements == 1)
+        #expect(cache.measurements == 2)
         let narrow = cache.height(row, width: 350, showsSpeakers: true)
         #expect(narrow > wide)
-        #expect(cache.measurements == 2)
+        #expect(cache.measurements == 3)
         let changed = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "Short")
         #expect(cache.height(changed, width: 350, showsSpeakers: true) < narrow)
-        #expect(cache.measurements == 3)
+        #expect(cache.measurements == 4)
+    }
+
+    @Test func fittingTranscriptLinesReuseExactNativeMetricsAcrossResize() {
+        let cache = TranscriptHeightCache()
+        for text in ["Short sentence.", "简短的示例文字。", "مرحبا بالعالم", "Emoji 👩🏽‍💻 sample", "", "a\tb"] {
+            let row = TranscriptDisplayRow(id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: nil, text: text)
+            let before = cache.measurements
+            let native = (text as NSString).boundingRect(
+                with: NSSize(width: 800 - 8 - 68 - 12 - 112 - 4, height: CGFloat.greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: NSFont.systemFont(ofSize: 13)]
+            )
+            for width in stride(from: CGFloat(800), through: 400, by: -1) {
+                #expect(cache.height(row, width: width, showsSpeakers: true) == max(20, ceil(native.height) + 2) + 8)
+            }
+            #expect(cache.measurements - before == 1)
+            for available in stride(from: max(36, native.width - 3), through: max(36, native.width) + 3, by: 0.25) {
+                let constrained = (text as NSString).boundingRect(
+                    with: NSSize(width: available, height: CGFloat.greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: NSFont.systemFont(ofSize: 13)])
+                #expect(
+                    cache.height(row, width: available + 8 + 68 + 12 + 112 + 4, showsSpeakers: true)
+                        == max(20, ceil(constrained.height) + 2) + 8)
+            }
+        }
+    }
+
+    @Test func wrappingAndExplicitBreaksRetainNativeTranscriptHeight() {
+        let cache = TranscriptHeightCache()
+        let id = UUID()
+        for text in [
+            "Longer words that wrap around the available space.", "First\nSecond", "First\rSecond",
+            "First\u{2028}Second",
+        ] {
+            let row = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "", speakerID: nil, text: text)
+            for width in [CGFloat(120), 300, 600, 120] {
+                let native = (text as NSString).boundingRect(
+                    with: NSSize(width: max(40, width - 8 - 68 - 12) - 4, height: CGFloat.greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: NSFont.systemFont(ofSize: 13)])
+                #expect(cache.height(row, width: width, showsSpeakers: false) == max(20, ceil(native.height) + 2) + 8)
+            }
+        }
     }
 
     @Test func recycledCellCommitsToOriginalSegmentBeforeNewBinding() {

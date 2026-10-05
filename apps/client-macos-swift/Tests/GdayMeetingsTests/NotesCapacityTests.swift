@@ -22,7 +22,7 @@ import Testing
         let directory = try fixtures.directory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        for index in 0..<26 { store.createMeeting(title: "Synthetic meeting \(index)") }
+        for index in 0..<26 { await store.createMeeting(title: "Synthetic meeting \(index)") }
         let meetingID = store.meetings[0].id
         let imageDirectory = store.directory(for: meetingID)
         let path = try NotesImageStore.write(fixtures.png(), filename: "diagram.png", directory: imageDirectory)
@@ -32,8 +32,8 @@ import Testing
         let initial = String(repeating: line, count: count) + images
         var meeting = store.meetings[0]
         meeting.notes = initial
-        store.updateMeeting(meeting)
-        #expect(store.flushNotes())
+        await store.updateMeeting(meeting)
+        #expect(await store.flushNotes())
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -52,7 +52,7 @@ import Testing
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         defer {
-            store.closeNotes(id: meetingID)
+            store.notesStorage.stopWatching(meetingID)
             window.contentView = nil
             window.close()
         }
@@ -146,7 +146,7 @@ import Testing
                 _ = try metrics.record(
                     event: "phase", phase: "save-start", payload: text.string, updates: updates,
                     skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
-                #expect(store.flushNotes())
+                #expect(await store.flushNotes())
                 _ = try metrics.record(
                     event: "phase", phase: "save-end", payload: text.string, updates: updates,
                     skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
@@ -160,6 +160,7 @@ import Testing
         _ = try metrics.record(
             event: "end", phase: aborted ? "guard-stop" : "finished", payload: text.string,
             updates: updates, skipped: skipped, insertedBytes: text.string.utf8.count - initial.utf8.count)
+        await store.closeNotes(id: meetingID)
         #expect(store.meetings.first?.notes == text.document.markdown)
         if ProcessInfo.processInfo.environment["GDAY_PERFORMANCE_OPERATIONS"] != nil {
             #expect(updates == operationLimit, "The fixed-work scaling batch did not complete")

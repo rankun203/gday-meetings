@@ -282,15 +282,16 @@ extension MeetingStore {
 }
 
 extension DataEventJournal {
-    static func documentSnapshot(directory: URL) -> [String: Data] {
+    /// Snapshot only files owned by this save. Live transcript writes have their own receipts.
+    static func documentSnapshot(directory: URL, names: [String]) -> [String: Data] {
         Dictionary(
-            uniqueKeysWithValues: ["metadata.json", "content.json", "transcript.jsonl", "summary.md"].compactMap {
+            uniqueKeysWithValues: names.compactMap {
                 name in
                 (try? Data(contentsOf: directory.appendingPathComponent(name))).map { (name, $0) }
             })
     }
-    static func recordDocuments(directory: URL, previous: [String: Data]) throws {
-        for name in ["metadata.json", "content.json", "transcript.jsonl", "summary.md"] {
+    static func recordDocuments(directory: URL, names: [String], previous: [String: Data]) throws {
+        for name in names {
             try fileChanged(directory.appendingPathComponent(name), previous: previous[name], directory: directory)
         }
     }

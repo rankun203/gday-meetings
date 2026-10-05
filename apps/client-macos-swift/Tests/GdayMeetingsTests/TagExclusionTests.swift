@@ -41,24 +41,24 @@ struct TagExclusionTests {
         #expect(try index.count(tagID: excluded) == 22)
     }
 
-    @MainActor @Test func associationsAndExclusionSurviveRestartAndCanBeReversed() throws {
+    @MainActor @Test func associationsAndExclusionSurviveRestartAndCanBeReversed() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingStore(dataDirectory: directory)
-        let meetingID = store.createMeeting(title: "Planning")
-        let tagID = store.addTag(name: "Project")
-        let personID = store.addPerson(name: "Alex")
-        let otherID = store.addPerson(name: "Taylor")
+        let meetingID = await store.createMeeting(title: "Planning")
+        let tagID = await store.addTag(name: "Project")
+        let personID = await store.addPerson(name: "Alex")
+        let otherID = await store.addPerson(name: "Taylor")
         var meeting = try #require(store.meeting(id: meetingID))
         meeting.tagIDs = [tagID]
         meeting.personIDs = [personID, otherID]
-        store.updateMeeting(meeting)
+        await store.updateMeeting(meeting)
         var person = try #require(store.people.first { $0.id == personID })
         person.tagIDs = [tagID]
-        store.updatePerson(person)
+        await store.updatePerson(person)
         var tag = try #require(store.tags.first)
         tag.isExcluded = true
-        store.updateTag(tag)
+        await store.updateTag(tag)
         #expect(store.visibleMeetingEntries.isEmpty)
         #expect(store.listedPeople.map(\.id) == [otherID])
         #expect(store.meeting(id: meetingID) != nil)
@@ -67,12 +67,13 @@ struct TagExclusionTests {
         #expect(restored.people.first { $0.id == personID }?.tagIDs == [tagID])
         #expect(restored.listedPeople.map(\.id) == [otherID])
         tag.isExcluded = false
-        restored.updateTag(tag)
+        await restored.updateTag(tag)
         #expect(restored.visibleMeetingEntries.map(\.id) == [meetingID])
         #expect(restored.listedPeople.count == 2)
-        restored.deleteTag(id: tagID)
+        await restored.deleteTag(id: tagID)
         let final = MeetingStore(dataDirectory: directory)
         #expect(final.people.allSatisfy { $0.tagIDs.isEmpty })
+        #expect(await final.ensureMeetingLoaded(id: meetingID))
         #expect(final.meeting(id: meetingID)?.tagIDs.isEmpty == true)
     }
 }

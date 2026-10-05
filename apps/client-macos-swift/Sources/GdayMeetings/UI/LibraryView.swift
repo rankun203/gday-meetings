@@ -26,6 +26,7 @@ struct LibraryView: View {
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
     @ViewState private var selectedMeeting: UUID?
+    @State private var meetingCountResult: (request: MeetingCountRequest, count: Int)?
     @ViewState private var selectedPeople: Set<UUID> = []
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
@@ -53,7 +54,6 @@ struct LibraryView: View {
         store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
     }
     private func showMeeting(_ id: UUID) {
-        guard store.ensureMeetingLoaded(id: id) else { return }
         workspace.selectMeeting(id)
         showsSearchResults = false
         openedSearchResult = nil
@@ -62,6 +62,26 @@ struct LibraryView: View {
     }
 
     private var filteredMeetings: [MeetingListEntry] { store.visibleMeetingEntries }
+
+    private struct MeetingCountRequest: Equatable, Sendable {
+        var revision: UUID
+        var query: String
+        var excludedTags: Set<UUID>
+        var entries: [UUID]
+        var reachedEnd: Bool
+    }
+
+    private var meetingCountRequest: MeetingCountRequest {
+        .init(
+            revision: store.meetingIndexRevision, query: store.meetingSearch, excludedTags: store.excludedTagIDs,
+            entries: store.visibleMeetingIDs,
+            reachedEnd: !store.hasMoreMeetings && !store.isLoadingMeetingPage && store.meetingPageError == nil)
+    }
+
+    private var meetingCount: Int? {
+        guard let result = meetingCountResult, result.request == meetingCountRequest else { return nil }
+        return result.count
+    }
 
     private var emptyMeetings: some View {
         LibraryIndexPlaceholder(status: store.libraryDataStatus) { meetingsPlaceholder }
@@ -88,20 +108,48 @@ struct LibraryView: View {
                 displaySummaryTitle: displaySummaryTitleOnMeetings,
                 viewportChanged: { store.prefetchMeetings($0) },
                 play: { id in
-                    guard !recordingActive, let meeting = store.meeting(id: id) else { return }
-                    let files = store.audioURLs(for: meeting)
-                    if !files.isEmpty { playback.play(meeting: meeting, files: files) }
+                    playback.requestPlayback(
+                        load: {
+                            guard await store.ensureMeetingLoaded(id: id), !recordingActive,
+                                let meeting = store.meeting(id: id)
+                            else { return nil }
+                            return meeting
+                        },
+                        play: { meeting in
+                            let files = store.audioURLs(for: meeting)
+                            if !files.isEmpty { playback.play(meeting: meeting, files: files) }
+                        })
                 },
                 reveal: { id in NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)]) },
-                export: { id in if let meeting = store.meeting(id: id) { MeetingPanels.export(meeting, store: store) }
+                export: { id in
+                    Task {
+                        guard await store.ensureMeetingLoaded(id: id), let meeting = store.meeting(id: id) else {
+                            return
+                        }
+                        MeetingPanels.export(meeting, store: store)
+                    }
                 },
-                delete: { id in deleting = store.meeting(id: id) },
-                retainedViewport: workspace.meetingViewport
+                delete: { id in
+                    Task {
+                        guard await store.ensureMeetingLoaded(id: id) else { return }
+                        deleting = store.meeting(id: id)
+                    }
+                },
+                retainedViewport: workspace.meetingViewport, totalCount: meetingCount
             )
             .scrollEdgeEffectStyle(.soft, for: .top)
             .ignoresSafeArea(.container, edges: .top)
         }
         .modifier(AudioFileDrop())
+        .task(id: meetingCountRequest) {
+            let request = meetingCountRequest
+            guard request.reachedEnd, !request.entries.isEmpty, let index = store.libraryIndex else { return }
+            let count = await Task.detached(priority: .utility) {
+                try? index.count(excludingTagIDs: request.excludedTags, query: request.query)
+            }.value
+            guard !Task.isCancelled, request == meetingCountRequest, let count else { return }
+            meetingCountResult = (request, count)
+        }
         .navigationTitle("Meetings")
         .overlay {
             if store.isSearchingMeetings || (filteredMeetings.isEmpty && store.isLoadingMeetingPage) {
@@ -133,7 +181,22 @@ struct LibraryView: View {
                     if showsSearchResults {
                         LibrarySearchResultsView(
                             session: searchSession, mode: searchModeBinding,
-                            open: openSearchResult, retry: retrySearch
+                            open: openSearchResult, retry: retrySearch,
+                            openPerson: { id in
+                                workspace.people.query = ""
+                                workspace.people.viewport.reset()
+                                let person = store.people.first { $0.id == id }
+                                if let person, !store.excludedTagIDs.isDisjoint(with: person.tagIDs) {
+                                    workspace.people.showExcluded = true
+                                }
+                                workspace.people.refresh(
+                                    index: store.directoryIndex, kind: .people, revision: store.directoryRevision)
+                                workspace.people.page.reveal(id, query: "", expectedName: person?.name)
+                                showsSearchResults = false
+                                destination = .people
+                                selectedPeople = [id]
+                                search = ""
+                            }
                         )
                         .onExitCommand {
                             showsSearchResults = false
@@ -188,7 +251,6 @@ struct LibraryView: View {
         case .tags: TagsView(selection: $selectedTag, session: workspace.tags)
         default:
             meetingList
-                .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
         }
     }
 
@@ -208,10 +270,17 @@ struct LibraryView: View {
                             Text("Voice match · \(playbackTime(audio.start))")
                                 .font(.callout).foregroundStyle(.secondary)
                             Button("Play Match", systemImage: "play.fill") {
-                                guard let meeting = store.meeting(id: id) else { return }
-                                playback.playExcerpt(
-                                    meeting: meeting, directory: store.directory(for: id),
-                                    audioFile: audio.filename, start: audio.start, end: audio.start + audio.duration)
+                                playback.requestPlayback(
+                                    load: {
+                                        guard await store.ensureMeetingLoaded(id: id) else { return nil }
+                                        return store.meeting(id: id)
+                                    },
+                                    play: { meeting in
+                                        playback.playExcerpt(
+                                            meeting: meeting, directory: store.directory(for: id),
+                                            audioFile: audio.filename, start: audio.start,
+                                            end: audio.start + audio.duration)
+                                    })
                             }
                             .disabled(store.recordingID != nil)
                         }
@@ -258,7 +327,15 @@ struct LibraryView: View {
         Menu {
             Group {
                 Button("New Meeting Notes", systemImage: "square.and.pencil") {
-                    showMeeting(store.createMeeting(title: "Untitled Meeting"))
+                    let previousMeeting = selectedMeeting
+                    let previousDestination = destination
+                    Task {
+                        let id = await store.createMeeting(title: "Untitled Meeting")
+                        guard store.meeting(id: id) != nil, selectedMeeting == previousMeeting,
+                            destination == previousDestination
+                        else { return }
+                        showMeeting(id)
+                    }
                 }
                 Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
                     MeetingPanels.importAudio(store)
@@ -393,16 +470,22 @@ struct LibraryView: View {
             openedSearchResult = nil
             destination = .tasks
         }
+        .task { searchSession.updatePeople(store.people.map { .init(id: $0.id, name: $0.name) }) }
+        .onChange(of: store.people) { previous, people in
+            let records = people.map { PeopleNameRecord(id: $0.id, name: $0.name) }
+            guard records != previous.map({ PeopleNameRecord(id: $0.id, name: $0.name) }) else { return }
+            let preparesProviders = showsSearchResults && searchSession.mode != .text && !searchSession.query.isEmpty
+            searchSession.updatePeople(records, refreshSearch: !preparesProviders)
+            if preparesProviders { submitSearch(searchSession.query) }
+        }
         .onAppear {
             workspace.selectMeeting(selectedMeeting)
-            if let selectedMeeting { _ = store.meeting(id: selectedMeeting) }
             sidebarControl?.connect(
                 expanded: sidebarExpandedBinding, rows: sidebarExpandedBinding, toggle: toggleSidebar(reduceMotion:))
         }
         .onChange(of: selectedMeeting) { _, id in
             workspace.selectMeeting(id)
             if openedSearchResult?.meetingID != id { openedSearchResult = nil }
-            if let id { _ = store.meeting(id: id) }
         }
         .onChange(of: showsSearchResults ? nil : destination) { _, selection in
             // The navigation owner observes current intent; a departing native
@@ -449,8 +532,12 @@ struct LibraryView: View {
             presenting: deleting
         ) { meeting in
             Button("Move to Trash", role: .destructive) {
-                if store.deleteMeeting(id: meeting.id), selectedMeeting == meeting.id { selectedMeeting = nil }
                 deleting = nil
+                Task {
+                    if await store.deleteMeeting(id: meeting.id), selectedMeeting == meeting.id {
+                        selectedMeeting = nil
+                    }
+                }
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { deleting = nil }
@@ -469,13 +556,16 @@ struct LibraryView: View {
         }
     }
 
-    private func submitSearch() {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func submitSearch() { submitSearch(search) }
+
+    private func submitSearch(_ submittedQuery: String) {
+        let query = submittedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         searchPreparationTask?.cancel()
         let requestID = UUID()
         searchRequestID = requestID
         let mode = store.settings.defaultSearchMode
+        searchSession.updatePeople(store.people.map { .init(id: $0.id, name: $0.name) })
         showsSearchResults = true
         openedSearchResult = nil
         searchFocused = false
@@ -484,16 +574,22 @@ struct LibraryView: View {
             return
         }
         searchSession.beginPreparation(query, mode: mode)
-        guard
-            let configured = store.settings.serviceProviders.first(where: {
-                $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
-            }), let configuration = configured.localSearch
-        else {
-            searchSession.preparationFailed("Choose and prepare a Voice Search provider in Service Providers.")
-            return
-        }
         let exclusions = store.excludedTagIDs
         searchPreparationTask = Task {
+            await searchSession.waitForPeopleResolution()
+            guard !Task.isCancelled, searchRequestID == requestID else { return }
+            if searchSession.contentQuery.isEmpty {
+                searchSession.finishPeopleOnly()
+                return
+            }
+            guard
+                let configured = store.settings.serviceProviders.first(where: {
+                    $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
+                }), let configuration = configured.localSearch
+            else {
+                searchSession.preparationFailed("Choose and prepare a Voice Search provider in Service Providers.")
+                return
+            }
             do {
                 let voice = try await store.voiceSearch.provider(configuration: configuration)
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
@@ -546,7 +642,6 @@ struct LibraryView: View {
     }
 
     private func openSearchResult(_ result: SearchDisplayResult) {
-        guard store.ensureMeetingLoaded(id: result.meetingID) else { return }
         workspace.selectMeeting(result.meetingID)
         selectedMeeting = result.meetingID
         destination = .meetings
@@ -674,10 +769,10 @@ enum MeetingPanels {
         panel.message =
             "Choose your existing Gday Meetings data folder. Meetings and audio are copied into the Swift app."
         if panel.runModal() == .OK, let url = panel.url {
-            do {
-                _ = try store.importLegacyLibrary(url: url)
+            Task {
+                do { _ = try await store.importLegacyLibrary(url: url) }
+                catch { store.errorMessage = error.localizedDescription }
             }
-            catch { store.errorMessage = error.localizedDescription }
         }
     }
     static func importArchive(_ store: MeetingStore) {
@@ -685,8 +780,10 @@ enum MeetingPanels {
         panel.allowedContentTypes = [.json]
         panel.prompt = "Import"
         if panel.runModal() == .OK, let url = panel.url {
-            do { try store.importArchive(url: url) }
-            catch { store.errorMessage = error.localizedDescription }
+            Task {
+                do { try await store.importArchive(url: url) }
+                catch { store.errorMessage = error.localizedDescription }
+            }
         }
     }
     static func export(_ meeting: Meeting, store: MeetingStore) {
@@ -694,9 +791,9 @@ enum MeetingPanels {
         panel.nameFieldStringValue = meeting.title + ".json"
         let formats = MeetingExportPanel(panel: panel)
         if withExtendedLifetime(formats, { panel.runModal() }) == .OK, let url = panel.url {
-            do { try store.exportMeeting(id: meeting.id, to: url) }
-            catch {
-                store.errorMessage = error.localizedDescription
+            Task {
+                do { try await store.exportMeeting(id: meeting.id, to: url) }
+                catch { store.errorMessage = error.localizedDescription }
             }
         }
     }
