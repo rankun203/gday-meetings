@@ -254,6 +254,38 @@ struct VoiceLibraryTests {
         #expect(!library.addRepresentation(exampleID: sample.id, embedding: sample.embeddings[0]))
     }
 
+    @Test func savedProjectionColorsRemainIdempotentAcrossColdLibraryReads() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(directory: directory)
+        let first = try example(root: directory, start: 0, end: 4)
+        let second = try example(
+            root: directory, meetingID: first.meetingID, speakerID: first.speakerID, start: 5, end: 9)
+        let speaker = MeetingSpeaker(
+            id: first.speakerID, label: "sys_01", track: "system", providerName: "Synthetic")
+        var meeting = Meeting(id: first.meetingID, audioFiles: ["system.wav"])
+        meeting.speakers = [speaker]
+        meeting.transcript = [
+            .init(start: 1, end: 3, speaker: speaker.label, text: "First voice", speakerID: speaker.id),
+            .init(start: 6, end: 8, speaker: speaker.label, text: "Second voice", speakerID: speaker.id),
+        ]
+        #expect(library.upsert([first, second]))
+        #expect(library.confirm(ids: [first.id], personID: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!))
+        #expect(library.confirm(ids: [second.id], personID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+        let projected = library.applyingDecisions(to: meeting)
+        let saved = MeetingSpeakerColors.assigning(projected, previous: meeting)
+        #expect(Set(saved.speakers.compactMap(\.colorSlot)).count == 2)
+        #expect(library.applyingDecisions(to: saved) == saved)
+        #expect(library.applyingDecisions(to: saved) == saved)
+        let decoded = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(saved))
+        let reopened = VoiceLibraryStore(directory: directory)
+        #expect(reopened.applyingDecisions(to: decoded) == decoded)
+        try MeetingFolderStorage.write(saved, directory: directory)
+        let folderDecoded = try MeetingFolderStorage.read(id: saved.id, directory: directory)
+        let coldFolderLibrary = VoiceLibraryStore(directory: directory)
+        #expect(coldFolderLibrary.applyingDecisions(to: folderDecoded) == folderDecoded)
+    }
+
     @Test func exactReviewProjectionIsIdempotentAndUndoRestoresSpeaker() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }

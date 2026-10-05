@@ -739,6 +739,13 @@ final class VoiceLibraryStore: ObservableObject {
             let people = Set(relevant.map { $0.review == .confirmed ? $0.personID : nil })
             var assigned = speaker
             assigned.id = VoiceProjectionOrigin.identity(exampleID: first.id, segmentID: row.id)
+            // Saving allocates colors for distinct projected voices. Preserve
+            // that passage's saved slot when rebuilding its projection, rather
+            // than copying the first restored origin's slot onto every voice.
+            // Otherwise reading the meeting repeatedly undoes save's allocation.
+            if let prior = meeting.speakers.first(where: { $0.id == assigned.id }) {
+                assigned.colorSlot = prior.colorSlot
+            }
             assigned.voiceReviewOrigin = .init(
                 speakerID: speaker.id, personID: speaker.personID,
                 manuallyAssigned: speaker.manuallyAssigned, confidence: speaker.confidence)
@@ -754,6 +761,9 @@ final class VoiceLibraryStore: ObservableObject {
         let priorPeople = Set(meeting.speakers.compactMap(\.personID))
         updated.personIDs.removeAll { priorPeople.contains($0) }
         updated.replaceSpeakers(updated.speakers)
+        // Folder metadata stores associations in canonical order. Projection
+        // must use the same order so a disk reload cannot trigger another save.
+        updated.personIDs = MeetingListEntry(updated).personIDs
         if projectionCache.count >= 16 { projectionCache.removeAll() }
         projectionCache[meeting.id] = .init(input: meeting, output: updated, evidenceIDs: evidenceIDs)
         return updated
