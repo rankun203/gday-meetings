@@ -30,6 +30,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
     private var importRetryScheduled = false
     private let report: @Sendable (Int?, Int64?, Bool, Int, String?) -> Void
     private let changed: @Sendable (Bool) -> Void
+    private let directoryChanged: @Sendable ([URL], Bool) -> Void
     private let discoveryProgress: @Sendable (Int) -> Void
     private var cursor: URL { indexDirectory.appendingPathComponent(".index-events.json") }
 
@@ -37,12 +38,14 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         root: URL, indexDirectory: URL? = nil, forceRebuild: Bool = false,
         report: @escaping @Sendable (Int?, Int64?, Bool, Int, String?) -> Void,
         changed: @escaping @Sendable (Bool) -> Void,
+        directoryChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
         discoveryProgress: @escaping @Sendable (Int) -> Void = { _ in }
     ) {
         self.root = LibraryFileMonitor.canonicalRoot(root)
         self.indexDirectory = indexDirectory ?? root
         self.report = report
         self.changed = changed
+        self.directoryChanged = directoryChanged
         self.discoveryProgress = discoveryProgress
         let saved =
             forceRebuild
@@ -213,6 +216,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
             else if !paths.isEmpty {
                 try index.reconcile(paths: paths)
             }
+            directoryChanged(paths, batch.requiresScan)
             if batch.eventID > 0 && pendingImports.isEmpty && !unsettledOverflow {
                 try JSONEncoder().encode(batch.eventID).write(to: self.cursor, options: .atomic)
             }
@@ -275,6 +279,7 @@ extension MeetingStore {
             changed: { [weak self] rebuilt in
                 Task { @MainActor in
                     guard let self else { return }
+                    self.meetingIndexRevision = UUID()
                     if rebuilt {
                         do {
                             self.libraryIndex = try LibraryIndex(
@@ -289,6 +294,9 @@ extension MeetingStore {
                     self.reloadExternalLibraryDocuments()
                     self.reloadExternalManagedTasks()
                 }
+            },
+            directoryChanged: { [weak self] paths, rebuild in
+                Task { @MainActor in self?.refreshDirectoryIndex(paths: paths, rebuild: rebuild) }
             },
             discoveryProgress: { [weak self] count in
                 Task { @MainActor in

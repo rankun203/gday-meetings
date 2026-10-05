@@ -177,7 +177,8 @@ private final class QueueProviderState: @unchecked Sendable {
         store.settings.autoSummarize = false
         let finished = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
             #expect(store.managedTasks.filter { $0.state == .running }.count <= 1)
-            return store.backgroundJobs.isEmpty
+            return store.managedTaskStateCounts[.queued, default: 0] == 0
+                && store.managedTaskStateCounts[.running, default: 0] == 0
         }
         try #require(finished)
         #expect(store.managedTasks.first { $0.id == automatic }?.state == .cancelled)
@@ -228,7 +229,10 @@ private final class QueueProviderState: @unchecked Sendable {
         // Test stores do not load Keychain; restore the synthetic credential before recovery runs.
         recovered.settings.serviceProviders = [provider]
         recovered.transcriptionPollDelay = .milliseconds(1)
-        try await waitUntil { recovered.managedTasks.allSatisfy { $0.state == .completed } }
+        try await waitUntil {
+            !recovered.managedTasksLoading && recovered.managedTasks.count == 2
+                && recovered.managedTasks.allSatisfy { $0.state == .completed }
+        }
         #expect(recovered.managedTasks.count == 2)
         #expect(server.requests.count == 2)
         #expect(server.requests.allSatisfy { $0.method == "GET" && $0.target.contains("/status/") })

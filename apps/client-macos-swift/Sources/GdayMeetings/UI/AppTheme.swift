@@ -12,6 +12,27 @@ enum AppTheme {
     static let readingBackground = Color(nsColor: .textBackgroundColor)
 }
 
+/// A stationary heading separates list scope and actions from selected-item details.
+struct WorkspaceListHeader<Actions: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.title2.weight(.semibold))
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+            }.layoutPriority(1)
+            Spacer(minLength: 4)
+            actions().labelStyle(.iconOnly).controlSize(.regular)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.readingBackground)
+    }
+}
+
 /// Stationary navigation and transport chrome; never apply to scrolling rows.
 struct AppChromeSurface<S: Shape>: ViewModifier {
     let shape: S

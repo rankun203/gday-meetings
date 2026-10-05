@@ -94,3 +94,17 @@ Launch the packaged full app against these libraries using GDAY_SWIFT_DATA_DIR, 
 # Technical debt
 
 Implementation and measured limitations are recorded in the associated worklogs. A one-million-meeting target is not an achieved benchmark; the requested full-app runs cover 1,000 and 100,000 copies. Task journal replay and people/tag consumers must be audited separately from meeting pagination; an indexed Meetings screen alone does not establish bounded memory for all entity types.
+
+# Task history and execution
+
+`tasks.jsonl` remains authoritative. `tasks-index.sqlite` lives in the local `indexDirectory`, outside a cloud-backed data folder. It stores each task's latest event offset, length, digest, identity, creation time, state, meeting, kind, and scheduler priority. It contains no copied task payloads. Deleting it loses no task history.
+
+A cold rebuild streams committed events into a SQLite transaction with bounded memory. It validates the source revision before and after replay; only an incomplete final line may be removed before a later append. A warm open reuses the index when the file size, modification time, and identity still match. Page reads verify indexed event identities and digests. A damaged disposable index is rebuilt from the source; malformed committed source events block writes and leave the journal unchanged.
+
+History queries seek by immutable creation time and task ID, in either direction. The Tasks view requests 50 records and retains at most 150 rows, independently of selection. The operational cache retains 100 nonrunning task payloads plus running tasks; synthetic Preview records are separate. The scheduler queries only enough queued records to fill its execution slots. Recovery processes 50 records per batch and yields between batches. Counts come from indexed state totals and update after durable transitions.
+
+Intent, provider-request binding, restart, dismissal, and terminal state changes still append and synchronize before dependent operations proceed. Progress text is transient presentation state: changing it does not append an event. The next durable transition includes the current progress text. Completion receipts remain the authority for reconciling saved results after interruption.
+
+External changes are compared against previous indexed event offsets and digests, rather than against the bounded UI cache. Changed active records require explicit continuation. An orphaned running record completes when its meeting has a matching completion receipt; otherwise it requires attention. An unrelated external append does not change untouched queued records.
+
+Retained limits: the journal has no compaction, so cold rebuild cost grows with event count. Rare durable transitions still perform synchronous journal writes through existing task APIs. Voice preparation jobs remain hydrated by their existing store; their visible history merges into cursor pages, but their persistence does not yet provide bounded payload loading. Concurrent writers remain unsupported: revision checks detect conflicts, but a future multiprocess mode needs interprocess locking around append and recovery.

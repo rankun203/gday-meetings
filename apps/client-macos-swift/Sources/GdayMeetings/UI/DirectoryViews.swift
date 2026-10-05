@@ -3,6 +3,7 @@ import SwiftUI
 struct PeopleView: View {
     @Binding var selection: Set<UUID>
     @EnvironmentObject private var store: MeetingStore
+    @StateObject private var page = DirectoryPaging()
     @ViewState private var name = ""
     @ViewState private var deleting: Person?
     @ViewState private var showExcluded = false
@@ -12,161 +13,215 @@ struct PeopleView: View {
         let personIDs: Set<UUID>
     }
     @ViewState private var mergeRequest: MergeRequest?
-    private var visiblePeople: [Person] {
-        let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (showExcluded ? store.people : store.listedPeople)
-            .filter { query.isEmpty || $0.name.localizedStandardContains(query) }
-            .sorted {
-                let order = $0.name.localizedStandardCompare($1.name)
-                return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
-            }
-    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
-            HStack(spacing: 8) {
-                Button("Review Voices…") { reviewingVoices = true }
-                if selection.count > 1 {
-                    Button("Merge…") {
-                        mergeRequest = MergeRequest(personIDs: selection)
-                    }
-                    .accessibilityLabel("Merge Selected People")
-                    .help("Merge selected people")
-                }
-                Spacer(minLength: 0)
-            }
-            .buttonStyle(.bordered).controlSize(.small)
-            .padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentInset)
-            HStack {
-                TextField("Find or Add Person", text: $name).onSubmit(findOrAdd)
-                    .accessibilityLabel("Find or Add Person")
-                if !name.isEmpty {
-                    Button("Clear Search", systemImage: "xmark.circle.fill") { name = "" }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless).help("Clear Search")
-                }
-                Button("Add Person", systemImage: "plus", action: add).help("Add Person").labelStyle(.iconOnly)
-                    .disabled(
-                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.textFieldStyle(.roundedBorder)
-                .padding(.horizontal, AppTheme.contentInset)
-            List(selection: $selection) {
-                ForEach(visiblePeople) { person in
-                    HStack {
-                        Label(person.name, systemImage: "person.crop.circle")
-                        Spacer()
-                        if !store.excludedTagIDs.isDisjoint(with: person.tagIDs) {
-                            Text("Excluded").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Button("Delete Person…", systemImage: "trash", role: .destructive) { deleting = person }.help(
-                            "Delete person"
-                        ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
-                    }.tag(person.id)
-                }
-            }.listStyle(.inset)
-            Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox)
-                .padding(.horizontal, AppTheme.contentInset).padding(.bottom, AppTheme.contentSpacing)
-        }.background(AppTheme.readingBackground).navigationTitle("People")
-            .onChange(of: visiblePeople.map(\.id)) { _, ids in
-                selection.formIntersection(ids)
-            }
-            .sheet(item: $mergeRequest) { request in
-                PersonMergeView(selectedIDs: request.personIDs) { keptID in
-                    name = ""
-                    if let kept = store.people.first(where: { $0.id == keptID }),
-                        !store.excludedTagIDs.isDisjoint(with: kept.tagIDs)
-                    {
-                        showExcluded = true
-                    }
-                    selection = [keptID]
-                }
-            }
-            .sheet(isPresented: $reviewingVoices) {
-                VoiceLibraryView(library: store.voiceLibrary)
-            }
-            .focusedValue(\.directoryControlFocus, true)
-            .confirmationDialog(
-                "Delete \(deleting?.name ?? "person")?",
-                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                titleVisibility: .visible
+        VStack(alignment: .leading, spacing: 0) {
+            WorkspaceListHeader(
+                title: "People", subtitle: "\(page.total.formatted()) \(page.total == 1 ? "person" : "people")"
             ) {
-                Button("Delete Person", role: .destructive) {
-                    if let deleting { store.deletePerson(id: deleting.id) }
-                    deleting = nil
-                }
-            } message: {
-                Text("The person will be removed from your directory and meeting assignments.")
+                Menu {
+                    Button("Review Voices…") { reviewingVoices = true }
+                    Button("Merge Selected People…") { mergeRequest = MergeRequest(personIDs: selection) }
+                        .disabled(selection.count < 2)
+                } label: {
+                    Label("People Actions", systemImage: "ellipsis.circle")
+                }.menuStyle(.borderlessButton).fixedSize().help("People Actions")
             }
+            HStack(spacing: 8) {
+                TextField("Find or Add Person", text: $name).onSubmit(findOrAdd).accessibilityLabel(
+                    "Find or Add Person")
+                Button("Add Person", systemImage: "plus", action: add).labelStyle(.iconOnly).help("Add Person")
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+            if selection.count > 1 {
+                HStack {
+                    Text("\(selection.count) selected").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Merge…") { mergeRequest = MergeRequest(personIDs: selection) }.controlSize(.small)
+                }.padding(.horizontal, 16).padding(.bottom, 8)
+            }
+            NativeDirectoryList(
+                entries: page.entries, selection: $selection, label: "People", reveal: page.revealRequest,
+                viewport: page.viewport
+            ) { entry in
+                deleting = store.people.first { $0.id == entry.id }
+            }
+            .overlay {
+                directoryState(page: page, indexError: store.directoryIndexError, kind: "People") {
+                    store.refreshDirectoryIndex(rebuild: true)
+                    refresh()
+                }
+            }
+            HStack {
+                Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox)
+                Spacer()
+                if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small) }
+            }.padding(12)
+        }
+        .background(AppTheme.readingBackground).navigationTitle("People")
+        .task(id: "\(name)|\(showExcluded)|\(store.directoryRevision)") { refresh() }
+        .sheet(item: $mergeRequest) { request in
+            PersonMergeView(selectedIDs: request.personIDs) { keptID in
+                name = ""
+                if let person = store.people.first(where: { $0.id == keptID }),
+                    !store.excludedTagIDs.isDisjoint(with: person.tagIDs)
+                {
+                    showExcluded = true
+                }
+                selection = [keptID]
+                page.reveal(keptID, query: "", expectedName: store.people.first(where: { $0.id == keptID })?.name)
+            }
+        }
+        .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary) }
+        .focusedValue(\.directoryControlFocus, true)
+        .confirmationDialog(
+            "Delete \(deleting?.name ?? "person")?",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Person", role: .destructive) {
+                if let deleting {
+                    store.deletePerson(id: deleting.id)
+                    if !store.people.contains(where: { $0.id == deleting.id }) { selection.remove(deleting.id) }
+                }
+                deleting = nil
+            }
+        } message: {
+            Text("The person will be removed from your directory and meeting assignments.")
+        }
+    }
+    private func refresh() {
+        page.configure(index: store.directoryIndex, kind: .people, query: name, showExcluded: showExcluded)
     }
     private func findOrAdd() {
         let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let person = visiblePeople.first(where: {
-            $0.name.compare(query, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == .orderedSame
-        }) {
-            selection = [person.id]
-        }
-        else {
-            add()
+        guard !query.isEmpty, let index = store.directoryIndex else { return }
+        Task {
+            do {
+                let id = try await Task.detached { try index.exactPerson(name: query) }.value
+                guard name.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+                if let id {
+                    if let person = store.people.first(where: { $0.id == id }),
+                        !store.excludedTagIDs.isDisjoint(with: person.tagIDs)
+                    {
+                        showExcluded = true
+                    }
+                    selection = [id]
+                    page.reveal(id, query: query, expectedName: store.people.first(where: { $0.id == id })?.name)
+                }
+                else {
+                    add()
+                }
+            }
+            catch { store.errorMessage = error.localizedDescription }
         }
     }
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        selection = [store.addPerson(name: value)]
+        let id = store.addPerson(name: value)
+        selection = [id]
         name = ""
+        page.reveal(id, query: "", expectedName: value)
     }
 }
 
 struct TagsView: View {
     @Binding var selection: UUID?
     @EnvironmentObject private var store: MeetingStore
+    @StateObject private var page = DirectoryPaging()
     @ViewState private var name = ""
     @ViewState private var deleting: MeetingTag?
+    private var selectedIDs: Binding<Set<UUID>> {
+        Binding(get: { selection.map { [$0] } ?? [] }, set: { selection = $0.first })
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
-            HStack {
-                TextField("New Tag", text: $name).onSubmit(add).accessibilityLabel("New Tag")
-                Button("Add Tag", systemImage: "plus", action: add).help("Add Tag").labelStyle(.iconOnly).disabled(
-                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.textFieldStyle(.roundedBorder).padding(AppTheme.contentInset)
-            List(selection: $selection) {
-                ForEach(store.tags) { tag in
-                    HStack {
-                        TextField(
-                            "Tag Name",
-                            text: Binding(
-                                get: { store.tags.first(where: { $0.id == tag.id })?.name ?? "" },
-                                set: { value in
-                                    var changed = tag
-                                    changed.name = value
-                                    store.updateTag(changed)
-                                }))
-                        Spacer()
-                        if tag.isExcluded { Text("Excluded").font(.caption).foregroundStyle(.secondary) }
-                        Text("\((try? store.libraryIndex?.count(tagID: tag.id)) ?? 0)").foregroundStyle(
-                            .secondary)
-                        Button("Delete Tag…", systemImage: "trash", role: .destructive) { deleting = tag }.help(
-                            "Delete tag"
-                        ).labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
-                    }.tag(tag.id)
+        VStack(alignment: .leading, spacing: 0) {
+            WorkspaceListHeader(
+                title: "Tags", subtitle: "\(page.total.formatted()) \(page.total == 1 ? "tag" : "tags")"
+            ) { EmptyView() }
+            HStack(spacing: 8) {
+                TextField("Find or Add Tag", text: $name).onSubmit(findOrAdd).accessibilityLabel("Find or Add Tag")
+                Button("Add Tag", systemImage: "plus", action: add).help("Add Tag").labelStyle(.iconOnly)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+            NativeDirectoryList(
+                entries: page.entries, selection: selectedIDs, multiple: false, label: "Tags",
+                reveal: page.revealRequest, viewport: page.viewport
+            ) { entry in
+                deleting = store.tags.first { $0.id == entry.id }
+            }
+            .overlay {
+                directoryState(page: page, indexError: store.directoryIndexError, kind: "Tags") {
+                    store.refreshDirectoryIndex(rebuild: true)
+                    refresh()
                 }
-            }.listStyle(.inset)
+            }
+            if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small).padding(12) }
         }.background(AppTheme.readingBackground).navigationTitle("Tags")
+            .task(id: "\(name)|\(store.directoryRevision)") { refresh() }
             .confirmationDialog(
                 "Delete \(deleting?.name ?? "tag")?",
                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                 titleVisibility: .visible
             ) {
                 Button("Delete Tag", role: .destructive) {
-                    if let deleting { store.deleteTag(id: deleting.id) }
+                    if let deleting {
+                        store.deleteTag(id: deleting.id)
+                        if !store.tags.contains(where: { $0.id == deleting.id }), selection == deleting.id {
+                            selection = nil
+                        }
+                    }
                     deleting = nil
                 }
             } message: {
                 Text("The tag will be removed from all meetings and people.")
             }
     }
+    private func refresh() { page.configure(index: store.directoryIndex, kind: .tags, query: name, showExcluded: true) }
+    private func findOrAdd() {
+        let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, let index = store.directoryIndex else { return }
+        Task {
+            do {
+                let id = try await Task.detached { try index.exactTag(name: query) }.value
+                guard name.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+                if let id {
+                    selection = id
+                    page.reveal(id, query: query, expectedName: store.tags.first(where: { $0.id == id })?.name)
+                }
+                else {
+                    add()
+                }
+            }
+            catch { store.errorMessage = error.localizedDescription }
+        }
+    }
     private func add() {
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        selection = store.addTag(name: value, color: "blue")
+        let id = store.addTag(name: value, color: "blue")
+        selection = id
         name = ""
+        page.reveal(id, query: "", expectedName: value)
+    }
+}
+
+@MainActor @ViewBuilder private func directoryState(
+    page: DirectoryPaging, indexError: String?, kind: String, retry: @escaping () -> Void
+) -> some View {
+    if let error = page.error ?? indexError {
+        VStack(spacing: 12) {
+            Text(error).font(.callout).multilineTextAlignment(.center)
+            Button("Try Again", action: retry)
+        }.padding()
+    }
+    else if page.loading && page.entries.isEmpty {
+        ProgressView("Loading \(kind.lowercased())…")
+    }
+    else if page.entries.isEmpty {
+        ContentUnavailableView(
+            "No \(kind) Found", systemImage: kind == "People" ? "person.2" : "tag",
+            description: Text("Enter a name to find or add \(kind == "People" ? "a person" : "a tag")."))
     }
 }

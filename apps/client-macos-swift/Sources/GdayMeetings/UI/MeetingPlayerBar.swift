@@ -93,8 +93,7 @@ struct MeetingPlayerBar: View {
                     HStack(spacing: 10) {
                         Image(systemName: "waveform")
                             .font(.title2).foregroundStyle(.tint)
-                            .frame(width: 44, height: 44)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                            .frame(width: 32, height: 44)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(playback.title).font(.callout.weight(.semibold)).lineLimit(1)
@@ -114,7 +113,7 @@ struct MeetingPlayerBar: View {
                 .accessibilityAction(named: "Reveal in Finder") { revealMeeting() }
                 .accessibilityLabel("Show meeting: \(playback.title)")
 
-                HStack(spacing: 9) {
+                HStack(spacing: 4) {
                     transportButton("Back 15 Seconds", symbol: "gobackward.15") { playback.skip(by: -15) }
                     Button {
                         playback.togglePlayPause()
@@ -134,6 +133,8 @@ struct MeetingPlayerBar: View {
                     .disabled(playback.isPlaybackBlocked || playback.isLoading)
                     transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
                 }
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .modifier(AppChromeSurface(shape: Capsule()))
 
                 PlaybackPosition(
                     progress: playback.progress, waveforms: audibleWaveforms,
@@ -171,8 +172,8 @@ struct MeetingPlayerBar: View {
                     .padding(.horizontal, 20).padding(.bottom, 10)
             }
         }
-        .modifier(AppChromeSurface(shape: RoundedRectangle(cornerRadius: AppTheme.cornerRadius)))
-        .padding(AppTheme.chromeInset)
+        .background(AppTheme.readingBackground)
+        .overlay(alignment: .top) { Divider() }
         .onGeometryChange(for: Bool.self) { geometry in
             geometry.size.width < 960
         } action: {

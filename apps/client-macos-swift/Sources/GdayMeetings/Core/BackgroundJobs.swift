@@ -5,7 +5,7 @@ import Foundation
 /// while other meetings keep their actions. Recording start and stop are not
 /// jobs; they use the recording state in MeetingStore.
 struct BackgroundJob: Identifiable, Equatable {
-    struct Kind: RawRepresentable, Codable, Hashable {
+    struct Kind: RawRepresentable, Codable, Hashable, Sendable {
         let rawValue: String
         init(rawValue: String) { self.rawValue = rawValue }
         static let transcription = Self(rawValue: "transcription")
@@ -61,7 +61,12 @@ extension MeetingStore {
         backgroundJobs.removeAll { $0.key == key }
     }
     func isJobRunning(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) -> Bool {
-        backgroundJobs.contains { $0.key == BackgroundJob.Key(kind: kind, scope: scope) }
+        if backgroundJobs.contains(where: { $0.key == BackgroundJob.Key(kind: kind, scope: scope) }) { return true }
+        guard managedTaskStateCounts[.queued, default: 0] > 0, case .meeting(let id) = scope else { return false }
+        return
+            !((try? managedTaskJournal.query(
+                where: "state='queued' AND meeting=" + ManagedTaskIndex.literal(id.uuidString) + " AND kind="
+                    + ManagedTaskIndex.literal(kind.rawValue), limit: 1)) ?? []).isEmpty
     }
     var isImportingAudio: Bool { backgroundJobs.contains { $0.key.kind == .importAudio } }
 

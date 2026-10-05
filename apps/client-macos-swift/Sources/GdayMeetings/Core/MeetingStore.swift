@@ -17,6 +17,10 @@ final class MeetingStore: ObservableObject {
     var meetingPageHasMore = true
     @Published var meetingPageHasPrevious = false
     var libraryIndex: LibraryIndex?
+    @Published var meetingIndexRevision = UUID()
+    var directoryIndex: DirectoryIndex?
+    @Published var directoryRevision = UUID()
+    @Published var directoryIndexError: String?
     var indexNeedsInitialRebuild = false
     let libraryDataStatus = LibraryDataStatus()
     var libraryMonitor: LibraryMonitorCoordinator?
@@ -45,8 +49,13 @@ final class MeetingStore: ObservableObject {
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
     @Published var managedTasks: [ManagedTaskRecord] = []
+    @Published var managedTaskRevision = 0
+    @Published var managedTasksLoading = false
+    @Published var managedTaskStateCounts: [ManagedTaskState: Int] = [:]
     @Published var managedTaskJournalError: String?
-    lazy var managedTaskJournal = ManagedTaskJournal(url: dataDirectory.appendingPathComponent("tasks.jsonl"))
+    lazy var managedTaskJournal = ManagedTaskJournal(
+        url: dataDirectory.appendingPathComponent("tasks.jsonl"),
+        indexURL: indexDirectory.appendingPathComponent("tasks-index.sqlite"))
     private var managedTaskWakeObserver: ManagedTaskWakeObserver?
     var isSchedulingManagedTasks = false
     var managedTaskOperations: [UUID: Task<Void, Never>] = [:]
@@ -83,6 +92,8 @@ final class MeetingStore: ObservableObject {
         !LocalModelManager.shared.isBusy && !isChangingLibrary && recordingID == nil && !isStartingRecording
             && !isFinalizingRecording
             && !captureTransition && backgroundJobs.isEmpty && managedTaskOperations.isEmpty
+            && !managedTasksLoading
+            && managedTaskStateCounts[.queued, default: 0] + managedTaskStateCounts[.running, default: 0] == 0
             && !managedTasks.contains(where: { $0.state.isActive })
     }
     lazy var notesStorage = NotesStorage(directory: dataDirectory)
@@ -166,6 +177,12 @@ final class MeetingStore: ObservableObject {
             indexNeedsInitialRebuild = !FileManager.default.fileExists(
                 atPath: self.indexDirectory.appendingPathComponent("index.db").path)
             libraryIndex = try LibraryIndex(directory: self.dataDirectory, indexDirectory: self.indexDirectory)
+            do {
+                directoryIndex = try DirectoryIndex(root: self.dataDirectory, indexDirectory: self.indexDirectory)
+            }
+            catch {
+                directoryIndexError = "Couldn’t open the directory index. \(error.localizedDescription)"
+            }
             indexNeedsInitialRebuild = indexNeedsInitialRebuild || libraryIndex?.requiresRebuild == true
             let meetingFolders = FileManager.default.enumerator(
                 at: self.dataDirectory.appendingPathComponent("meetings"), includingPropertiesForKeys: nil,
@@ -203,6 +220,7 @@ final class MeetingStore: ObservableObject {
             lastSavedLibrary = LibrarySnapshot(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
             resetMeetingPages()
+            refreshDirectoryIndex(rebuild: true)
             startLibraryMonitoring()
             recoverUnadoptedLiveTranscripts()
             refreshArchiveStatuses()
@@ -220,17 +238,17 @@ final class MeetingStore: ObservableObject {
                     }
                 }
             }
-            do {
-                _ = voicePreparation
-                try restoreManagedTasks()
-                managedTaskWakeObserver = ManagedTaskWakeObserver { [weak self] in
-                    self?.recoverUnfinishedManagedTasks()
-                }
-                Task { [weak self] in self?.recoverUnfinishedManagedTasks() }
+            _ = voicePreparation
+            if FileManager.default.fileExists(atPath: self.dataDirectory.appendingPathComponent("tasks.jsonl").path) {
+                managedTasksLoading = true
+                Task { [weak self] in await self?.prepareManagedTasks() }
             }
-            catch {
-                // A task-history error must not make the meeting library read-only.
-                errorMessage = "Couldn’t load saved tasks. \(error.localizedDescription)"
+            else {
+                do { try restoreManagedTasks() }
+                catch { managedTaskJournalError = "Couldn’t load saved tasks. \(error.localizedDescription)" }
+            }
+            managedTaskWakeObserver = ManagedTaskWakeObserver { [weak self] in
+                self?.recoverUnfinishedManagedTasks()
             }
             do { try AgentGuides.ensure(directory: self.dataDirectory) }
             catch { errorMessage = "Couldn’t prepare the library’s AGENTS.md. \(error.localizedDescription)" }
@@ -458,6 +476,7 @@ final class MeetingStore: ObservableObject {
                 if !libraryDataStatus.isBuilding {
                     for meeting in changed { try libraryIndex?.upsert(MeetingListEntry(meeting), refreshSearch: false) }
                     for entry in mergedEntries { try libraryIndex?.upsert(entry, refreshSearch: false) }
+                    if !changed.isEmpty || !mergedEntries.isEmpty { meetingIndexRevision = UUID() }
                     let paths = (changed.map(\.id) + mergedEntries.map(\.id)).map {
                         directory(for: $0).appendingPathComponent("metadata.json")
                     }
@@ -468,6 +487,7 @@ final class MeetingStore: ObservableObject {
             }
             catch { libraryDataStatus.error = "Couldn’t refresh the index. Rebuild it in Data settings." }
             let exclusionChanged = Set(lastSavedLibrary.tags.filter(\.isExcluded).map(\.id)) != excludedTagIDs
+            refreshDirectoryIndex(previousPeople: lastSavedLibrary.people, previousTags: lastSavedLibrary.tags)
             lastSavedLibrary = LibrarySnapshot(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
             if exclusionChanged {

@@ -1,10 +1,11 @@
+import CryptoKit
 import Foundation
 
 /// Append-only committed events. Only a torn, non-newline-terminated final write
 /// is discarded before the next append. Complete corrupt records block writes.
-/// Callers serialize access on MeetingStore's main actor.
-final class ManagedTaskJournal {
-    struct Cursor: Codable, Equatable {
+/// A recursive lock serializes background index reads/rebuilds and durable intent writes.
+final class ManagedTaskJournal: @unchecked Sendable {
+    struct Cursor: Codable, Equatable, Sendable {
         let createdAt: Date
         let id: UUID
     }
@@ -18,9 +19,21 @@ final class ManagedTaskJournal {
         let record: ManagedTaskRecord?
     }
     let url: URL
-    private(set) var records: [UUID: ManagedTaskRecord] = [:]
-    /// Latest event offsets can seed a disk-backed index without rewriting events.
-    private(set) var latestOffsets: [UUID: UInt64] = [:]
+    private let lock = NSRecursiveLock()
+    let indexURL: URL
+    private var index: ManagedTaskIndex?
+    private(set) var replayedEventCount = 0
+    // Diagnostic compatibility; production paging never materializes this dictionary.
+    var latestOffsets: [UUID: UInt64] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let index, let locations = try? index.locations(limit: Int.max) else { return [:] }
+        return Dictionary(
+            uniqueKeysWithValues: locations.compactMap { location in
+                guard let record = try? read(location) else { return nil }
+                return (record.id, location.offset)
+            })
+    }
     private struct Revision: Equatable {
         let size: UInt64
         let modified: Date?
@@ -34,17 +47,79 @@ final class ManagedTaskJournal {
             modified: attributes[.modificationDate] as? Date,
             inode: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0)
     }
-    var hasExternalChanges: Bool { diskRevision != knownRevision }
+    var hasExternalChanges: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return diskRevision != knownRevision
+    }
+    private var revisionKey: String {
+        guard let revision = diskRevision else { return "missing" }
+        return "\(revision.size):\(revision.inode):\(revision.modified?.timeIntervalSince1970 ?? 0)"
+    }
     private var loaded = false
+    private var comparedPreviousOffsets = false
     private var committedLength: UInt64 = 0
     private var observedLength: UInt64 = 0
     private var hasIncompleteTail = false
     private var writeFailure: Error?
-    init(url: URL) { self.url = url }
+    private var storedReadFailure: Error?
+    var readFailure: Error? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedReadFailure
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            storedReadFailure = newValue
+        }
+    }
+    init(url: URL, indexURL: URL? = nil) {
+        self.url = url
+        self.indexURL = indexURL ?? url.deletingPathExtension().appendingPathExtension("index.sqlite")
+    }
 
     @discardableResult func load() throws -> [ManagedTaskRecord] {
-        records = [:]
-        latestOffsets = [:]
+        try prepare()
+        return try query(limit: Int.max)
+    }
+
+    /// Warm opens only inspect the journal revision. Cold rebuilds stream one event at a time.
+    func prepare(forceRebuild: Bool = false) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        replayedEventCount = 0
+        comparedPreviousOffsets = false
+        readFailure = nil
+        let startingRevision = diskRevision
+        let startingKey = revisionKey
+        do { index = try ManagedTaskIndex(url: indexURL) }
+        catch {
+            // This file is disposable; source corruption is still rejected during replay.
+            index = nil
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: indexURL.path + suffix) }
+            index = try ManagedTaskIndex(url: indexURL)
+        }
+        guard let index else { throw ServiceError("Couldn’t open the task index.") }
+        if !forceRebuild, let (revision, committed) = try index.revision(), revision == revisionKey {
+            committedLength = committed
+            observedLength = diskRevision?.size ?? 0
+            hasIncompleteTail = observedLength != committed
+            loaded = true
+            writeFailure = nil
+            knownRevision = diskRevision
+            return
+        }
+        try index.execute("BEGIN IMMEDIATE")
+        do {
+            try index.clear()
+            comparedPreviousOffsets = true
+        }
+        catch {
+            try? index.execute("ROLLBACK")
+            throw error
+        }
         committedLength = 0
         observedLength = 0
         hasIncompleteTail = false
@@ -53,7 +128,9 @@ final class ManagedTaskJournal {
         guard FileManager.default.fileExists(atPath: url.path) else {
             loaded = true
             knownRevision = nil
-            return []
+            try index.setRevision(revisionKey, committed: 0)
+            try index.execute("COMMIT")
+            return
         }
         do {
             let handle = try FileHandle(forReadingFrom: url)
@@ -75,15 +152,16 @@ final class ManagedTaskJournal {
                         guard let record = event.record, record.id == event.taskID else {
                             throw ServiceError("The task journal contains an invalid task identity.")
                         }
-                        records[event.taskID] = record
-                        latestOffsets[event.taskID] = committedLength
+                        try index.upsert(
+                            record, offset: committedLength, length: line.count,
+                            digest: SHA256.hash(data: line).description)
                     case .delete:
                         guard event.record == nil else {
                             throw ServiceError("The task journal contains an invalid deletion.")
                         }
-                        records.removeValue(forKey: event.taskID)
-                        latestOffsets.removeValue(forKey: event.taskID)
+                        try index.remove(event.taskID)
                     }
+                    replayedEventCount += 1
                     let bytes = buffer.distance(from: buffer.startIndex, to: newline) + 1
                     committedLength += UInt64(bytes)
                     buffer.removeFirst(bytes)
@@ -92,12 +170,18 @@ final class ManagedTaskJournal {
                     throw ServiceError("A task journal record exceeds the supported size.")
                 }
             }
+            guard diskRevision == startingRevision else {
+                throw ServiceError(
+                    "The task journal changed during indexing. Reopen the library to read the updated file.")
+            }
             hasIncompleteTail = !buffer.isEmpty
             loaded = true
             knownRevision = diskRevision
-            return page(limit: Int.max)
+            try index.setRevision(startingKey, committed: committedLength)
+            try index.execute("COMMIT")
         }
         catch {
+            try? index.execute("ROLLBACK")
             writeFailure = error
             throw ServiceError("Couldn’t read tasks.jsonl. The file was kept unchanged. \(error.localizedDescription)")
         }
@@ -110,8 +194,11 @@ final class ManagedTaskJournal {
         try append(Event(operation: .delete, taskID: id, record: nil))
     }
     private func append(_ event: Event) throws {
+        lock.lock()
+        defer { lock.unlock() }
         if let writeFailure { throw writeFailure }
-        if !loaded { try load() }
+        if let readFailure { throw readFailure }
+        if !loaded { try prepare() }
         var data = try JSONEncoder().encode(event)
         data.append(10)
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -120,11 +207,12 @@ final class ManagedTaskJournal {
             else {
                 throw ServiceError("Couldn’t create tasks.jsonl.")
             }
+            knownRevision = diskRevision
         }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         do {
-            guard try handle.seekToEnd() == observedLength else {
+            guard diskRevision == knownRevision, try handle.seekToEnd() == observedLength else {
                 throw ServiceError(
                     "The task journal changed outside this app. Reopen the library before changing tasks.")
             }
@@ -146,13 +234,14 @@ final class ManagedTaskJournal {
                 knownRevision = Revision(size: committedLength, modified: disk.modified, inode: disk.inode)
             }
             if let record = event.record {
-                records[event.taskID] = record
-                latestOffsets[event.taskID] = offset
+                try index?.upsert(
+                    record, offset: offset, length: data.count - 1,
+                    digest: SHA256.hash(data: data.dropLast()).description)
             }
             else {
-                records.removeValue(forKey: event.taskID)
-                latestOffsets.removeValue(forKey: event.taskID)
+                try index?.remove(event.taskID)
             }
+            try index?.setRevision(revisionKey, committed: committedLength)
         }
         catch {
             // Reopen/replay before any later append: a write may have stopped mid-line.
@@ -161,15 +250,90 @@ final class ManagedTaskJournal {
         }
     }
 
-    /// Stable cursor ordering; updates never move a row because createdAt is immutable.
-    /// Replay currently indexes latest rows in memory. A persisted offset index is
-    /// needed to make cold-start/history pagination independent of total log size.
-    func page(after cursor: Cursor? = nil, limit: Int = 50) -> [ManagedTaskRecord] {
-        records.values.filter { row in
-            guard let cursor else { return true }
-            return row.createdAt < cursor.createdAt
-                || (row.createdAt == cursor.createdAt && row.id.uuidString < cursor.id.uuidString)
-        }.sorted(by: Self.newestFirst).prefix(max(0, limit)).map { $0 }
+    private func read(_ location: ManagedTaskIndex.Location) throws -> ManagedTaskRecord {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: location.offset)
+        guard let data = try handle.read(upToCount: location.length), data.count == location.length,
+            SHA256.hash(data: data).description == location.digest,
+            let record = try JSONDecoder().decode(Event.self, from: data).record,
+            record.id.uuidString == location.id
+        else {
+            throw ServiceError("The task index no longer matches the journal.")
+        }
+        return record
+    }
+
+    func query(
+        where predicate: String = "1", order: String = "created DESC,id DESC", limit: Int = 50,
+        recoverIndex: Bool = true
+    ) throws
+        -> [ManagedTaskRecord]
+    {
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            if !loaded { try prepare() }
+            guard diskRevision == knownRevision else {
+                throw ServiceError(
+                    "The task journal changed outside this app. Wait for it to reload before changing tasks.")
+            }
+            let records = try index?.locations(where: predicate, order: order, limit: limit).map(read) ?? []
+            guard diskRevision == knownRevision else {
+                throw ServiceError("The task journal changed while reading tasks.")
+            }
+            return records
+        }
+        catch {
+            if recoverIndex, diskRevision == knownRevision, writeFailure == nil {
+                do {
+                    try prepare(forceRebuild: true)
+                    return try query(where: predicate, order: order, limit: limit, recoverIndex: false)
+                }
+                catch {
+                    readFailure = error
+                    throw error
+                }
+            }
+            readFailure = error
+            throw error
+        }
+    }
+    func count(where predicate: String = "1") -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return (try? index?.count(where: predicate)) ?? 0
+    }
+    func changedSinceRebuild(_ id: UUID) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard comparedPreviousOffsets else { return true }
+        return try index?.changedSinceRebuild(id) ?? true
+    }
+    func record(id: UUID) -> ManagedTaskRecord? {
+        try? query(where: "id=" + ManagedTaskIndex.literal(id.uuidString), limit: 1).first
+    }
+    /// Stable creation ordering; cursor predicates are evaluated by the disk index.
+    func page(after cursor: Cursor? = nil, limit: Int = 50, predicate: String = "1", newer: Bool = false)
+        -> [ManagedTaskRecord]
+    {
+        var condition = predicate
+        if let cursor {
+            let comparison = newer ? ">" : "<"
+            let date = cursor.createdAt.timeIntervalSince1970
+            condition +=
+                " AND (created \(comparison) \(date) OR (created=\(date) AND id \(comparison) \(ManagedTaskIndex.literal(cursor.id.uuidString))))"
+        }
+        do {
+            let rows = try query(where: condition, order: newer ? "created,id" : "created DESC,id DESC", limit: limit)
+            return newer ? rows.reversed() : rows
+        }
+        catch {
+            lock.lock()
+            readFailure = error
+            lock.unlock()
+            return []
+        }
     }
     static func newestFirst(_ lhs: ManagedTaskRecord, _ rhs: ManagedTaskRecord) -> Bool {
         lhs.createdAt == rhs.createdAt ? lhs.id.uuidString > rhs.id.uuidString : lhs.createdAt > rhs.createdAt

@@ -37,9 +37,10 @@ struct MeetingTranscriptView: View {
     private var labelingHistoryKey: SpeakerLabelingHistoryReadKey {
         .init(
             meetingID: meetingID, sourceID: meeting?.transcriptSource?.id,
-            taskStates: labelingTasks.map {
-                $0.id.uuidString + ":" + $0.state.rawValue + ":" + ($0.speakerLabelingResultID?.uuidString ?? "")
-            })
+            taskStates: ["journal:\(store.managedTaskRevision)"]
+                + labelingTasks.map {
+                    $0.id.uuidString + ":" + $0.state.rawValue + ":" + ($0.speakerLabelingResultID?.uuidString ?? "")
+                })
     }
     private var canRestore: Bool {
         store.libraryWritable && store.recordingID != meetingID && meeting?.transcriptionAttempt == nil
@@ -198,9 +199,29 @@ struct MeetingTranscriptView: View {
     private func loadLabelingHistory() async {
         let key = labelingHistoryKey
         labelingHistory = nil
-        let result = await SpeakerLabelingHistory.load(
-            directory: store.directory(for: meetingID), tasks: labelingTasks,
+        let journal = store.managedTaskJournal
+        let id = meetingID
+        let (tasks, taskWarning) = await Task.detached(priority: .utility) { () -> ([ManagedTaskRecord], String?) in
+            do {
+                return (
+                    try journal.query(
+                        where: "meeting=" + ManagedTaskIndex.literal(id.uuidString) + " AND kind='diarization'",
+                        limit: 501), nil
+                )
+            }
+            catch {
+                return ([], "Couldn’t read speaker-labeling tasks. \(error.localizedDescription)")
+            }
+        }.value
+        var result = await SpeakerLabelingHistory.load(
+            directory: store.directory(for: meetingID),
+            tasks: Array(tasks.prefix(500)) + labelingTasks.filter(\.isPreview),
             currentSourceID: key.sourceID)
+        let warnings = [
+            result.warning, taskWarning,
+            tasks.count > 500 ? "Showing the latest 500 speaker-labeling tasks." : nil,
+        ].compactMap { $0 }
+        result.warning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
         guard !Task.isCancelled, key == labelingHistoryKey else { return }
         labelingHistory = result
     }

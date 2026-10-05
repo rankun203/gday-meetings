@@ -36,6 +36,8 @@ These paths are relative to this client directory. Quit the bundle being rebuilt
 
 The app runs on macOS 14.2 or later. Building from source requires Apple's Command Line Tools or Xcode with Swift 6.2 and macOS SDK 26 or later. The build Mac must support those developer tools. Install current Command Line Tools for your macOS version; tests use Swift Testing.
 
+The Make build commands pass the selected SDK and the existing deployment minimum explicitly to the linker. Release packaging checks both values in the executable. This prevents Swift Build from stamping the deployment minimum as the SDK version, which selects an older native control appearance even when compilation uses the current SDK.
+
 ```sh
 xcode-select --install
 # Wait for Apple's installer to finish, then from the repository root:

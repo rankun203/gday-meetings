@@ -12,6 +12,8 @@ scope: swift-app-design
 
 The [October 4 worklog](2026-10-04-liquid-glass-implementation.md) records the implementation and remaining validation: screen changes, search behavior, regression fixes, build results, and remaining validation limits. The proposal and original audit below remain historical evidence; their acceptance targets are not automatically satisfied by implementation.
 
+The [October 5 workspace redesign](2026-10-05-workspace-redesign.md) follows the user's Voice Memos reference and supersedes the original shell and player geometry: native split navigation, scoped list actions, compact detail headers, and a quiet waveform surface with a separate transport capsule. It also adds continuous People, Tags, associated-meeting, and Tasks paging, and indexes task history. That worklog records the SDK-linking correction, synthetic comparisons, measured storage performance, and remaining validation limits.
+
 ## Problem and evidence
 
 The current layout makes navigation, meeting selection, reading, and playback available together. Preserve that work. The supplied screenshots show a visually heavy sidebar, strong column boundaries, broad control backgrounds, and a full-width player attached to the window edge. A clicked content tab retains a rectangular focus outline. These details make the chrome compete with meeting content.

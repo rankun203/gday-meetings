@@ -1,7 +1,7 @@
 ---
 title: Shared UI theme and component practices
 date: 2026-10-03
-updated: 2026-10-04
+updated: 2026-10-05
 status: active
 scope: all-swift-app-ui
 ---
@@ -26,6 +26,7 @@ Use a small shared design system with **native controls, semantic values, scoped
 The implementation keeps the existing flat `UI/` layout. Do not move feature files merely to adopt the theme. Shared contracts are:
 
 - `AppTheme.swift`: `AppTheme` holds fixed spacing, radius, transport target, and semantic reading-background values.
+- `WorkspaceListHeader(title:subtitle:actions:)`: a stationary list heading with optional count and scoped actions. It draws supplied values on the reading surface and does not load data.
 - `AppChromeSurface(shape:)`: stationary navigation and transport material. Uses native Liquid Glass on macOS 26, native regular material on earlier supported systems, and an opaque control background for Reduce Transparency or Increase Contrast. Increased contrast adds an outline. Never apply it to scrolling rows.
 - `AppContentSurface()`: an opaque semantic reading background for related content, with an outline only when contrast is increased. It adds no padding; the owning layout chooses the shared inset.
 - `SettingsComponents.swift`: `AppInlineMessage(text:systemImage:tint:)` combines wrapping, selectable primary text with a status symbol; tint affects the symbol. `ProviderHealthSummary(title:health:)` combines a capability, its readiness, and any explanation. These views draw supplied values and perform no service operations.
@@ -38,6 +39,7 @@ Apply styles at the narrowest useful container. A global borderless button style
 ## Visual language
 
 - Use native Liquid Glass for navigation and persistent control surfaces on supported systems. Keep transcripts, lists, Markdown, and forms on quiet readable surfaces. No per-row glass or decorative blur behind text.
+- The library uses native split navigation. Let the system render its sidebar and toolbar; do not wrap the sidebar in an additional floating glass card or force an opaque toolbar background. List creation actions belong to the list header; selected-item actions belong to the detail header. Playback keeps a readable waveform surface and a separate transport capsule.
 - Use semantic system colors. Accent expresses selection/action; recording uses its established red signal; warning/error/success include a symbol and text. Speaker colors identify people, not playback state.
 - Use system text roles: title for the screen or meeting, headline for sections, body for content/control labels, callout/caption for secondary metadata. Keep timestamps monospaced-digit. Never shrink an actionable warning into faint caption text.
 - Use a small shared spacing scale (4, 8, 12, 16, 24 points as starting conventions), then respect native control metrics. Do not force all controls into one height. Native compact form controls remain compact; frequent transport targets remain at least 44 by 44 points.

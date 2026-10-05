@@ -11,6 +11,7 @@ struct MeetingDetailView: View {
     var initialTranscriptRowID: UUID? = nil
     var initialContentTab: MeetingContentTab? = nil
     @ViewState private var tab = 0
+    @ViewState private var showsDetails = false
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
@@ -67,33 +68,43 @@ struct MeetingDetailView: View {
                     NSWorkspace.shared.open(store.directory(for: meetingID))
                 }
                 .layoutPriority(1)
+                Spacer(minLength: 8)
+                MeetingActionsMenu(meeting: meeting).labelStyle(.iconOnly).fixedSize()
             }
             if store.recordingID != meetingID {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) {
-                        meetingDate(meeting).fixedSize()
-                        Spacer(minLength: 8)
-                        MeetingLanguagePicker(
-                            selection: text(\.language),
-                            compact: true
-                        )
-                        .fixedSize()
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    meetingDate(meeting).font(.callout).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button {
+                        showsDetails.toggle()
+                    } label: {
+                        Label("Details", systemImage: hasArchiveIssue ? "exclamationmark.circle" : "info.circle")
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        meetingDate(meeting)
-                        MeetingLanguagePicker(
-                            selection: text(\.language),
-                            compact: true
-                        )
-                        .fixedSize()
+                    .buttonStyle(.borderless)
+                    .help(
+                        hasArchiveIssue
+                            ? "Archive incomplete. Open meeting details to review."
+                            : "Language, tags, and archive status"
+                    )
+                    .popover(isPresented: $showsDetails) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Meeting Details").font(.headline)
+                            MeetingLanguagePicker(selection: text(\.language))
+                            MeetingTagsView(meetingID: meetingID)
+                            MeetingArchiveStatusView(meetingID: meetingID)
+                        }
+                        .padding(AppTheme.contentInset).frame(width: 360)
                     }
-                }.font(.callout).foregroundStyle(.secondary)
-                MeetingArchiveStatusView(meetingID: meetingID).font(.callout).foregroundStyle(.secondary)
-                MeetingTagsView(meetingID: meetingID)
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(1)
+    }
+
+    private var hasArchiveIssue: Bool {
+        if let status = store.archiveStatuses[meetingID], case .incomplete = status { return true }
+        return false
     }
 
     private func meetingDate(_ meeting: Meeting) -> some View {

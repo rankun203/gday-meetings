@@ -37,10 +37,17 @@ check_tools() {
 
 swift_package() {
     /bin/bash "$client_dir/scripts/build-audio-dependencies.sh"
+    # Swift Build can stamp the deployment target as the SDK version, which
+    # selects older AppKit/SwiftUI compatibility behavior. Pass both versions
+    # explicitly to the linker; this does not raise the deployment target.
+    local app_minimum sdk_version
+    app_minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$client_dir/packaging/macos/Info.plist")"
+    sdk_version="$(/usr/bin/xcrun --sdk macosx --show-sdk-version)"
     # Keep build caches local to the checkout, including on managed Macs.
     mkdir -p "$build_dir/cache" "$build_dir/clang-cache"
     CLANG_MODULE_CACHE_PATH="$build_dir/clang-cache" \
-        /usr/bin/xcrun swift "$@" --package-path "$client_dir" --cache-path "$build_dir/cache"
+        /usr/bin/xcrun swift "$@" --package-path "$client_dir" --cache-path "$build_dir/cache" \
+        -Xlinker -platform_version -Xlinker macos -Xlinker "$app_minimum" -Xlinker "$sdk_version"
 }
 
 require_stopped_app() {

@@ -237,11 +237,15 @@ enum UIPreview {
             if ProcessInfo.processInfo.arguments.contains("--synthetic-summary-stream") {
                 seedSummaryStream(store)
             }
+            if UIPreviewPerformanceFixtures.flag("--synthetic-directories", infoKey: "GdaySyntheticDirectories") {
+                DirectoryPreview.populate(store: store)
+            }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks")
                 || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
             {
                 seedTasks(store)
             }
+            try seedPagedTasks(store)
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {

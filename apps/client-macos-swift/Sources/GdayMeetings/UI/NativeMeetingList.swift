@@ -18,6 +18,7 @@ struct NativeMeetingList: NSViewRepresentable {
     var reveal: (UUID) -> Void
     var export: (UUID) -> Void
     var delete: (UUID) -> Void
+    var open: ((UUID) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -46,6 +47,13 @@ struct NativeMeetingList: NSViewRepresentable {
         table.deleteSelected = { [weak coordinator = context.coordinator] in
             guard let coordinator else { return }
             coordinator.requestDeletion(row: coordinator.table?.selectedRow ?? -1)
+        }
+        table.openSelected = { [weak coordinator = context.coordinator] in
+            guard let coordinator, coordinator.parent.open != nil else { return false }
+            let row = coordinator.table?.selectedRow ?? -1
+            guard coordinator.rows.indices.contains(row) else { return false }
+            coordinator.parent.open?(coordinator.rows[row].id)
+            return true
         }
         table.menuForRow = { [weak coordinator = context.coordinator] in coordinator?.menu(row: $0) }
         table.revealRow = { [weak coordinator = context.coordinator] row in
@@ -175,8 +183,14 @@ struct NativeMeetingList: NSViewRepresentable {
             parent.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
         }
         @objc func doubleClicked(_ sender: NSTableView) {
-            guard parent.canPlay, rows.indices.contains(sender.clickedRow) else { return }
-            parent.play(rows[sender.clickedRow].id)
+            guard rows.indices.contains(sender.clickedRow) else { return }
+            let id = rows[sender.clickedRow].id
+            if let open = parent.open {
+                open(id)
+            }
+            else if parent.canPlay {
+                parent.play(id)
+            }
         }
         func viewportDidChange() {
             guard !updating, let scroll else { return }
@@ -212,6 +226,12 @@ struct NativeMeetingList: NSViewRepresentable {
             guard rows.indices.contains(row) else { return nil }
             let entry = rows[row]
             let menu = NSMenu()
+            if parent.open != nil {
+                let item = NSMenuItem(title: "Open Meeting", action: #selector(openItem(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.id
+                menu.addItem(item)
+            }
             if !entry.audioFiles.isEmpty {
                 let item = NSMenuItem(title: "Play", action: #selector(playItem(_:)), keyEquivalent: "")
                 item.target = self
@@ -235,6 +255,9 @@ struct NativeMeetingList: NSViewRepresentable {
             menu.autoenablesItems = false
             return menu
         }
+        @objc private func openItem(_ item: NSMenuItem) {
+            if let id = item.representedObject as? UUID { parent.open?(id) }
+        }
         @objc private func playItem(_ item: NSMenuItem) {
             if let id = item.representedObject as? UUID { parent.play(id) }
         }
@@ -257,6 +280,7 @@ struct NativeMeetingList: NSViewRepresentable {
 final class MeetingNativeTable: NSTableView {
     var menuForRow: ((Int) -> NSMenu?)?
     var deleteSelected: (() -> Void)?
+    var openSelected: (() -> Bool)?
     var revealRow: ((Int) -> Void)?
     private var cursorTracking: NSTrackingArea?
     private var modifierMonitor: Any?
@@ -309,6 +333,12 @@ final class MeetingNativeTable: NSTableView {
         super.mouseDown(with: event)
     }
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76,
+            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+            openSelected?() == true
+        {
+            return
+        }
         if event.keyCode == 51 || event.keyCode == 117,
             event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
         {

@@ -12,7 +12,7 @@ Liquid Glass is the design standard for all future UI work in the Swift macOS cl
 ## Appearance and hierarchy
 
 - Use Apple's native Liquid Glass presentation for navigation and controls where supported. Keep meeting text, notes, transcripts, and waveform content on quiet, readable surfaces. Do not put glass behind every card or stack translucent layers unnecessarily.
-- Apple Music is the reference for capsule-shaped tabs and a soft rounded sidebar selection with accent-colored text/icons. Use Gday's accent color and consistent selection treatment. Retain a visible selected state when the window is inactive.
+- Voice Memos informs the navigation, list, detail, and playback hierarchy; compact capsule tabs retain the earlier Apple Music reference. Use native sidebar selection and Gday's accent color. Retain a visible selected state when the window is inactive.
 - Prefer standard SwiftUI/AppKit controls, SF Symbols, semantic colors, system typography, and system spacing. Use supported customization only when the native component cannot express the required interaction or visual hierarchy.
 - Keep labels direct and concise: “Play,” “Recording transcript,” and meaningful source names. Avoid decorative explanatory text that repeats what the controls already communicate.
 - Make recording actions easy to find and distinguish recording, saving, playing, and paused states through symbols and accessible labels as well as color.
@@ -23,7 +23,7 @@ Liquid Glass is the design standard for all future UI work in the Swift macOS cl
 The compact play/pause button beside the meeting title shows an accent-tinted circle and outline on hover, with a stronger pressed tint and a pointing-hand cursor. Draw this feedback above the glass material so it remains visible. Keep the button and title stationary during hover.
 
 - Use one main Meetings window. **Show App**, recording setup, and reopening the app reveal that window instead of creating another. A closed main window can be reopened without restarting the app.
-- Keep the window toolbar independent of sidebar expansion. Its title and toggle must remain stationary; reveal sidebar rows after expansion completes and preserve the sidebar background throughout.
+- Use native split navigation for the library sidebar and let the system coordinate its toolbar and column transition. Keep sidebar content available during expansion; do not add a second row-hiding animation. Rapid reversal and Reduce Motion must leave search and destination selection usable.
 - Preserve native list spacing. Do not add compensating scroll insets or offsets to hide a layout issue; reproduce the cause and verify navigation, playback changes, and window activation.
 - Keep playback updates local to the transport. Menus, text editing, selection, and the main content layout must remain stable while time advances.
 - Center waveform and primary playback controls together, with time labels below. Every track shares one playback/scrubbing timeline.
@@ -36,7 +36,7 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 - Show the title as one line of plain text with tail truncation. For a stored multiline title, show its first line followed by an ellipsis; retain the complete saved title and expose it to accessibility and help.
 - Double-click the title to edit. Enter commits, Escape cancels, and leaving the field commits. Keep edits in a local draft until completion rather than saving each keystroke. Provide **Edit Title** through the context menu and accessibility action.
 - Command-click the title to open that meeting's folder in Finder. Provide **Open Meeting Folder** through the context menu and accessibility action. Keep ordinary clicks and the title layout unchanged.
-- Normal reading must not expand header height for long titles. Date, language, and tags remain below the title row.
+- Normal reading must not expand header height for long titles. Show date and duration below the title; place language, tags, and archive details in **Details**. An incomplete archive must remain visible as an issue indicator on that control.
 
 ## Meeting list
 
@@ -115,7 +115,7 @@ Render generated bold CJK labels such as `**结论：**正文` as a bold label f
 
 People voice review follows the [voice library design](../../../docs/design/2026-10-03-people-voice-library.md). Reviewed audio examples retain their recording and exact source range independently of provider embeddings. Keep automatic suggestions distinct from human confirmation, make exclusions and identity corrections reversible, and use the persistent player for bounded excerpts. Grouping examples does not confirm their identities. Provider preparation must not upload audio merely by opening People or choosing a provider.
 
-The People list supports native multiple selection. Show **Merge…** beside **Review Voices…** in the same row only when at least two people are selected. The merge sheet lists only those people and asks which one to keep, previewing their combined details before **Merge People** commits. Preserve meeting assignments, tags, notes, chats, and voice samples; retain conflicting names and email addresses in Notes. Update all selected identities, voice-review references, and hidden original assignments in one file transaction. Explain that merging removes the other selected people and clears voice-review undo history. Require recording, processing, and indexing to finish first. Cancel preserves the selection. After success, reveal and select the retained person, including when their tags exclude them from the ordinary list.
+The People list supports native multiple selection. The **People Actions** menu contains **Review Voices…** and **Merge Selected People…**; enable merging when at least two people are selected. Show the selected count and a **Merge…** button below the search field for that selection. The merge sheet lists only those people and asks which one to keep, previewing their combined details before **Merge People** commits. Preserve meeting assignments, tags, notes, chats, and voice samples; retain conflicting names and email addresses in Notes. Update all selected identities, voice-review references, and hidden original assignments in one file transaction. Explain that merging removes the other selected people and clears voice-review undo history. Require recording, processing, and indexing to finish first. Cancel preserves the selection. After success, reveal and select the retained person, including when their tags exclude them from the ordinary list.
 
 New service providers start with all capabilities that their app adapter supports enabled. Saving an edited provider preserves capabilities the user turned off. Do not display capabilities without an implementation.
 

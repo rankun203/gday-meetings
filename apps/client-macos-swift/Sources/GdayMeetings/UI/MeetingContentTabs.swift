@@ -18,7 +18,8 @@ struct MeetingContentTabs: View {
                     Text(titles[index])
                         .font(.callout.weight(selection == index ? .semibold : .regular))
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: 28)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(ActionButtonStyle(cornerRadius: 18))
@@ -35,7 +36,8 @@ struct MeetingContentTabs: View {
                 .onKeyPress(.rightArrow) { move(from: index, by: 1) }
             }
         }
-        .padding(4)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(3)
         .modifier(MeetingGlassSurface())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: selection)
         .accessibilityElement(children: .contain)

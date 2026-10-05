@@ -97,7 +97,7 @@ private struct DataSettingsContent: View {
                 LabeledContent("Meetings", value: status.meetingCount.formatted())
                 LabeledContent("People", value: store.people.count.formatted())
                 LabeledContent("Tags", value: store.tags.count.formatted())
-                LabeledContent("Tasks", value: store.managedTasks.count.formatted())
+                LabeledContent("Tasks", value: store.managedTaskCount.formatted())
             }
         }
         .formStyle(.grouped)
