@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -25,11 +26,38 @@ struct LocalSearchConfigurationTests {
         #expect(provider.kind.capabilities == [.search])
     }
 
-    @MainActor @Test func missingConfigurationNeverAdvertisesReady() async {
-        let provider = ServiceProvider(kind: .localSearch)
-        let result = await provider.health(for: .search, settings: AppSettings())
-        #expect(!result.isReady)
-        #expect(!ProviderConfigurationEligibility.canSelect(provider, for: .search, providers: [provider]))
+    @MainActor @Test func managedCoreMLFilesDetermineReadinessWithoutLegacyPaths() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("synthetic model".utf8)
+        let descriptor = LocalModelDescriptor(
+            id: .clsp, title: "Synthetic CLSP", repository: "synthetic/model", revision: "pinned",
+            assets: [
+                .init(
+                    path: "data", remotePath: "data", bytes: Int64(bytes.count),
+                    digest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
+            ],
+            modelNames: ["CLSPAudio", "CLSPText"])
+        let manager = LocalModelManager(
+            root: root, descriptor: { _ in descriptor },
+            preparer: { _, _ in
+                Issue.record("Readiness must not load the model")
+                return [:]
+            })
+        var provider = ServiceProvider(kind: .localSearch)
+        provider.localSearch = nil
+        #expect(ProviderConfigurationEligibility.canSelect(provider, for: .search, providers: [provider]))
+        #expect(!(await provider.health(for: .search, settings: AppSettings(), models: manager)).isReady)
+        let directory = manager.modelDirectory(for: .clsp)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try bytes.write(to: directory.appendingPathComponent("data"))
+        #expect(await provider.health(for: .search, settings: AppSettings(), models: manager) == .ready)
+        provider.localSearch = .init(
+            executableURL: URL(fileURLWithPath: "/nonexistent/legacy-worker"),
+            modelCacheURL: URL(fileURLWithPath: "/nonexistent/legacy-cache"))
+        #expect(await provider.health(for: .search, settings: AppSettings(), models: manager) == .ready)
+        try Data("changed".utf8).write(to: directory.appendingPathComponent("data"))
+        #expect(!(await provider.health(for: .search, settings: AppSettings(), models: manager)).isReady)
     }
 
     @Test func readinessChecksMetadataWithoutStartingWorker() throws {

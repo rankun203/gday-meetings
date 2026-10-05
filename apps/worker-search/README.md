@@ -11,7 +11,7 @@ This optional Python subprocess evaluates CLSP speech-style embeddings. It is no
 
 From this directory, prepare weights explicitly with `uv run gday-search prepare`, then start `uv run gday-search serve`. Preparation downloads the pinned CLSP revision and its RoBERTa tokenizer/configuration. Serving uses the prepared cache offline and loads the model only for an embedding request. Use `HF_HOME` to select the model cache. CPU is the baseline; MPS is experimental until measured.
 
-In the Mac app, add a Local Voice Search provider in Service Providers. Choose this environment's `.venv/bin/gday-search` executable and the prepared model cache folder, then save. Building the voice index is a separate action. The app starts the worker when needed and reuses the process between requests. Readiness checks inspect prepared-file metadata without loading the model.
+The Mac app's native Local Voice Search integration uses managed Core ML models in Service Providers. It no longer launches this Python worker or asks for an executable path. Building the voice index remains a separate action. This environment is retained for reference inference and retrieval evaluation; see [Core ML conversion](coreml/README.md) for the separate, pinned conversion environment and current validation limits.
 
 The subprocess accepts one JSON object per line and emits one final response per request. `health` reports whether the model is loaded without loading it. `embed_text` takes a `texts` array. `embed_audio` takes a local audio `path`, optional `start`, and `duration` in seconds (up to 30). Files are decoded locally, mixed to mono, and resampled to 16 kHz. Example:
 

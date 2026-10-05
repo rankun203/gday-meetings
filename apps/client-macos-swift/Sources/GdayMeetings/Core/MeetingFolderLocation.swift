@@ -27,9 +27,38 @@ enum MeetingFolderLocation {
         weak var value: LibraryIndex?
         init(_ value: LibraryIndex) { self.value = value }
     }
-    private final class IndexReferences { var values: [IndexReference] = [] }
-    private static let indexes = NSCache<NSString, IndexReferences>()
-    private static let indexLock = NSLock()
+    /// Registration must outlive cache pressure without retaining the indexes themselves.
+    private final class IndexRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: [IndexReference]] = [:]
+
+        private func prune() {
+            entries = entries.compactMapValues { references in
+                let live = references.filter { $0.value != nil }
+                return live.isEmpty ? nil : live
+            }
+        }
+
+        func register(_ index: LibraryIndex) {
+            lock.withLock {
+                prune()
+                let key = index.directory.standardizedFileURL.path
+                entries[key, default: []].removeAll { $0.value === index }
+                entries[key, default: []].append(IndexReference(index))
+            }
+        }
+
+        func latest(directory: URL) -> LibraryIndex? {
+            lock.withLock {
+                prune()
+                for reference in (entries[directory.standardizedFileURL.path] ?? []).reversed() {
+                    if let index = reference.value { return index }
+                }
+                return nil
+            }
+        }
+    }
+    private static let indexes = IndexRegistry()
     static func identity(_ name: String) -> UUID? {
         let parts = name.split(separator: "_", omittingEmptySubsequences: false)
         if parts.count == 1 { return MeetingIdentity.parse(name) }
@@ -55,23 +84,8 @@ enum MeetingFolderLocation {
         folders.setObject(Location(""), forKey: key(id, directory))
     }
     static func forget(id: UUID, directory: URL) { folders.removeObject(forKey: key(id, directory)) }
-    static func registerIndex(_ index: LibraryIndex) {
-        indexLock.lock()
-        defer { indexLock.unlock() }
-        indexes.countLimit = 32
-        let key = index.directory.standardizedFileURL.path as NSString
-        let references = indexes.object(forKey: key) ?? IndexReferences()
-        references.values.removeAll { $0.value == nil || $0.value === index }
-        references.values.append(IndexReference(index))
-        indexes.setObject(references, forKey: key)
-    }
-    static func registeredIndex(directory: URL) -> LibraryIndex? {
-        indexLock.lock()
-        defer { indexLock.unlock() }
-        let references = indexes.object(forKey: directory.standardizedFileURL.path as NSString)
-        references?.values.removeAll { $0.value == nil }
-        return references?.values.last?.value
-    }
+    static func registerIndex(_ index: LibraryIndex) { indexes.register(index) }
+    static func registeredIndex(directory: URL) -> LibraryIndex? { indexes.latest(directory: directory) }
     static func validate(_ folder: URL, directory: URL) throws {
         let root = directory.appendingPathComponent("meetings")
         guard folder.deletingLastPathComponent().standardizedFileURL.path == root.standardizedFileURL.path else {

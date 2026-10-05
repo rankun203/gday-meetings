@@ -34,14 +34,11 @@ final class VoiceSearchController: ObservableObject {
             let indexDirectory = indexDirectory
             preparedConfiguration = configuration
             preparationGeneration = UUID()
+            let worker = CLSPCoreMLWorker()
             preparation = Task.detached(priority: .utility) {
-                try configuration.validatePreparedFiles()
-                guard let executable = configuration.executableURL, let cache = configuration.modelCacheURL else {
-                    throw ServiceError("Choose a local search worker and prepared model folder.")
-                }
                 return try LocalVoiceSearchProvider(
                     directory: directory, indexDirectory: indexDirectory,
-                    worker: LocalSearchWorkerClient(executable: executable, modelCache: cache))
+                    worker: worker)
             }
         }
         guard let preparation else { throw SearchProviderError.incompleteResponse }

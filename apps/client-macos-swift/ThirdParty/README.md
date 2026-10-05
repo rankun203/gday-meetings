@@ -55,3 +55,9 @@ To upgrade, fetch a stable release from Xiph, verify its published checksum,
 replace the archive and license, update the script/version documentation, and run
 a clean build plus the decoder, streaming, waveform, and app regression tests.
 No automatic upstream upgrades occur during a user's build.
+
+## CLSP native inference
+
+The native voice-search integration uses Swift Tokenizers and a Kaldi-compatible Swift audio frontend. Their notices and the separately downloaded model's inherited licenses are recorded in [CLSP attribution](clsp-licenses/NOTICE.md). Release packaging copies `clsp-licenses/` into `Contents/Resources/ThirdPartyLicenses/CLSP`. Model weights are not checked in or bundled with the app; the prepared Core ML distribution includes its own copy of these notices.
+
+The app also bundles the [Swift tokenizer dependency notices](swift-tokenizer-licenses/README.md) in `Contents/Resources/ThirdPartyLicenses/SwiftTokenizers`. These app dependencies are separate from the downloaded model assets.

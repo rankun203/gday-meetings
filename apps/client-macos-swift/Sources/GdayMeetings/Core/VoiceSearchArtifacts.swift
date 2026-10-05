@@ -10,7 +10,7 @@ struct VoiceEmbeddingSpace: Codable, Equatable, Sendable {
 
     static let clsp = Self(
         model: "yfyeung/CLSP", revision: "30355ce67960e4cc1562e4e5fa154baf86a21430",
-        preprocessing: "clsp-16khz-mono-v1", dimension: 512, normalization: "unitL2")
+        preprocessing: "clsp-coreml-fp32-kaldi-v1", dimension: 512, normalization: "unitL2")
     init(model: String, revision: String, preprocessing: String, dimension: Int, normalization: String) {
         self.model = model
         self.revision = revision

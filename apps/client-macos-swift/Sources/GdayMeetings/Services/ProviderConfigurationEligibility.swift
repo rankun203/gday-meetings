@@ -8,8 +8,7 @@ enum ProviderConfigurationEligibility {
     ) -> Bool {
         guard provider.supports(capability), hasText(provider.name) else { return false }
         if provider.kind == .localSearch {
-            return provider.localSearch?.executableURL?.isFileURL == true
-                && provider.localSearch?.modelCacheURL?.isFileURL == true
+            return true
         }
         if provider.kind.isLocalSpeaker {
             if capability == .speakerRecognition { return true }

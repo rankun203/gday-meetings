@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 
@@ -8,7 +9,23 @@ private actor TopicRequests {
     func record(_ query: String) { values.append(query) }
 }
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor struct PeopleSearchSessionTests {
+    private func waitForSearchCompletion(_ session: LibrarySearchSession) async throws {
+        while session.isLoading {
+            let signal = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let subscription = session.$isLoading.sink { loading in
+                if !loading {
+                    signal.continuation.yield(())
+                    signal.continuation.finish()
+                }
+            }
+            for await _ in signal.stream { break }
+            subscription.cancel()
+            try Task.checkCancellation()
+        }
+    }
+
     @Test func confidentNamesUseResidualTopicAndNameOnlyDoesNotQueryContent() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -21,12 +38,12 @@ private actor TopicRequests {
         let person = PeopleNameRecord(id: UUID(), name: "Zora Vale")
         session.updatePeople([person])
         #expect(session.submit("Zora Vale budget", index: index))
-        try #require(try await waitForMainActorTestCondition { !session.isLoading })
+        try await waitForSearchCompletion(session)
         #expect(session.query == "Zora Vale budget")
         #expect(session.contentQuery == "budget")
         #expect(await requests.values == ["budget"])
         #expect(session.submit("Zora Vale", index: nil))
-        try #require(try await waitForMainActorTestCondition { !session.isLoading })
+        try await waitForSearchCompletion(session)
         #expect(session.peopleResolution.confident.first?.personID == person.id)
         #expect(session.contentQuery.isEmpty)
         #expect(session.error == nil)
@@ -44,9 +61,9 @@ private actor TopicRequests {
         let person = PeopleNameRecord(id: UUID(), name: "Zora Vale")
         session.updatePeople([person])
         #expect(session.submit("Zora Vale budget", index: index))
-        try #require(try await waitForMainActorTestCondition { !session.isLoading })
+        try await waitForSearchCompletion(session)
         session.updatePeople([])
-        try #require(try await waitForMainActorTestCondition { !session.isLoading })
+        try await waitForSearchCompletion(session)
         #expect(session.peopleResolution.candidates.isEmpty)
         #expect(session.contentQuery == "Zora Vale budget")
         #expect(await requests.values.last == "Zora Vale budget")
@@ -72,14 +89,20 @@ extension PeopleSearchSessionTests {
         let new = PeopleNameRecord(id: UUID(), name: "Current Person")
         session.updatePeople([old])
         session.beginPreparation("budget", mode: .voice)
-        while await !gate.started(old.name) { await Task.yield() }
+        while await !gate.started(old.name) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
         var finished = false
         let waiter = Task {
             await session.waitForPeopleResolution()
             finished = true
         }
         session.updatePeople([new])
-        while await !gate.started(new.name) { await Task.yield() }
+        while await !gate.started(new.name) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
         await gate.finish(old.name, result: .init(query: "budget", candidates: [], residualQuery: ""))
         for _ in 0..<20 { await Task.yield() }
         #expect(!finished)

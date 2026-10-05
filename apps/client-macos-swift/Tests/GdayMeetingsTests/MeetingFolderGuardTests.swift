@@ -173,6 +173,24 @@ import Testing
         #expect(try FileManager.default.contentsOfDirectory(atPath: external.path).isEmpty)
     }
 
+    @Test func indexRegistryPreservesEveryLiveLibraryBeyondOldCacheLimit() throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = (0..<40).map { root.appendingPathComponent("library-" + String($0)) }
+        var indexes = try directories.map { try LibraryIndex(directory: $0) }
+        for (directory, index) in zip(directories, indexes) {
+            #expect(MeetingFolderLocation.registeredIndex(directory: directory) === index)
+        }
+        weak let released = indexes.last
+        let releasedDirectory = directories.last!
+        indexes.removeLast()
+        #expect(released == nil)
+        #expect(MeetingFolderLocation.registeredIndex(directory: releasedDirectory) == nil)
+        for (directory, index) in zip(directories, indexes) {
+            #expect(MeetingFolderLocation.registeredIndex(directory: directory) === index)
+        }
+    }
+
     @Test func indexRegistryRetainsLiveFallbackAfterTransientAndOlderIndexesClose() throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -585,13 +585,14 @@ struct LibraryView: View {
             guard
                 let configured = store.settings.serviceProviders.first(where: {
                     $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
-                }), let configuration = configured.localSearch
+                })
             else {
                 searchSession.preparationFailed("Choose and prepare a Voice Search provider in Service Providers.")
                 return
             }
             do {
-                let voice = try await store.voiceSearch.provider(configuration: configuration)
+                let voice = try await store.voiceSearch.provider(
+                    configuration: configured.localSearch ?? LocalSearchConfiguration())
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
                 var providers: [any SearchProvider] = [voice]
                 if mode == .fusion {

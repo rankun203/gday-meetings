@@ -152,3 +152,7 @@ Task hover backgrounds use equal padding around the first through last line's ty
 Checkbox toggles update only the task’s checked state, marker, strikethrough, and copy metadata. Preserve displayed characters, paragraph layout, selection, and viewport. Hover responds to pointer entry, movement, and cursor updates; layout-only bounds notifications must not clear it.
 
 Notes has a compact native segmented Edit/Read icon control aligned to the right on its own action row, above the document card. Keep both modes visible and expose their names to accessibility and help. Flush pending edits before switching.
+
+## Local Voice Search setup
+
+Local Voice Search uses the same managed model controls as other local providers. Show model download size, progress, verification, cancellation, removal, and manual installation in **Search Model**. Readiness checks installed model files without running inference. Downloading a model does not start indexing; **Build Voice Index** remains an explicit action with progress and cancellation. Do not expose an executable path or require Python for the native app. Keep unpublished model availability explicit until the distribution is released.

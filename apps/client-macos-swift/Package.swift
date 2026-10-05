@@ -19,7 +19,10 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
-            revision: "21493f8dac5a97e65742e6ff26f42f164c2fda0f", traits: [])
+            revision: "21493f8dac5a97e65742e6ff26f42f164c2fda0f", traits: []),
+        .package(
+            url: "https://github.com/huggingface/swift-transformers.git",
+            revision: "c21fdcde390313a6d98d8e33a346f2c3486c3ab0"),
     ],
     targets: [
         .systemLibrary(name: "CSQLite"),
@@ -37,12 +40,15 @@ let package = Package(
             dependencies: [
                 "AudioCaptureBridge", "OpusFileBridge", "CSQLite",
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             resources: [
                 .copy("Resources/index.db.template.md"), .copy("Resources/frequent-words.json"),
                 .copy("Resources/wordfreq-NOTICE.md"),
             ]),
-        .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"]),
+        .testTarget(
+            name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"],
+            resources: [.copy("Fixtures/CLSP")]),
     ],
     swiftLanguageModes: [.v5]
 )

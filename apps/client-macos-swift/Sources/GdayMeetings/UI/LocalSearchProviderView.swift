@@ -5,6 +5,7 @@ struct LocalSearchProviderView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var drafts: ProviderDraftCoordinator
     @ObservedObject private var health = ProviderHealthStore.shared
+    @ObservedObject private var localModels = LocalModelManager.shared
     @ObservedObject var controller: VoiceSearchController
     @Binding var draft: ServiceProvider
     @ViewState private var failure: String?
@@ -23,19 +24,20 @@ struct LocalSearchProviderView: View {
                 )
                 .font(.callout).foregroundStyle(.secondary)
             }
-            Section("Configuration") {
-                pathRow("Worker Executable", keyPath: \.executableURL, directory: false)
-                pathRow("Model Folder", keyPath: \.modelCacheURL, directory: true)
+            Section("Search Model") {
                 LabeledContent("Model", value: LocalSearchConfiguration.modelID)
+                LocalModelDownloadView(modelID: .clsp)
                 Text(
-                    "Install the local Python worker and prepare its pinned model before choosing these paths. Saving settings does not download a model or index recordings."
+                    "The Core ML model files haven’t been published yet. Use Manual Installation with the prepared files."
                 )
                 .font(.callout).foregroundStyle(.secondary)
+                Text("The downloaded model processes voice descriptions and recorded audio on this Mac.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Readiness") {
                 ProviderHealthSummary(title: "Voice Search", health: readiness)
                 Text(
-                    "Readiness checks the executable and prepared-model metadata. It does not start the worker or measure search quality."
+                    "Readiness checks the installed model files. It does not process recordings or measure search quality."
                 )
                 .font(.caption).foregroundStyle(.secondary)
                 Button("Refresh") { Task { await store.refreshProviderHealth(providerID: draft.id) } }
@@ -59,12 +61,11 @@ struct LocalSearchProviderView: View {
                 }
                 HStack {
                     Button("Build Voice Index") {
-                        if let configuration = draft.localSearch {
-                            controller.buildLibrary(
-                                configuration: configuration, libraryIndex: store.libraryIndex,
-                                excludingTagIDs: Set(store.tags.filter(\.isExcluded).map(\.id)),
-                                excludingMeetingIDs: Set([store.recordingID].compactMap { $0 }))
-                        }
+                        controller.buildLibrary(
+                            configuration: draft.localSearch ?? LocalSearchConfiguration(),
+                            libraryIndex: store.libraryIndex,
+                            excludingTagIDs: Set(store.tags.filter(\.isExcluded).map(\.id)),
+                            excludingMeetingIDs: Set([store.recordingID].compactMap { $0 }))
                     }
                     .disabled(
                         changed || !readiness.isReady || controller.isBuilding || !store.libraryWritable
@@ -103,31 +104,8 @@ struct LocalSearchProviderView: View {
             }
         }
         .formStyle(.grouped)
-        .task { await store.refreshProviderHealth(providerID: draft.id) }
-    }
-
-    private func pathRow(_ title: String, keyPath: WritableKeyPath<LocalSearchConfiguration, URL?>, directory: Bool)
-        -> some View
-    {
-        HStack {
-            LabeledContent(title) {
-                Text(draft.localSearch?[keyPath: keyPath]?.path ?? "Not Selected")
-                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                    .help(draft.localSearch?[keyPath: keyPath]?.path ?? "Choose a path on this Mac")
-            }
-            Button("Choose…") {
-                let panel = NSOpenPanel()
-                panel.title = title
-                panel.canChooseDirectories = directory
-                panel.canChooseFiles = !directory
-                panel.allowsMultipleSelection = false
-                panel.begin { response in
-                    guard response == .OK, let url = panel.url else { return }
-                    var configuration = draft.localSearch ?? LocalSearchConfiguration()
-                    configuration[keyPath: keyPath] = url
-                    draft.localSearch = configuration
-                }
-            }.accessibilityLabel("Choose \(title)")
+        .task(id: localModels.state(for: .clsp).healthIdentity) {
+            await store.refreshProviderHealth(providerID: draft.id)
         }
     }
 
