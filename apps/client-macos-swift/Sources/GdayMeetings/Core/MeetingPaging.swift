@@ -1,7 +1,7 @@
 import Foundation
 
 /// Small catalog records are safe to keep in memory; content stays in each meeting folder.
-struct MeetingListEntry: Codable, Identifiable, Equatable {
+struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var title: String
     var createdAt: Date

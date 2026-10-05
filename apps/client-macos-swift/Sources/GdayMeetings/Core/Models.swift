@@ -91,6 +91,8 @@ struct AppSettings: Codable, Equatable {
     var serviceProviders: [ServiceProvider] = []
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
+    var searchProviderID: UUID?
+    var defaultSearchMode: SearchMode = .text
     var liveDiarizationProviderID: UUID?
     var diarizationProviderID: UUID?
     var speakerRecognitionProviderID: UUID?
@@ -128,7 +130,7 @@ struct AppSettings: Codable, Equatable {
     /// `nil` records from the macOS default input.
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
-        case serviceProviders, transcriptionProviderID, summaryProviderID,
+        case serviceProviders, transcriptionProviderID, summaryProviderID, searchProviderID, defaultSearchMode,
             liveDiarizationProviderID, diarizationProviderID, speakerRecognitionProviderID,
             showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers, labelRecordedSpeakers,
             initializedProviderCapabilities, explicitlyDisabledFeatures,
@@ -257,6 +259,8 @@ extension AppSettings {
         serviceProviders = try values.decodeIfPresent([ServiceProvider].self, forKey: .serviceProviders) ?? []
         transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
+        searchProviderID = try values.decodeIfPresent(UUID.self, forKey: .searchProviderID)
+        defaultSearchMode = try values.decodeIfPresent(SearchMode.self, forKey: .defaultSearchMode) ?? .text
         liveDiarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .liveDiarizationProviderID)
         diarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .diarizationProviderID)
         speakerRecognitionProviderID = try values.decodeIfPresent(UUID.self, forKey: .speakerRecognitionProviderID)

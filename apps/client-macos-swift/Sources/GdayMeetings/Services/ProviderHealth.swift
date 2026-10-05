@@ -31,7 +31,17 @@ extension ServiceProvider {
         guard kind.capabilities.contains(capability) else { return .notReady("Capability unavailable.") }
         guard isEnabled else { return .notReady("Provider is turned off.") }
         guard enabledCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
-        if kind.isLocal {
+        if kind == .localSearch {
+            guard let configuration = localSearch else {
+                return .notReady("Choose the search worker and model folder.")
+            }
+            do {
+                try await Task.detached(priority: .utility) { try configuration.validatePreparedFiles() }.value
+                return .ready
+            }
+            catch { return .notReady(error.localizedDescription) }
+        }
+        if kind.isLocalSpeaker {
             let id: LocalModelID?
             if capability == .speakerRecognition {
                 id = .voiceEmbedding
@@ -71,7 +81,6 @@ extension ThisMacProvider {
     @MainActor static func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
         guard capability == .liveTranscription else { return .notReady("Capability unavailable.") }
         guard settings.thisMacCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
-        guard #available(macOS 26.0, *) else { return .notReady("Requires macOS 26 or later.") }
         guard SpeechTranscriber.isAvailable else { return .notReady("Transcription is unavailable on this Mac.") }
         let locales = await SpeechTranscriber.supportedLocales
         guard let locale = AppleSpeechLanguageMapping.locale(for: settings.defaultLanguage, supported: locales) else {

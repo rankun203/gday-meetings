@@ -39,7 +39,7 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
 }
 
 enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
-    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1
+    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1, localSearch
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -49,11 +49,13 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .gdayWebsite: return "Gday Meetings Website"
         case .nemotron: return "Live Speaker Labeling (Nemotron)"
         case .community1: return "Speaker Labeling (Community-1)"
+        case .localSearch: return "Local Voice Search (CLSP)"
         }
     }
     var systemImage: String {
         switch self {
         case .nemotron, .community1: "person.wave.2"
+        case .localSearch: "waveform"
         case .gdayWebsite: "globe"
         case .runpod, .openAICompatible, .filedrop: "server.rack"
         }
@@ -67,9 +69,11 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .gdayWebsite: return [.transcription, .diarization]
         case .nemotron: return [.liveDiarization, .speakerRecognition]
         case .community1: return [.diarization, .speakerRecognition]
+        case .localSearch: return [.search]
         }
     }
-    var isLocal: Bool { self == .nemotron || self == .community1 }
+    var isLocalSpeaker: Bool { self == .nemotron || self == .community1 }
+    var isLocal: Bool { isLocalSpeaker || self == .localSearch }
 }
 
 struct ServiceProvider: Identifiable, Codable, Equatable {
@@ -79,6 +83,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var endpoint = ""
     var apiKey = ""
     var model = ""
+    var localSearch: LocalSearchConfiguration?
     // Scoped to the exact endpoint/model; switching either returns to automatic detection.
     var summaryImageOverride: SummaryImageOverride?
     var summarizationPrompt: String?
@@ -97,10 +102,11 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         enabledCapabilities = kind.capabilities
         if kind == .nemotron { model = "nemotronLow" }
         if kind == .community1 { model = "community1" }
+        if kind == .localSearch { localSearch = LocalSearchConfiguration() }
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
-        case summaryImageOverride, capabilityVersion
+        case summaryImageOverride, capabilityVersion, localSearch
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -109,6 +115,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         name = try values.decode(String.self, forKey: .name)
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = try values.decode(String.self, forKey: .model)
+        localSearch = try values.decodeIfPresent(LocalSearchConfiguration.self, forKey: .localSearch)
         isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
         enabledCapabilities = try values.decode(Set<ProviderCapability>.self, forKey: .enabledCapabilities)
         uploadProviderID = try values.decodeIfPresent(UUID.self, forKey: .uploadProviderID)
@@ -150,20 +157,6 @@ struct ProviderSearchDocument: Codable {
     let title: String
     let transcript: String
     let summary: String
-}
-struct ProviderSearchResult: Identifiable {
-    let meetingID: String
-    let externalID: String
-    let title: String
-    let excerpt: String
-    var id: String { meetingID }
-}
-protocol SearchProvider {
-    func search(query: String) async throws -> ProviderResult<[ProviderSearchResult]>
-}
-protocol SearchIndexProvider: SearchProvider {
-    func index(_ document: ProviderSearchDocument) async throws -> ProviderResult<Void>
-    func remove(meetingID: String) async throws -> ProviderResult<Void>
 }
 struct ProviderPlaybackResource {
     let meetingID: String
@@ -420,7 +413,7 @@ struct OpenAISummaryProvider: SummarizationProvider {
             let server = suppliedServer ?? GdayServerService.shared
             let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
             switch provider.kind {
-            case .nemotron, .community1:
+            case .nemotron, .community1, .localSearch:
                 throw ServiceError("Manage local model readiness in Service Providers.")
             case .filedrop:
                 return try await FiledropProvider(provider: provider).checkConnection().value

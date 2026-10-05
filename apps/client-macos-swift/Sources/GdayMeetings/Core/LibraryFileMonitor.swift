@@ -84,6 +84,8 @@ final class LibraryFileMonitor: @unchecked Sendable {
         guard let first = parts.first else { return true }
         if first.hasPrefix("index.db") || first.hasPrefix(".index") || first == "cache" || first == "caches"
             || first == "staging"
+            || ["tasks-index.sqlite", "tasks-index.sqlite-wal", "tasks-index.sqlite-shm", "tasks-index.sqlite-journal"]
+                .contains(String(first))
         {
             return false
         }

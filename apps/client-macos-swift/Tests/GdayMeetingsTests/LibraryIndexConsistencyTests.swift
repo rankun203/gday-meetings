@@ -132,6 +132,17 @@ import Testing
     private final class ReconciliationResult: @unchecked Sendable {
         private let lock = NSLock()
         private var values: [Bool] = []
+        private var errors: [String] = []
+        func report(_ error: String?) {
+            lock.lock()
+            defer { lock.unlock() }
+            if let error { errors.append(error) }
+        }
+        var reportedErrors: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return errors
+        }
         func append(_ rebuilt: Bool) {
             lock.lock()
             defer { lock.unlock() }
@@ -175,6 +186,38 @@ import Testing
         #expect(try index.page().map(\.id) == [added.id])
         #expect(!FileManager.default.fileExists(atPath: incoming.path))
         #expect(try index.folderName(id: removed.id) == nil)
+    }
+
+    @Test func nestedProviderEventsStayWithinOwningMeeting() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let root = LibraryFileMonitor.canonicalRoot(temporary)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Embedding fixture")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let folder = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+        let nested = folder.appendingPathComponent("providers/local/embeddings/source")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let artifact = nested.appendingPathComponent("clip.json")
+        try Data("{}".utf8).write(to: artifact)
+        let looseFile = root.appendingPathComponent("meetings/readme.txt")
+        try Data("Fixture".utf8).write(to: looseFile)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        try JSONEncoder().encode(FSEventsGetCurrentEventId()).write(
+            to: root.appendingPathComponent(".index-events.json"))
+        let result = ReconciliationResult()
+        let coordinator = LibraryMonitorCoordinator(
+            root: root, report: { _, _, _, _, error in result.report(error) },
+            changed: { result.append($0) })
+        coordinator.process(.init(paths: [artifact, nested, looseFile], requiresScan: false, eventID: 0))
+        let reconciled = try await waitForMainActorTestCondition(timeout: .seconds(5)) { result.first != nil }
+        await coordinator.stop()
+        #expect(reconciled)
+        #expect(result.first == false)
+        #expect(result.reportedErrors.isEmpty)
+        #expect(try index.page().map(\.id) == [meeting.id])
+        #expect(FileManager.default.fileExists(atPath: artifact.path))
     }
 
     @Test func deletedFolderEventPreservesPhysicalRootSpelling() throws {

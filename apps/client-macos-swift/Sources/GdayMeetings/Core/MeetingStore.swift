@@ -24,6 +24,8 @@ final class MeetingStore: ObservableObject {
     var indexNeedsInitialRebuild = false
     let libraryDataStatus = LibraryDataStatus()
     var libraryMonitor: LibraryMonitorCoordinator?
+    private var pendingExternalChanges: ExternalLibraryChanges = []
+    private var externalReloadTask: Task<Void, Never>?
     var meetingSearch = ""
     var meetingSearchGeneration = UUID()
     @Published var people: [Person] = []
@@ -79,6 +81,14 @@ final class MeetingStore: ObservableObject {
     var recordingLevels: RecordingLevels { recordingMeter.levels }
     let dataDirectory: URL
     let indexDirectory: URL
+    lazy var voiceSearch: VoiceSearchController = {
+        let controller = VoiceSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
+        voiceSearchJobObservation = controller.$isBuilding.dropFirst().sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        return controller
+    }()
+    private var voiceSearchJobObservation: AnyCancellable?
     @Published var isCopyingLibrary = false
     @Published var copiedLibraryFiles = 0
     @Published var pendingLibraryFolder: URL?
@@ -89,7 +99,8 @@ final class MeetingStore: ObservableObject {
     private var writableBeforeFolderChange = true
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
-        !LocalModelManager.shared.isBusy && !isChangingLibrary && recordingID == nil && !isStartingRecording
+        !LocalModelManager.shared.isBusy && !voiceSearch.isBuilding && !isChangingLibrary
+            && recordingID == nil && !isStartingRecording
             && !isFinalizingRecording
             && !captureTransition && backgroundJobs.isEmpty && managedTaskOperations.isEmpty
             && !managedTasksLoading
@@ -513,7 +524,60 @@ final class MeetingStore: ObservableObject {
             return false
         }
     }
-    func reloadExternalLibraryDocuments() {
+    func requestExternalLibraryReload(paths: [URL], rebuild: Bool) {
+        pendingExternalChanges.formUnion(.init(paths: paths, root: dataDirectory, rebuild: rebuild))
+        guard externalReloadTask == nil, !pendingExternalChanges.isEmpty else { return }
+        externalReloadTask = Task { [weak self] in
+            guard let self else { return }
+            defer { externalReloadTask = nil }
+            while !pendingExternalChanges.isEmpty {
+                let changes = pendingExternalChanges
+                pendingExternalChanges = []
+                let root = dataDirectory
+                let originalPeople = people
+                let originalTags = tags
+                do {
+                    let snapshot: ExternalCatalogSnapshot?
+                    do {
+                        snapshot = try await Task.detached(priority: .utility) {
+                            try ExternalCatalogSnapshot.read(changes: changes, directory: root)
+                        }.value
+                    }
+                    catch {
+                        // A malformed catalog must not block independent meeting
+                        // and task refreshes in a root-level recovery batch.
+                        libraryDataStatus.error = error.localizedDescription
+                        snapshot = ExternalCatalogSnapshot(people: nil, tags: nil)
+                    }
+                    guard root == dataDirectory else { continue }
+                    guard let snapshot,
+                        !FileManager.default.fileExists(
+                            atPath: root.appendingPathComponent(".document-transaction").path)
+                    else {
+                        pendingExternalChanges.formUnion(changes)
+                        try await Task.sleep(for: .milliseconds(100))
+                        continue
+                    }
+                    if let fresh = snapshot.people, people == originalPeople, lastSavedLibrary.people == originalPeople
+                    {
+                        if people != fresh { people = fresh }
+                        lastSavedLibrary.people = fresh
+                    }
+                    let previousExcluded = excludedTagIDs
+                    if let fresh = snapshot.tags, tags == originalTags, lastSavedLibrary.tags == originalTags {
+                        if tags != fresh { tags = fresh }
+                        lastSavedLibrary.tags = fresh
+                    }
+                    if previousExcluded != excludedTagIDs { resetMeetingPages() }
+                    if changes.contains(.meetings) { reloadExternalLibraryDocuments(reloadCatalogs: false) }
+                    if changes.contains(.tasks) { reloadExternalManagedTasks() }
+                }
+                catch { libraryDataStatus.error = error.localizedDescription }
+            }
+        }
+    }
+
+    func reloadExternalLibraryDocuments(reloadCatalogs: Bool = true) {
         // A file transaction may temporarily remove or replace a document. Its absence
         // becomes authoritative only after the transaction has committed.
         guard
@@ -542,17 +606,17 @@ final class MeetingStore: ObservableObject {
                     continue
                 }
                 let fresh = try MeetingFolderStorage.read(id: current.id, directory: dataDirectory)
-                meetings[position] = fresh
+                if meetings[position] != fresh { meetings[position] = fresh }
                 if let saved = lastSavedLibrary.meetings.firstIndex(where: { $0.id == current.id }) {
                     lastSavedLibrary.meetings[saved] = fresh
                 }
             }
-            if people == lastSavedLibrary.people {
+            if reloadCatalogs, people == lastSavedLibrary.people {
                 people = try FileEntityStorage.load(Person.self, kind: "people", directory: dataDirectory)
                 lastSavedLibrary.people = people
             }
             let previousExcluded = excludedTagIDs
-            if tags == lastSavedLibrary.tags {
+            if reloadCatalogs, tags == lastSavedLibrary.tags {
                 tags = try FileEntityStorage.load(MeetingTag.self, kind: "tags", directory: dataDirectory)
                 lastSavedLibrary.tags = tags
             }
@@ -669,6 +733,10 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func deleteMeeting(id: UUID) -> Bool {
         guard canSave else { return false }
+        guard !voiceSearch.isBuilding || voiceSearch.buildingMeetingID != id else {
+            errorMessage = "Stop voice indexing before deleting this meeting."
+            return false
+        }
         guard
             !voiceLibrary.jobs.contains(where: { job in
                 (job.state == .running || job.state == .queued)
@@ -701,6 +769,7 @@ final class MeetingStore: ObservableObject {
                     _ = try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
                 }
                 try libraryIndex?.remove(id: id)
+                voiceSearch.invalidateDeletedMeeting(id)
                 notesStorage.discard(id)
                 return save()
             }
@@ -884,6 +953,9 @@ final class MeetingStore: ObservableObject {
             return
         }
         guard canStartRecording else { return }
+        // Stop the existing build before a new, growing recording can enter
+        // a later page of its saved-library scan.
+        voiceSearch.cancel()
         let microphone = microphoneEnabled ?? settings.captureMicrophone
         let systemAudio = systemEnabled ?? settings.captureSystemAudio
         isStartingRecording = true
@@ -1117,6 +1189,7 @@ final class MeetingStore: ObservableObject {
         for file in originals { try? FileManager.default.removeItem(at: file) }
     }
     @discardableResult func finalizeForQuit() async -> Bool {
+        await voiceSearch.shutdown()
         libraryCopyTask?.cancel()
         await libraryCopyTask?.value
         RecordingPermissions.cancelPendingStart()

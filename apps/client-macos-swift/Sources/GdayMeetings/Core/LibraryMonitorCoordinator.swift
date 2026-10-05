@@ -31,6 +31,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
     private let report: @Sendable (Int?, Int64?, Bool, Int, String?) -> Void
     private let changed: @Sendable (Bool) -> Void
     private let directoryChanged: @Sendable ([URL], Bool) -> Void
+    private let documentsChanged: @Sendable ([URL], Bool) -> Void
     private let discoveryProgress: @Sendable (Int) -> Void
     private var cursor: URL { indexDirectory.appendingPathComponent(".index-events.json") }
 
@@ -39,6 +40,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         report: @escaping @Sendable (Int?, Int64?, Bool, Int, String?) -> Void,
         changed: @escaping @Sendable (Bool) -> Void,
         directoryChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
+        documentsChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
         discoveryProgress: @escaping @Sendable (Int) -> Void = { _ in }
     ) {
         self.root = LibraryFileMonitor.canonicalRoot(root)
@@ -46,6 +48,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         self.report = report
         self.changed = changed
         self.directoryChanged = directoryChanged
+        self.documentsChanged = documentsChanged
         self.discoveryProgress = discoveryProgress
         let saved =
             forceRebuild
@@ -190,9 +193,20 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
                 }
             }
             else {
-                let candidates = paths.filter { $0.path.hasPrefix(meetings.path + "/") }.map {
-                    (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                        ? $0 : $0.deletingLastPathComponent()
+                let prefix = meetings.standardizedFileURL.path + "/"
+                let candidates = paths.compactMap { path -> URL? in
+                    let normalized = path.standardizedFileURL.path
+                    guard normalized.hasPrefix(prefix),
+                        let component = normalized.dropFirst(prefix.count).split(separator: "/").first
+                    else { return nil }
+                    // Nested provider artifacts belong to their meeting, not a new import folder.
+                    let folder = meetings.appendingPathComponent(String(component), isDirectory: true)
+                    if FileManager.default.fileExists(atPath: folder.path),
+                        (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+                    {
+                        return nil
+                    }
+                    return folder
                 }
                 for folder in Set(candidates).union(pendingImports) { try adopt(folder) }
             }
@@ -229,7 +243,10 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
                 importErrorCount > 0
                 ? "\(importErrorCount) folders need attention. " + importErrors.joined(separator: " ") : nil
             self.refreshCounts(error: importError)
-            if batch.requiresScan || !paths.isEmpty { self.changed(batch.requiresScan) }
+            if batch.requiresScan || !paths.isEmpty {
+                self.changed(batch.requiresScan)
+                self.documentsChanged(paths, batch.requiresScan)
+            }
         }
         catch {
             needsRecoveryScan = true
@@ -291,12 +308,13 @@ extension MeetingStore {
                             return
                         }
                     }
-                    self.reloadExternalLibraryDocuments()
-                    self.reloadExternalManagedTasks()
                 }
             },
             directoryChanged: { [weak self] paths, rebuild in
                 Task { @MainActor in self?.refreshDirectoryIndex(paths: paths, rebuild: rebuild) }
+            },
+            documentsChanged: { [weak self] paths, rebuild in
+                Task { @MainActor in self?.requestExternalLibraryReload(paths: paths, rebuild: rebuild) }
             },
             discoveryProgress: { [weak self] count in
                 Task { @MainActor in

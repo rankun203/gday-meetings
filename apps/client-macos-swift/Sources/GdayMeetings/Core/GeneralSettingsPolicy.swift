@@ -33,6 +33,7 @@ extension AppSettings {
         case .diarization: diarizationProviderID
         case .speakerRecognition: speakerRecognitionProviderID
         case .summarization: summaryProviderID
+        case .search: searchProviderID
         default: nil
         }
     }
@@ -52,6 +53,7 @@ extension AppSettings {
         case .diarization: diarizationProviderID = id
         case .speakerRecognition: speakerRecognitionProviderID = id
         case .summarization: summaryProviderID = id
+        case .search: searchProviderID = id
         default: break
         }
     }

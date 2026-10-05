@@ -27,6 +27,17 @@ struct LibrarySearchPage: Sendable {
     let total: Int
 }
 
+struct SearchDisplayResult: Identifiable, Equatable, Sendable {
+    let id: String
+    let meetingID: UUID
+    let title: String
+    let excerpt: String
+    let createdAt: Date?
+    let passage: LibrarySearchResult?
+    let audio: ProviderSearchAudioRange?
+    var segmentID: UUID? { passage?.segmentID }
+}
+
 extension MeetingFolderStorage {
     static func searchPassages(id: UUID, directory: URL) throws -> [LibrarySearchPassage] {
         let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
@@ -83,26 +94,68 @@ final class LibrarySearchSession: ObservableObject {
     @Published private(set) var total: Int?
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
-    var selection: Int64?
+    @Published private(set) var mode: SearchMode = .text
+    @Published private(set) var rankedResults: [FusedSearchResult] = []
+    @Published private(set) var providerFailures: [UUID: String] = [:]
+    var selection: String?
     var scrollOffset: Double = 0
     private(set) var generation = UUID()
     private var task: Task<Void, Never>?
     private var index: LibraryIndex?
     private var exhausted = false
     private var excludingTagIDs: Set<UUID> = []
+    private var coordinator: SearchCoordinator?
     private let loadPage: @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage
 
     init(
         loadPage: @escaping @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage = {
             index, query, cursor, excludingTagIDs in
-            try await Task.detached(priority: .userInitiated) {
-                try index.searchPage(query: query, after: cursor, excludingTagIDs: excludingTagIDs)
-            }.value
+            try await LocalTextSearchProvider(index: index).page(
+                query: query, after: cursor, excludingTagIDs: excludingTagIDs)
         }
     ) {
         self.loadPage = loadPage
     }
     var canLoadMore: Bool { !isLoading && error == nil && !exhausted }
+    func beginPreparation(_ draft: String, mode: SearchMode) {
+        task?.cancel()
+        generation = UUID()
+        query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.mode = mode
+        coordinator = nil
+        results = []
+        rankedResults = []
+        providerFailures = [:]
+        total = nil
+        exhausted = true
+        error = nil
+        selection = nil
+        scrollOffset = 0
+        isLoading = true
+    }
+    func preparationFailed(_ message: String) {
+        error = message
+        isLoading = false
+    }
+    var usesRankedSearch: Bool { coordinator != nil }
+    var displayResults: [SearchDisplayResult] {
+        if usesRankedSearch {
+            return rankedResults.compactMap { fused in
+                guard let first = fused.evidence.first else { return nil }
+                let passage = fused.evidence.compactMap(\.passage).first
+                return .init(
+                    id: "meeting:" + fused.meetingID.uuidString, meetingID: fused.meetingID,
+                    title: first.title, excerpt: passage?.excerpt ?? first.excerpt,
+                    createdAt: passage?.createdAt ?? first.createdAt, passage: passage,
+                    audio: fused.evidence.compactMap(\.audio).first)
+            }
+        }
+        return results.map {
+            .init(
+                id: "passage:" + String($0.id), meetingID: $0.meetingID,
+                title: $0.title, excerpt: $0.excerpt, createdAt: $0.createdAt, passage: $0, audio: nil)
+        }
+    }
 
     @discardableResult
     func submit(_ draft: String, index: LibraryIndex?, excludingTagIDs: Set<UUID> = []) -> Bool {
@@ -113,6 +166,10 @@ final class LibrarySearchSession: ObservableObject {
         self.index = index
         self.excludingTagIDs = excludingTagIDs
         query = trimmed
+        mode = .text
+        coordinator = nil
+        rankedResults = []
+        providerFailures = [:]
         results = []
         total = nil
         exhausted = false
@@ -123,8 +180,72 @@ final class LibrarySearchSession: ObservableObject {
         return true
     }
 
-    func retry() { load() }
+    /// Voice and fusion publish bounded ranked snapshots as providers finish.
+    @discardableResult
+    func submit(_ draft: String, mode: SearchMode, providers: [any SearchProvider], excludingTagIDs: Set<UUID> = [])
+        -> Bool
+    {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        task?.cancel()
+        generation = UUID()
+        query = trimmed
+        self.mode = mode
+        self.excludingTagIDs = excludingTagIDs
+        coordinator = SearchCoordinator(providers: providers)
+        results = []
+        rankedResults = []
+        providerFailures = [:]
+        total = nil
+        exhausted = true
+        error = nil
+        selection = nil
+        scrollOffset = 0
+        loadRanked()
+        return true
+    }
+
+    func retry() {
+        if coordinator != nil {
+            loadRanked()
+        }
+        else {
+            load()
+        }
+    }
     func loadMore() { if canLoadMore { load() } }
+
+    private func loadRanked() {
+        guard let coordinator else { return }
+        task?.cancel()
+        generation = UUID()
+        let generation = generation
+        let request = ProviderSearchRequest(
+            id: generation, query: query, mode: mode, limit: 100,
+            excludingTagIDs: excludingTagIDs, ranked: true)
+        isLoading = true
+        error = nil
+        providerFailures = [:]
+        task = Task {
+            do {
+                for try await progress in coordinator.search(request) {
+                    guard !Task.isCancelled, generation == self.generation else { return }
+                    rankedResults = progress.results
+                    providerFailures = progress.failures
+                    total = progress.results.count
+                    isLoading = !progress.isFinal
+                    if progress.isFinal, progress.results.isEmpty, !progress.failures.isEmpty {
+                        error = progress.failures.values.sorted().joined(separator: " ")
+                    }
+                }
+            }
+            catch {
+                guard !Task.isCancelled, generation == self.generation else { return }
+                self.error = error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
 
     private func load() {
         guard let index else {

@@ -7,7 +7,11 @@ enum ProviderConfigurationEligibility {
         _ provider: ServiceProvider, for capability: ProviderCapability, providers: [ServiceProvider]
     ) -> Bool {
         guard provider.supports(capability), hasText(provider.name) else { return false }
-        if provider.kind.isLocal {
+        if provider.kind == .localSearch {
+            return provider.localSearch?.executableURL?.isFileURL == true
+                && provider.localSearch?.modelCacheURL?.isFileURL == true
+        }
+        if provider.kind.isLocalSpeaker {
             if capability == .speakerRecognition { return true }
             switch provider.kind {
             case .nemotron:
@@ -22,7 +26,7 @@ enum ProviderConfigurationEligibility {
             (try? ProviderEndpoint.base(provider.endpoint)) != nil
         else { return false }
         switch provider.kind {
-        case .nemotron, .community1: return false
+        case .nemotron, .community1, .localSearch: return false
         case .runpod:
             guard (try? ProviderEndpoint.runpod(provider.endpoint)) != nil,
                 hasText(provider.apiKey)

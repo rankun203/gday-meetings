@@ -6,7 +6,10 @@ import Testing
 
 @Suite struct LibraryFileMonitorTests {
     @Test func excludesIndexButIncludesAllAuthoritativeKinds() {
-        for path in ["index.db", "index.db-wal", ".index-events.json", "cache/audio"] {
+        for path in [
+            "index.db", "index.db-wal", ".index-events.json", "cache/audio", "tasks-index.sqlite",
+            "tasks-index.sqlite-wal", "tasks-index.sqlite-shm", "tasks-index.sqlite-journal",
+        ] {
             #expect(!LibraryFileMonitor.isRelevant(relativePath: path))
         }
         for path in [
