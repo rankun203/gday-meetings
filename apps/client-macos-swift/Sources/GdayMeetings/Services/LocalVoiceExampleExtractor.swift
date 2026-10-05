@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 
 /// Extracts the reviewed source range; never runs transcription or changes speaker labels.
 actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
@@ -52,16 +53,16 @@ actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
         try reader.seek(frame: offset)
         try reader.read(into: input, frames: count)
         converter.primeMethod = .none
-        var supplied = false
+        // Transfer the buffer once; the converter callback owns it after taking it.
+        let pendingInput = VoiceExampleConverterInput(input)
         var error: NSError?
         let status = converter.convert(to: output, error: &error) { _, state in
-            guard !supplied else {
+            guard let next = pendingInput.take() else {
                 state.pointee = .endOfStream
                 return nil
             }
-            supplied = true
             state.pointee = .haveData
-            return input
+            return next
         }
         guard status != .error else { throw error ?? ServiceError("Couldn’t convert the voice example audio.") }
         let frames = min(160000, Int(output.frameLength))
@@ -71,4 +72,19 @@ actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
         return Array(UnsafeBufferPointer(start: channel, count: frames))
     }
 
+}
+
+/// A copyable owner lets the callback transfer a non-Sendable buffer exactly once.
+private final class VoiceExampleConverterInput: Sendable {
+    private let buffer: Mutex<AVAudioPCMBuffer?>
+
+    init(_ buffer: sending AVAudioPCMBuffer) { self.buffer = Mutex(buffer) }
+
+    func take() -> sending AVAudioPCMBuffer? {
+        buffer.withLock { pending in
+            let value = pending
+            pending = nil
+            return value
+        }
+    }
 }
