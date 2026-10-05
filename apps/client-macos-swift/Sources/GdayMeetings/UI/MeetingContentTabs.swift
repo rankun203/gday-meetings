@@ -1,54 +1,19 @@
 import SwiftUI
 
-/// Capsule navigation for macOS versions whose native segmented picker uses a
-/// rectangular bezel. Keep actual Buttons for keyboard and accessibility actions.
-/// https://developer.apple.com/design/human-interface-guidelines/segmented-controls
+/// Native toolbar placement supplies the system's tab-navigation appearance.
+/// https://developer.apple.com/videos/play/wwdc2025/310/
 struct MeetingContentTabs: View {
     @Binding var selection: Int
-    @FocusState private var focusedTab: Int?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let titles = ["Transcript", "Notes", "Summary", "Data Privacy"]
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(titles.indices, id: \.self) { index in
-                Button {
-                    selection = index
-                } label: {
-                    Text(titles[index])
-                        .font(.callout.weight(selection == index ? .semibold : .regular))
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .frame(minHeight: 28)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(ActionButtonStyle(cornerRadius: 18))
-                .background {
-                    if selection == index { Capsule().fill(.quaternary) }
-                }
-                .focused($focusedTab, equals: index)
-                .focusedValue(\.directoryControlFocus, true)
-                // Pointer selection should also clear focus left by keyboard navigation.
-                // Keep the Button action separate so keyboard activation retains focus.
-                .simultaneousGesture(TapGesture().onEnded { focusedTab = nil })
-                .accessibilityAddTraits(selection == index ? .isSelected : [])
-                .onKeyPress(.leftArrow) { move(from: index, by: -1) }
-                .onKeyPress(.rightArrow) { move(from: index, by: 1) }
-            }
+        Picker("Meeting Content", selection: $selection) {
+            Text("Transcript").tag(0)
+            Text("Notes").tag(1)
+            Text("Summary").tag(2)
+            Text("Data Privacy").tag(3)
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(3)
-        .modifier(MeetingGlassSurface())
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: selection)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Meeting content")
-    }
-
-    private func move(from index: Int, by step: Int) -> KeyPress.Result {
-        let next = min(max(index + step, 0), titles.count - 1)
-        selection = next
-        focusedTab = next
-        return .handled
+        .pickerStyle(.segmented)
+        .focusedValue(\.directoryControlFocus, true)
     }
 }
 

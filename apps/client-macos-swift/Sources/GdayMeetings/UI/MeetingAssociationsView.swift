@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MeetingTagsView: View {
@@ -89,8 +90,9 @@ struct MeetingSpeakersView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let meeting {
                 let speakers = meeting.speakers.filter { $0.canAssignPerson || $0.personID != nil }
+                let slots = MeetingSpeakerColors.slots(for: meeting.speakers)
                 ForEach(speakers) { speaker in
-                    speakerRow(speaker)
+                    speakerRow(speaker, slots: slots)
                 }
             }
         }
@@ -111,7 +113,7 @@ struct MeetingSpeakersView: View {
         }
     }
 
-    private func speakerRow(_ speaker: MeetingSpeaker) -> some View {
+    private func speakerRow(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
         HStack(spacing: 12) {
             Text(speaker.displayLabel.isEmpty ? "Unlabeled" : speaker.displayLabel)
                 .font(.callout.monospaced())
@@ -121,7 +123,7 @@ struct MeetingSpeakersView: View {
             if !speaker.canAssignPerson {
                 Text(personName(for: speaker) ?? "Unassigned").lineLimit(1)
             }
-            actions(speaker)
+            actions(speaker, slots: slots)
         }
         .frame(minHeight: 28)
     }
@@ -130,7 +132,7 @@ struct MeetingSpeakersView: View {
         store.people.first(where: { $0.id == speaker.personID })?.name
     }
 
-    @ViewBuilder private func actions(_ speaker: MeetingSpeaker) -> some View {
+    @ViewBuilder private func actions(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
         if !speaker.canAssignPerson {
             Button("Remove Assignment") {
                 store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
@@ -138,7 +140,7 @@ struct MeetingSpeakersView: View {
         }
         else {
             HStack(spacing: 8) {
-                Menu(personName(for: speaker) ?? "Assign Person") {
+                Menu {
                     ForEach(store.people) { person in
                         Button(person.name) {
                             store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: person.id)
@@ -154,7 +156,22 @@ struct MeetingSpeakersView: View {
                             store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil)
                         }
                     }
+                } label: {
+                    if let name = personName(for: speaker),
+                        let tint = TranscriptSpeakerPalette.assignmentTint(for: speaker, slots: slots)
+                    {
+                        Text(name)
+                            .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
+                    }
+                    else {
+                        Text("Assign Person")
+                    }
                 }
+                .modifier(
+                    SpeakerAssignmentMenuStyle(
+                        tint: personName(for: speaker) == nil
+                            ? nil : TranscriptSpeakerPalette.assignmentTint(for: speaker, slots: slots))
+                )
                 .lineLimit(1)
                 .frame(maxWidth: 240, alignment: .trailing)
                 .accessibilityLabel(
@@ -174,5 +191,32 @@ struct MeetingSpeakersView: View {
         let personID = store.addPerson(name: name)
         store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: personID)
         newPersonSpeaker = nil
+    }
+}
+
+extension TranscriptSpeakerPalette {
+    /// Use the same complete-meeting allocation as saved transcript badges.
+    static func assignmentTint(for speaker: MeetingSpeaker, slots: [UUID: Int]) -> NSColor? {
+        guard speaker.personID != nil else { return nil }
+        let identity = MeetingSpeakerColors.identity(speaker)
+        return color(for: identity.uuidString, index: slots[identity])
+    }
+}
+
+private struct SpeakerAssignmentMenuStyle: ViewModifier {
+    let tint: NSColor?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let tint {
+            content
+                .menuStyle(.borderlessButton)
+                .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: tint).opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+        }
+        else {
+            content
+        }
     }
 }

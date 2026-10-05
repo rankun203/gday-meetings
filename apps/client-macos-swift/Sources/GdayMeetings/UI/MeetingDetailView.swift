@@ -10,8 +10,21 @@ struct MeetingDetailView: View {
     let meetingID: UUID
     var initialTranscriptRowID: UUID? = nil
     var initialContentTab: MeetingContentTab? = nil
-    @ViewState private var tab = 0
+    var usesWindowToolbar = false
+    var retainedTab: Binding<Int>? = nil
+    @ViewState private var localTab = 0
     @ViewState private var showsDetails = false
+    private var tab: Int {
+        get { retainedTab?.wrappedValue ?? localTab }
+        nonmutating set {
+            if let retainedTab {
+                retainedTab.wrappedValue = newValue
+            }
+            else {
+                localTab = newValue
+            }
+        }
+    }
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
@@ -22,11 +35,12 @@ struct MeetingDetailView: View {
     private func text(_ path: WritableKeyPath<Meeting, String>) -> Binding<String> {
         Binding(get: { meeting?[keyPath: path] ?? "" }, set: { value in change { $0[keyPath: path] = value } })
     }
-    var body: some View {
+    var body: some View { meetingBody }
+
+    @ViewBuilder private var meetingBody: some View {
         if let meeting {
             detailContent(meeting)
                 .modifier(AudioFileDrop(meetingID: meetingID))
-                .navigationTitle(meeting.title)
                 .onAppear {
                     if let initialContentTab {
                         tab = initialContentTab.rawValue
@@ -53,8 +67,13 @@ struct MeetingDetailView: View {
             if store.recordingID == meetingID {
                 RecordingWorkspaceView(meetingID: meetingID)
             }
-            MeetingContentTabs(selection: $tab)
-            meetingContent(meeting).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if !usesWindowToolbar {
+                MeetingContentTabs(selection: Binding(get: { tab }, set: { tab = $0 }))
+            }
+            GeometryReader { viewport in
+                meetingContent(meeting, tab: tab)
+                    .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+            }
         }.padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentSpacing).padding(.bottom, 16)
     }
 
@@ -155,7 +174,7 @@ struct MeetingDetailView: View {
     }
 
     @ViewBuilder
-    private func meetingContent(_ meeting: Meeting) -> some View {
+    private func meetingContent(_ meeting: Meeting, tab: Int) -> some View {
         switch tab {
         case 0:
             if store.recordingID == meetingID {
@@ -220,12 +239,13 @@ struct MeetingActionsMenu: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject private var server = GdayServerService.shared
     let meeting: Meeting
+    @ViewState private var transcriptionConfirmation: TranscriptionConfirmation?
 
     var body: some View {
         Menu {
-            TranscriptionActionButton(meeting: meeting)
+            TranscriptionActionButton(meeting: meeting, requestConfirmation: { transcriptionConfirmation = $0 })
             if meeting.transcriptionAttempt != nil {
-                PendingTranscriptionActions(meeting: meeting)
+                PendingTranscriptionActions(meeting: meeting, requestConfirmation: { transcriptionConfirmation = $0 })
             }
             Divider()
             Button("Export Meeting Text…", systemImage: "square.and.arrow.up") {
@@ -242,5 +262,6 @@ struct MeetingActionsMenu: View {
             Label("Meeting Actions", systemImage: "ellipsis.circle")
         }
         .help("Transcribe, export, or archive this meeting")
+        .modifier(TranscriptionConfirmationPresenter(meeting: meeting, confirmation: $transcriptionConfirmation))
     }
 }

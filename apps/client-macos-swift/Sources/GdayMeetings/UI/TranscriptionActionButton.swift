@@ -7,9 +7,10 @@ struct TranscriptionActionButton: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.showManagedTask) private var showManagedTask
     @AppStorage("settingsTab") private var settingsTab = "defaults"
-    @ViewState private var confirming = false
+    @ViewState private var confirmation: TranscriptionConfirmation?
     let meeting: Meeting
     var hasTranscript: Bool? = nil
+    var requestConfirmation: ((TranscriptionConfirmation) -> Void)? = nil
 
     private var providers: [ServiceProvider] { store.eligibleTranscriptionProviders }
     private var verb: String { (hasTranscript ?? !meeting.transcript.isEmpty) ? "Re-transcribe" : "Transcribe" }
@@ -31,23 +32,26 @@ struct TranscriptionActionButton: View {
                 .help("Show this transcription in Tasks")
             }
             else if meeting.transcriptionAttempt?.result != nil {
-                Button("Apply Saved Transcript…", systemImage: "text.bubble") { confirming = true }
-                    .disabled(busy)
+                Button("Apply Saved Transcript…", systemImage: "text.bubble") {
+                    if let requestConfirmation {
+                        requestConfirmation(.applySavedTranscript)
+                    }
+                    else {
+                        confirmation = .applySavedTranscript
+                    }
+                }
+                .disabled(busy)
             }
             else if meeting.transcriptionAttempt != nil {
                 Button("Resume Transcription", systemImage: "text.bubble") {
                     Task { await store.transcribe(id: meeting.id) }
                 }.disabled(busy || meeting.audioFiles.isEmpty)
             }
-            else if providers.count == 1, let provider = providers.first {
-                Button("\(verb) with \(provider.name)", systemImage: "text.bubble") {
-                    start(provider)
-                }.disabled(busy || meeting.audioFiles.isEmpty)
-            }
-            else if providers.count > 1 {
+            else if !providers.isEmpty {
                 Menu(verb, systemImage: "text.bubble") {
                     ForEach(providers) { provider in
-                        Button("\(verb) with \(provider.name)") { start(provider) }
+                        Button(provider.name) { start(provider) }
+                            .accessibilityLabel("\(verb) with \(provider.name)")
                     }
                 }.disabled(busy || meeting.audioFiles.isEmpty)
             }
@@ -58,12 +62,7 @@ struct TranscriptionActionButton: View {
                 }
             }
         }
-        .confirmationDialog("Replace the current transcript?", isPresented: $confirming, titleVisibility: .visible) {
-            Button("Replace Transcript") { store.applySavedTranscriptionResult(meetingID: meeting.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The current transcript and its edits will be kept in Transcript History. The recording is kept.")
-        }
+        .modifier(TranscriptionConfirmationPresenter(meeting: meeting, confirmation: $confirmation))
     }
     private func start(_ provider: ServiceProvider) {
         Task { await store.transcribe(id: meeting.id, providerID: provider.id) }
@@ -73,21 +72,61 @@ struct TranscriptionActionButton: View {
 /// Recovery is explicit because a lost submit response may still represent a paid job.
 struct PendingTranscriptionActions: View {
     @EnvironmentObject private var store: MeetingStore
-    @ViewState private var confirming = false
+    @ViewState private var confirmation: TranscriptionConfirmation?
     let meeting: Meeting
+    var requestConfirmation: ((TranscriptionConfirmation) -> Void)? = nil
     var body: some View {
-        Button("Discard Pending Request…", role: .destructive) { confirming = true }
-            .disabled(store.isJobRunning(.transcription, .meeting(meeting.id)))
-            .confirmationDialog("Discard this pending request?", isPresented: $confirming, titleVisibility: .visible) {
+        Button("Discard Pending Request…", role: .destructive) {
+            if let requestConfirmation {
+                requestConfirmation(.discardPendingRequest)
+            }
+            else {
+                confirmation = .discardPendingRequest
+            }
+        }
+        .disabled(store.isJobRunning(.transcription, .meeting(meeting.id)))
+        .modifier(TranscriptionConfirmationPresenter(meeting: meeting, confirmation: $confirmation))
+    }
+}
+
+enum TranscriptionConfirmation: Equatable {
+    case applySavedTranscript
+    case discardPendingRequest
+}
+
+/// Menu actions request presentation from the containing view: a dismissed
+/// native menu must not own the confirmation's lifetime or presentation anchor.
+struct TranscriptionConfirmationPresenter: ViewModifier {
+    @EnvironmentObject private var store: MeetingStore
+    let meeting: Meeting
+    @Binding var confirmation: TranscriptionConfirmation?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            confirmation == .discardPendingRequest
+                ? "Discard this pending request?" : "Replace the current transcript?",
+            isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
+            titleVisibility: .visible
+        ) {
+            if confirmation == .discardPendingRequest {
                 Button("Discard Pending Request", role: .destructive) {
                     do { try store.clearTranscriptionAttempt(meetingID: meeting.id) }
                     catch { store.errorMessage = error.localizedDescription }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
+            }
+            else {
+                Button("Replace Transcript") { store.applySavedTranscriptionResult(meetingID: meeting.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if confirmation == .discardPendingRequest {
                 Text(
                     "This removes the saved job reference and any unapplied result from this Mac. It does not cancel the provider's job or remove uploaded audio. Check the provider's job history first. Starting another transcription may incur another charge."
                 )
             }
+            else {
+                Text("The current transcript and its edits will be kept in Transcripts. The recording is kept.")
+            }
+        }
     }
 }

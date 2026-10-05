@@ -681,11 +681,14 @@ struct NativeTranscriptView: NSViewRepresentable {
 }
 
 @MainActor final class TranscriptNativeScroller: NSScroller {
+    // Native drawing and action tracking support either system scroller style.
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
     var userScrolled: (() -> Void)?
-    override func mouseDown(with event: NSEvent) {
+    override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
         userScrolled?()
-        super.mouseDown(with: event)
+        let sent = super.sendAction(action, to: target)
         userScrolled?()
+        return sent
     }
 }
 
@@ -714,6 +717,25 @@ struct NativeTranscriptView: NSViewRepresentable {
     private(set) var hoverEnabled = false
     private var hoverWork: DispatchWorkItem?
     private var hoverDeadline: TimeInterval = 0
+    private(set) var keyboardSelection = false
+    private var handlingPointerSelection = false
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            keyboardSelection = !handlingPointerSelection
+            redrawVisibleRows()
+        }
+        return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted {
+            keyboardSelection = false
+            redrawVisibleRows()
+        }
+        return accepted
+    }
     func delayHover() {
         hoverDeadline = ProcessInfo.processInfo.systemUptime + 0.15
         if hoverEnabled {
@@ -753,15 +775,23 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
     override func keyDown(with event: NSEvent) {
         userInteracted?()
+        keyboardSelection = true
         if event.keyCode == 36 {
             editSelected?()
         }
         else {
             super.keyDown(with: event)
         }
+        redrawVisibleRows()
     }
     override func mouseDown(with event: NSEvent) {
         userInteracted?()
+        keyboardSelection = false
+        handlingPointerSelection = true
+        defer {
+            handlingPointerSelection = false
+            redrawVisibleRows()
+        }
         super.mouseDown(with: event)
     }
 }
@@ -834,6 +864,14 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
+        if isSelected, let table, table.keyboardSelection, window?.firstResponder === table {
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
+            NSColor.unemphasizedSelectedContentBackgroundColor.setFill()
+            outline.fill()
+            NSColor.keyboardFocusIndicatorColor.setStroke()
+            outline.lineWidth = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 2 : 1
+            outline.stroke()
+        }
         if isReviewTarget {
             NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
             let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5)
@@ -1107,8 +1145,7 @@ enum TranscriptSpeakerPalette {
 /// Preserve the original live trail's public SwiftUI color mix in native text.
 enum TranscriptLiveWordColor {
     static var trailing: NSColor {
-        if #available(macOS 15, *) { return NSColor(Color.red.mix(with: .primary, by: 0.5)) }
-        return NSColor.systemRed.blended(withFraction: 0.5, of: .labelColor) ?? .systemRed
+        NSColor(Color.red.mix(with: .primary, by: 0.5))
     }
 }
 

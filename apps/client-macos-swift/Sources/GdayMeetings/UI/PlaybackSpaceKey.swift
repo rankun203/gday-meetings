@@ -40,7 +40,8 @@ struct PlaybackSpaceKey: NSViewRepresentable {
                     !self.controlHasFocus,
                     event.charactersIgnoringModifiers == " ",
                     event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-                    !Self.isEditingText(window.firstResponder),
+                    !Self.preservesFocusedSpace(
+                        window.firstResponder, accessibilityElement: NSApp.accessibilityFocusedUIElement),
                     let playback = self.playback, playback.hasSelection,
                     !playback.isLoading, !playback.isPlaybackBlocked
                 else { return event }
@@ -53,6 +54,21 @@ struct PlaybackSpaceKey: NSViewRepresentable {
             if let text = responder as? NSTextView { return text.isEditable || text is MarkdownReadingTextView }
             if let field = responder as? NSTextField { return field.isEditable }
             return false
+        }
+
+        /// SwiftUI controls can share a hosting view as their AppKit responder.
+        /// Consult the focused accessibility element as well as native controls,
+        /// without taking Space away from tables and ordinary reading surfaces.
+        static func preservesFocusedSpace(_ responder: NSResponder?, accessibilityElement: Any?) -> Bool {
+            if isEditingText(responder) { return true }
+            if responder is NSControl && !(responder is NSTableView) && !(responder is NSTextField) { return true }
+            guard let element = accessibilityElement as? NSAccessibilityProtocol,
+                let role = element.accessibilityRole()
+            else { return false }
+            return [
+                NSAccessibility.Role.button, .checkBox, .radioButton, .popUpButton, .menuButton,
+                .slider, .comboBox, .incrementor, .disclosureTriangle, .tabGroup, .link, .textField, .textArea,
+            ].contains(role)
         }
 
         func stopMonitoring() {

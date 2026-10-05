@@ -214,7 +214,8 @@ struct MeetingPlayerBar: View {
                     Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
                 }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
             }
-            .menuStyle(.button).buttonStyle(ActionButtonStyle()).frame(maxWidth: 140)
+            .menuStyle(.button).buttonStyle(ActionButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
             .accessibilityLabel("Audio track and player options")
             .accessibilityValue(selectedTrackName)
             .help("Choose microphone, system audio, or all tracks")

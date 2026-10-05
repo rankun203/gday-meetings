@@ -5,21 +5,60 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct MeetingContentTabsLayoutTests {
-    @Test func tabsFitMinimumDetailWidth() throws {
-        let host = NSHostingView(rootView: MeetingContentTabs(selection: .constant(0)))
-        let size = host.fittingSize
-        // A 360-point detail column leaves 320 points inside its content insets.
-        #expect(size.width <= 360 - 2 * AppTheme.contentInset)
-        #expect(size.height <= 40)
-        #expect(size.width > 0 && size.height > 0)
-        host.frame.size = size
-        host.layoutSubtreeIfNeeded()
-        guard let destination = ProcessInfo.processInfo.environment["GDAY_SNAPSHOT_DIR"] else { return }
-        let directory = URL(fileURLWithPath: destination, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: image)
-        let data = try #require(image.representation(using: .png, properties: [:]))
-        try data.write(to: directory.appendingPathComponent("meeting-content-tabs-component.png"))
+    @MainActor private final class Selection: ObservableObject {
+        @Published var value = 0
+    }
+
+    private struct Harness: View {
+        @ObservedObject var selection: Selection
+        var body: some View {
+            Text("Synthetic page \(selection.value + 1)")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        MeetingContentTabs(selection: $selection.value)
+                    }
+                }
+        }
+    }
+
+    @Test func nativeToolbarTabsFitAndUpdateSelection() async throws {
+        _ = NSApplication.shared
+        let selection = Selection()
+        let controller = NSHostingController(rootView: Harness(selection: selection))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 900, height: 500))
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        defer { window.close() }
+
+        func segmentedControl(in view: NSView) -> NSSegmentedControl? {
+            if let control = view as? NSSegmentedControl { return control }
+            return view.subviews.lazy.compactMap { segmentedControl(in: $0) }.first
+        }
+        func toolbarControl() -> NSSegmentedControl? {
+            window.toolbar?.items.compactMap(\.view).lazy.compactMap { segmentedControl(in: $0) }.first
+        }
+        let mounted = try await waitForMainActorTestCondition {
+            controller.view.layoutSubtreeIfNeeded()
+            return toolbarControl()?.segmentCount == 4
+        }
+        #expect(mounted)
+        let control = try #require(toolbarControl())
+        #expect((0..<4).map { control.label(forSegment: $0) } == ["Transcript", "Notes", "Summary", "Data Privacy"])
+        #expect(control.frame.width >= control.fittingSize.width)
+        #expect(control.frame.width <= window.contentLayoutRect.width)
+        for index in 0..<4 {
+            control.selectedSegment = index
+            #expect(control.sendAction(control.action, to: control.target))
+            let selected = try await waitForMainActorTestCondition { selection.value == index }
+            #expect(selected)
+        }
+        selection.value = 1
+        let restored = try await waitForMainActorTestCondition {
+            controller.view.layoutSubtreeIfNeeded()
+            return control.selectedSegment == 1
+        }
+        #expect(restored)
     }
 }
