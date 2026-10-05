@@ -61,7 +61,7 @@ struct ProviderCredentialPersistenceTests {
             write: { secrets[$0] = $1 }, remove: { secrets.removeValue(forKey: $0) },
             persistSettings: { try ProviderCredentialPersistence.writeSettings(Data("new".utf8), to: url) })
         #expect(secrets == ["new": "new-key"])
-        #expect(try String(contentsOf: url) == "new")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "new")
         let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         #expect(permissions == 0o600)
     }

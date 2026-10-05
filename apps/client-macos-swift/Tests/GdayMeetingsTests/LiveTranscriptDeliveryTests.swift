@@ -86,7 +86,6 @@ struct LiveTranscriptDeliveryTests {
 
     @Test(arguments: [512, 4800])
     func pullInputUsesDurationBudgetAndContinuesAfterDeviceGap(frames: AVAudioFrameCount) async throws {
-        guard #available(macOS 26.0, *) else { return }
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
         buffer.frameLength = frames

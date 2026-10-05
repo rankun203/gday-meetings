@@ -40,10 +40,8 @@ struct ThisMacProviderView: View {
             Section("Speech Models") {
                 if models.isEmpty { Text(message).foregroundStyle(.secondary) }
                 ForEach(models) { model in
-                    if #available(macOS 26.0, *) {
-                        SpeechModelRow(model: model) {
-                            await refreshModels()
-                        }
+                    SpeechModelRow(model: model) {
+                        await refreshModels()
                     }
                 }
             }
@@ -51,10 +49,6 @@ struct ThisMacProviderView: View {
         .formStyle(.grouped)
         .task {
             await store.refreshProviderHealth(providerID: ThisMacProvider.id)
-            guard #available(macOS 26.0, *) else {
-                message = "Live transcription requires macOS 26 or later."
-                return
-            }
             guard SpeechTranscriber.isAvailable else {
                 message = "Live transcription isn’t available on this Mac."
                 return
@@ -64,7 +58,7 @@ struct ThisMacProviderView: View {
         }
     }
 
-    @MainActor @available(macOS 26.0, *)
+    @MainActor
     private func refreshModels() async {
         let supported = await SpeechTranscriber.supportedLocales
         var snapshot: [SpeechModelOption] = []
@@ -112,7 +106,6 @@ enum SpeechModelOrdering {
     }
 }
 
-@available(macOS 26.0, *)
 private struct SpeechModelRow: View {
     let model: SpeechModelOption
     let refreshAllModels: () async -> Void

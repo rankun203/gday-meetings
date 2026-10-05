@@ -155,7 +155,7 @@ import Testing
         store.updateMeeting(meeting)
         let file = root.appendingPathComponent("export.json")
         try store.exportMeeting(id: id, to: file)
-        let output = try String(contentsOf: file)
+        let output = try String(contentsOf: file, encoding: .utf8)
         #expect(!output.contains("secret"))
         try store.importArchive(url: file)
         #expect(store.meetings.first?.transcriptionAttempt == nil)

@@ -40,7 +40,7 @@ struct LogExportTests {
 
     @Test func networkOutcomeOmitsErrorDescriptions() {
         let error = URLError(
-            .timedOut, userInfo: [NSURLErrorFailingURLStringErrorKey: "https://example.com/?token=secret"])
+            .timedOut, userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://example.com/?token=secret")!])
         #expect(NetworkLog.outcome(error) == "failed (URLError -1001)")
         #expect(NetworkLog.outcome(URLError(.cancelled)) == "cancelled")
         #expect(
