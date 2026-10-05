@@ -139,7 +139,9 @@ Server archives are immutable snapshots. Repeating an archive resumes or verifie
 
 ### Service provider contracts
 
-The [protocol index](../../docs/protocols/README.md) defines common connection checks and links to each capability. Saving an enabled provider and opening its panel check its current connection without submitting meeting content. Disabled providers are not checked. A successful check confirms access to the checked route; transcription still depends on worker configuration and reachable audio. Filedrop checks health, limits, and the API key. Its credential probe sends an empty request that is rejected before a file is created. See the [file-transfer contract](../../docs/protocols/file-transfer.md).
+The [protocol index](../../docs/protocols/README.md) defines common connection checks and links to each capability. The provider form’s Save button and opening an enabled provider’s panel check its current connection without submitting meeting content. Disabled providers are not checked. A successful check confirms access to the checked route; transcription still depends on worker configuration and reachable audio. Filedrop checks health, limits, and the API key. Its credential probe sends an empty request that is rejected before a file is created. See the [file-transfer contract](../../docs/protocols/file-transfer.md).
+
+Provider forms use **Save**. Switching providers or Settings tabs with unsaved changes offers **Save Changes**, **Discard Changes**, and **Cancel**. Closing Settings keeps the draft in memory for the next time you open it; quitting asks you to resolve it before the existing recording shutdown checks. Draft credentials are not saved until you choose Save. Save Changes in the navigation or quit dialog saves settings without starting a connection check. A failed save keeps the draft and cancels navigation.
 
 ### On-device live transcription
 

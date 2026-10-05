@@ -4,12 +4,11 @@ import SwiftUI
 /// Local capabilities share the provider form, but have no remote connection fields.
 struct LocalSpeakerProviderView: View {
     @EnvironmentObject private var store: MeetingStore
+    @EnvironmentObject private var drafts: ProviderDraftCoordinator
     @ObservedObject private var health = ProviderHealthStore.shared
     @ObservedObject private var localModels = LocalModelManager.shared
-    @ViewState private var draft: ServiceProvider
+    @Binding var draft: ServiceProvider
     @ViewState private var failure: String?
-
-    init(provider: ServiceProvider) { _draft = ViewState(initialValue: provider) }
 
     private var choices: [LocalModelID] {
         draft.kind == .nemotron
@@ -118,6 +117,7 @@ struct LocalSpeakerProviderView: View {
             failure = store.errorMessage ?? "Couldn’t save provider settings."
         }
         else {
+            drafts.clear(draft.id)
             failure = nil
             Task { await store.refreshProviderHealth(providerID: draft.id) }
         }

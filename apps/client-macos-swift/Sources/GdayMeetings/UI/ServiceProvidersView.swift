@@ -5,7 +5,15 @@ import SwiftUI
 struct ServiceProvidersView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject private var health = ProviderHealthStore.shared
-    @ViewState private var selection: UUID?
+    @EnvironmentObject private var drafts: ProviderDraftCoordinator
+    @ViewState private var listSelection: UUID?
+    private var selection: UUID? {
+        get { drafts.selection }
+        nonmutating set {
+            guard newValue != drafts.selection else { return }
+            if drafts.confirmLeaving(store: store) { drafts.selection = newValue }
+        }
+    }
     @ViewState private var confirmsRemoval = false
     @ViewState private var saveError: String?
     @ViewState private var isRemoving = false
@@ -14,7 +22,7 @@ struct ServiceProvidersView: View {
     var body: some View {
         HStack(spacing: AppTheme.contentSpacing) {
             VStack(spacing: 0) {
-                List(selection: $selection) {
+                List(selection: $listSelection) {
                     VStack(alignment: .leading, spacing: 3) {
                         Label("This Mac", systemImage: "desktopcomputer")
                         Text("Live Transcription").font(.caption).foregroundStyle(.secondary)
@@ -64,10 +72,11 @@ struct ServiceProvidersView: View {
             }
             else if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
                 if provider.kind.isLocal {
-                    LocalSpeakerProviderView(provider: provider).id(provider.id)
+                    LocalSpeakerProviderView(draft: draftBinding(provider)).id(provider.id)
                 }
                 else {
-                    ServiceProviderPanel(provider: provider, addProvider: add, signInTask: $signInTask).id(provider.id)
+                    ServiceProviderPanel(draft: draftBinding(provider), addProvider: add, signInTask: $signInTask).id(
+                        provider.id)
                 }
             }
             else {
@@ -85,8 +94,19 @@ struct ServiceProvidersView: View {
                 ProgressView("Removing Provider…").padding()
             }
         }
-        .onAppear { selection = health.settingsProviderID ?? selection ?? ThisMacProvider.id }
-        .onChange(of: health.settingsProviderID) { _, id in if let id { selection = id } }
+        .onAppear {
+            consumeProviderRequest()
+            selection = selection ?? ThisMacProvider.id
+            listSelection = selection
+        }
+        .onChange(of: listSelection) { _, proposed in
+            selection = proposed
+            // Write the committed value back after a rejected native selection.
+            // Denying the binding setter alone leaves AppKit's highlight stale.
+            listSelection = selection
+        }
+        .onChange(of: drafts.selection) { _, committed in listSelection = committed }
+        .onChange(of: health.settingsProviderID) { _, _ in consumeProviderRequest() }
         .alert(
             "Couldn’t Update Providers",
             isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
@@ -107,7 +127,22 @@ struct ServiceProvidersView: View {
         }
     }
 
+    private func consumeProviderRequest() {
+        guard let id = health.settingsProviderID else { return }
+        // Consume before presentation so Cancel does not leave a stale request
+        // that overrides the retained selection when Settings reopens.
+        health.settingsProviderID = nil
+        drafts.select(id) { drafts.confirmLeaving(store: store) }
+    }
+
+    private func draftBinding(_ provider: ServiceProvider) -> Binding<ServiceProvider> {
+        Binding(
+            get: { drafts.draft(for: store.settings.serviceProviders.first { $0.id == provider.id } ?? provider) },
+            set: { drafts.update($0) })
+    }
+
     private func add(_ kind: ServiceProviderKind) {
+        guard drafts.confirmLeaving(store: store) else { return }
         let provider = ServiceProvider(kind: kind)
         let previous = store.settings
         store.settings.serviceProviders.append(provider)
@@ -120,6 +155,7 @@ struct ServiceProvidersView: View {
     }
 
     private func removeSelected() {
+        guard drafts.confirmLeaving(store: store) else { return }
         guard !isRemoving, let selection,
             let provider = store.settings.serviceProviders.first(where: { $0.id == selection })
         else { return }
@@ -157,8 +193,9 @@ private struct ServiceProviderPanel: View {
     let addProvider: (ServiceProviderKind) -> Void
     @Binding var signInTask: Task<Void, Never>?
     @EnvironmentObject private var store: MeetingStore
+    @EnvironmentObject private var drafts: ProviderDraftCoordinator
     @ObservedObject private var server = GdayServerService.shared
-    @ViewState private var draft: ServiceProvider
+    @Binding private var draft: ServiceProvider
     @ViewState private var status = "Not Checked"
     @ViewState private var statusIcon = "circle.dashed"
     @ViewState private var statusColor: Color = .secondary
@@ -175,10 +212,10 @@ private struct ServiceProviderPanel: View {
     @ViewState private var modelListState = ModelListState.idle
 
     init(
-        provider: ServiceProvider, addProvider: @escaping (ServiceProviderKind) -> Void,
+        draft: Binding<ServiceProvider>, addProvider: @escaping (ServiceProviderKind) -> Void,
         signInTask: Binding<Task<Void, Never>?>
     ) {
-        _draft = ViewState(initialValue: provider)
+        _draft = draft
         self.addProvider = addProvider
         _signInTask = signInTask
     }
@@ -527,6 +564,7 @@ private struct ServiceProviderPanel: View {
             saveError = store.errorMessage ?? "Couldn’t save provider settings. Try again."
             return false
         }
+        drafts.clear(draft.id)
         saveError = nil
         startCheck()
         return true

@@ -9,6 +9,7 @@ struct GdayMeetingsApp: App {
     @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
     @StateObject private var appearance = AppearanceSettings()
+    @StateObject private var providerDrafts = ProviderDraftCoordinator()
 
     var body: some Scene {
         Window("Meetings", id: "main") {
@@ -17,6 +18,7 @@ struct GdayMeetingsApp: App {
                 .disabled(store.isChangingLibrary)
                 .onAppear {
                     delegate.store = store
+                    delegate.providerDrafts = providerDrafts
                     delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
                     if UIPreview.enabled, !playback.hasSelection, let meeting = store.meetings.first {
                         playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
@@ -93,6 +95,7 @@ struct GdayMeetingsApp: App {
         // https://developer.apple.com/design/human-interface-guidelines/settings
         Settings {
             SettingsView().environmentObject(store).environmentObject(playback).environmentObject(appearance)
+                .environmentObject(providerDrafts)
         }
         MenuBarExtra {
             RecordingMenuView().environmentObject(store).environmentObject(playback)
@@ -167,6 +170,7 @@ enum MenuBarArtwork {
 @MainActor
 final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     weak var store: MeetingStore?
+    weak var providerDrafts: ProviderDraftCoordinator?
     let mainWindowLifecycle = MainWindowLifecycle()
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -179,8 +183,9 @@ final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        mainWindowLifecycle.isTerminating = true
         guard let store else { return .terminateNow }
+        guard providerDrafts?.confirmLeaving(store: store) != false else { return .terminateCancel }
+        mainWindowLifecycle.isTerminating = true
         Task {
             let saved = await store.finalizeForQuit()
             if !saved { mainWindowLifecycle.isTerminating = false }
