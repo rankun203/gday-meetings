@@ -21,6 +21,10 @@ struct LibraryFolderChoiceTests {
         try bytes.write(to: meeting.appendingPathComponent("audio.wav"))
         try Data("{}".utf8).write(to: meeting.appendingPathComponent("metadata.json"))
         try Data("index".utf8).write(to: source.appendingPathComponent("index.db"))
+        let recoveredIndexes = [
+            "index.db.corrupt-example", "index.db-wal.corrupt-example", "tasks-index.sqlite-shm.corrupt-example",
+        ]
+        for name in recoveredIndexes { try Data("cache".utf8).write(to: source.appendingPathComponent(name)) }
         let models = source.appendingPathComponent("LocalModels/synthetic/revision")
         try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
         try bytes.write(to: models.appendingPathComponent("model.bin"))
@@ -30,6 +34,10 @@ struct LibraryFolderChoiceTests {
         #expect(try Data(contentsOf: target.appendingPathComponent("meetings/example/audio.wav")) == bytes)
         #expect(try Data(contentsOf: meeting.appendingPathComponent("audio.wav")) == bytes)
         #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent("index.db").path))
+        for name in recoveredIndexes {
+            #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(name).path))
+            #expect(FileManager.default.fileExists(atPath: source.appendingPathComponent(name).path))
+        }
         #expect(try LibraryFolderChoice.inspect(target, current: source) == .library)
         #expect(
             !(try FileManager.default.contentsOfDirectory(atPath: root.path)).contains { $0.hasPrefix(".gday-copy-") })

@@ -55,7 +55,7 @@ final class MeetingStore: ObservableObject {
     @Published var managedTaskJournalError: String?
     lazy var managedTaskJournal = ManagedTaskJournal(
         url: dataDirectory.appendingPathComponent("tasks.jsonl"),
-        indexURL: indexDirectory.appendingPathComponent("tasks-index.sqlite"))
+        indexURL: indexDirectory.appendingPathComponent("index.db"))
     private var managedTaskWakeObserver: ManagedTaskWakeObserver?
     var isSchedulingManagedTasks = false
     var managedTaskOperations: [UUID: Task<Void, Never>] = [:]

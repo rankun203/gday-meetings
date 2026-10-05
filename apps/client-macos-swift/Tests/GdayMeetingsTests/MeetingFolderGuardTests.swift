@@ -49,6 +49,54 @@ import Testing
         #expect(try MeetingFolderStorage.read(id: first.id, directory: root).title == first.title)
     }
 
+    @Test func stagedRebuildKeepsCommittedFolderLookupAvailable() throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = Meeting(title: "Committed fixture")
+        try MeetingFolderStorage.write(original, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        var addedID = UUID()
+        for number in 1..<500 {
+            let meeting = Meeting(title: "Staged fixture \(number)")
+            _ = try seed(meeting, name: MeetingFolderLocation.name(id: meeting.id, date: meeting.createdAt), root: root)
+            addedID = meeting.id
+        }
+        let stagedID = addedID
+        try index.rebuild { count in
+            guard count == 500, index.lastCommittedCount == nil else { return }
+            let completed = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                defer { completed.signal() }
+                do {
+                    #expect(try index.folderName(id: original.id) != nil)
+                    #expect(try index.folderName(id: stagedID) == nil)
+                }
+                catch { Issue.record(error) }
+            }
+            #expect(completed.wait(timeout: .now() + 2) == .success)
+        }
+        #expect(try index.folderName(id: stagedID) != nil)
+    }
+
+    @Test func committedQuarantineOverridesAStalePositiveFolderCache() throws {
+        let root = root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Quarantine fixture")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let folder = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        let original = try Data(contentsOf: folder.appendingPathComponent("metadata.json"))
+        try index.quarantine(id: meeting.id)
+        // A previously started reader may finish after quarantine and refresh its location hint.
+        MeetingFolderLocation.remember(folder, id: meeting.id, directory: root)
+        #expect(throws: MeetingFolderLocation.AccessError.self) {
+            try MeetingFolderStorage.write(meeting, directory: root)
+        }
+        #expect(try Data(contentsOf: folder.appendingPathComponent("metadata.json")) == original)
+    }
+
     @Test func duplicateEventCannotReplaceIndexedOrCachedMeeting() throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }

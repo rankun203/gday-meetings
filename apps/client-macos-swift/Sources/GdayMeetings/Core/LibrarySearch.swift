@@ -30,6 +30,11 @@ struct LibrarySearchPage: Sendable {
 extension MeetingFolderStorage {
     static func searchPassages(id: UUID, directory: URL) throws -> [LibrarySearchPassage] {
         let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
+        return try searchPassages(folder: folder, directory: directory)
+    }
+
+    static func searchPassages(folder: URL, directory: URL) throws -> [LibrarySearchPassage] {
+        try MeetingFolderLocation.validate(folder, directory: directory)
         var passages: [LibrarySearchPassage] = []
         for (name, kind) in [("notes.md", LibrarySearchKind.notes), ("summary.md", .summary)] {
             let file = folder.appendingPathComponent(name)

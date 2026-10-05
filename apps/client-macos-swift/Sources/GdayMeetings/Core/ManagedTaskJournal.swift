@@ -77,7 +77,7 @@ final class ManagedTaskJournal: @unchecked Sendable {
     }
     init(url: URL, indexURL: URL? = nil) {
         self.url = url
-        self.indexURL = indexURL ?? url.deletingPathExtension().appendingPathExtension("index.sqlite")
+        self.indexURL = indexURL ?? url.deletingLastPathComponent().appendingPathComponent("index.db")
     }
 
     @discardableResult func load() throws -> [ManagedTaskRecord] {
@@ -94,13 +94,10 @@ final class ManagedTaskJournal: @unchecked Sendable {
         readFailure = nil
         let startingRevision = diskRevision
         let startingKey = revisionKey
-        do { index = try ManagedTaskIndex(url: indexURL) }
-        catch {
-            // This file is disposable; source corruption is still rejected during replay.
-            index = nil
-            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: indexURL.path + suffix) }
-            index = try ManagedTaskIndex(url: indexURL)
-        }
+        // Release this journal's old connection before opening. Central recovery never
+        // replaces a file that another domain still has open.
+        index = nil
+        index = try ManagedTaskIndex(url: indexURL)
         guard let index else { throw ServiceError("Couldn’t open the task index.") }
         if !forceRebuild, let (revision, committed) = try index.revision(), revision == revisionKey {
             committedLength = committed
@@ -111,13 +108,12 @@ final class ManagedTaskJournal: @unchecked Sendable {
             knownRevision = diskRevision
             return
         }
-        try index.execute("BEGIN IMMEDIATE")
         do {
             try index.clear()
             comparedPreviousOffsets = true
         }
         catch {
-            try? index.execute("ROLLBACK")
+            index.discardRebuild()
             throw error
         }
         committedLength = 0
@@ -126,10 +122,17 @@ final class ManagedTaskJournal: @unchecked Sendable {
         writeFailure = nil
         loaded = false
         guard FileManager.default.fileExists(atPath: url.path) else {
-            loaded = true
-            knownRevision = nil
-            try index.setRevision(revisionKey, committed: 0)
-            try index.execute("COMMIT")
+            do {
+                try index.setRevision(revisionKey, committed: 0)
+                try index.publishRebuild()
+                loaded = true
+                knownRevision = nil
+            }
+            catch {
+                index.discardRebuild()
+                writeFailure = error
+                throw error
+            }
             return
         }
         do {
@@ -175,13 +178,13 @@ final class ManagedTaskJournal: @unchecked Sendable {
                     "The task journal changed during indexing. Reopen the library to read the updated file.")
             }
             hasIncompleteTail = !buffer.isEmpty
+            try index.setRevision(startingKey, committed: committedLength)
+            try index.publishRebuild()
             loaded = true
             knownRevision = diskRevision
-            try index.setRevision(startingKey, committed: committedLength)
-            try index.execute("COMMIT")
         }
         catch {
-            try? index.execute("ROLLBACK")
+            index.discardRebuild()
             writeFailure = error
             throw ServiceError("Couldn’t read tasks.jsonl. The file was kept unchanged. \(error.localizedDescription)")
         }

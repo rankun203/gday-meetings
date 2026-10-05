@@ -37,7 +37,8 @@ let package = Package(
             dependencies: [
                 "AudioCaptureBridge", "OpusFileBridge", "CSQLite",
                 .product(name: "FluidAudio", package: "FluidAudio"),
-            ]),
+            ],
+            resources: [.copy("Resources/index.db.template.md")]),
         .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"]),
     ],
     swiftLanguageModes: [.v5]

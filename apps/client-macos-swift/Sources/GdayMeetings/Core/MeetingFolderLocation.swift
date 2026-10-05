@@ -116,12 +116,6 @@ enum MeetingFolderLocation {
         let root = directory.appendingPathComponent("meetings")
         let proposed = root.appendingPathComponent(name(id: id, date: date))
         try validate(proposed, directory: directory)
-        if let cached = folders.object(forKey: key(id, directory)) {
-            guard !cached.name.isEmpty else { throw AccessError.duplicate }
-            let candidate = root.appendingPathComponent(cached.name)
-            try validate(candidate, directory: directory)
-            if cached.reserved || FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-        }
         if let name = try registeredIndex(directory: directory)?.folderName(id: id) {
             guard !name.isEmpty else { throw AccessError.duplicate }
             guard identity(name) == id else { throw AccessError.invalidPath }
@@ -131,6 +125,12 @@ enum MeetingFolderLocation {
                 remember(candidate, id: id, directory: directory)
                 return candidate
             }
+        }
+        if let cached = folders.object(forKey: key(id, directory)) {
+            guard !cached.name.isEmpty else { throw AccessError.duplicate }
+            let candidate = root.appendingPathComponent(cached.name)
+            try validate(candidate, directory: directory)
+            if cached.reserved || FileManager.default.fileExists(atPath: candidate.path) { return candidate }
         }
         let matches = try candidates(id: id, directory: directory)
         guard matches.count <= 1 else { throw AccessError.duplicate }

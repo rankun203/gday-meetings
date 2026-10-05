@@ -9,43 +9,17 @@ final class ManagedTaskIndex {
         let id: String
         let digest: String
     }
-    private var database: OpaquePointer?
+    private let connection: IndexDatabase.Connection
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     init(url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
-            throw failure()
-        }
-        do {
-            let version = try statement("PRAGMA user_version")
-            let previous = sqlite3_step(version) == SQLITE_ROW ? sqlite3_column_int(version, 0) : -1
-            sqlite3_finalize(version)
-            if previous != 2 {
-                try execute(
-                    "DROP TABLE IF EXISTS task_offsets; DROP TABLE IF EXISTS journal_revision; PRAGMA user_version=2;")
-            }
-            try execute(
-                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048; CREATE TABLE IF NOT EXISTS task_offsets(id TEXT PRIMARY KEY, created REAL NOT NULL, state TEXT NOT NULL, kind TEXT NOT NULL, meeting TEXT NOT NULL, priority INTEGER NOT NULL, offset INTEGER NOT NULL, length INTEGER NOT NULL,digest TEXT NOT NULL); CREATE INDEX IF NOT EXISTS task_history ON task_offsets(created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_state ON task_offsets(state,created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_queue ON task_offsets(kind,state,priority DESC,created,id); CREATE INDEX IF NOT EXISTS task_meeting ON task_offsets(meeting,kind,created DESC,id DESC); CREATE TABLE IF NOT EXISTS journal_revision(id INTEGER PRIMARY KEY, revision TEXT, committed INTEGER);"
-            )
-        }
-        catch {
-            sqlite3_close(database)
-            database = nil
-            throw error
-        }
+        connection = try IndexDatabase.open(at: url)
+        try connection.register(.tasks)
     }
-    deinit { sqlite3_close(database) }
-    private func failure() -> Error {
-        ServiceError("Couldn’t read the task index. \(String(cString: sqlite3_errmsg(database)))")
-    }
-    func execute(_ sql: String) throws {
-        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
-    }
-    private func statement(_ sql: String) throws -> OpaquePointer {
-        var result: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &result, nil) == SQLITE_OK, let result else { throw failure() }
-        return result
-    }
+    private func failure() -> Error { connection.failure() }
+    func execute(_ sql: String) throws { try connection.execute(sql) }
+    private func statement(_ sql: String) throws -> OpaquePointer { try connection.prepare(sql) }
+    func publishRebuild() throws { try connection.publishStaging() }
+    func discardRebuild() { connection.discardStaging() }
     static func literal(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "''") + "'" }
     func revision() throws -> (String, UInt64)? {
         let query = try statement("SELECT revision,committed FROM journal_revision WHERE id=1")
@@ -58,8 +32,9 @@ final class ManagedTaskIndex {
     }
     func clear() throws {
         try execute(
-            "DROP TABLE IF EXISTS temp.previous_offsets; CREATE TEMP TABLE previous_offsets AS SELECT id,offset,digest FROM task_offsets; CREATE INDEX previous_task_id ON previous_offsets(id); DELETE FROM task_offsets; DELETE FROM journal_revision"
+            "DROP TABLE IF EXISTS temp.previous_offsets; CREATE TEMP TABLE previous_offsets AS SELECT id,offset,digest FROM task_offsets; CREATE INDEX previous_task_id ON previous_offsets(id)"
         )
+        try connection.beginStaging(.tasks, preservingRows: false)
     }
     func changedSinceRebuild(_ id: UUID) throws -> Bool {
         let query = try statement(

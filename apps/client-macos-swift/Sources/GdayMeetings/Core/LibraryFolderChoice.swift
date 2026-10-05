@@ -96,10 +96,13 @@ enum LibraryFolderChoice {
             at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? manager.removeItem(at: staging) }
         let excluded = [
-            "index.db", "index.db-wal", "index.db-shm", "cache", "caches", "staging", ".index-events.json", ".DS_Store",
+            "index.db", "index.db-wal", "index.db-shm", "index.db.md", "index.db.needs-recovery", ".directory-index.db",
+            ".directory-index.db-wal",
+            ".directory-index.db-shm", "tasks-index.sqlite", "tasks-index.sqlite-wal", "tasks-index.sqlite-shm",
+            "cache", "caches", "staging", ".index-events.json", ".DS_Store",
         ]
         let children = try manager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
-            .filter { !excluded.contains($0.lastPathComponent) && !$0.lastPathComponent.hasPrefix(".index") }
+            .filter { !excludedRootEntry($0.lastPathComponent, excluding: excluded) }
         let initialManifest = try manifest(source, excluding: excluded)
         var count = 0
         for child in children {
@@ -128,6 +131,13 @@ enum LibraryFolderChoice {
             try? manager.createDirectory(at: target, withIntermediateDirectories: false)
             throw error
         }
+    }
+
+    private static func excludedRootEntry(_ name: String, excluding: [String]) -> Bool {
+        let recoveryCopy = ["index.db", ".directory-index.db", "tasks-index.sqlite"].contains { base in
+            ["", "-wal", "-shm"].contains { name.hasPrefix(base + $0 + ".corrupt-") }
+        }
+        return excluding.contains(name) || name.hasPrefix(".index") || recoveryCopy
     }
 
     private static func copyAndVerify(original: URL, copy: URL, count: inout Int, progress: @Sendable (Int) -> Void)
@@ -200,7 +210,7 @@ enum LibraryFolderChoice {
             }
         }
         for name in try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
-        where !excluding.contains(name) && !name.hasPrefix(".index") {
+        where !excludedRootEntry(name, excluding: excluding) {
             try visit(root.appendingPathComponent(name), relative: name)
         }
         return digest.finalize()

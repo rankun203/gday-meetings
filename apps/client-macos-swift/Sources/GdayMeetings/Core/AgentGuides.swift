@@ -70,9 +70,10 @@ enum AgentGuides {
         providers/<UUID>/              Cached models/languages; not meeting content
         settings.json                  App configuration; not needed for meeting questions
         index.db, index.db-*            Derived SQLite files, when stored here
+        index.db.md                    Generated schema guide beside the actual database
         ```
 
-        This Swift library has no `recordings/index.md`, `people/index.md`, `transcript.md`, or root `tags.json`. Metadata files form the catalog. A relocated library may keep its SQLite index elsewhere; meeting files remain authoritative.
+        This Swift library has no `recordings/index.md`, `people/index.md`, `transcript.md`, or root `tags.json`. Metadata files form the catalog. Custom library folders, including cloud folders, keep SQLite in a local cache keyed by the resolved folder path. The schema guide stays beside that database. Source files and provider embedding artifacts may sync; SQLite files must stay local.
 
         ## Authority and missing files
 

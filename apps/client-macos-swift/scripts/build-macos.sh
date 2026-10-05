@@ -19,6 +19,7 @@ printf 'Linked platform: macOS %s minimum, SDK %s.\n' "$linked_minimum" "$linked
 require_stopped_app "$app_path"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 /bin/cp "$binary_dir/GdayMeetings" "$app_path/Contents/MacOS/GdayMeetings"
+/usr/bin/ditto "$binary_dir/GdayMeetings_GdayMeetings.bundle" "$app_path/Contents/Resources/GdayMeetings_GdayMeetings.bundle"
 /bin/cp "$client_dir/packaging/macos/Info.plist" "$app_path/Contents/Info.plist"
 /bin/cp "$client_dir/packaging/macos/GdayMeetings.icns" "$app_path/Contents/Resources/GdayMeetings.icns"
 /usr/bin/ditto "$build_dir/native-audio-$(uname -m)/install/licenses" "$app_path/Contents/Resources/ThirdPartyLicenses"

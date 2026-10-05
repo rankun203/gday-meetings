@@ -9,100 +9,30 @@ final class LibraryIndex: @unchecked Sendable {
     private(set) var lastCommittedCount: Int?
     private(set) var recoveredCorruptIndex = false
     private(set) var requiresRebuild = false
-    private var statements: [String: OpaquePointer] = [:]
     private var lastPageSQL: String?
-    private var database: OpaquePointer?
+    private let locationConnection: IndexDatabase.Connection
+    private let locationLock = NSLock()
+    private let connection: IndexDatabase.Connection
     private let lock = NSRecursiveLock()
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     init(directory: URL, indexDirectory: URL? = nil) throws {
         self.directory = directory
         let indexDirectory = indexDirectory ?? directory
         self.indexDirectory = indexDirectory
-        try FileManager.default.createDirectory(at: indexDirectory, withIntermediateDirectories: true)
-        guard
-            sqlite3_open_v2(
-                indexDirectory.appendingPathComponent("index.db").path, &database,
-                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK
-        else {
-            throw MeetingError.message("Couldn’t open the library index.")
-        }
-        sqlite3_busy_timeout(database, 5000)
-        do { try createSchema() }
-        catch {
-            let status = sqlite3_errcode(database)
-            guard status == SQLITE_CORRUPT || status == SQLITE_NOTADB else { throw error }
-            for statement in statements.values { sqlite3_finalize(statement) }
-            statements.removeAll()
-            sqlite3_close(database)
-            database = nil
-            let suffix = ".corrupt-" + UUID().uuidString
-            for name in ["index.db", "index.db-wal", "index.db-shm"] {
-                let file = indexDirectory.appendingPathComponent(name)
-                if FileManager.default.fileExists(atPath: file.path) {
-                    try FileManager.default.moveItem(at: file, to: indexDirectory.appendingPathComponent(name + suffix))
-                }
-            }
-            guard
-                sqlite3_open_v2(
-                    indexDirectory.appendingPathComponent("index.db").path, &database,
-                    SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK
-            else { throw failure() }
-            sqlite3_busy_timeout(database, 5000)
-            try createSchema()
-            recoveredCorruptIndex = true
-            requiresRebuild = true
-        }
-        MeetingFolderLocation.registerIndex(self)
-    }
-    private func createSchema() throws {
-        try execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;")
-        let version = try statement("PRAGMA user_version")
-        guard sqlite3_step(version) == SQLITE_ROW else {
-            release(version)
-            throw failure()
-        }
-        let previous = sqlite3_column_int(version, 0)
-        release(version)
-        if previous != 3 {
-            let exists = try statement("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='meetings'")
-            if sqlite3_step(exists) == SQLITE_ROW { requiresRebuild = sqlite3_column_int(exists, 0) > 0 }
-            release(exists)
-            try execute(
-                "BEGIN IMMEDIATE; DROP TABLE IF EXISTS meetings; DROP TABLE IF EXISTS relations; DROP TABLE IF EXISTS search; DROP TABLE IF EXISTS search_passages; DROP TABLE IF EXISTS search_locations; DROP TABLE IF EXISTS index_state; COMMIT;"
-            )
-            try execute(
-                "CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY, created REAL NOT NULL, sortTime REAL NOT NULL, title TEXT NOT NULL, metadata BLOB NOT NULL); CREATE INDEX IF NOT EXISTS meeting_seek ON meetings(sortTime,id); CREATE TABLE IF NOT EXISTS relations(meeting TEXT NOT NULL,kind TEXT NOT NULL,target TEXT NOT NULL,sortTime REAL NOT NULL,PRIMARY KEY(meeting,kind,target)); CREATE INDEX IF NOT EXISTS relation_seek ON relations(kind,target,sortTime,meeting); CREATE TABLE IF NOT EXISTS index_state(id INTEGER PRIMARY KEY CHECK(id=1),complete INTEGER NOT NULL); INSERT OR IGNORE INTO index_state VALUES(1,0); CREATE TABLE IF NOT EXISTS search_locations(id INTEGER PRIMARY KEY AUTOINCREMENT,meeting TEXT NOT NULL,source TEXT NOT NULL,revision TEXT NOT NULL,UNIQUE(meeting,source)); CREATE INDEX IF NOT EXISTS search_location_meeting ON search_locations(meeting); CREATE VIRTUAL TABLE IF NOT EXISTS search_passages USING fts5(meeting UNINDEXED, kind UNINDEXED, segment UNINDEXED, start UNINDEXED, text); PRAGMA user_version=3;"
-            )
-        }
-        try execute("CREATE TABLE IF NOT EXISTS meeting_folders(id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+        connection = try IndexDatabase.open(at: indexDirectory.appendingPathComponent("index.db"))
+        try connection.register(.library)
+        locationConnection = try IndexDatabase.open(at: indexDirectory.appendingPathComponent("index.db"))
+        recoveredCorruptIndex = connection.recoveredCorruption
         let completion = try statement("SELECT complete FROM index_state WHERE id=1")
         defer { release(completion) }
         guard sqlite3_step(completion) == SQLITE_ROW else { throw failure() }
         requiresRebuild = sqlite3_column_int(completion, 0) == 0
+        MeetingFolderLocation.registerIndex(self)
     }
-
-    deinit {
-        for statement in statements.values { sqlite3_finalize(statement) }
-        sqlite3_close(database)
-    }
-    private func execute(_ sql: String) throws {
-        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
-    }
-    private func failure() -> Error {
-        MeetingError.message("Couldn’t update the library index: \(String(cString: sqlite3_errmsg(database)))")
-    }
-    private func statement(_ sql: String) throws -> OpaquePointer {
-        if let cached = statements.removeValue(forKey: sql) { return cached }
-        var value: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &value, nil) == SQLITE_OK, let value else { throw failure() }
-        return value
-    }
-    private func release(_ statement: OpaquePointer) {
-        let sql = String(cString: sqlite3_sql(statement))
-        sqlite3_reset(statement)
-        sqlite3_clear_bindings(statement)
-        if let old = statements.updateValue(statement, forKey: sql) { sqlite3_finalize(old) }
-    }
+    private func execute(_ sql: String) throws { try connection.execute(sql) }
+    private func failure() -> Error { connection.failure() }
+    private func statement(_ sql: String) throws -> OpaquePointer { try connection.prepare(sql) }
+    private func release(_ statement: OpaquePointer) { connection.release(statement) }
     private func bind(_ text: String, _ position: Int32, _ stmt: OpaquePointer) {
         sqlite3_bind_text(stmt, position, text, -1, transient)
     }
@@ -114,12 +44,17 @@ final class LibraryIndex: @unchecked Sendable {
         requiresRebuild = false
     }
     func folderName(id: UUID) throws -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        let query = try statement("SELECT name FROM meeting_folders WHERE id=?")
-        defer { release(query) }
+        // Source resolution must not wait for a long-running rebuild or see its TEMP tables.
+        locationLock.lock()
+        defer { locationLock.unlock() }
+        let query = try locationConnection.prepare("SELECT name FROM main.meeting_folders WHERE id=?")
+        defer { locationConnection.release(query) }
         bind(id.uuidString, 1, query)
-        guard sqlite3_step(query) == SQLITE_ROW else { return nil }
+        let result = sqlite3_step(query)
+        guard result == SQLITE_ROW else {
+            guard result == SQLITE_DONE else { throw locationConnection.failure() }
+            return nil
+        }
         return String(cString: sqlite3_column_text(query, 0))
     }
 
@@ -169,9 +104,10 @@ final class LibraryIndex: @unchecked Sendable {
             try quarantine(id: entry.id)
             throw MeetingFolderLocation.AccessError.duplicate
         }
+        let passages =
+            refreshSearch ? try MeetingFolderStorage.searchPassages(folder: folder, directory: directory) : []
         try execute("SAVEPOINT upsert_row")
         do {
-            MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
             let location = try statement(
                 "INSERT INTO meeting_folders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
             defer { release(location) }
@@ -196,7 +132,6 @@ final class LibraryIndex: @unchecked Sendable {
             // UI saves update catalog metadata immediately. The existing reconciliation
             // worker refreshes passage content from the committed files off the main thread.
             if refreshSearch {
-                let passages = try MeetingFolderStorage.searchPassages(id: entry.id, directory: directory)
                 let passageDelete = try statement(
                     "DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting=?)")
                 defer { release(passageDelete) }
@@ -247,6 +182,9 @@ final class LibraryIndex: @unchecked Sendable {
                 }
             }
             try execute("RELEASE upsert_row")
+            if !connection.isStaging {
+                MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
+            }
         }
         catch {
             try execute("ROLLBACK TO upsert_row; RELEASE upsert_row")
@@ -401,7 +339,9 @@ final class LibraryIndex: @unchecked Sendable {
         }
     }
     /// Search only the derived index. Passage IDs and snippets need no transcript reads.
-    func searchPage(query: String, after: Int64 = 0, limit: Int = 50, excludingTagIDs: Set<UUID> = []) throws
+    func searchPage(
+        query: String, after: Int64 = 0, limit: Int = 50, excludingTagIDs: Set<UUID> = [], ranked: Bool = false
+    ) throws
         -> LibrarySearchPage
     {
         lock.lock()
@@ -411,7 +351,8 @@ final class LibraryIndex: @unchecked Sendable {
         let expression = "\"" + query.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         let exclusion = excludingTagIDs.isEmpty ? "" : " AND " + Self.exclusionClause
         let count = try statement(
-            "SELECT count(*) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
+            "SELECT " + (ranked ? "count(DISTINCT m.id)" : "count(*)")
+                + " FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
                 + exclusion)
         defer { release(count) }
         bind(expression, 1, count)
@@ -419,25 +360,43 @@ final class LibraryIndex: @unchecked Sendable {
         guard sqlite3_step(count) == SQLITE_ROW else { throw failure() }
         let total = Int(sqlite3_column_int64(count, 0))
         let stmt = try statement(
-            "SELECT p.rowid,m.id,m.title,m.created,p.kind,p.segment,p.start,snippet(search_passages,4,'','','…',32) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ? AND p.rowid>?"
-                + exclusion + " ORDER BY p.rowid LIMIT ?"
+            "SELECT p.rowid,m.id,m.title,m.created,p.kind,p.segment,p.start,snippet(search_passages,4,'','','…',32) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
+                + (ranked ? "" : " AND p.rowid>?")
+                + exclusion + (ranked ? " ORDER BY bm25(search_passages),p.rowid" : " ORDER BY p.rowid LIMIT ?")
         )
         defer { release(stmt) }
         bind(expression, 1, stmt)
-        sqlite3_bind_int64(stmt, 2, after)
-        if !excludingTagIDs.isEmpty { bind(try encodedTagIDs(excludingTagIDs), 3, stmt) }
-        sqlite3_bind_int(stmt, excludingTagIDs.isEmpty ? 3 : 4, Int32(max(1, min(limit, 100))))
+        var position: Int32 = 2
+        if !ranked {
+            sqlite3_bind_int64(stmt, position, after)
+            position += 1
+        }
+        if !excludingTagIDs.isEmpty {
+            bind(try encodedTagIDs(excludingTagIDs), position, stmt)
+            position += 1
+        }
+        let pageSize = max(1, min(limit, 100))
+        if !ranked { sqlite3_bind_int(stmt, position, Int32(pageSize)) }
         func text(_ column: Int32) -> String {
             guard let value = sqlite3_column_text(stmt, column) else { return "" }
             return String(cString: value)
         }
         var results: [LibrarySearchResult] = []
+        var rankedMeetings: Set<UUID> = []
         while true {
+            if results.count == pageSize { return LibrarySearchPage(results: results, total: total) }
             let status = sqlite3_step(stmt)
             if status == SQLITE_DONE { return LibrarySearchPage(results: results, total: total) }
             guard status == SQLITE_ROW, let meetingID = UUID(uuidString: text(1)),
                 let kind = LibrarySearchKind(rawValue: text(4))
             else { throw failure() }
+            if ranked {
+                // One candidate per meeting keeps long transcripts from crowding
+                // every other meeting out of the fusion candidate set.
+                guard rankedMeetings.insert(meetingID).inserted,
+                    Int64(rankedMeetings.count) > max(0, after)
+                else { continue }
+            }
             results.append(
                 LibrarySearchResult(
                     id: sqlite3_column_int64(stmt, 0), meetingID: meetingID, title: text(2),
@@ -467,8 +426,9 @@ final class LibraryIndex: @unchecked Sendable {
         lastRebuildErrorCount = 0
         lastCommittedCount = nil
         let publishBatches = try count() == 0
+        if !publishBatches { try connection.beginStaging(.library, preservingRows: true) }
         try execute(
-            "BEGIN IMMEDIATE; CREATE TEMP TABLE IF NOT EXISTS rebuild_seen(id TEXT PRIMARY KEY); DELETE FROM rebuild_seen; CREATE TEMP TABLE IF NOT EXISTS rebuild_folder_counts(id TEXT PRIMARY KEY, occurrences INTEGER NOT NULL); DELETE FROM rebuild_folder_counts;"
+            "CREATE TEMP TABLE IF NOT EXISTS rebuild_seen(id TEXT PRIMARY KEY); DELETE FROM rebuild_seen; CREATE TEMP TABLE IF NOT EXISTS rebuild_folder_counts(id TEXT PRIMARY KEY, occurrences INTEGER NOT NULL); DELETE FROM rebuild_folder_counts;"
         )
         do {
             var count = 0
@@ -522,23 +482,19 @@ final class LibraryIndex: @unchecked Sendable {
                             lastRebuildErrorCount += 1
                             return true
                         }
-                        try execute("SAVEPOINT rebuild_row")
                         do {
                             let entry = try JSONDecoder().decode(MeetingListEntry.self, from: Data(contentsOf: url))
                             guard entry.id == id else {
                                 throw MeetingError.message("Meeting ID differs from its folder.")
                             }
                             try upsert(entry, folder: folder, confirmedUnique: true)
-                            try execute("RELEASE rebuild_row")
                         }
                         catch {
-                            try execute("ROLLBACK TO rebuild_row; RELEASE rebuild_row")
                             lastRebuildErrorCount += 1
                         }
                         count += 1
                         if count % 500 == 0 {
                             if publishBatches {
-                                try execute("COMMIT; BEGIN IMMEDIATE")
                                 lastCommittedCount = try self.count()
                             }
                             progress(count)
@@ -549,14 +505,15 @@ final class LibraryIndex: @unchecked Sendable {
                 }
             }
             try execute(
-                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen)); DELETE FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1; COMMIT"
+                "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen)); DELETE FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1"
             )
+            if !publishBatches { try connection.publishStaging() }
             requiresRebuild = false
             lastCommittedCount = try self.count()
             progress(count)
         }
         catch {
-            try? execute("ROLLBACK")
+            connection.discardStaging()
             throw error
         }
     }

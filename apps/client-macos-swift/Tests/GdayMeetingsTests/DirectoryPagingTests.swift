@@ -76,7 +76,7 @@ import Testing
         try FileEntityStorage.save([person], previous: [], kind: "people", directory: root)
         let file = root.appendingPathComponent("people/\(person.id.uuidString).json")
         let original = try Data(contentsOf: file)
-        let databaseURL = root.appendingPathComponent(".directory-index.db")
+        let databaseURL = root.appendingPathComponent("index.db")
         try Data("not a database".utf8).write(to: databaseURL)
         do {
             let index = try DirectoryIndex(root: root, indexDirectory: root)
@@ -84,10 +84,12 @@ import Testing
             #expect(try index.exactPerson(name: "Recovery fixture") == person.id)
         }
         let preserved = try FileManager.default.contentsOfDirectory(atPath: root.path)
-        #expect(preserved.contains { $0.hasPrefix(".directory-index.db.corrupt-") })
+        #expect(preserved.contains { $0.hasPrefix("index.db.corrupt-") })
         var database: OpaquePointer?
         #expect(sqlite3_open(databaseURL.path, &database) == SQLITE_OK)
-        #expect(sqlite3_exec(database, "PRAGMA user_version=0", nil, nil, nil) == SQLITE_OK)
+        #expect(
+            sqlite3_exec(database, "UPDATE index_modules SET version=0 WHERE namespace='core_directory'", nil, nil, nil)
+                == SQLITE_OK)
         sqlite3_close(database)
         let rebuilt = try DirectoryIndex(root: root, indexDirectory: root)
         try rebuilt.reconcile(paths: [])
