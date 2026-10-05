@@ -59,6 +59,29 @@ struct SearchProviderTests {
         catch { #expect(error is SearchProviderError) }
     }
 
+    @Test func fusionBreaksScoreTiesBeforeApplyingLimit() throws {
+        let first = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let second = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
+        let request = UUID()
+        let text = UUID()
+        let voice = UUID()
+        var fusion = ReciprocalRankFusion(requestID: request, weights: [text: 1, voice: 1])
+        for (provider, meetings) in [(text, [second, first]), (voice, [first, second])] {
+            let results = meetings.map { meetingID in
+                ProviderSearchResult(
+                    id: meetingID.uuidString, meetingID: meetingID, title: "Tie fixture", excerpt: "Match",
+                    sourceRevision: nil, passage: nil)
+            }
+            fusion.accept(
+                .init(
+                    requestID: request, providerID: provider, sequence: 0, results: results,
+                    total: 2, nextCursor: nil, isFinal: true))
+        }
+        #expect(fusion.results(limit: 2).map(\.meetingID) == [first, second])
+        #expect(fusion.results(limit: 1).map(\.meetingID) == [first])
+        #expect(fusion.results(limit: -1).isEmpty)
+    }
+
     @Test func fusionReplacesSnapshotsAndVotesOncePerMeeting() {
         let request = UUID()
         let text = UUID()

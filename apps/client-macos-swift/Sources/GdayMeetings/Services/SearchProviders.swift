@@ -181,8 +181,13 @@ struct ReciprocalRankFusion: Sendable {
                 evidence[result.meetingID, default: []].append(result)
             }
         }
-        return scores.map { FusedSearchResult(meetingID: $0.key, score: $0.value, evidence: evidence[$0.key] ?? []) }
-            .sorted { $0.score == $1.score ? $0.id.uuidString < $1.id.uuidString : $0.score > $1.score }
-            .prefix(max(0, limit)).map { $0 }
+        var ranked: [FusedSearchResult] = scores.map { meetingID, score in
+            FusedSearchResult(meetingID: meetingID, score: score, evidence: evidence[meetingID] ?? [])
+        }
+        ranked.sort { left, right in
+            if left.score == right.score { return left.id.uuidString < right.id.uuidString }
+            return left.score > right.score
+        }
+        return Array(ranked.prefix(max(0, limit)))
     }
 }
