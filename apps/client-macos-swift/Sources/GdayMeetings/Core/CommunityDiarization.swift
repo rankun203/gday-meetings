@@ -290,6 +290,7 @@ extension MeetingStore {
         }
         guard let current = self.meeting(id: id), self.libraryWritable,
             current.audioFiles == meeting.audioFiles, current.transcriptSource == meeting.transcriptSource,
+            current.transcript == meeting.transcript, current.speakers == meeting.speakers,
             try LocalDiarizationInputPolicy.revisions(for: files) == sourceRevisions
         else {
             throw ServiceError(
@@ -305,8 +306,17 @@ extension MeetingStore {
         _ = self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id))
         if recognize { self.voiceLibrary.suggestReviewedPeople(from: self.people) }
         updated = self.voiceLibrary.applyingDecisions(to: updated)
-        updated.transcriptSource = .init(
-            id: result.id, providerName: "Community-1 Speaker Labeling", generatedAt: result.generatedAt)
+        let savedRevisions = try TranscriptRevisions.read(at: self.directory(for: id)).revisions
+        if let normalized = TranscriptRevisions.snapshots(savedRevisions, current: current)
+            .first(where: { $0.id == TranscriptRevisions.current(current).id })
+        {
+            updated.transcriptSource =
+                normalized.source
+                ?? .init(
+                    id: current.id, providerName: "Transcript", generatedAt: current.createdAt)
+        }
+        updated.speakerLabelSource = .init(
+            resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
         self.markManagedTaskCompletion(on: &updated, kind: .diarization)
         guard self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
     }

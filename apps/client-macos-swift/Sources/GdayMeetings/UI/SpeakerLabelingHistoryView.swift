@@ -4,15 +4,41 @@ import SwiftUI
 struct SpeakerLabelingHistoryReadKey: Equatable {
     let meetingID: UUID
     let sourceID: UUID?
+    var labelingResultID: UUID? = nil
     let taskStates: [String]
 }
 
 struct SpeakerLabelingHistoryView: View {
     let history: SpeakerLabelingHistory?
+    var restoreChoices: [TranscriptRevision] = []
+    var currentSnapshotID: UUID? = nil
+    var canRestore = false
+    var restore: (TranscriptRevision) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Speaker Labeling History").font(.headline)
+            if !restoreChoices.isEmpty {
+                Menu("Restore Labels", systemImage: "arrow.uturn.backward") {
+                    ForEach(restoreChoices) { revision in
+                        Button {
+                            restore(revision)
+                        } label: {
+                            let name = revision.speakerLabelSource?.providerName ?? "Original Labels"
+                            let date = revision.speakerLabelSource?.generatedAt ?? revision.savedAt
+                            let title = name + " · " + date.formatted(date: .abbreviated, time: .shortened)
+                            if revision.id == currentSnapshotID {
+                                Label(title, systemImage: "checkmark")
+                            }
+                            else {
+                                Text(title)
+                            }
+                        }.disabled(revision.id == currentSnapshotID)
+                    }
+                }.disabled(!canRestore || restoreChoices.count < 2)
+                Text("Restores labels for this transcript’s current words and timing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let history {
                 if history.entries.isEmpty {
                     Text("No speaker labeling runs or saved analyses were found for this recording.")

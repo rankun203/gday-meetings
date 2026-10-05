@@ -363,6 +363,7 @@ extension MeetingStore {
         guard preserveTranscript(latest) else { return }
         latest.replaceSpeakers(latest.transcriptionAttempt?.resultSpeakers ?? [])
         latest.transcript = result
+        latest.speakerLabelSource = nil
         if let attempt = latest.transcriptionAttempt {
             latest.transcriptSource = transcriptSource(attempt)
         }
@@ -392,6 +393,7 @@ extension MeetingStore {
         }
         latest.replaceSpeakers(attempt.resultSpeakers ?? [])
         latest.transcript = result
+        latest.speakerLabelSource = nil
         latest.transcriptSource = transcriptSource(attempt)
         latest.restoreSpeakerIdentities()
         markManagedTaskCompletion(on: &latest, kind: .transcription)

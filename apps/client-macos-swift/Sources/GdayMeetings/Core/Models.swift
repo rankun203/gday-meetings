@@ -41,6 +41,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     var summary = ""
     var transcript: [TranscriptSegment] = []
     var transcriptSource: TranscriptSource?
+    var speakerLabelSource: SpeakerLabelSource?
     var liveTranscriptAdopted = false
     var speakers: [MeetingSpeaker] = []
     var personIDs: [UUID] = []
@@ -54,7 +55,8 @@ struct Meeting: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, title, language, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat,
             todos,
-            recordingProfile, transcriptionAttempt, speakers, liveTranscriptAdopted, completedTaskIDs, transcriptSource
+            recordingProfile, transcriptionAttempt, speakers, liveTranscriptAdopted, completedTaskIDs, transcriptSource,
+            speakerLabelSource
     }
 
 }
@@ -209,6 +211,7 @@ extension Meeting {
         summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? ""
         transcript = try values.decodeIfPresent([TranscriptSegment].self, forKey: .transcript) ?? []
         transcriptSource = try values.decodeIfPresent(TranscriptSource.self, forKey: .transcriptSource)
+        speakerLabelSource = try values.decodeIfPresent(SpeakerLabelSource.self, forKey: .speakerLabelSource)
         liveTranscriptAdopted = try values.decodeIfPresent(Bool.self, forKey: .liveTranscriptAdopted) ?? false
         speakers = try values.decodeIfPresent([MeetingSpeaker].self, forKey: .speakers) ?? []
         personIDs = try values.decodeIfPresent([UUID].self, forKey: .personIDs) ?? []
@@ -332,6 +335,7 @@ extension Meeting {
         try values.encode(summary, forKey: .summary)
         try values.encode(transcript, forKey: .transcript)
         try values.encodeIfPresent(transcriptSource, forKey: .transcriptSource)
+        try values.encodeIfPresent(speakerLabelSource, forKey: .speakerLabelSource)
         try values.encode(liveTranscriptAdopted, forKey: .liveTranscriptAdopted)
         try values.encode(speakers, forKey: .speakers)
         try values.encode(personIDs, forKey: .personIDs)

@@ -23,7 +23,7 @@ struct SpeakerLabelingHistoryTests {
         let history = await SpeakerLabelingHistory.load(directory: directory, tasks: [task], currentSourceID: legacy)
         #expect(history.entries.count == 2)
         #expect(history.entries.first(where: { $0.taskID == task.id })?.modelRevision == "synthetic-r1")
-        #expect(history.entries.first(where: { $0.resultID == legacy })?.status == "Current transcript")
+        #expect(history.entries.first(where: { $0.resultID == legacy })?.status == "Current labels")
         #expect(history.entries.first(where: { $0.taskID == task.id })?.providerName == "Configured local provider")
         #expect(history.warning == nil)
     }

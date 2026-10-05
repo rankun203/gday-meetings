@@ -10,6 +10,8 @@ struct MeetingTranscriptView: View {
     var initialRowID: UUID? = nil
     @ViewState private var draft: LiveTranscriptDraft?
     @ViewState private var revisions: [TranscriptRevision] = []
+    @ViewState private var transcriptChoices: [TranscriptRevision] = []
+    @ViewState private var labelChoices: [TranscriptRevision] = []
     @ViewState private var failure: String?
     @ViewState private var displayRows: [TranscriptDisplayRow] = []
     @ViewState private var visibleRows: [TranscriptDisplayRow] = []
@@ -37,6 +39,7 @@ struct MeetingTranscriptView: View {
     private var labelingHistoryKey: SpeakerLabelingHistoryReadKey {
         .init(
             meetingID: meetingID, sourceID: meeting?.transcriptSource?.id,
+            labelingResultID: meeting?.speakerLabelSource?.resultID,
             taskStates: ["journal:\(store.managedTaskRevision)"]
                 + labelingTasks.map {
                     $0.id.uuidString + ":" + $0.state.rawValue + ":" + ($0.speakerLabelingResultID?.uuidString ?? "")
@@ -45,6 +48,7 @@ struct MeetingTranscriptView: View {
     private var canRestore: Bool {
         store.libraryWritable && store.recordingID != meetingID && meeting?.transcriptionAttempt == nil
             && !store.isJobRunning(.transcription, .meeting(meetingID))
+            && !store.isJobRunning(.diarization, .meeting(meetingID))
             && !store.isJobRunning(.importAudio, .meeting(meetingID))
     }
     var body: some View {
@@ -57,12 +61,24 @@ struct MeetingTranscriptView: View {
                         TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
                         Spacer(minLength: 8)
                         speakerLabelAction
+                        labelingHistoryButton
                         historyMenu
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
-                        speakerLabelAction
-                        historyMenu
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
+                                speakerLabelAction
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
+                                speakerLabelAction
+                            }
+                        }
+                        HStack {
+                            labelingHistoryButton
+                            historyMenu
+                        }
                     }
                 }
                 .controlSize(.small)
@@ -140,10 +156,14 @@ struct MeetingTranscriptView: View {
             }
             .task(id: labelingHistoryKey) { await loadLabelingHistory() }
             .onChange(of: meeting.transcript) { _, _ in
-                loadHistory()
+                refreshHistoryChoices()
                 refreshRows()
             }
-            .onChange(of: meeting.speakers) { _, _ in refreshRows() }
+            .onChange(of: meeting.speakers) { _, _ in
+                refreshHistoryChoices()
+                refreshRows()
+            }
+            .onChange(of: meeting.speakerLabelSource) { _, _ in loadHistory() }
             .onChange(of: meeting.transcriptSource) { _, _ in
                 loadHistory()
                 refreshRows()
@@ -153,31 +173,39 @@ struct MeetingTranscriptView: View {
         }
     }
     @ViewBuilder private var speakerLabelAction: some View {
-        HStack(spacing: 6) {
-            if store.isJobRunning(.diarization, .meeting(meetingID)) {
-                Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
-                    .help(labelingHistoryHelp)
-            }
-            else if store.settings.serviceProviders.contains(where: {
-                $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
-            }) {
-                Button("Label Speakers") {
-                    if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
-                    Task { await store.diarizeLocally(id: meetingID) }
-                }
-                .disabled(
-                    !canRestore
-                        || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
-                        || localModels.state(for: .community1).phase != .ready
-                )
+        if store.isJobRunning(.diarization, .meeting(meetingID)) {
+            Button("Cancel Speaker Labeling") { store.cancelLocalDiarization(id: meetingID) }
                 .help(labelingHistoryHelp)
+        }
+        else if store.settings.serviceProviders.contains(where: {
+            $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+        }) {
+            Button("Label Speakers") {
+                if usesCheckpoint, let draft, !store.adoptLiveTranscript(draft) { return }
+                Task { await store.diarizeLocally(id: meetingID) }
             }
-            Button("Speaker Labeling History", systemImage: "clock.arrow.circlepath") {
-                showsLabelingHistory = true
-            }
-            .labelStyle(.iconOnly).help("Speaker Labeling History")
-            .popover(isPresented: $showsLabelingHistory) {
-                SpeakerLabelingHistoryView(history: labelingHistory)
+            .disabled(
+                !canRestore
+                    || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
+                    || localModels.state(for: .community1).phase != .ready
+            )
+            .help(labelingHistoryHelp)
+        }
+    }
+
+    private var labelingHistoryButton: some View {
+        Button("Labelings", systemImage: "clock.arrow.circlepath") {
+            showsLabelingHistory = true
+        }
+        .labelStyle(.titleAndIcon)
+        .help("Speaker Labeling History")
+        .accessibilityLabel("Labelings")
+        .popover(isPresented: $showsLabelingHistory) {
+            SpeakerLabelingHistoryView(
+                history: labelingHistory, restoreChoices: labelChoices,
+                currentSnapshotID: meeting.map { TranscriptRevisions.current($0).id }, canRestore: canRestore
+            ) { revision in
+                if store.restoreSpeakerLabels(revision, meetingID: meetingID) { loadHistory() }
             }
         }
     }
@@ -216,7 +244,7 @@ struct MeetingTranscriptView: View {
         var result = await SpeakerLabelingHistory.load(
             directory: store.directory(for: meetingID),
             tasks: Array(tasks.prefix(500)) + labelingTasks.filter(\.isPreview),
-            currentSourceID: key.sourceID)
+            currentSourceID: key.sourceID, currentLabelingResultID: key.labelingResultID)
         let warnings = [
             result.warning, taskWarning,
             tasks.count > 500 ? "Showing the latest 500 speaker-labeling tasks." : nil,
@@ -227,11 +255,11 @@ struct MeetingTranscriptView: View {
     }
     @ViewBuilder private var historyMenu: some View {
         if let meeting, draft?.hasUsableText == true || !meeting.transcript.isEmpty || !revisions.isEmpty {
-            let choices = TranscriptRevisions.choices(revisions, current: meeting)
+            let choices = transcriptChoices
             let liveSource = draft.map { store.liveTranscriptSource($0, meeting: meeting) }
-            Menu("Transcript History") {
+            Menu("Transcripts", systemImage: "doc.on.doc") {
                 if let draft, draft.hasUsableText, let liveSource,
-                    !choices.contains(where: { $0.id == liveSource.id })
+                    !choices.contains(where: { ($0.source?.id ?? $0.id) == liveSource.id })
                 {
                     Button(
                         "\(liveSource.providerName) · \(liveSource.generatedAt.formatted(date: .abbreviated, time: .standard))"
@@ -241,18 +269,25 @@ struct MeetingTranscriptView: View {
                     }
                 }
                 ForEach(choices) { revision in
-                    let selected = revision.id == (meeting.transcriptSource?.id ?? meeting.id)
+                    let selected = revision.id == TranscriptRevisions.current(meeting).id
                     Button {
                         store.restoreTranscript(revision, meetingID: meetingID)
                         loadHistory()
                     } label: {
-                        let name = revision.source?.providerName ?? "Transcript"
-                        Label(
-                            "\(name) · \(revision.savedAt.formatted(date: .abbreviated, time: .standard))",
-                            systemImage: selected ? "checkmark" : "")
+                        let name = transcriptChoiceTitle(revision, meeting: meeting)
+                        let title = "\(name) · \(revision.savedAt.formatted(date: .abbreviated, time: .standard))"
+                        if selected {
+                            Label(title, systemImage: "checkmark")
+                        }
+                        else {
+                            Text(title)
+                        }
                     }.disabled(selected)
                 }
             }.disabled(!canRestore)
+                .labelStyle(.titleAndIcon)
+                .help("Transcript History")
+                .accessibilityLabel("Transcripts")
         }
     }
     private func seek(_ time: Double, meeting: Meeting) {
@@ -337,5 +372,27 @@ struct MeetingTranscriptView: View {
             revisions = try TranscriptRevisions.read(at: store.directory(for: meetingID)).revisions
         }
         catch { failure = error.localizedDescription }
+        refreshHistoryChoices()
+    }
+
+    private func refreshHistoryChoices() {
+        guard let meeting else {
+            transcriptChoices = []
+            labelChoices = []
+            return
+        }
+        transcriptChoices = TranscriptRevisions.choices(revisions, current: meeting)
+        labelChoices = TranscriptRevisions.labelingChoices(revisions, current: meeting)
+    }
+
+    private func transcriptChoiceTitle(_ revision: TranscriptRevision, meeting: Meeting) -> String {
+        if TranscriptRevisions.isLegacyLabeling(revision) { return "Transcript and Labels" }
+        let name = revision.source?.providerName ?? "Transcript"
+        if revision.source?.id == meeting.transcriptSource?.id,
+            revision.id != TranscriptRevisions.current(meeting).id
+        {
+            return name + " · Earlier Text"
+        }
+        return name
     }
 }

@@ -93,6 +93,7 @@ extension MeetingStore {
         }
         meeting.transcript = draft.segments
         meeting.transcriptSource = source
+        meeting.speakerLabelSource = nil
         meeting.liveTranscriptAdopted = true
         meeting.replaceSpeakers(speakers)
         _ = voiceLibrary.ingest(

@@ -18,7 +18,8 @@ struct SpeakerLabelingHistory: Sendable {
 
     /// Work and memory are bounded, even if a folder contains corrupt or huge receipts.
     static func load(
-        directory: URL, tasks: [ManagedTaskRecord], currentSourceID: UUID? = nil
+        directory: URL, tasks: [ManagedTaskRecord], currentSourceID: UUID? = nil,
+        currentLabelingResultID: UUID? = nil
     ) async -> Self {
         let rows = tasks.filter { $0.kind == .diarization }.map { task in
             Entry(
@@ -27,7 +28,7 @@ struct SpeakerLabelingHistory: Sendable {
                 taskID: task.id, resultID: task.speakerLabelingResultID)
         }
         return await Task.detached(priority: .utility) {
-            read(directory: directory, rows: rows, currentSourceID: currentSourceID)
+            read(directory: directory, rows: rows, currentSourceID: currentLabelingResultID ?? currentSourceID)
         }.value
     }
 
@@ -85,13 +86,14 @@ struct SpeakerLabelingHistory: Sendable {
                 if let index = entries.firstIndex(where: { $0.resultID == receipt.id }) {
                     entries[index].resultID = receipt.id
                     entries[index].modelRevision = receipt.modelRevision
+                    if receipt.id == currentSourceID { entries[index].status = "Current labels" }
                     continue
                 }
                 entries.append(
                     Entry(
                         id: "result-\(receipt.id)", date: receipt.generatedAt, providerName: "Community-1",
                         modelRevision: receipt.modelRevision,
-                        status: receipt.id == currentSourceID ? "Current transcript" : "Saved analysis",
+                        status: receipt.id == currentSourceID ? "Current labels" : "Saved analysis",
                         detail: receipt.id == currentSourceID
                             ? nil : "This result was saved. Its application status wasn’t recorded.",
                         taskID: nil, resultID: receipt.id))
