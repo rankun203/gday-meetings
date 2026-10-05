@@ -8,7 +8,6 @@ struct AgentsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Agents").font(.title.weight(.semibold))
             if let markdown {
                 NativeMarkdownReadingView(
                     markdown: AgentGuides.displayBody(markdown), showsTimestamps: false,

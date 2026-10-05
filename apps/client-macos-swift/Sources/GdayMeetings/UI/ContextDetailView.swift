@@ -49,7 +49,7 @@ struct ContextDetailView: View {
             Divider()
             conversation
         }
-        .background(AppTheme.readingBackground).navigationTitle(displayTitle)
+        .background(AppTheme.readingBackground)
         .focusedValue(\.directoryControlFocus, true)
         .task(id: store.meetingIndexRevision) {
             await loader.refresh(index: store.libraryIndex, personID: personID, tagID: tagID)
@@ -219,11 +219,7 @@ struct ContextDetailView: View {
                 TextField("Ask a Question", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit(send)
                     .accessibilityLabel("Ask About Recent Meetings")
                 Button("Send", systemImage: "arrow.up", action: send)
-                    .disabled(
-                        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loader.window.page.total == 0
-                            || store.isJobRunning(
-                                .contextChat, .context(MeetingStore.contextChatKey(personID: personID, tagID: tagID)))
-                    )
+                    .disabled(!canSend)
             }.textFieldStyle(.roundedBorder)
         }.padding(.horizontal, AppTheme.contentInset).padding(.vertical, 12)
     }
@@ -241,9 +237,14 @@ struct ContextDetailView: View {
                 store.updatePerson(updated)
             })
     }
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && loader.window.page.total > 0
+            && !store.isJobRunning(
+                .contextChat, .context(MeetingStore.contextChatKey(personID: personID, tagID: tagID)))
+    }
     private func send() {
+        guard canSend else { return }
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty else { return }
         draft = ""
         showsConversation = true
         Task { _ = await store.sendContextChat(personID: personID, tagID: tagID, message: question) }

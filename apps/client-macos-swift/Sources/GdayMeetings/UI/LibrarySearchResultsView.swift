@@ -3,38 +3,55 @@ import SwiftUI
 
 struct LibrarySearchResultsView: View {
     @ObservedObject var session: LibrarySearchSession
-    var open: (LibrarySearchResult) -> Void
+    @Binding var mode: SearchMode
+    var open: (SearchDisplayResult) -> Void
     var retry: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Search Results").font(.title2.bold())
-                Text("“\(session.query)”").font(.headline).textSelection(.enabled)
+                HStack {
+                    Text("“\(session.query)”").font(.headline).textSelection(.enabled)
+                    Spacer()
+                    SearchModePicker(selection: $mode)
+                }
                 if let total = session.total {
-                    Text("\(total.formatted()) \(total == 1 ? "match" : "matches")")
-                        .foregroundStyle(.secondary).font(.callout)
+                    Text(
+                        (session.usesRankedSearch ? "Top " : "")
+                            + "\(total.formatted()) \(total == 1 ? "match" : "matches")"
+                    )
+                    .foregroundStyle(.secondary).font(.callout)
                 }
             }.padding(AppTheme.contentInset)
-            NativeSearchResults(session: session, results: session.results, generation: session.generation, open: open)
-                .overlay {
-                    if session.isLoading && session.results.isEmpty {
-                        ProgressView("Searching…")
-                    }
-                    else if session.total == 0 && session.error == nil {
-                        ContentUnavailableView.search(text: session.query)
-                    }
-                    else if let error = session.error, session.results.isEmpty {
-                        ContentUnavailableView {
-                            Label("Couldn’t Search", systemImage: "exclamationmark.magnifyingglass")
-                        } description: {
-                            Text(error)
-                        } actions: {
-                            Button("Try Again", action: retry)
-                        }
+            if session.error == nil, !session.providerFailures.isEmpty {
+                HStack {
+                    Text(session.providerFailures.values.sorted().joined(separator: " "))
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Try Again", action: retry)
+                }.padding(.horizontal, AppTheme.contentInset).padding(.bottom, AppTheme.contentSpacing)
+            }
+            NativeSearchResults(
+                session: session, results: session.displayResults, generation: session.generation, open: open
+            )
+            .overlay {
+                if session.isLoading && session.displayResults.isEmpty {
+                    ProgressView("Searching…")
+                }
+                else if session.total == 0 && session.error == nil {
+                    ContentUnavailableView.search(text: session.query)
+                }
+                else if let error = session.error, session.displayResults.isEmpty {
+                    ContentUnavailableView {
+                        Label("Couldn’t Search", systemImage: "exclamationmark.magnifyingglass")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Try Again", action: retry)
                     }
                 }
-            if !session.results.isEmpty {
+            }
+            if !session.displayResults.isEmpty {
                 HStack {
                     Text("Double-click a result or press Return to open it.").font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -54,9 +71,9 @@ struct LibrarySearchResultsView: View {
 /// Reusable native cells retain a pixel viewport and selection when returning from a meeting.
 private struct NativeSearchResults: NSViewRepresentable {
     let session: LibrarySearchSession
-    let results: [LibrarySearchResult]
+    let results: [SearchDisplayResult]
     let generation: UUID
-    let open: (LibrarySearchResult) -> Void
+    let open: (SearchDisplayResult) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -103,7 +120,7 @@ private struct NativeSearchResults: NSViewRepresentable {
         weak var table: SearchResultsTable?
         weak var scroll: NSScrollView?
         var observer: NSObjectProtocol?
-        var rows: [LibrarySearchResult] = []
+        var rows: [SearchDisplayResult] = []
         var generation: UUID?
         var updating = false
         var announced = false
@@ -220,16 +237,19 @@ private final class SearchResultCell: NSTableCellView {
         textField = title
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func configure(_ result: LibrarySearchResult) {
+    func configure(_ result: SearchDisplayResult) {
         title.stringValue = result.title
         let source: String
-        switch result.kind {
+        switch result.passage?.kind {
         case .title: source = "Meeting"
         case .notes: source = "Notes"
         case .summary: source = "Summary"
-        case .transcript: source = "Transcript · " + playbackTime(result.start ?? 0)
+        case .transcript: source = "Transcript · " + playbackTime(result.passage?.start ?? 0)
+        case nil: source = "Voice · " + playbackTime(result.audio?.start ?? 0)
         }
-        metadata.stringValue = result.createdAt.formatted(date: .abbreviated, time: .shortened) + " · " + source
+        metadata.stringValue = [result.createdAt?.formatted(date: .abbreviated, time: .shortened), source].compactMap {
+            $0
+        }.joined(separator: " · ")
         excerpt.stringValue = result.excerpt.replacingOccurrences(of: "\n", with: " ")
         setAccessibilityLabel([title.stringValue, metadata.stringValue, excerpt.stringValue].joined(separator: ". "))
         toolTip = result.excerpt

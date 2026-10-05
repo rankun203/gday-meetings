@@ -2,7 +2,16 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum LibraryDestination: Hashable { case meetings, people, tags, tasks, agents }
+private struct LibrarySearchActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var librarySearchAction: (() -> Void)? {
+        get { self[LibrarySearchActionKey.self] }
+        set { self[LibrarySearchActionKey.self] = newValue }
+    }
+}
 
 struct LibraryView: View {
     /// Splits after the first sentence; a single-sentence message has no body.
@@ -21,13 +30,17 @@ struct LibraryView: View {
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @StateObject private var searchSession = LibrarySearchSession()
+    @ViewState private var searchPreparationTask: Task<Void, Never>?
+    @ViewState private var searchRequestID = UUID()
+    @StateObject private var workspace = LibraryWorkspaceState()
     @ViewState private var showsSearchResults = false
-    @ViewState private var openedSearchResult: LibrarySearchResult?
+    @ViewState private var openedSearchResult: SearchDisplayResult?
     @FocusState private var searchFocused: Bool
+    @StateObject private var sidebarFocus = LibrarySidebarFocusRequest()
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ViewState private var sidebarExpanded = true
-    @ViewState private var sidebarRowsVisible = true
+    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
+    @ViewState private var searchPresented = false
     @ViewState private var sidebarTransition = UUID()
     private let sidebarControl: LibrarySidebarControl?
 
@@ -41,6 +54,7 @@ struct LibraryView: View {
     }
     private func showMeeting(_ id: UUID) {
         guard store.ensureMeetingLoaded(id: id) else { return }
+        workspace.selectMeeting(id)
         showsSearchResults = false
         openedSearchResult = nil
         selectedMeeting = id
@@ -65,22 +79,28 @@ struct LibraryView: View {
     }
 
     private var meetingList: some View {
-        NativeMeetingList(
-            entries: filteredMeetings, selection: $selectedMeeting, revealID: store.latestCreatedMeetingID,
-            recordingID: store.recordingID, isFinalizing: store.isFinalizingRecording,
-            playingID: playback.meetingID, isPlaying: playback.isPlaying, canPlay: !recordingActive,
-            archiveStatuses: store.archiveStatuses,
-            displaySummaryTitle: displaySummaryTitleOnMeetings,
-            viewportChanged: { store.prefetchMeetings($0) },
-            play: { id in
-                guard !recordingActive, let meeting = store.meeting(id: id) else { return }
-                let files = store.audioURLs(for: meeting)
-                if !files.isEmpty { playback.play(meeting: meeting, files: files) }
-            },
-            reveal: { id in NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)]) },
-            export: { id in if let meeting = store.meeting(id: id) { MeetingPanels.export(meeting, store: store) } },
-            delete: { id in deleting = store.meeting(id: id) }
-        )
+        ZStack {
+            NativeMeetingList(
+                entries: filteredMeetings, selection: $selectedMeeting, revealID: store.latestCreatedMeetingID,
+                recordingID: store.recordingID, isFinalizing: store.isFinalizingRecording,
+                playingID: playback.meetingID, isPlaying: playback.isPlaying, canPlay: !recordingActive,
+                archiveStatuses: store.archiveStatuses,
+                displaySummaryTitle: displaySummaryTitleOnMeetings,
+                viewportChanged: { store.prefetchMeetings($0) },
+                play: { id in
+                    guard !recordingActive, let meeting = store.meeting(id: id) else { return }
+                    let files = store.audioURLs(for: meeting)
+                    if !files.isEmpty { playback.play(meeting: meeting, files: files) }
+                },
+                reveal: { id in NSWorkspace.shared.activateFileViewerSelecting([store.directory(for: id)]) },
+                export: { id in if let meeting = store.meeting(id: id) { MeetingPanels.export(meeting, store: store) }
+                },
+                delete: { id in deleting = store.meeting(id: id) },
+                retainedViewport: workspace.meetingViewport
+            )
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .ignoresSafeArea(.container, edges: .top)
+        }
         .modifier(AudioFileDrop())
         .navigationTitle("Meetings")
         .overlay {
@@ -94,7 +114,7 @@ struct LibraryView: View {
         .overlay(alignment: .bottom) {
             if let error = store.meetingPageError {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(error).font(.caption)
+                    AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .orange)
                     Button("Try Again") { Task { await store.searchMeetingPages("") } }
                 }.padding(12).background(.regularMaterial)
             }
@@ -104,219 +124,223 @@ struct LibraryView: View {
         }
     }
 
+    @ViewBuilder private var navigationWorkspace: some View {
+        if showsSearchResults || destination == .tasks || destination == .agents {
+            NavigationSplitView(columnVisibility: twoColumnVisibility) {
+                librarySidebar(twoColumn: true)
+            } detail: {
+                Group {
+                    if showsSearchResults {
+                        LibrarySearchResultsView(
+                            session: searchSession, mode: searchModeBinding,
+                            open: openSearchResult, retry: retrySearch
+                        )
+                        .onExitCommand {
+                            showsSearchResults = false
+                            search = ""
+                        }
+                    }
+                    else if destination == .tasks {
+                        TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID, session: workspace.tasks)
+                    }
+                    else {
+                        AgentsView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle(showsSearchResults ? "Search Results" : destination == .tasks ? "Tasks" : "Agents")
+            }
+        }
+        else {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                librarySidebar(twoColumn: false)
+            } content: {
+                directoryColumn
+                    .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 360)
+            } detail: {
+                selectedDetail
+                    .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+            }
+        }
+    }
+
+    private func librarySidebar(twoColumn: Bool) -> some View {
+        NativeLibrarySidebar(
+            selection: Binding(
+                get: { showsSearchResults ? nil : destination },
+                set: { value in
+                    if let value {
+                        focusedTaskID = nil
+                        showsSearchResults = false
+                        openedSearchResult = nil
+                        destination = value
+                    }
+                }),
+            twoColumn: twoColumn, focusRequest: sidebarFocus
+        )
+        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+    }
+
+    @ViewBuilder private var directoryColumn: some View {
+        switch destination {
+        case .people: PeopleView(selection: $selectedPeople, session: workspace.people)
+        case .tags: TagsView(selection: $selectedTag, session: workspace.tags)
+        default:
+            meetingList
+                .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+        }
+    }
+
+    @ViewBuilder private var selectedDetail: some View {
+        if destination == .meetings, let id = selectedMeeting,
+            store.meetings.contains(where: { $0.id == id })
+        {
+            VStack(spacing: 0) {
+                if openedSearchResult != nil {
+                    HStack {
+                        Button("Back to Search Results", systemImage: "chevron.left") {
+                            showsSearchResults = true
+                            search = searchSession.query
+                        }
+                        Spacer()
+                        if let audio = openedSearchResult?.audio {
+                            Text("Voice match · \(playbackTime(audio.start))")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Button("Play Match", systemImage: "play.fill") {
+                                guard let meeting = store.meeting(id: id) else { return }
+                                playback.playExcerpt(
+                                    meeting: meeting, directory: store.directory(for: id),
+                                    audioFile: audio.filename, start: audio.start, end: audio.start + audio.duration)
+                            }
+                            .disabled(store.recordingID != nil)
+                        }
+                    }.padding(.horizontal, AppTheme.contentInset).padding(
+                        .top, AppTheme.contentSpacing)
+                }
+                MeetingDetailView(
+                    meetingID: id,
+                    initialTranscriptRowID: openedSearchResult?.segmentID,
+                    initialContentTab: searchContentTab,
+                    usesWindowToolbar: true,
+                    retainedTab: $workspace.meetingTab
+                ).id(id)
+            }
+        }
+        else if destination == .people, selectedPeople.count == 1,
+            let id = selectedPeople.first,
+            let person = store.people.first(where: { $0.id == id })
+        {
+            ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
+        }
+        else if destination == .people, selectedPeople.count > 1 {
+            ContentUnavailableView {
+                Label("\(selectedPeople.count) People Selected", systemImage: "person.2")
+            } description: {
+                Text("Choose Merge to combine the selected people.")
+            }
+        }
+        else if destination == .tags, let id = selectedTag,
+            let tag = store.tags.first(where: { $0.id == id })
+        {
+            ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
+        }
+        else {
+            LibraryIndexPlaceholder(
+                status: store.libraryDataStatus,
+                enabled: destination == .meetings && filteredMeetings.isEmpty,
+                showsProgress: false
+            ) { emptySelection }
+        }
+    }
+
+    private var addMeetingMenu: some View {
+        Menu {
+            Group {
+                Button("New Meeting Notes", systemImage: "square.and.pencil") {
+                    showMeeting(store.createMeeting(title: "Untitled Meeting"))
+                }
+                Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
+                    MeetingPanels.importAudio(store)
+                }
+                .disabled(recordingActive || store.isImportingAudio)
+                Divider()
+                Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
+                Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
+            }.disabled(!store.libraryWritable)
+            Divider()
+            Button("Open Meetings Folder", systemImage: "folder") {
+                if !NSWorkspace.shared.open(store.dataDirectory) {
+                    store.errorMessage = "Could not open the meetings folder in Finder."
+                }
+            }
+        } label: {
+            Label("Add Meeting", systemImage: "plus")
+        }
+        .help("Add Meeting")
+    }
+
+    private var recordButton: some View {
+        Button {
+            if let id = store.recordingID {
+                showMeeting(id)
+            }
+            else {
+                store.presentsRecordingSetup = true
+            }
+        } label: {
+            Label(
+                store.isFinalizingRecording ? "Saving…" : recordingActive ? "Recording" : "New Recording",
+                systemImage: store.isFinalizingRecording
+                    ? "hourglass.circle.fill"
+                    : recordingActive ? "waveform.circle.fill" : "record.circle.fill"
+            )
+            .font(.title2)
+            .frame(minWidth: 32, minHeight: 32)
+            .modifier(RecordingToolbarForeground())
+        }
+        .labelStyle(.iconOnly).tint(.red)
+        .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
+        .disabled(!store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording)
+    }
+
     var body: some View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
-        // Content columns are independent of the window toolbar.
+        // Native columns align their titles and actions with the window toolbar.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
-            NavigationSplitView(
-                columnVisibility: Binding(
-                    get: { sidebarExpanded ? .all : .detailOnly },
-                    set: { value in
-                        sidebarExpanded = value != .detailOnly
-                        sidebarRowsVisible = sidebarExpanded
-                    })
-            ) {
-                VStack(spacing: AppTheme.compactSpacing) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
-                        TextField("Search", text: $search)
-                            .textFieldStyle(.plain).focused($searchFocused)
-                            .accessibilityLabel("Search meetings and transcripts")
-                            .help("Search meetings and transcripts. Press Return to search.")
-                            .onSubmit(submitSearch)
-                        if !search.isEmpty {
-                            Button {
-                                search = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                            }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
-                            .accessibilityLabel("Clear Search").help("Clear Search")
+            navigationWorkspace
+                .navigationSplitViewStyle(.balanced)
+                .scrollEdgeEffectStyle(.soft, for: .top)
+                .searchable(text: $search, isPresented: $searchPresented, placement: .toolbar, prompt: "Search")
+                .searchFocused($searchFocused)
+                .onSubmit(of: .search, submitSearch)
+                .toolbar {
+                    if !showsSearchResults, destination == .meetings {
+                        ToolbarItem(placement: .secondaryAction) {
+                            addMeetingMenu
                         }
-                    }
-                    .padding(8)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.horizontal, 8).padding(.top, 10)
-                    List(
-                        selection: Binding(
-                            get: { sidebarRowsVisible && !showsSearchResults ? destination : nil },
-                            set: {
-                                if sidebarRowsVisible, let chosen = $0 {
-                                    focusedTaskID = nil
-                                    showsSearchResults = false
-                                    openedSearchResult = nil
-                                    destination = chosen
-                                }
-                            })
-                    ) {
-                        Group {
-                            Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
-                            Label("People", systemImage: "person.2").tag(LibraryDestination.people)
-                            Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
-                            Label("Tasks", systemImage: "list.bullet.rectangle").tag(LibraryDestination.tasks)
-                            Label("Agents", systemImage: "bubble.left.and.text.bubble.right").tag(
-                                LibraryDestination.agents)
-                        }
-                    }
-                    .listStyle(.sidebar)
-                    .scrollContentBackground(.hidden)
-                    // The native list already supplies row spacing. An extra scroll margin
-                    // alternates between applied/unapplied on focus and state updates.
-                    .contentMargins(.top, 0, for: .scrollContent)
-                    .scrollBounceBehavior(.basedOnSize)
-                }
-                .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
-            } detail: {
-                if showsSearchResults {
-                    LibrarySearchResultsView(session: searchSession, open: openSearchResult, retry: retrySearch)
-                }
-                else if destination == .tasks {
-                    TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                else if destination == .agents {
-                    AgentsView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                else {
-                    GeometryReader { workspace in
-                        let maximumListWidth = min(360, max(250, workspace.size.width - 361))
-                        HSplitView {
-                            Group {
-                                switch destination {
-                                case .people: PeopleView(selection: $selectedPeople)
-                                case .tags: TagsView(selection: $selectedTag)
-                                default:
-                                    VStack(spacing: 0) {
-                                        WorkspaceListHeader(title: "Meetings") {
-                                            Menu {
-                                                Button("New Meeting Notes", systemImage: "square.and.pencil") {
-                                                    showMeeting(store.createMeeting(title: "Untitled Meeting"))
-                                                }
-                                                Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
-                                                    MeetingPanels.importAudio(store)
-                                                }
-                                                .disabled(recordingActive || store.isImportingAudio)
-                                                Divider()
-                                                Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
-                                                Button("Import Existing Gday Library…") {
-                                                    MeetingPanels.importLegacy(store)
-                                                }
-                                            } label: {
-                                                Label("Add Meeting", systemImage: "plus")
-                                            }
-                                            .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                                            .fixedSize().help("Add Meeting")
-                                            .disabled(!store.libraryWritable)
-                                        }
-                                        meetingList
-                                    }
-                                }
-                            }.frame(
-                                minWidth: 250, idealWidth: min(300, maximumListWidth),
-                                maxWidth: maximumListWidth
-                            )
-                            .background(AppTheme.readingBackground)
-                            Group {
-                                if destination == .meetings, let id = selectedMeeting,
-                                    store.meetings.contains(where: { $0.id == id })
-                                {
-                                    VStack(spacing: 0) {
-                                        if openedSearchResult != nil {
-                                            HStack {
-                                                Button("Back to Search Results", systemImage: "chevron.left") {
-                                                    showsSearchResults = true
-                                                    search = searchSession.query
-                                                }
-                                                Spacer()
-                                            }.padding(.horizontal, AppTheme.contentInset).padding(
-                                                .top, AppTheme.contentSpacing)
-                                        }
-                                        MeetingDetailView(
-                                            meetingID: id,
-                                            initialTranscriptRowID: openedSearchResult?.segmentID,
-                                            initialContentTab: searchContentTab
-                                        ).id(id)
-                                    }
-                                }
-                                else if destination == .people, selectedPeople.count == 1,
-                                    let id = selectedPeople.first,
-                                    let person = store.people.first(where: { $0.id == id })
-                                {
-                                    ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
-                                }
-                                else if destination == .people, selectedPeople.count > 1 {
-                                    ContentUnavailableView {
-                                        Label("\(selectedPeople.count) People Selected", systemImage: "person.2")
-                                    } description: {
-                                        Text("Choose Merge to combine the selected people.")
-                                    }
-                                }
-                                else if destination == .tags, let id = selectedTag,
-                                    let tag = store.tags.first(where: { $0.id == id })
-                                {
-                                    ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
-                                }
-                                else {
-                                    LibraryIndexPlaceholder(
-                                        status: store.libraryDataStatus,
-                                        enabled: destination == .meetings && filteredMeetings.isEmpty,
-                                        showsProgress: false
-                                    ) { emptySelection }
-                                }
-                            }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
-                                .background(AppTheme.readingBackground)
-                        }
-                    }
-                    // Keep a remembered native divider position inside the space
-                    // allocated by navigation, including at the minimum window width.
-                    .frame(minWidth: 611)
-                }
-            }
-            .navigationSplitViewStyle(.balanced)
-            .navigationTitle("")
-            // HIG: toolbar actions apply to the current content and use familiar symbols.
-            // https://developer.apple.com/design/human-interface-guidelines/toolbars
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        if let id = store.recordingID {
-                            showMeeting(id)
-                        }
-                        else {
-                            store.presentsRecordingSetup = true
-                        }
-                    } label: {
-                        Label(
-                            store.isFinalizingRecording ? "Saving…" : recordingActive ? "Recording" : "New Recording",
-                            systemImage: "record.circle.fill"
-                        )
-                        .modifier(RecordingToolbarForeground())
-                    }
-                    .labelStyle(.titleAndIcon).tint(.red)
-                    .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
-                    // A read-only library can't save a recording, import, or new notes.
-                    // Background jobs such as transcription never disable it.
-                    .disabled(!store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording)
-                    Menu {
-                        Button("Open Meetings Folder", systemImage: "folder") {
-                            if !NSWorkspace.shared.open(store.dataDirectory) {
-                                store.errorMessage = "Could not open the meetings folder in Finder."
+                        if let selectedMeeting, store.meetings.contains(where: { $0.id == selectedMeeting }) {
+                            ToolbarItem(placement: .principal) {
+                                MeetingContentTabs(selection: $workspace.meetingTab)
                             }
                         }
-                    } label: {
-                        Label("Library", systemImage: "folder")
+                        ToolbarSpacer(.flexible, placement: .primaryAction)
                     }
-                    .help("Library")
-                    Button(action: focusLibrarySearch) {
-                        Label("Search", systemImage: "magnifyingglass")
+                    if #available(macOS 26.1, *) {
+                        ToolbarItem(placement: .primaryAction) {
+                            recordButton
+                        }
+                        .visibilityPriority(.high)
                     }
-                    .help("Search meetings and transcripts")
-                    .keyboardShortcut("f", modifiers: .command)
+                    else {
+                        ToolbarItem(placement: .primaryAction) {
+                            recordButton
+                        }
+                    }
+                    ToolbarSpacer(.fixed, placement: .primaryAction)
+                    DefaultToolbarItem(kind: .search, placement: .primaryAction)
                 }
-            }
             // HIG Feedback: keep the activity visible while people browse other content.
             // A single persistent transport replaces scattered status and action rows.
             // https://developer.apple.com/design/human-interface-guidelines/feedback
@@ -345,10 +369,12 @@ struct LibraryView: View {
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: store.showsTaskQueueStatus)
             }
         }
+        .toolbarBackgroundVisibility(.automatic, for: .windowToolbar)
         .sheet(isPresented: $store.presentsRecordingSetup) {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
         }
         .background(PlaybackSpaceKey(playback: playback))
+        .focusedSceneValue(\.librarySearchAction, focusLibrarySearch)
         .environment(\.showManagedTask) { id in
             focusedTaskID = id
             showsSearchResults = false
@@ -356,15 +382,25 @@ struct LibraryView: View {
             destination = .tasks
         }
         .onAppear {
-            if let selectedMeeting { _ = store.ensureMeetingLoaded(id: selectedMeeting) }
+            workspace.selectMeeting(selectedMeeting)
+            if let selectedMeeting { _ = store.meeting(id: selectedMeeting) }
             sidebarControl?.connect(
-                expanded: $sidebarExpanded, rows: $sidebarRowsVisible, toggle: toggleSidebar(reduceMotion:))
+                expanded: sidebarExpandedBinding, rows: sidebarExpandedBinding, toggle: toggleSidebar(reduceMotion:))
         }
         .onChange(of: selectedMeeting) { _, id in
+            workspace.selectMeeting(id)
             if openedSearchResult?.meetingID != id { openedSearchResult = nil }
-            if let id { _ = store.ensureMeetingLoaded(id: id) }
+            if let id { _ = store.meeting(id: id) }
+        }
+        .onChange(of: showsSearchResults ? nil : destination) { _, selection in
+            // The navigation owner observes current intent; a departing native
+            // column can still receive its old selection during replacement.
+            sidebarFocus.cancelIfDestinationChanged(to: selection)
         }
         .onDisappear { sidebarControl?.disconnect() }
+        .onChange(of: search) { _, query in
+            if query.isEmpty, showsSearchResults { showsSearchResults = false }
+        }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
         // Messages lead with the problem; that sentence is the title, and what was
         // kept and technical detail follow as the smaller message text.
@@ -413,7 +449,7 @@ struct LibraryView: View {
     }
 
     private var searchContentTab: MeetingContentTab? {
-        switch openedSearchResult?.kind {
+        switch openedSearchResult?.passage?.kind {
         case .notes: .notes
         case .summary: .summary
         case .transcript: .transcript
@@ -422,25 +458,84 @@ struct LibraryView: View {
     }
 
     private func submitSearch() {
-        if searchSession.submit(search, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs) {
-            showsSearchResults = true
-            openedSearchResult = nil
-            searchFocused = false
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        searchPreparationTask?.cancel()
+        let requestID = UUID()
+        searchRequestID = requestID
+        let mode = store.settings.defaultSearchMode
+        showsSearchResults = true
+        openedSearchResult = nil
+        searchFocused = false
+        if mode == .text {
+            _ = searchSession.submit(query, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs)
+            return
+        }
+        searchSession.beginPreparation(query, mode: mode)
+        guard
+            let configured = store.settings.serviceProviders.first(where: {
+                $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
+            }), let configuration = configured.localSearch
+        else {
+            searchSession.preparationFailed("Choose and prepare a Voice Search provider in Service Providers.")
+            return
+        }
+        let exclusions = store.excludedTagIDs
+        searchPreparationTask = Task {
+            do {
+                let voice = try await store.voiceSearch.provider(configuration: configuration)
+                guard !Task.isCancelled, searchRequestID == requestID else { return }
+                var providers: [any SearchProvider] = [voice]
+                if mode == .fusion {
+                    guard let index = store.libraryIndex else {
+                        throw ServiceError("Wait for the library index to finish loading, then try again.")
+                    }
+                    providers.append(LocalTextSearchProvider(index: index))
+                }
+                _ = searchSession.submit(query, mode: mode, providers: providers, excludingTagIDs: exclusions)
+            }
+            catch {
+                guard !Task.isCancelled, searchRequestID == requestID else { return }
+                searchSession.preparationFailed(error.localizedDescription)
+            }
         }
     }
 
+    private var searchModeBinding: Binding<SearchMode> {
+        Binding(
+            get: { store.settings.defaultSearchMode },
+            set: { mode in
+                let previous = store.settings
+                store.settings.defaultSearchMode = mode
+                guard store.saveSettings() else {
+                    store.settings = previous
+                    return
+                }
+                if !searchSession.query.isEmpty {
+                    search = searchSession.query
+                    submitSearch()
+                }
+            })
+    }
+
     private func retrySearch() {
+        if searchSession.usesRankedSearch {
+            search = searchSession.query
+            submitSearch()
+            return
+        }
         if searchSession.results.isEmpty {
-            _ = searchSession.submit(
-                searchSession.query, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs)
+            search = searchSession.query
+            submitSearch()
         }
         else {
             searchSession.retry()
         }
     }
 
-    private func openSearchResult(_ result: LibrarySearchResult) {
+    private func openSearchResult(_ result: SearchDisplayResult) {
         guard store.ensureMeetingLoaded(id: result.meetingID) else { return }
+        workspace.selectMeeting(result.meetingID)
         selectedMeeting = result.meetingID
         destination = .meetings
         openedSearchResult = result
@@ -448,25 +543,27 @@ struct LibraryView: View {
     }
 
     private func focusLibrarySearch() {
-        if !sidebarExpanded {
-            sidebarTransition = UUID()
-            sidebarExpanded = true
-            sidebarRowsVisible = true
-        }
+        searchPresented = true
         searchFocused = true
     }
 
-    private func toggleSidebar() { toggleSidebar(reduceMotion: reduceMotion) }
+    private var sidebarExpanded: Bool { columnVisibility == .all }
+    private var sidebarExpandedBinding: Binding<Bool> {
+        Binding(get: { sidebarExpanded }, set: { columnVisibility = $0 ? .all : .doubleColumn })
+    }
+    private var twoColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { sidebarExpanded ? .all : .detailOnly },
+            set: { columnVisibility = $0 == .detailOnly ? .doubleColumn : .all })
+    }
 
     private func toggleSidebar(reduceMotion: Bool) {
         let transition = UUID()
         sidebarTransition = transition
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25), completionCriteria: .removed) {
-            sidebarExpanded.toggle()
-            sidebarRowsVisible = sidebarExpanded
+        withAnimation(reduceMotion ? nil : .default, completionCriteria: .removed) {
+            columnVisibility = sidebarExpanded ? .doubleColumn : .all
         } completion: {
             guard sidebarTransition == transition else { return }
-            sidebarRowsVisible = sidebarExpanded
             sidebarControl?.completed?(sidebarExpanded)
         }
     }
@@ -482,24 +579,9 @@ struct LibraryView: View {
                 "Select a Tag", systemImage: "tag", description: Text("Choose a tag to see its meetings."))
         }
         else {
-            VStack(spacing: 18) {
-                Button {
-                    store.presentsRecordingSetup = true
-                } label: {
-                    Image(systemName: "record.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundStyle(.red)
-                        .frame(width: 88, height: 88)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(ActionButtonStyle(cornerRadius: 44))
-                .accessibilityLabel("New Recording")
-                .help("New Recording")
-                .disabled(!store.canStartRecording)
-                Text("Select a meeting or start a recording.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Text("No Meeting Selected")
+                .font(.title2).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

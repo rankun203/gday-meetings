@@ -6,40 +6,92 @@ struct TaskQueueView: View {
     var focusedTaskID: UUID? = nil
     @ViewState private var reviewingVoices = false
 
-    @ViewState private var scope = TaskHistoryScope.all
-    @ViewState private var rows: [TaskHistoryRow] = []
-    @ViewState private var selection: UUID?
-    @ViewState private var selectedRow: TaskHistoryRow?
-    @ViewState private var loadingPage = false
-    @ViewState private var hasOlder = true
-    @ViewState private var hasNewer = false
-    @ViewState private var generation = UUID()
-    @ViewState private var canRetry = false
-    @ViewState private var canRestart = false
-    @ViewState private var canOpen = false
-    @ViewState private var failureOffset = 0
-    @ViewState private var selectedFailures: [String] = []
-    @ViewState private var ignoresNextScopeChange = false
-    @ViewState private var visibleFirst: UUID?
-    @ViewState private var visibleLast: UUID?
+    @ObservedObject var session: TaskQueueSession
+    private var scope: TaskHistoryScope {
+        get { session.scope }
+        nonmutating set { session.scope = newValue }
+    }
+    private var rows: [TaskHistoryRow] {
+        get { session.rows }
+        nonmutating set { session.rows = newValue }
+    }
+    private var selection: UUID? {
+        get { session.selection }
+        nonmutating set { session.selection = newValue }
+    }
+    private var selectedRow: TaskHistoryRow? {
+        get { session.selectedRow }
+        nonmutating set { session.selectedRow = newValue }
+    }
+    private var loadingPage: Bool {
+        get { session.loadingPage }
+        nonmutating set { session.loadingPage = newValue }
+    }
+    private var hasOlder: Bool {
+        get { session.hasOlder }
+        nonmutating set { session.hasOlder = newValue }
+    }
+    private var hasNewer: Bool {
+        get { session.hasNewer }
+        nonmutating set { session.hasNewer = newValue }
+    }
+    private var generation: UUID {
+        get { session.generation }
+        nonmutating set { session.generation = newValue }
+    }
+    private var canRetry: Bool {
+        get { session.canRetry }
+        nonmutating set { session.canRetry = newValue }
+    }
+    private var canRestart: Bool {
+        get { session.canRestart }
+        nonmutating set { session.canRestart = newValue }
+    }
+    private var canOpen: Bool {
+        get { session.canOpen }
+        nonmutating set { session.canOpen = newValue }
+    }
+    private var failureOffset: Int {
+        get { session.failureOffset }
+        nonmutating set { session.failureOffset = newValue }
+    }
+    private var selectedFailures: [String] {
+        get { session.selectedFailures }
+        nonmutating set { session.selectedFailures = newValue }
+    }
+    private var ignoresNextScopeChange: Bool {
+        get { session.ignoresNextScopeChange }
+        nonmutating set { session.ignoresNextScopeChange = newValue }
+    }
+    private var visibleFirst: UUID? {
+        get { session.visibleFirst }
+        nonmutating set { session.visibleFirst = newValue }
+    }
+    private var visibleLast: UUID? {
+        get { session.visibleLast }
+        nonmutating set { session.visibleLast = newValue }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("Tasks").font(.title2.weight(.semibold))
-                    Spacer()
                     Menu {
-                        Picker("Show Tasks", selection: $scope) {
+                        Picker("Show Tasks", selection: $session.scope) {
                             ForEach(TaskHistoryScope.allCases) { Text($0.rawValue).tag($0) }
                         }
                     } label: {
                         Label(scope.rawValue, systemImage: "line.3.horizontal.decrease")
                     }
                     .menuStyle(.borderlessButton).fixedSize()
+                    Spacer()
                 }.padding(16)
                 Divider()
-                NativeTaskList(rows: rows, selection: $selection, revealID: focusedTaskID) { first, last, newer in
+                NativeTaskList(
+                    rows: rows, selection: $session.selection, revealID: session.revealID,
+                    revealToken: session.revealToken,
+                    retainedViewport: session.viewport
+                ) { first, last, newer in
                     visibleFirst = first
                     visibleLast = last
                     guard !loadingPage else { return }
@@ -95,7 +147,13 @@ struct TaskQueueView: View {
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { if focusedTaskID == nil { resetRows() } }
+        .onAppear { if focusedTaskID == nil { refreshRows() } }
+        .onDisappear {
+            generation = UUID()
+            loadingPage = false
+            ignoresNextScopeChange = false
+            session.handledFocusID = nil
+        }
         .onChange(of: scope) { _, _ in
             if ignoresNextScopeChange {
                 ignoresNextScopeChange = false
@@ -114,7 +172,9 @@ struct TaskQueueView: View {
         }
         .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
         .task(id: focusedTaskID) {
-            guard let id = focusedTaskID, let record = store.managedTask(id: id) else { return }
+            guard let id = focusedTaskID, session.handledFocusID != id, let record = store.managedTask(id: id) else {
+                return
+            }
             if scope != .all {
                 ignoresNextScopeChange = true
                 scope = .all
@@ -130,7 +190,10 @@ struct TaskQueueView: View {
             let after = await store.taskHistoryPage(
                 scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), limit: 25)
             guard !Task.isCancelled, generation == token else { return }
+            session.handledFocusID = id
             rows = before + [.managed(record)] + after
+            session.revealID = id
+            session.revealToken = UUID()
             hasNewer = before.count == 25
             hasOlder = after.count == 25
             loadingPage = false
@@ -161,6 +224,9 @@ struct TaskQueueView: View {
         }
     }
     private func resetRows() {
+        session.viewport.reset()
+        session.revealID = nil
+        rows = []
         let token = UUID()
         generation = token
         loadingPage = true

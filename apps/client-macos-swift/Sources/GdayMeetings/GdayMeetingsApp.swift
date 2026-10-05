@@ -5,6 +5,7 @@ import SwiftUI
 @main
 struct GdayMeetingsApp: App {
     @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.librarySearchAction) private var librarySearchAction
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
     @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
@@ -20,7 +21,10 @@ struct GdayMeetingsApp: App {
                     delegate.store = store
                     delegate.providerDrafts = providerDrafts
                     delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
-                    if UIPreview.enabled, !playback.hasSelection, let meeting = store.meetings.first {
+                    if UIPreview.enabled,
+                        !UIPreviewPerformanceFixtures.flag("--preview-chrome-only", infoKey: "GdayPreviewChromeOnly"),
+                        !playback.hasSelection, let meeting = store.meetings.first
+                    {
                         playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
                     }
                 }
@@ -32,9 +36,14 @@ struct GdayMeetingsApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1200, height: 800)
-        .windowToolbarStyle(.unified(showsTitle: false))
+        .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             SidebarCommands()
+            CommandGroup(after: .textEditing) {
+                Button("Find Meetings…") { librarySearchAction?() }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(librarySearchAction == nil)
+            }
             // HIG: expose frequent commands in the menu bar, with standard shortcuts.
             // https://developer.apple.com/design/human-interface-guidelines/designing-for-macos
             CommandGroup(replacing: .newItem) {
@@ -209,7 +218,7 @@ private struct RecordingMenuView: View {
             Text("Recording since \(started.formatted(date: .omitted, time: .shortened))")
         }
         Group {
-            if #available(macOS 15.0, *), store.recordingID == nil {
+            if store.recordingID == nil {
                 // Native Option-key menu replacement, including while the menu is open.
                 // https://developer.apple.com/documentation/swiftui/view/modifierkeyalternate(_:_:)
                 recordingButton.modifierKeyAlternate(.option) {
@@ -247,11 +256,6 @@ private struct RecordingMenuView: View {
     private var recordingButton: some View {
         Button {
             if store.recordingID == nil {
-                // macOS 14 lacks modifierKeyAlternate; preserve Option-click behavior.
-                if #unavailable(macOS 15.0), NSEvent.modifierFlags.contains(.option) {
-                    openRecordingSetup()
-                    return
-                }
                 Task {
                     await store.startRecording()
                     if store.recordingID == nil, store.errorMessage != nil || store.recordingPermissionNeeded != nil {

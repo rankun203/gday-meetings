@@ -19,6 +19,7 @@ struct NativeMeetingList: NSViewRepresentable {
     var export: (UUID) -> Void
     var delete: (UUID) -> Void
     var open: ((UUID) -> Void)? = nil
+    var retainedViewport: NativeListViewport? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -89,13 +90,20 @@ struct NativeMeetingList: NSViewRepresentable {
         private var lastTime = ProcessInfo.processInfo.systemUptime
         private var velocity: Double = 0
 
-        init(_ parent: NativeMeetingList) { self.parent = parent }
+        init(_ parent: NativeMeetingList) {
+            self.parent = parent
+            revealed = parent.retainedViewport?.revealedID
+        }
         func update(_ value: NativeMeetingList) {
             guard let table, let scroll else { return }
-            let range = table.rows(in: scroll.contentView.bounds)
+            let bounds = Self.visibleContentBounds(scroll)
+            let range = table.rows(in: bounds)
             let anchorIndex = range.location
-            let anchor = rows.indices.contains(anchorIndex) ? rows[anchorIndex].id : nil
-            let offset = anchor.map { _ in scroll.contentView.bounds.minY - table.rect(ofRow: anchorIndex).minY } ?? 0
+            let anchor = rows.indices.contains(anchorIndex) ? rows[anchorIndex].id : value.retainedViewport?.anchor?.id
+            let offset =
+                rows.indices.contains(anchorIndex)
+                ? bounds.minY - table.rect(ofRow: anchorIndex).minY
+                : value.retainedViewport?.anchor?.offset ?? 0
             let changed = rows != value.entries || parent.displaySummaryTitle != value.displaySummaryTitle
             let appearanceChanged =
                 parent.recordingID != value.recordingID || parent.isFinalizing != value.isFinalizing
@@ -108,12 +116,13 @@ struct NativeMeetingList: NSViewRepresentable {
                 table.reloadData()
                 table.layoutSubtreeIfNeeded()
                 if let anchor, let row = rows.firstIndex(where: { $0.id == anchor }) {
-                    scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: row).minY + offset))
+                    scroll.contentView.scroll(
+                        to: NSPoint(x: 0, y: table.rect(ofRow: row).minY + offset - scroll.contentInsets.top))
                     scroll.reflectScrolledClipView(scroll.contentView)
                 }
             }
             else if appearanceChanged {
-                let visible = table.rows(in: scroll.contentView.bounds)
+                let visible = table.rows(in: Self.visibleContentBounds(scroll))
                 if visible.location != NSNotFound, visible.length > 0 {
                     table.reloadData(
                         forRowIndexes: IndexSet(integersIn: visible.location..<min(rows.count, NSMaxRange(visible))),
@@ -137,11 +146,27 @@ struct NativeMeetingList: NSViewRepresentable {
                     scroll.reflectScrolledClipView(scroll.contentView)
                 }
                 revealed = revealID
+                value.retainedViewport?.revealedID = revealID
             }
             lastOffset = scroll.contentView.bounds.minY
             lastTime = ProcessInfo.processInfo.systemUptime
             updating = false
+            rememberViewport()
             scheduleViewport()
+        }
+        private func rememberViewport() {
+            guard let table, let scroll, let retained = parent.retainedViewport else { return }
+            let bounds = Self.visibleContentBounds(scroll)
+            let first = table.rows(in: bounds).location
+            guard rows.indices.contains(first) else { return }
+            retained.anchor = .init(
+                id: rows[first].id, offset: bounds.minY - table.rect(ofRow: first).minY)
+        }
+        private static func visibleContentBounds(_ scroll: NSScrollView) -> NSRect {
+            var bounds = scroll.contentView.bounds
+            bounds.origin.y += scroll.contentInsets.top
+            bounds.size.height = max(0, bounds.height - scroll.contentInsets.top - scroll.contentInsets.bottom)
+            return bounds
         }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -194,6 +219,7 @@ struct NativeMeetingList: NSViewRepresentable {
         }
         func viewportDidChange() {
             guard !updating, let scroll else { return }
+            rememberViewport()
             let now = ProcessInfo.processInfo.systemUptime
             let dt = now - lastTime
             if dt > 0.002 {
@@ -211,7 +237,7 @@ struct NativeMeetingList: NSViewRepresentable {
                 guard let self else { return }
                 self.scheduledViewport = false
                 guard let table = self.table, let scroll = self.scroll else { return }
-                let range = table.rows(in: scroll.contentView.bounds)
+                let range = table.rows(in: Self.visibleContentBounds(scroll))
                 guard range.location != NSNotFound, range.length > 0, self.rows.indices.contains(range.location) else {
                     return
                 }

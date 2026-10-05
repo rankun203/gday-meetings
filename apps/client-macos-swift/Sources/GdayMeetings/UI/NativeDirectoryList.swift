@@ -8,6 +8,7 @@ struct NativeDirectoryList: NSViewRepresentable {
     var multiple = true
     var label: String
     var reveal: DirectoryReveal? = nil
+    var retainedViewport: NativeListViewport? = nil
     var viewport: (UUID, UUID) -> Void
     var delete: (DirectoryEntry) -> Void
 
@@ -58,13 +59,19 @@ struct NativeDirectoryList: NSViewRepresentable {
         var observer: NSObjectProtocol?
         var updating = false
         var revealed: UUID?
-        init(_ parent: NativeDirectoryList) { self.parent = parent }
+        init(_ parent: NativeDirectoryList) {
+            self.parent = parent
+            revealed = parent.retainedViewport?.revealedID
+        }
         func update(_ parent: NativeDirectoryList) {
             guard let table, let scroll else { return }
             let visible = table.rows(in: scroll.contentView.bounds)
             let first = visible.location
-            let anchor = rows.indices.contains(first) ? rows[first].id : nil
-            let offset = anchor == nil ? 0 : scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
+            let anchor = rows.indices.contains(first) ? rows[first].id : parent.retainedViewport?.anchor?.id
+            let offset =
+                rows.indices.contains(first)
+                ? scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
+                : parent.retainedViewport?.anchor?.offset ?? 0
             updating = true
             let changed = rows != parent.entries
             self.parent = parent
@@ -87,11 +94,14 @@ struct NativeDirectoryList: NSViewRepresentable {
             {
                 table.scrollRowToVisible(position)
                 revealed = reveal.id
+                parent.retainedViewport?.revealedID = reveal.id
             }
             updating = false
+            rememberViewport()
             scrolled()
         }
         func scrolled() {
+            if !updating { rememberViewport() }
             guard !updating, let table, let scroll else { return }
             let visible = table.rows(in: scroll.contentView.bounds)
             guard visible.location != NSNotFound, visible.length > 0, rows.indices.contains(visible.location) else {
@@ -101,6 +111,13 @@ struct NativeDirectoryList: NSViewRepresentable {
             let last = rows[min(rows.count - 1, NSMaxRange(visible) - 1)].id
             let callback = parent.viewport
             Task { @MainActor in callback(first, last) }
+        }
+        private func rememberViewport() {
+            guard let table, let scroll, let retained = parent.retainedViewport else { return }
+            let first = table.rows(in: scroll.contentView.bounds).location
+            guard rows.indices.contains(first) else { return }
+            retained.anchor = .init(
+                id: rows[first].id, offset: scroll.contentView.bounds.minY - table.rect(ofRow: first).minY)
         }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableViewSelectionDidChange(_ notification: Notification) {

@@ -5,6 +5,8 @@ struct NativeTaskList: NSViewRepresentable {
     let rows: [TaskHistoryRow]
     @Binding var selection: UUID?
     var revealID: UUID?
+    var revealToken: UUID? = nil
+    var retainedViewport: NativeListViewport? = nil
     var viewport: (UUID, UUID, Bool) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -51,12 +53,18 @@ struct NativeTaskList: NSViewRepresentable {
         var updating = false
         var offset: CGFloat = 0
         var revealed: UUID?
-        init(_ parent: NativeTaskList) { self.parent = parent }
+        init(_ parent: NativeTaskList) {
+            self.parent = parent
+            revealed = parent.retainedViewport?.revealedID
+        }
         func update(_ value: NativeTaskList) {
             guard let table, let scroll else { return }
             let first = table.rows(in: scroll.contentView.bounds).location
-            let anchor = rows.indices.contains(first) ? rows[first].id : nil
-            let delta = anchor == nil ? 0 : scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
+            let anchor = rows.indices.contains(first) ? rows[first].id : value.retainedViewport?.anchor?.id
+            let delta =
+                rows.indices.contains(first)
+                ? scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
+                : value.retainedViewport?.anchor?.offset ?? 0
             updating = true
             let changed = rows != value.rows
             parent = value
@@ -80,15 +88,20 @@ struct NativeTaskList: NSViewRepresentable {
             else {
                 table.deselectAll(nil)
             }
-            if let id = value.revealID, revealed != id, let position = rows.firstIndex(where: { $0.id == id }) {
+            if let id = value.revealID, revealed != (value.revealToken ?? id),
+                let position = rows.firstIndex(where: { $0.id == id })
+            {
                 table.scrollRowToVisible(position)
-                revealed = id
+                revealed = value.revealToken ?? id
+                value.retainedViewport?.revealedID = revealed
             }
             offset = scroll.contentView.bounds.minY
             updating = false
+            rememberViewport()
             if rows.count <= 50 { report(newer: false) }
         }
         func scrolled() {
+            if !updating { rememberViewport() }
             guard !updating, let scroll else { return }
             let position = scroll.contentView.bounds.minY
             guard abs(position - offset) > 0.5 else { return }
@@ -106,6 +119,13 @@ struct NativeTaskList: NSViewRepresentable {
             let last = rows[min(rows.count - 1, NSMaxRange(visible) - 1)].id
             let callback = parent.viewport
             Task { @MainActor in callback(first, last, newer) }
+        }
+        private func rememberViewport() {
+            guard let table, let scroll, let retained = parent.retainedViewport else { return }
+            let first = table.rows(in: scroll.contentView.bounds).location
+            guard rows.indices.contains(first) else { return }
+            retained.anchor = .init(
+                id: rows[first].id, offset: scroll.contentView.bounds.minY - table.rect(ofRow: first).minY)
         }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {

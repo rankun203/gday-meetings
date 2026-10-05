@@ -3,10 +3,17 @@ import SwiftUI
 struct PeopleView: View {
     @Binding var selection: Set<UUID>
     @EnvironmentObject private var store: MeetingStore
-    @StateObject private var page = DirectoryPaging()
-    @ViewState private var name = ""
+    @ObservedObject private var session: DirectorySession
+    @ObservedObject private var page: DirectoryPaging
+    private var name: String {
+        get { session.query }
+        nonmutating set { session.query = newValue }
+    }
     @ViewState private var deleting: Person?
-    @ViewState private var showExcluded = false
+    private var showExcluded: Bool {
+        get { session.showExcluded }
+        nonmutating set { session.showExcluded = newValue }
+    }
     @ViewState private var reviewingVoices = false
     private struct MergeRequest: Identifiable {
         let id = UUID()
@@ -14,25 +21,22 @@ struct PeopleView: View {
     }
     @ViewState private var mergeRequest: MergeRequest?
 
+    init(selection: Binding<Set<UUID>>, session: DirectorySession) {
+        _selection = selection
+        _session = ObservedObject(wrappedValue: session)
+        _page = ObservedObject(wrappedValue: session.page)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceListHeader(
-                title: "People", subtitle: "\(page.total.formatted()) \(page.total == 1 ? "person" : "people")"
-            ) {
-                Menu {
-                    Button("Review Voices…") { reviewingVoices = true }
-                    Button("Merge Selected People…") { mergeRequest = MergeRequest(personIDs: selection) }
-                        .disabled(selection.count < 2)
-                } label: {
-                    Label("People Actions", systemImage: "ellipsis.circle")
-                }.menuStyle(.borderlessButton).fixedSize().help("People Actions")
-            }
+
             HStack(spacing: 8) {
-                TextField("Find or Add Person", text: $name).onSubmit(findOrAdd).accessibilityLabel(
+                TextField("Find or Add Person", text: $session.query).onSubmit(findOrAdd).accessibilityLabel(
                     "Find or Add Person")
                 Button("Add Person", systemImage: "plus", action: add).labelStyle(.iconOnly).help("Add Person")
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+                .padding(.top, 12)
             if selection.count > 1 {
                 HStack {
                     Text("\(selection.count) selected").font(.caption).foregroundStyle(.secondary)
@@ -42,7 +46,7 @@ struct PeopleView: View {
             }
             NativeDirectoryList(
                 entries: page.entries, selection: $selection, label: "People", reveal: page.revealRequest,
-                viewport: page.viewport
+                retainedViewport: session.viewport, viewport: page.viewport
             ) { entry in
                 deleting = store.people.first { $0.id == entry.id }
             }
@@ -53,12 +57,21 @@ struct PeopleView: View {
                 }
             }
             HStack {
-                Toggle("Show Excluded", isOn: $showExcluded).toggleStyle(.checkbox)
+                Toggle("Show Excluded", isOn: $session.showExcluded).toggleStyle(.checkbox)
                 Spacer()
+
+                Text(page.total.formatted()).font(.caption).foregroundStyle(.secondary).accessibilityLabel(
+                    "\(page.total) people")
+
                 if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small) }
             }.padding(12)
         }
-        .background(AppTheme.readingBackground).navigationTitle("People")
+        .background(AppTheme.readingBackground, ignoresSafeAreaEdges: []).navigationTitle("People")
+        .toolbar {
+
+            ToolbarItem { peopleActions }
+
+        }
         .task(id: "\(name)|\(showExcluded)|\(store.directoryRevision)") { refresh() }
         .sheet(item: $mergeRequest) { request in
             PersonMergeView(selectedIDs: request.personIDs) { keptID in
@@ -90,8 +103,17 @@ struct PeopleView: View {
             Text("The person will be removed from your directory and meeting assignments.")
         }
     }
+    private var peopleActions: some View {
+        Menu {
+            Button("Review Voices…") { reviewingVoices = true }
+            Button("Merge Selected People…") { mergeRequest = MergeRequest(personIDs: selection) }
+                .disabled(selection.count < 2)
+        } label: {
+            Label("People Actions", systemImage: "ellipsis.circle")
+        }.labelStyle(.iconOnly).help("People Actions")
+    }
     private func refresh() {
-        page.configure(index: store.directoryIndex, kind: .people, query: name, showExcluded: showExcluded)
+        session.refresh(index: store.directoryIndex, kind: .people, revision: store.directoryRevision)
     }
     private func findOrAdd() {
         let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -129,25 +151,35 @@ struct PeopleView: View {
 struct TagsView: View {
     @Binding var selection: UUID?
     @EnvironmentObject private var store: MeetingStore
-    @StateObject private var page = DirectoryPaging()
-    @ViewState private var name = ""
+    @ObservedObject private var session: DirectorySession
+    @ObservedObject private var page: DirectoryPaging
+    private var name: String {
+        get { session.query }
+        nonmutating set { session.query = newValue }
+    }
     @ViewState private var deleting: MeetingTag?
     private var selectedIDs: Binding<Set<UUID>> {
         Binding(get: { selection.map { [$0] } ?? [] }, set: { selection = $0.first })
     }
+    init(selection: Binding<UUID?>, session: DirectorySession) {
+        _selection = selection
+        _session = ObservedObject(wrappedValue: session)
+        _page = ObservedObject(wrappedValue: session.page)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceListHeader(
-                title: "Tags", subtitle: "\(page.total.formatted()) \(page.total == 1 ? "tag" : "tags")"
-            ) { EmptyView() }
+
             HStack(spacing: 8) {
-                TextField("Find or Add Tag", text: $name).onSubmit(findOrAdd).accessibilityLabel("Find or Add Tag")
+                TextField("Find or Add Tag", text: $session.query).onSubmit(findOrAdd).accessibilityLabel(
+                    "Find or Add Tag")
                 Button("Add Tag", systemImage: "plus", action: add).help("Add Tag").labelStyle(.iconOnly)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+                .padding(.top, 12)
             NativeDirectoryList(
                 entries: page.entries, selection: selectedIDs, multiple: false, label: "Tags",
-                reveal: page.revealRequest, viewport: page.viewport
+                reveal: page.revealRequest, retainedViewport: session.viewport, viewport: page.viewport
             ) { entry in
                 deleting = store.tags.first { $0.id == entry.id }
             }
@@ -158,7 +190,12 @@ struct TagsView: View {
                 }
             }
             if page.loading && !page.entries.isEmpty { ProgressView().controlSize(.small).padding(12) }
-        }.background(AppTheme.readingBackground).navigationTitle("Tags")
+
+            Text("\(page.total.formatted()) \(page.total == 1 ? "tag" : "tags")").font(.caption).foregroundStyle(
+                .secondary
+            ).padding(12)
+
+        }.background(AppTheme.readingBackground, ignoresSafeAreaEdges: []).navigationTitle("Tags")
             .task(id: "\(name)|\(store.directoryRevision)") { refresh() }
             .confirmationDialog(
                 "Delete \(deleting?.name ?? "tag")?",
@@ -178,7 +215,9 @@ struct TagsView: View {
                 Text("The tag will be removed from all meetings and people.")
             }
     }
-    private func refresh() { page.configure(index: store.directoryIndex, kind: .tags, query: name, showExcluded: true) }
+    private func refresh() {
+        session.refresh(index: store.directoryIndex, kind: .tags, revision: store.directoryRevision)
+    }
     private func findOrAdd() {
         let query = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, let index = store.directoryIndex else { return }
