@@ -8,7 +8,6 @@ struct AppleLiveTranscriptionTests {
     /// Explicitly enabled only: generated speech, no microphone or cloud transcription.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_APPLE_LIVE_TEST"] == "1"))
     func generatedEnglishAndMandarin() async throws {
-        guard #available(macOS 26.0, *) else { return }
         for (language, voice, text) in [
             (
                 "en", "Karen",
@@ -60,7 +59,7 @@ struct AppleLiveTranscriptionTests {
     }
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_LOCAL_LIVE_RECORDING"] != nil))
     func authorizedLocalRecordingExcerpt() async throws {
-        guard #available(macOS 26.0, *), let path = ProcessInfo.processInfo.environment["GDAY_LOCAL_LIVE_RECORDING"]
+        guard let path = ProcessInfo.processInfo.environment["GDAY_LOCAL_LIVE_RECORDING"]
         else { return }
         let directory = URL(fileURLWithPath: path)
         let locale = try await AppleLiveTranscription.prepare(language: "en") { _ in }

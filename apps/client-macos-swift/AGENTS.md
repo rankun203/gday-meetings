@@ -32,6 +32,6 @@ Run `make format-macos` after Swift edits and `make lint-macos` before committin
 ## UI implementation and validation
 
 - Follow the UI design and shared theme guides before changing any screen or component, including settings, dialogs, menus, warnings, editors, and AppKit-backed views. Existing screens must converge on the same standard; Preview must use production components with synthetic data. Prefer current public SwiftUI/AppKit controls and Apple's Human Interface Guidelines.
-- Preserve the declared minimum macOS version with availability-checked native fallbacks. Do not raise it or introduce deprecated APIs for a visual effect.
+- Preserve the current declared minimum, macOS 26, unless the user authorizes a platform change. Use availability checks for APIs introduced after that minimum, and retain runtime hardware, language, and accessibility checks. Do not introduce deprecated APIs for a visual effect.
 - Validate changed UI in isolated Preview, including appearance, keyboard access, and layout stability. Keep Keychain access, real capture, and hardware playback disabled; use synthetic content.
 - Preview supports online provider checks and deliberately started jobs. Opening or saving settings must not upload content. Record untested behavior and compatibility limits in the task worklog; a successful build does not establish visual correctness.

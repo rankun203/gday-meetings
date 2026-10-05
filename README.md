@@ -33,7 +33,7 @@ The client must run in the host OS to receive microphone and system-audio permis
 
 ### SwiftUI client — Apple tools only
 
-On macOS 14.2 or later, install Apple's Command Line Tools, wait for installation to finish, then build from the repository root:
+On macOS 26 or later, install Apple's Command Line Tools, wait for installation to finish, then build from the repository root:
 
 ```sh
 xcode-select --install

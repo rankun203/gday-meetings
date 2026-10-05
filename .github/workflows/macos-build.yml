@@ -4,9 +4,13 @@ on:
   push:
     paths:
       - 'apps/client-macos-swift/**'
+      - '.github/workflows/macos-build.yml'
+      - '.github/actions/build-macos/**'
   pull_request:
     paths:
       - 'apps/client-macos-swift/**'
+      - '.github/workflows/macos-build.yml'
+      - '.github/actions/build-macos/**'
   workflow_dispatch:
 
 permissions:
@@ -23,10 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS 15 (Xcode 26.0.1)
-            runner: macos-15
-            # The app uses macOS 26 SDK APIs behind runtime availability checks.
-            developer_dir: /Applications/Xcode_26.0.1.app/Contents/Developer
           - name: macOS 26
             runner: macos-26
           - name: macOS 27 (runner preview)

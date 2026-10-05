@@ -6,7 +6,7 @@ app_path="$build_dir/macos/Gday Meetings.app"
 
 check_tools() {
     if [[ "$(uname -s)" != Darwin ]]; then
-        echo 'The SwiftUI client requires macOS 14.2 or later.' >&2
+        echo 'The SwiftUI client requires macOS 26 or later.' >&2
         exit 1
     fi
     if ! /usr/bin/xcode-select -p >/dev/null 2>&1; then
@@ -26,11 +26,10 @@ check_tools() {
         echo 'Building Gday Meetings requires macOS SDK 26 or later. Update Apple Command Line Tools or Xcode to version 26 or later and select the updated developer tools.' >&2
         exit 1
     fi
-    local os_major os_minor
+    local os_major
     os_major="$(/usr/bin/sw_vers -productVersion | cut -d. -f1)"
-    os_minor="$(/usr/bin/sw_vers -productVersion | cut -d. -f2)"
-    if (( os_major < 14 || (os_major == 14 && os_minor < 2) )); then
-        echo 'Gday Meetings requires macOS 14.2 or later.' >&2
+    if (( os_major < 26 )); then
+        echo 'Gday Meetings requires macOS 26 or later.' >&2
         exit 1
     fi
 }

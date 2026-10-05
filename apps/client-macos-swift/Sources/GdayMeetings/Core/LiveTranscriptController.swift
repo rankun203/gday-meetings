@@ -517,11 +517,6 @@ final class LiveTranscriptController: ObservableObject {
         }
         status = "Preparing live transcript…"
         checkpoint()
-        guard #available(macOS 26.0, *) else {
-            status = "Live transcript requires macOS 26 or later."
-            transcriptionIssue = status
-            return
-        }
         let provider = AppleLiveTranscription()
         let boundaries = self.boundaries
         cancelProvider = { await provider.cancel() }

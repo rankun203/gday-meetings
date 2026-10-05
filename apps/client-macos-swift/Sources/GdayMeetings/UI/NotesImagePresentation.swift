@@ -269,14 +269,7 @@ import QuickLookUI
         guard bounds.contains(point) else { return nil }
         return text?.isEditable == true && resizeHandle.contains(point) ? Self.resizeCursor : .arrow
     }
-    static let resizeCursor: NSCursor = {
-        if #available(macOS 15.0, *) {
-            return .frameResize(position: .bottomRight, directions: .all)
-        }
-        let image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: nil)!
-        image.size = NSSize(width: 18, height: 18)
-        return NSCursor(image: image, hotSpot: NSPoint(x: 9, y: 9))
-    }()
+    static let resizeCursor = NSCursor.frameResize(position: .bottomRight, directions: .all)
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .arrow)

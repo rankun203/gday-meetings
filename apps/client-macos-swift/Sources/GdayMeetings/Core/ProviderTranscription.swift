@@ -430,12 +430,8 @@ func prepareServerAudio(_ file: URL, compressPCM: Bool = true) async throws -> (
                         asset: AVURLAsset(url: file), presetName: AVAssetExportPresetAppleM4A),
                     exporter.supportedFileTypes.contains(.m4a)
                 else { throw ServiceError("Could not convert this audio format for the server.") }
-                exporter.outputURL = destination
-                exporter.outputFileType = .m4a
-                await exporter.export()
-                guard exporter.status == .completed else {
-                    throw exporter.error ?? ServiceError("Audio conversion failed.")
-                }
+                try Task.checkCancellation()
+                try await exporter.export(to: destination, as: .m4a)
             }
             try Task.checkCancellation()
             let outputSize = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0

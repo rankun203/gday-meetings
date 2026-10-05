@@ -43,18 +43,7 @@ struct MarkdownControlCursor: ViewModifier {
     @Environment(\.isEnabled) private var enabled
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) {
-            // Let SwiftUI own the cursor region; a one-time onHover assignment
-            // is otherwise overwritten by native button and picker tracking.
-            content.pointerStyle(enabled ? .link : .default)
-        }
-        else {
-            content.onContinuousHover { phase in
-                switch phase {
-                case .active: (enabled ? NSCursor.pointingHand : NSCursor.arrow).set()
-                case .ended: NSCursor.arrow.set()
-                }
-            }
-        }
+        // SwiftUI owns the region so native button and picker tracking preserve it.
+        content.pointerStyle(enabled ? .link : .default)
     }
 }

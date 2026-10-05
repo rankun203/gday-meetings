@@ -31,7 +31,7 @@ enum RecordingPermissions {
     // https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps
     static func request(microphone: Bool) async throws {
         let generation = cancellationGeneration
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         if microphone {
             let granted: Bool
             switch AVCaptureDevice.authorizationStatus(for: .audio) {

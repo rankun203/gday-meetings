@@ -34,7 +34,9 @@ These paths are relative to this client directory. Quit the bundle being rebuilt
 
 ## Build and install
 
-The app runs on macOS 14.2 or later. Building from source requires Apple's Command Line Tools or Xcode with Swift 6.2 and macOS SDK 26 or later. The build Mac must support those developer tools. Install current Command Line Tools for your macOS version; tests use Swift Testing.
+The app runs on macOS 26 or later. Building from source requires Apple's Command Line Tools or Xcode with Swift 6.2 and macOS SDK 26 or later. The build Mac must also run macOS 26 or later. Install current Command Line Tools for your macOS version; tests use Swift Testing.
+
+For macOS 14.2 or 15, use [v0.3.0](https://github.com/rankun203/meeting-notes/releases/tag/v0.3.0). Current builds no longer support those systems. Apple live transcription still depends on supported hardware and languages.
 
 The Make build commands pass the selected SDK and the existing deployment minimum explicitly to the linker. Release packaging checks both values in the executable. This prevents Swift Build from stamping the deployment minimum as the SDK version, which selects an older native control appearance even when compilation uses the current SDK.
 
@@ -64,8 +66,8 @@ Builds target the current Mac's architecture. Quit the development or staged app
 ### Release build checks
 
 GitHub Actions builds and ad-hoc signs the release app when a push or pull
-request changes files under `apps/client-macos-swift/`, with parallel Apple
-Silicon jobs for macOS 15, macOS 26, and macOS 27. Manual runs remain available.
+request changes the Swift client, this workflow, or its build action, with parallel Apple
+Silicon jobs for macOS 26 and macOS 27. Manual runs remain available.
 The macOS 27 job uses GitHub's `xcode-27` preview runner. Apple moved from
 macOS 15 to 26; there is no macOS 25 runner. Each job records the OS, architecture,
 developer directory, Swift compiler, and SDK versions before building from a
@@ -74,7 +76,7 @@ fresh checkout. A failed job does not cancel the other builds.
 The workflow is `.github/workflows/macos-build.yml`; its build steps are in
 `.github/actions/build-macos/action.yml`. These checks validate compilation,
 packaging, and signing, not recording permissions or audio hardware. They use
-Xcode 26.0.1 on macOS 15 and the runner's default Xcode on macOS 26 and 27.
+the runner's default Xcode on macOS 26 and 27.
 They do not cover every supported compiler version or Intel Macs.
 Run `make build-macos` locally before finishing Swift changes;
 use an isolated checkout if a development bundle is running.
@@ -117,7 +119,7 @@ Run `bash apps/client-macos-swift/scripts/build-audio-dependencies.sh` once from
 - Add connections in **Settings → Service Providers**. Each provider has its own address, authentication, capabilities, and connection status. Choose the provider for each capability in **Settings → General**. Summaries and chat use an OpenAI-compatible language-model provider. Its **Model** field lists the endpoint's models once the endpoint URL and API key are entered; type to filter the menu, or type any model name.
 - Export meeting text as JSON, Markdown, or TextBundle. Markdown and JSON exports include referenced images in a sibling assets folder; keep it beside the exported file. JSON retains time markers and an image manifest so importing it restores the image files. Older JSON files without a manifest import text and report missing images. TextBundle packages Markdown and assets together. Audio is not included. Copy recordings from the Rust client's library using **File → Import Existing Gday Library**.
 - Use **Meeting Actions → Archive to Server** to retain a verified snapshot of a local meeting and its audio on a configured Gday Meetings website.
-- Use the menu bar's **Start Recording** to record immediately with saved settings. Hold **Option** to reveal **New Recording…** and configure the session first (on macOS 14, Option-click **Start Recording**). Use **Command-N** for New Recording, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
+- Use the menu bar's **Start Recording** to record immediately with saved settings. Hold **Option** to reveal **New Recording…** and configure the session first. Use **Command-N** for New Recording, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
 
 Website transcription checkpoints its upload inputs, stable attempt key, and task ID locally. If the app exits or a request fails, choose **Resume Transcription** to check the same durable job. The server and worker run separately; installing this client does not install them. A working server must have a worker configured before it can transcribe.
 
@@ -209,7 +211,7 @@ Choose **Help → Export Logs**, or **Export Logs** in Data Privacy, to save the
 
 ## Human Interface Guidelines
 
-**Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](docs/UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Apple Music's capsule tabs and soft sidebar selection are visual references; use supported native APIs and preserve older-macOS fallbacks. Existing views have not all been migrated yet.
+**Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](docs/UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Use supported native APIs on macOS 26 or later, availability checks for newer APIs, and runtime hardware and accessibility checks. Validate each changed screen against the shared theme.
 
 The source cites the relevant Apple HIG principles beside the controls implementing them:
 

@@ -4,7 +4,8 @@ set -euo pipefail
 client_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 root="${GDAY_AUDIO_BUILD_ROOT:-$client_dir/.build/native-audio-$(uname -m)}"
 prefix="$root/install"
-signature="$(shasum -a 256 "$0" | cut -d' ' -f1)-$(xcrun clang --version | head -1)-$(xcrun --sdk macosx --show-sdk-version)"
+app_minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$client_dir/packaging/macos/Info.plist")"
+signature="$(shasum -a 256 "$0" | cut -d' ' -f1)-$(xcrun clang --version | head -1)-$(xcrun --sdk macosx --show-sdk-version)-$app_minimum"
 if [[ -f "$root/ready" && "$(cat "$root/ready")" == "$signature" && -f "$prefix/lib/libopusfile.a" ]]; then exit 0; fi
 jobs="${GDAY_AUDIO_BUILD_JOBS:-$(/usr/sbin/sysctl -n hw.activecpu 2>/dev/null || printf '4')}"
 if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
@@ -42,9 +43,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 export CC="$(xcrun --find clang)"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-export MACOSX_DEPLOYMENT_TARGET=14.2
-export CFLAGS="-O2 -isysroot $SDKROOT -mmacosx-version-min=14.2"
-export LDFLAGS="-isysroot $SDKROOT -mmacosx-version-min=14.2"
+export MACOSX_DEPLOYMENT_TARGET="$app_minimum"
+export CFLAGS="-O2 -isysroot $SDKROOT -mmacosx-version-min=$app_minimum"
+export LDFLAGS="-isysroot $SDKROOT -mmacosx-version-min=$app_minimum"
 build_library() {
     local name="$1" checksum="$2" library_jobs="$3"
     shift 3
@@ -64,7 +65,7 @@ build_library() {
             # wrapper and unused opusurl target. macOS provides lrintf in libSystem.
             local unit object_pids=()
             for unit in info internal opusfile stream; do
-                "$CC" -O2 -isysroot "$SDKROOT" -mmacosx-version-min=14.2 -DOP_HAVE_LRINTF=1 \
+                "$CC" -O2 -isysroot "$SDKROOT" -mmacosx-version-min="$app_minimum" -DOP_HAVE_LRINTF=1 \
                     -I"$prefix/include" -I"$prefix/include/opus" -I"$root/sources/$name/include" \
                     -c "$root/sources/$name/src/$unit.c" -o "$unit.o" &
                 object_pids+=("$!")

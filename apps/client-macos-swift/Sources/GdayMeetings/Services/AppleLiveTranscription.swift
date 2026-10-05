@@ -3,8 +3,7 @@ import CoreMedia
 import OSLog
 import Speech
 
-/// Public SpeechAnalyzer APIs are macOS 26+. No legacy recognizer or cloud fallback is used.
-@available(macOS 26.0, *)
+/// Uses SpeechAnalyzer on supported hardware and languages, with no cloud fallback.
 actor AppleLiveTranscription {
     struct Session {
         let analyzer: SpeechAnalyzer
@@ -191,7 +190,6 @@ actor AppleLiveTranscription {
 }
 
 /// AssetInventory reservations belong to this app and survive launches. Never evict a locale in use.
-@available(macOS 26.0, *)
 actor AppleSpeechAssets {
     static let shared = AppleSpeechAssets()
     private var active: [String: Int] = [:]
@@ -249,7 +247,6 @@ final class LivePCMConverter {
 
 /// SpeechAnalyzer requests one converted packet at a time. Device changes keep
 /// the same queue and recording clock; only conversion history resets at a gap.
-@available(macOS 26.0, *)
 actor AppleLiveAudioInput {
     private var iterator: AsyncStream<LiveAudioQueue.Packet>.Iterator
     private let queue: LiveAudioQueue

@@ -1,3 +1,10 @@
+---
+title: Audio dependencies
+date: 2026-10-05
+status: active
+scope: swift-native-audio-build
+---
+
 # Audio dependencies
 
 We vendor source releases, not precompiled libraries. The `.tar.gz` files are
@@ -15,7 +22,7 @@ SHA-256 in `scripts/build-audio-dependencies.sh`, and built with Apple Command L
 Tools (`clang`, `make`, `ar`, shell). No Homebrew, CMake, pkg-config, OpenSSL, or
 download server is required. The normal Make entry points run this step once and
 reuse `.build/native-audio-<architecture>/install` until the build script/compiler
-or SDK version changes. The final app statically links the libraries and includes
+or SDK version or deployment minimum changes. The final app statically links the libraries and includes
 their license notices in `Contents/Resources/ThirdPartyLicenses`.
 
 | Library | Version | Upstream source |
@@ -37,7 +44,7 @@ For direct SwiftPM/Xcode use, first run:
 bash scripts/build-audio-dependencies.sh
 ```
 
-Builds target the current host architecture (arm64 or x86_64), with macOS 14.2 as
+Builds target the current host architecture (arm64 or x86_64), with macOS 26 as
 the minimum. This is not a universal-binary build. On a failed build, fix the
 reported cause and rerun; incomplete builds never create the `ready` stamp. After
 an interrupted shell, remove the indicated `lock` directory only after verifying

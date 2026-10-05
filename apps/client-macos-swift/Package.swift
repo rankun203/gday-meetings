@@ -14,7 +14,7 @@ let audioRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 
 let package = Package(
     name: "GdayMeetings",
-    platforms: [.macOS("14.2")],
+    platforms: [.macOS("26.0")],
     products: [.executable(name: "GdayMeetings", targets: ["GdayMeetings"])],
     dependencies: [
         .package(
