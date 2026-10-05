@@ -304,6 +304,35 @@ struct LibraryView: View {
         .disabled(!store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording)
     }
 
+    private var showsMeetingTabs: Bool {
+        guard let selectedMeeting else { return false }
+        return store.meetings.contains { $0.id == selectedMeeting }
+    }
+
+    @ToolbarContentBuilder private var meetingToolbar: some ToolbarContent {
+        if !showsSearchResults && destination == .meetings {
+            ToolbarItem(placement: .secondaryAction) { addMeetingMenu }
+            if showsMeetingTabs {
+                ToolbarItem(placement: .principal) {
+                    MeetingContentTabs(selection: $workspace.meetingTab)
+                }
+            }
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+        }
+    }
+
+    @ToolbarContentBuilder private var recordingToolbar: some ToolbarContent {
+        if #available(macOS 26.1, *) {
+            ToolbarItem(placement: .primaryAction) { recordButton }
+                .visibilityPriority(.high)
+        }
+        else {
+            ToolbarItem(placement: .primaryAction) { recordButton }
+        }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        DefaultToolbarItem(kind: .search, placement: .primaryAction)
+    }
+
     var body: some View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
         // Native columns align their titles and actions with the window toolbar.
@@ -316,30 +345,8 @@ struct LibraryView: View {
                 .searchFocused($searchFocused)
                 .onSubmit(of: .search, submitSearch)
                 .toolbar {
-                    if !showsSearchResults, destination == .meetings {
-                        ToolbarItem(placement: .secondaryAction) {
-                            addMeetingMenu
-                        }
-                        if let selectedMeeting, store.meetings.contains(where: { $0.id == selectedMeeting }) {
-                            ToolbarItem(placement: .principal) {
-                                MeetingContentTabs(selection: $workspace.meetingTab)
-                            }
-                        }
-                        ToolbarSpacer(.flexible, placement: .primaryAction)
-                    }
-                    if #available(macOS 26.1, *) {
-                        ToolbarItem(placement: .primaryAction) {
-                            recordButton
-                        }
-                        .visibilityPriority(.high)
-                    }
-                    else {
-                        ToolbarItem(placement: .primaryAction) {
-                            recordButton
-                        }
-                    }
-                    ToolbarSpacer(.fixed, placement: .primaryAction)
-                    DefaultToolbarItem(kind: .search, placement: .primaryAction)
+                    meetingToolbar
+                    recordingToolbar
                 }
             // HIG Feedback: keep the activity visible while people browse other content.
             // A single persistent transport replaces scattered status and action rows.

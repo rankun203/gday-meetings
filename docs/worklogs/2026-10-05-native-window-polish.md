@@ -65,6 +65,12 @@ Claude Code's configured Opus resolved to `claude-opus-5-5` for the completed ap
 - Full serial validation passed 914 tests across 160 suites in 129.989 seconds after two committed-folder consistency defects were corrected. Evidence: `tmp/search-provider-index-2026-10-05/logs/full-canonical-quarantine-tests.log`. The local Python worker's three tests also pass.
 - The final isolated release passed in 170.39 seconds using full Xcode, targeted macOS 26 with SDK 27, and passed strict signature verification with no warnings or errors. Five focused tests across three suites passed after the final preview cleanup. The earlier Command Line Tools search-path warnings do not occur with this toolchain. The testable bundle is `tmp/native-window-polish-2026-10-05/production/Gday Meetings.app`; its binary SHA-256 is `9d60083c310e105cba620bbed47462248cbc8f629173a886aa1bdab01b879174`. Final captures, documentation commits, push, and CI are pending.
 
+## CI follow-up
+
+The first pushed run, `37280958588`, passed on macOS 27 but failed on macOS 26 with Xcode 26.6, Swift 6.3.3, and SDK 26.5. The older compiler exceeded its type-checking budget for the fusion-ranking expression and combined toolbar builder. Ranking now uses typed intermediate values; toolbar content is split into named builders without changing its controls or placements. A new regression preserves equal-score ordering before applying the result limit.
+
+The same runner exposed a non-Sendable audio-buffer capture in the existing excerpt converter. A Sendable reference owner now stores the one-shot input in `Synchronization.Mutex`; the callback takes and clears that input under the lock. No `@unchecked Sendable` or `@preconcurrency` suppression was added. An isolated SDK 26.5 compile passed strict concurrency with warnings treated as errors. The combined local build and 20 ranking/audio tests pass; the exact macOS 26 CI rerun remains pending.
+
 ## Cleanup
 
 A cleanup agent removed 20 obsolete generated directories before the later instruction to use Trash. Their pre-removal allocated sizes total 54,078,070,784 bytes (about 50.36 GiB), not a measured APFS free-space delta. Those generated files can be rebuilt but cannot be restored from Trash. Source, user libraries, the active isolated build, current production candidate, evidence, and current model/worker caches were preserved. Exact paths and sizes are in `cleanup-manifest.json`.
