@@ -5,13 +5,18 @@ import Testing
 
 @MainActor
 struct ProviderDraftCoordinatorTests {
-    @Test(arguments: [ServiceProviderKind.runpod, .openAICompatible, .nemotron, .community1])
+    @Test(arguments: [ServiceProviderKind.runpod, .openAICompatible, .nemotron, .community1, .localSearch])
     func cancelAndFailedSaveRetainDraft(kind: ServiceProviderKind) {
         let coordinator = ProviderDraftCoordinator()
         let saved = ServiceProvider(kind: kind)
         var edited = saved
         edited.name = "Synthetic edited provider"
         edited.apiKey = "synthetic-secret"
+        if kind == .localSearch {
+            edited.localSearch = .init(
+                executableURL: URL(fileURLWithPath: "/synthetic/worker"),
+                modelCacheURL: URL(fileURLWithPath: "/synthetic/models"))
+        }
         coordinator.update(edited)
         #expect(coordinator.hasChanges(in: [saved]))
         var writes = 0

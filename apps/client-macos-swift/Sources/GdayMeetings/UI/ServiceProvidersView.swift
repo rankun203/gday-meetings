@@ -27,6 +27,10 @@ struct ServiceProvidersView: View {
                         Label("This Mac", systemImage: "desktopcomputer")
                         Text("Live Transcription").font(.caption).foregroundStyle(.secondary)
                     }.tag(ThisMacProvider.id).padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label("Library Text Search", systemImage: "text.magnifyingglass")
+                        Text("Built In").font(.caption).foregroundStyle(.secondary)
+                    }.tag(LocalTextSearchProvider.id).padding(.vertical, 4)
                     ForEach(store.settings.serviceProviders) { provider in
                         ProviderReadinessRow(
                             provider: provider,
@@ -60,7 +64,9 @@ struct ServiceProvidersView: View {
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .buttonStyle(.borderless).disabled(selection == nil || selection == ThisMacProvider.id)
+                    .buttonStyle(.borderless).disabled(
+                        selection == nil || selection == ThisMacProvider.id || selection == LocalTextSearchProvider.id
+                    )
                     .accessibilityLabel("Remove Provider").help("Remove Provider")
                     Spacer()
                 }.padding(12)
@@ -70,8 +76,15 @@ struct ServiceProvidersView: View {
             if selection == ThisMacProvider.id {
                 ThisMacProviderView()
             }
+            else if selection == LocalTextSearchProvider.id {
+                LibraryTextSearchProviderView(status: store.libraryDataStatus)
+            }
             else if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
-                if provider.kind.isLocal {
+                if provider.kind == .localSearch {
+                    LocalSearchProviderView(controller: store.voiceSearch, draft: draftBinding(provider)).id(
+                        provider.id)
+                }
+                else if provider.kind.isLocalSpeaker {
                     LocalSpeakerProviderView(draft: draftBinding(provider)).id(provider.id)
                 }
                 else {
@@ -83,7 +96,7 @@ struct ServiceProvidersView: View {
                 ContentUnavailableView {
                     Label("Service Providers", systemImage: "server.rack")
                 } description: {
-                    Text("Add a provider to transcribe recordings or create summaries.")
+                    Text("Add a provider to transcribe recordings, create summaries, or search audio.")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -174,6 +187,7 @@ struct ServiceProvidersView: View {
             store.settings.serviceProviders.removeAll { $0.id == selection }
             if store.settings.transcriptionProviderID == selection { store.settings.transcriptionProviderID = nil }
             if store.settings.summaryProviderID == selection { store.settings.summaryProviderID = nil }
+            if store.settings.searchProviderID == selection { store.settings.searchProviderID = nil }
             if store.settings.liveDiarizationProviderID == selection { store.settings.liveDiarizationProviderID = nil }
             if store.settings.diarizationProviderID == selection { store.settings.diarizationProviderID = nil }
             if store.settings.speakerRecognitionProviderID == selection {
@@ -520,7 +534,7 @@ private struct ServiceProviderPanel: View {
             "Enter the address of the Gday Meetings website that hosts this account."
         case .filedrop:
             "Enter the Filedrop service base URL supplied by the service administrator."
-        case .nemotron, .community1:
+        case .nemotron, .community1, .localSearch:
             "This provider processes audio on this Mac."
         }
     }
@@ -547,7 +561,7 @@ private struct ServiceProviderPanel: View {
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization:
             "Summaries send the selected transcript and notes to this provider, including images when Image Input supports them."
-        case .search: "No search provider is available."
+        case .search: "Finds recorded audio that matches a voice description."
         case .playback: "Remote playback requires uploading original audio."
         case .fileTransfer: "Temporary audio links expire automatically."
         }
