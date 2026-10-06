@@ -255,9 +255,7 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private var selectedDetail: some View {
-        if destination == .meetings, let id = selectedMeeting,
-            store.meetings.contains(where: { $0.id == id })
-        {
+        if destination == .meetings, let id = selectedMeeting {
             VStack(spacing: 0) {
                 if openedSearchResult != nil {
                     HStack {
@@ -382,8 +380,7 @@ struct LibraryView: View {
     }
 
     private var showsMeetingTabs: Bool {
-        guard let selectedMeeting else { return false }
-        return store.meetings.contains { $0.id == selectedMeeting }
+        selectedMeeting != nil
     }
 
     @ToolbarContentBuilder private var meetingToolbar: some ToolbarContent {
