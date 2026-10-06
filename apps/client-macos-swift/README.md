@@ -143,9 +143,11 @@ The [protocol index](../../docs/protocols/README.md) defines common connection c
 
 Provider forms use **Save**. Switching providers or Settings tabs with unsaved changes offers **Save Changes**, **Discard Changes**, and **Cancel**. Closing Settings keeps the draft in memory for the next time you open it; quitting asks you to resolve it before the existing recording shutdown checks. Draft credentials are not saved until you choose Save. Save Changes in the navigation or quit dialog saves settings without starting a connection check. A failed save keeps the draft and cancels navigation.
 
-### On-device live transcription
+### On-device transcription
 
-**This Mac** provides Live Transcription when Apple supports the device and language. **Settings → General → Recording → Automatically Transcribe** is on by default. During recording, the **Transcribe** switch stops or resumes transcription without stopping audio capture. Speech models download from Apple when needed; **Settings → Service Providers → This Mac** lists installed and available models. Audio is processed locally. Unsupported hardware or languages do not prevent recording or provider-based transcription after recording.
+**This Mac** provides Transcription for saved audio and Live Transcription when Apple supports the device and language. Choose **This Mac** in **Transcribe** or **Re-transcribe** to process a recording locally. Each capability has its own switch in **Settings → Service Providers → This Mac**. Saved-audio transcription retains the previous transcript in **Transcripts** and uses source placeholders; use **Label Speakers** to distinguish voices.
+
+**Settings → General → Recording → Automatically Transcribe** is on by default. During recording, the **Transcribe** switch stops or resumes transcription without stopping audio capture. Speech models download from Apple when needed; **Settings → Service Providers → This Mac** lists installed and available models. Audio is processed locally. Unsupported hardware or languages do not prevent recording or provider-based transcription after recording.
 
 The recording card keeps the date, timer, stop action, and source meters visible. Open **Recording Settings** to change Language, Voice Processing, or Tags; the folded row summarizes their current values. Changing language restarts live recognition from that point and keeps earlier finalized text.
 

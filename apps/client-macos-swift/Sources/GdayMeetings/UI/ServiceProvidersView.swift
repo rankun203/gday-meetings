@@ -25,7 +25,7 @@ struct ServiceProvidersView: View {
                 List(selection: $listSelection) {
                     VStack(alignment: .leading, spacing: 3) {
                         Label("This Mac", systemImage: "desktopcomputer")
-                        Text("Live Transcription").font(.caption).foregroundStyle(.secondary)
+                        Text("Live and Recorded Transcription").font(.caption).foregroundStyle(.secondary)
                     }.tag(ThisMacProvider.id).padding(.vertical, 4)
                     VStack(alignment: .leading, spacing: 3) {
                         Label("Library Text Search", systemImage: "text.magnifyingglass")
@@ -50,7 +50,7 @@ struct ServiceProvidersView: View {
                 .listStyle(.sidebar)
                 HStack {
                     Menu {
-                        ForEach(ServiceProviderKind.allCases, id: \.self) { kind in
+                        ForEach(ServiceProviderKind.allCases.filter { $0 != .appleSpeech }, id: \.self) { kind in
                             Button {
                                 add(kind)
                             } label: {
@@ -540,7 +540,7 @@ private struct ServiceProviderPanel: View {
             "Enter the address of the Gday Meetings website that hosts this account."
         case .filedrop:
             "Enter the Filedrop service base URL supplied by the service administrator."
-        case .nemotron, .community1, .localSearch:
+        case .nemotron, .community1, .localSearch, .appleSpeech:
             "This provider processes audio on this Mac."
         }
     }

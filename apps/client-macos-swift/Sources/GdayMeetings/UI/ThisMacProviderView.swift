@@ -10,13 +10,28 @@ struct ThisMacProviderView: View {
         Form {
             Section {
                 Label("This Mac", systemImage: "desktopcomputer").font(.title2.weight(.semibold))
-                Text("Live transcription audio stays on this Mac.")
+                Text("Transcription audio stays on this Mac.")
                 Text(
                     "Speech models are downloaded from Apple when needed. Recording continues while a model downloads."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
             Section("Capabilities") {
+                Toggle(
+                    "Transcription",
+                    isOn: Binding(
+                        get: { store.settings.thisMacCapabilities.contains(.transcription) },
+                        set: { enabled in
+                            if enabled {
+                                store.settings.thisMacCapabilities.insert(.transcription)
+                            }
+                            else {
+                                store.settings.thisMacCapabilities.remove(.transcription)
+                            }
+                            store.saveSettings()
+                            Task { await store.refreshProviderHealth(providerID: ThisMacProvider.id) }
+                        }))
+                Text("Transcribes saved audio.").font(.caption).foregroundStyle(.secondary)
                 Toggle(
                     "Live Transcription",
                     isOn: Binding(
@@ -34,6 +49,9 @@ struct ThisMacProviderView: View {
                 Text("Transcribes audio during recording.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Readiness") {
+                ProviderHealthSummary(
+                    title: "Transcription",
+                    health: health.state(providerID: ThisMacProvider.id, capability: .transcription))
                 let result = health.state(providerID: ThisMacProvider.id, capability: .liveTranscription)
                 ProviderHealthSummary(title: "Live Transcription", health: result)
             }
@@ -50,7 +68,7 @@ struct ThisMacProviderView: View {
         .task {
             await store.refreshProviderHealth(providerID: ThisMacProvider.id)
             guard SpeechTranscriber.isAvailable else {
-                message = "Live transcription isn’t available on this Mac."
+                message = "Transcription isn’t available on this Mac."
                 return
             }
             await refreshModels()

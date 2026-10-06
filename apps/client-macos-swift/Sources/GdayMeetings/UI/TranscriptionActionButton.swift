@@ -123,7 +123,12 @@ struct TranscriptionConfirmationPresenter: ViewModifier {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            if confirmation == .discardPendingRequest {
+            if confirmation == .discardPendingRequest, meeting.transcriptionAttempt?.providerID == ThisMacProvider.id {
+                Text(
+                    "This removes the saved transcription request and any unapplied result. The current transcript and recording are kept."
+                )
+            }
+            else if confirmation == .discardPendingRequest {
                 Text(
                     "This removes the saved job reference and any unapplied result from this Mac. It does not cancel the provider's job or remove uploaded audio. Check the provider's job history first. Starting another transcription may incur another charge."
                 )

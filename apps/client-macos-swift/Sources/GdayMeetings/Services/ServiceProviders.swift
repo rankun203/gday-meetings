@@ -2,7 +2,13 @@ import Foundation
 
 enum ThisMacProvider {
     static let id = UUID(uuidString: "5987605A-1329-46E3-906D-2EC2D08B4D16")!
-    static let capabilities: Set<ProviderCapability> = [.liveTranscription]
+    static let capabilities: Set<ProviderCapability> = [.liveTranscription, .transcription]
+    static func transcriptionProvider(settings: AppSettings) -> ServiceProvider {
+        var provider = ServiceProvider(kind: .appleSpeech)
+        provider.id = id
+        provider.enabledCapabilities = settings.thisMacCapabilities
+        return provider
+    }
 }
 
 enum TranscriptionLanguage {
@@ -39,10 +45,11 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
 }
 
 enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
-    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1, localSearch
+    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1, localSearch, appleSpeech
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .appleSpeech: return "This Mac"
         case .runpod: return "RunPod"
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
@@ -54,6 +61,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
     }
     var systemImage: String {
         switch self {
+        case .appleSpeech: "desktopcomputer"
         case .nemotron, .community1: "person.wave.2"
         case .localSearch: "waveform"
         case .gdayWebsite: "globe"
@@ -62,6 +70,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
     }
     var capabilities: Set<ProviderCapability> {
         switch self {
+        case .appleSpeech: return ThisMacProvider.capabilities
         case .runpod: return [.transcription, .diarization]
         case .filedrop: return [.fileTransfer]
         case .openAICompatible: return [.summarization]
@@ -73,7 +82,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         }
     }
     var isLocalSpeaker: Bool { self == .nemotron || self == .community1 }
-    var isLocal: Bool { isLocalSpeaker || self == .localSearch }
+    var isLocal: Bool { isLocalSpeaker || self == .localSearch || self == .appleSpeech }
 }
 
 struct ServiceProvider: Identifiable, Codable, Equatable {
@@ -413,7 +422,7 @@ struct OpenAISummaryProvider: SummarizationProvider {
             let server = suppliedServer ?? GdayServerService.shared
             let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
             switch provider.kind {
-            case .nemotron, .community1, .localSearch:
+            case .nemotron, .community1, .localSearch, .appleSpeech:
                 throw ServiceError("Manage local model readiness in Service Providers.")
             case .filedrop:
                 return try await FiledropProvider(provider: provider).checkConnection().value

@@ -16,7 +16,7 @@ extension MeetingStore {
     }
 
     var eligibleTranscriptionProviders: [ServiceProvider] {
-        settings.serviceProviders.filter {
+        ([ThisMacProvider.transcriptionProvider(settings: settings)] + settings.serviceProviders).filter {
             ProviderConfigurationEligibility.canSelect($0, for: .transcription, providers: settings.serviceProviders)
         }
     }
@@ -26,7 +26,11 @@ extension MeetingStore {
             throw ServiceError("Resume or discard the pending transcription before choosing another provider.")
         }
         let providerID = meeting.transcriptionAttempt?.providerID ?? requestedID ?? settings.transcriptionProviderID
-        guard let providerID, let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else {
+        guard let providerID,
+            let provider = providerID == ThisMacProvider.id
+                ? ThisMacProvider.transcriptionProvider(settings: settings)
+                : settings.serviceProviders.first(where: { $0.id == providerID })
+        else {
             throw ServiceError("Choose a transcription provider in Settings → General.")
         }
         guard provider.supports(.transcription) else {

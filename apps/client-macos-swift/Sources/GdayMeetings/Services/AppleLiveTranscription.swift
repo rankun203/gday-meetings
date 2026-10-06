@@ -25,15 +25,15 @@ actor AppleLiveTranscription {
 
     static func prepare(language: String, status: @Sendable (String) async -> Void) async throws -> Locale {
         guard SpeechTranscriber.isAvailable else {
-            throw MeetingError.message("Live transcript isn’t available on this Mac.")
+            throw MeetingError.message("Transcription isn’t available on this Mac.")
         }
         guard let locale = await locale(for: language) else {
-            throw MeetingError.message("Live transcript isn’t available for this language on this Mac.")
+            throw MeetingError.message("Transcription isn’t available for this language on this Mac.")
         }
         let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
         let readiness = await AssetInventory.status(forModules: [module])
         guard readiness != .unsupported else {
-            throw MeetingError.message("Live transcript isn’t available for this language on this Mac.")
+            throw MeetingError.message("Transcription isn’t available for this language on this Mac.")
         }
         try await AppleSpeechAssets.shared.reserve(locale)
         if readiness != .installed {
@@ -51,7 +51,7 @@ actor AppleLiveTranscription {
             catch {
                 log.error("Speech model installation failed: locale \(locale.identifier, privacy: .public)")
                 throw MeetingError.message(
-                    "Couldn’t download the speech model. Check your internet connection and available storage, then turn Live Transcript on again."
+                    "Couldn’t download the speech model. Check your internet connection and available storage, then try transcription again."
                 )
             }
         }
@@ -199,7 +199,7 @@ actor AppleSpeechAssets {
         if reserved.count >= AssetInventory.maximumReservedLocales {
             guard let old = reserved.first(where: { (active[$0.identifier] ?? 0) == 0 }) else {
                 throw MeetingError.message(
-                    "Finish the current live transcript before downloading another speech model.")
+                    "Wait for transcription to finish before downloading another speech model.")
             }
             _ = await AssetInventory.release(reservedLocale: old)
         }

@@ -72,7 +72,7 @@ extension ServiceProvider {
 
 extension ThisMacProvider {
     @MainActor static func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
-        guard capability == .liveTranscription else { return .notReady("Capability unavailable.") }
+        guard ThisMacProvider.capabilities.contains(capability) else { return .notReady("Capability unavailable.") }
         guard settings.thisMacCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
         guard SpeechTranscriber.isAvailable else { return .notReady("Transcription is unavailable on this Mac.") }
         let locales = await SpeechTranscriber.supportedLocales

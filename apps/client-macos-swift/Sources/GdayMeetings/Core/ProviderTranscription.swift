@@ -67,11 +67,34 @@ extension MeetingStore {
             return
         }
         if attempt.taskID == nil {
-            attempt.providerLanguage = try await resolvedTranscriptionLanguage(
-                attempt.providerLanguage ?? attempt.language, for: provider,
-                preservingRequestCode: meeting.transcriptionAttempt != nil)
+            attempt.providerLanguage =
+                provider.kind == .appleSpeech
+                ? attempt.language
+                : try await resolvedTranscriptionLanguage(
+                    attempt.providerLanguage ?? attempt.language, for: provider,
+                    preservingRequestCode: meeting.transcriptionAttempt != nil)
         }
         switch provider.kind {
+        case .appleSpeech:
+            try await saveTranscriptionAttempt(attempt, meetingID: id)
+            let files = audioURLs(for: meeting)
+            guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
+            let startedAt = Date()
+            let draft = try await AppleRecordedTranscription.transcribe(
+                files: files, meetingID: id, language: attempt.language
+            ) { message in
+                await self.setJobProgress(.transcription, .meeting(id), message)
+            }
+            try Task.checkCancellation()
+            recordDataFlow(
+                DataFlow(
+                    location: .local, targetID: provider.id, targetName: provider.name,
+                    startedAt: startedAt, bodies: files.map(\.lastPathComponent), purpose: "Transcription"),
+                meetingID: id)
+            attempt.result = draft.segments
+            attempt.resultSpeakers = draft.speakers
+            try await saveTranscriptionAttempt(attempt, meetingID: id)
+            try await saveTranscriptionResult(draft.segments, attempt: attempt, meetingID: id)
         case .gdayWebsite:
             let server = GdayServerService.shared
             let origin = try ServiceHTTP.origin(provider.endpoint).absoluteString

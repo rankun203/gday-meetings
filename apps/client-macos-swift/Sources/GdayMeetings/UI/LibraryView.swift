@@ -26,7 +26,7 @@ struct LibraryView: View {
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
     @ViewState private var selectedMeeting: UUID?
-    @State private var meetingCountResult: (request: MeetingCountRequest, count: Int)?
+    @ViewState private var meetingCountResult: (request: MeetingCountRequest, count: Int)?
     @ViewState private var selectedPeople: Set<UUID> = []
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""

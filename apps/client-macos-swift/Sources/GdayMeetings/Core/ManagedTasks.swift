@@ -150,7 +150,9 @@ extension MeetingStore {
             let instructions = summaryInstructions?.trimmingCharacters(in: .whitespacesAndNewlines)
             task.summaryInstructions = instructions?.isEmpty == false ? instructions : nil
         }
-        task.providerName = settings.serviceProviders.first { $0.id == providerID }?.name
+        task.providerName =
+            providerID == ThisMacProvider.id
+            ? "This Mac" : settings.serviceProviders.first { $0.id == providerID }?.name
         task.meetingTitle = meeting.title
         task.state = .queued
         task.progress = "Waiting to start"
