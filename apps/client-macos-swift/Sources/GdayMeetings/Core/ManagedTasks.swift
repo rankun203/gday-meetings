@@ -17,6 +17,7 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var providerID: UUID?
     var providerName: String?
     var summaryInstructions: String?
+    var searchIndexRevision: String?
     var state: ManagedTaskState = .queued
     var progress = "Waiting to start"
     var errorMessage: String?
@@ -109,9 +110,37 @@ extension MeetingStore {
         return await enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
     }
 
+    @discardableResult func queueSearchIndexCommand(id: UUID, revision: String? = nil, force: Bool = false) async
+        -> UUID?
+    {
+        guard let selected = selectedSearchProvider,
+            await ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id })
+        else { return nil }
+        let source: String
+        if let revision {
+            source = revision
+        }
+        else {
+            let directory = dataDirectory
+            guard
+                let fingerprint = try? await Task.detached(
+                    priority: .utility,
+                    operation: {
+                        try SemanticSource.fingerprint(
+                            folder: MeetingFolderLocation.resolve(id: id, directory: directory))
+                    }
+                ).value
+            else { return nil }
+            source = (selected.localSearch ?? .init()).selectedModel.space + ":" + fingerprint
+        }
+        return await enqueueManagedTask(
+            kind: .searchIndex, meeting: meeting, providerID: selected.id, automatically: true,
+            searchIndexRevision: source, retryStopped: force)
+    }
+
     private func enqueueManagedTask(
         kind: BackgroundJob.Kind, meeting: Meeting, providerID: UUID?, automatically: Bool = false,
-        summaryInstructions: String? = nil
+        summaryInstructions: String? = nil, searchIndexRevision: String? = nil, retryStopped: Bool = false
     ) async -> UUID? {
         let key = BackgroundJob.Key(kind: kind, scope: .meeting(meeting.id))
         guard !isChangingLibrary, !isPreparingToQuit, !managedTasksLoading,
@@ -145,6 +174,10 @@ extension MeetingStore {
             return nil
         }
         if task.recovery == .restartRequired || task.restartRequested { return nil }
+        if kind == .searchIndex {
+            if task.userStopped, task.searchIndexRevision == searchIndexRevision, !retryStopped { return nil }
+            task.searchIndexRevision = searchIndexRevision
+        }
         task.providerID = providerID
         if kind == .summary {
             let instructions = summaryInstructions?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -237,11 +270,12 @@ extension MeetingStore {
         guard !isChangingLibrary, !isPreparingToQuit, !isSchedulingManagedTasks, !managedTasksLoading else { return }
         isSchedulingManagedTasks = true
         defer { isSchedulingManagedTasks = false }
-        for kind in [BackgroundJob.Kind.transcription, .summary, .diarization] {
+        for kind in [BackgroundJob.Kind.transcription, .summary, .diarization, .searchIndex] {
             let limit =
                 kind == .transcription
                 ? Self.maximumConcurrentTranscriptions
-                : kind == .diarization ? Self.maximumConcurrentSpeakerLabeling : Self.maximumConcurrentSummaries
+                : kind == .searchIndex
+                    ? 1 : kind == .diarization ? Self.maximumConcurrentSpeakerLabeling : Self.maximumConcurrentSummaries
             while true {
                 let running = managedTasks.filter { $0.kind == kind && $0.state == .running && !$0.isPreview }.count
                 guard running < limit else { break }
@@ -330,6 +364,8 @@ extension MeetingStore {
                 pendingAutomaticSummaries.remove(task.meetingID)
                 try await performSummary(
                     id: task.meetingID, providerID: task.providerID, instructions: task.summaryInstructions)
+            case .searchIndex:
+                try await performSearchIndex(id: task.meetingID, providerID: task.providerID)
             case .diarization:
                 try await performLocalDiarization(id: task.meetingID, providerID: task.providerID)
             default: throw ServiceError("This task type cannot run from Tasks yet.")
@@ -337,6 +373,7 @@ extension MeetingStore {
             try Task.checkCancellation()
             await completeManagedTask(id, state: .completed, recovery: .none)
             if task.kind == .transcription { scheduleAutomaticSpeakerLabeling(id: task.meetingID) }
+            if task.kind == .searchIndex { scheduleSearchIndexing() }
         }
         catch {
             if Task.isCancelled || error is CancellationError {
@@ -352,10 +389,17 @@ extension MeetingStore {
                 else {
                     await completeManagedTask(
                         id, state: .cancelled, recovery: .manual,
-                        message: task.kind == .diarization
-                            ? "Speaker labeling cancelled. The current transcript was kept."
-                            : "Stopped waiting on this Mac. The provider may still be processing the request.")
+                        message: task.kind == .searchIndex
+                            ? "Search indexing stopped."
+                            : task.kind == .diarization
+                                ? "Speaker labeling cancelled. The current transcript was kept."
+                                : "Stopped waiting on this Mac. The provider may still be processing the request.")
                 }
+                if task.kind == .searchIndex, !Task.isCancelled, !isPreparingToQuit { scheduleSearchIndexing() }
+            }
+            else if task.kind == .searchIndex, case SearchProviderError.sourceChanged = error {
+                await completeManagedTask(id, state: .cancelled, recovery: .none, message: error.localizedDescription)
+                scheduleSearchIndexing()
             }
             else if error is MissingTranscriptionJob {
                 await completeManagedTask(
@@ -446,6 +490,7 @@ extension MeetingStore {
             task.recovery != .restartRequired && task.recovery != .blocked
         else { return false }
         if task.isPreview || task.kind == .summary { return true }
+        if task.kind == .searchIndex { return selectedSearchProvider != nil }
         if task.kind == .diarization {
             return recordingID != task.meetingID && !isJobRunning(.transcription, .meeting(task.meetingID))
                 && !isJobRunning(.importAudio, .meeting(task.meetingID))
@@ -481,6 +526,9 @@ extension MeetingStore {
         guard await ensureMeetingLoaded(id: task.meetingID), canRetryManagedTask(task) else { return }
         if task.kind == .transcription {
             _ = await queueTranscriptionCommand(id: task.meetingID, providerID: task.providerID)
+        }
+        else if task.kind == .searchIndex {
+            _ = await queueSearchIndexCommand(id: task.meetingID, force: true)
         }
         else if task.kind == .diarization {
             _ = await queueSpeakerLabelingCommand(id: task.meetingID, providerID: task.providerID)
@@ -733,7 +781,7 @@ extension MeetingStore {
             guard original.state.isActive || (original.state == .failed && original.recovery == .automatic) else {
                 continue
             }
-            guard [.transcription, .summary, .diarization].contains(original.kind) else {
+            guard [.transcription, .summary, .diarization, .searchIndex].contains(original.kind) else {
                 await finishManagedTask(
                     original.id, state: .failed, recovery: .blocked,
                     message: "This app cannot run this task type. The saved task has been kept.")

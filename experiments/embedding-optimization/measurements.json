@@ -1,0 +1,1784 @@
+{
+  "timing": {
+    "311m-bounded-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999998855647138,
+      "loadMs": {
+        "median": 202.539624995552,
+        "minimum": 195.50266669830307,
+        "maximum": 1862.182583368849
+      },
+      "firstPredictionMs": {
+        "median": 121.56158330617473,
+        "minimum": 118.62033337820321,
+        "maximum": 126.6037083696574
+      },
+      "warmP50Ms": {
+        "median": 8.887833333574235,
+        "minimum": 8.858874964062124,
+        "maximum": 8.915083366446197
+      },
+      "warmP95Ms": {
+        "median": 9.195458318572491,
+        "minimum": 9.031708294060081,
+        "maximum": 9.268124995287508
+      }
+    },
+    "311m-bounded-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999998855647138,
+      "loadMs": {
+        "median": 253.63633333472535,
+        "minimum": 233.42520830919966,
+        "maximum": 1621.8919583479874
+      },
+      "firstPredictionMs": {
+        "median": 152.26129168877378,
+        "minimum": 144.10845830570906,
+        "maximum": 153.60645833425224
+      },
+      "warmP50Ms": {
+        "median": 23.15941668348387,
+        "minimum": 23.094916716217995,
+        "maximum": 23.185250000096858
+      },
+      "warmP95Ms": {
+        "median": 23.484208330046386,
+        "minimum": 23.432416666764766,
+        "maximum": 23.528416641056538
+      }
+    },
+    "311m-fp32-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999998838,
+      "loadMs": {
+        "median": 304.3916249880567,
+        "minimum": 298.7318750238046,
+        "maximum": 310.3527500061318
+      },
+      "firstPredictionMs": {
+        "median": 129.44133335258812,
+        "minimum": 123.33149998448789,
+        "maximum": 133.27037502313033
+      },
+      "warmP50Ms": {
+        "median": 9.997375018429011,
+        "minimum": 9.992458333726972,
+        "maximum": 10.100333311129361
+      },
+      "warmP95Ms": {
+        "median": 10.299583314917982,
+        "minimum": 10.205124970525503,
+        "maximum": 10.364999994635582
+      }
+    },
+    "311m-fp32-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999998965,
+      "loadMs": {
+        "median": 346.658666676376,
+        "minimum": 342.7860416122712,
+        "maximum": 4953.120583377313
+      },
+      "firstPredictionMs": {
+        "median": 154.02379166334867,
+        "minimum": 149.9221666599624,
+        "maximum": 191.54987501678988
+      },
+      "warmP50Ms": {
+        "median": 24.997750006150454,
+        "minimum": 24.956166686024517,
+        "maximum": 25.061041640583426
+      },
+      "warmP95Ms": {
+        "median": 25.434041628614068,
+        "minimum": 25.192166678607464,
+        "maximum": 25.44070838484913
+      }
+    },
+    "311m-palette6-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9398821476554702,
+      "loadMs": {
+        "median": 195.7854999927804,
+        "minimum": 180.26233330601826,
+        "maximum": 12318.815750011709
+      },
+      "firstPredictionMs": {
+        "median": 2201.2756666517816,
+        "minimum": 2192.3300833441317,
+        "maximum": 2290.300666645635
+      },
+      "warmP50Ms": {
+        "median": 24.56383331445977,
+        "minimum": 24.478541628923267,
+        "maximum": 24.654833308886737
+      },
+      "warmP95Ms": {
+        "median": 24.93658335879445,
+        "minimum": 24.835083284415305,
+        "maximum": 25.19783331081271
+      }
+    },
+    "311m-selective-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999379766873,
+      "loadMs": {
+        "median": 215.64933331683278,
+        "minimum": 214.68479168834165,
+        "maximum": 222.40795835386962
+      },
+      "firstPredictionMs": {
+        "median": 127.24116665776819,
+        "minimum": 125.13524998212233,
+        "maximum": 128.23170830961317
+      },
+      "warmP50Ms": {
+        "median": 9.503916662652045,
+        "minimum": 9.379541617818177,
+        "maximum": 9.533000004012138
+      },
+      "warmP95Ms": {
+        "median": 9.735416679177433,
+        "minimum": 9.638625022489578,
+        "maximum": 9.829416638240218
+      }
+    },
+    "311m-selective-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999395145103,
+      "loadMs": {
+        "median": 246.16824998520315,
+        "minimum": 242.61387501610443,
+        "maximum": 976.8340000300668
+      },
+      "firstPredictionMs": {
+        "median": 141.78095833631232,
+        "minimum": 140.26666665449739,
+        "maximum": 150.3412916790694
+      },
+      "warmP50Ms": {
+        "median": 24.48370831552893,
+        "minimum": 24.420041707344353,
+        "maximum": 24.506749992724508
+      },
+      "warmP95Ms": {
+        "median": 24.93679168401286,
+        "minimum": 24.90804169792682,
+        "maximum": 24.990250007249415
+      }
+    },
+    "97m-bounded-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999850625193986,
+      "loadMs": {
+        "median": 113.78449999028817,
+        "minimum": 112.3045000131242,
+        "maximum": 3238.6782499961555
+      },
+      "firstPredictionMs": {
+        "median": 40.60704167932272,
+        "minimum": 40.55170837091282,
+        "maximum": 44.72154163522646
+      },
+      "warmP50Ms": {
+        "median": 4.090333299245685,
+        "minimum": 3.9260833291336894,
+        "maximum": 4.158249997999519
+      },
+      "warmP95Ms": {
+        "median": 4.725458333268762,
+        "minimum": 4.569291661027819,
+        "maximum": 4.733208334073424
+      }
+    },
+    "97m-bounded-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999994019414442,
+      "loadMs": {
+        "median": 154.8272916697897,
+        "minimum": 150.16220830148086,
+        "maximum": 1197.9674583417363
+      },
+      "firstPredictionMs": {
+        "median": 88.49620830733329,
+        "minimum": 86.87266666674986,
+        "maximum": 90.14833334367722
+      },
+      "warmP50Ms": {
+        "median": 9.34633333235979,
+        "minimum": 9.07254166668281,
+        "maximum": 9.377500042319298
+      },
+      "warmP95Ms": {
+        "median": 10.114874981809407,
+        "minimum": 9.665083314757794,
+        "maximum": 10.211666638497263
+      }
+    },
+    "97m-fp32-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999995555,
+      "loadMs": {
+        "median": 155.63933330122381,
+        "minimum": 146.56070835189894,
+        "maximum": 893.8271249644458
+      },
+      "firstPredictionMs": {
+        "median": 78.8412083638832,
+        "minimum": 74.82616667402908,
+        "maximum": 79.37125000171363
+      },
+      "warmP50Ms": {
+        "median": 7.154499995522201,
+        "minimum": 6.2371667008847,
+        "maximum": 7.308624975848943
+      },
+      "warmP95Ms": {
+        "median": 8.478583302348852,
+        "minimum": 8.275833330117166,
+        "maximum": 8.600541623309255
+      }
+    },
+    "97m-fp32-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999991998,
+      "loadMs": {
+        "median": 176.86345835682005,
+        "minimum": 173.40191663242877,
+        "maximum": 891.9541666400619
+      },
+      "firstPredictionMs": {
+        "median": 93.28604163601995,
+        "minimum": 91.87695832224563,
+        "maximum": 93.99066667538136
+      },
+      "warmP50Ms": {
+        "median": 8.443666680250317,
+        "minimum": 8.42204166110605,
+        "maximum": 8.477791678160429
+      },
+      "warmP95Ms": {
+        "median": 8.697499986737967,
+        "minimum": 8.636583341285586,
+        "maximum": 8.738125034142286
+      }
+    },
+    "97m-palette4-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9105681586955483,
+      "loadMs": {
+        "median": 140.04237501649186,
+        "minimum": 134.84891667030752,
+        "maximum": 4203.068999981042
+      },
+      "firstPredictionMs": {
+        "median": 104.17870833771303,
+        "minimum": 97.91133331600577,
+        "maximum": 104.97200000099838
+      },
+      "warmP50Ms": {
+        "median": 11.279666621703655,
+        "minimum": 11.265749984886497,
+        "maximum": 11.282249994110316
+      },
+      "warmP95Ms": {
+        "median": 11.541791667696089,
+        "minimum": 11.508958355989307,
+        "maximum": 11.577791650779545
+      }
+    },
+    "97m-palette6-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9788593912121031,
+      "loadMs": {
+        "median": 143.8522083335556,
+        "minimum": 142.03958335565403,
+        "maximum": 4417.447458312381
+      },
+      "firstPredictionMs": {
+        "median": 723.5010833246633,
+        "minimum": 710.4014166397974,
+        "maximum": 725.4367916611955
+      },
+      "warmP50Ms": {
+        "median": 10.160541685763747,
+        "minimum": 10.131708346307278,
+        "maximum": 10.16841665841639
+      },
+      "warmP95Ms": {
+        "median": 10.344458336476237,
+        "minimum": 10.326333285775036,
+        "maximum": 10.445041698403656
+      }
+    },
+    "97m-palette8-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9997883738282667,
+      "loadMs": {
+        "median": 172.07070835866034,
+        "minimum": 167.53345832694322,
+        "maximum": 177.4245000560768
+      },
+      "firstPredictionMs": {
+        "median": 97.9763749637641,
+        "minimum": 96.94283333374187,
+        "maximum": 99.39570829737931
+      },
+      "warmP50Ms": {
+        "median": 11.436333355959505,
+        "minimum": 11.415749962907284,
+        "maximum": 11.511041666381061
+      },
+      "warmP95Ms": {
+        "median": 11.727583361789584,
+        "minimum": 11.627624975517392,
+        "maximum": 11.87295833369717
+      }
+    },
+    "97m-selective-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999999849030433,
+      "loadMs": {
+        "median": 121.85687501914799,
+        "minimum": 120.53204164840281,
+        "maximum": 1201.4301666640677
+      },
+      "firstPredictionMs": {
+        "median": 83.9530416415073,
+        "minimum": 82.17229164438322,
+        "maximum": 84.05900001525879
+      },
+      "warmP50Ms": {
+        "median": 6.29583332920447,
+        "minimum": 6.0255000134930015,
+        "maximum": 6.808708363678306
+      },
+      "warmP95Ms": {
+        "median": 7.785291702020913,
+        "minimum": 6.920416664797813,
+        "maximum": 8.496208349242806
+      }
+    },
+    "97m-selective-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        0,
+        0
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999998525656971,
+      "loadMs": {
+        "median": 155.6780833634548,
+        "minimum": 152.67408330691978,
+        "maximum": 1442.629625031259
+      },
+      "firstPredictionMs": {
+        "median": 91.78250003606081,
+        "minimum": 90.12424998218194,
+        "maximum": 92.46662497753277
+      },
+      "warmP50Ms": {
+        "median": 10.13033336494118,
+        "minimum": 10.130250011570752,
+        "maximum": 10.13666664948687
+      },
+      "warmP95Ms": {
+        "median": 10.369249968789518,
+        "minimum": 10.29891666257754,
+        "maximum": 10.417874960694462
+      }
+    }
+  },
+  "devicePolicy": {
+    "311m-fp32-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999996898,
+      "loadMs": {
+        "median": 4788.818541681394,
+        "minimum": 3787.0893749641255,
+        "maximum": 5430.420791672077
+      },
+      "firstPredictionMs": {
+        "median": 176.73145834123716,
+        "minimum": 158.93316664732993,
+        "maximum": 195.87587501155213
+      },
+      "warmP50Ms": {
+        "median": 26.115083310287446,
+        "minimum": 25.81237500999123,
+        "maximum": 26.757416664622724
+      },
+      "warmP95Ms": {
+        "median": 26.76883334061131,
+        "minimum": 26.469708303920925,
+        "maximum": 32.406291633378714
+      }
+    },
+    "311m-fp32-512-ane": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999992503,
+      "loadMs": {
+        "median": 2881.6788750118576,
+        "minimum": 84.494375041686,
+        "maximum": 2935.430249955971
+      },
+      "firstPredictionMs": {
+        "median": 238.6207083472982,
+        "minimum": 218.08804164174944,
+        "maximum": 1556.4762916765176
+      },
+      "warmP50Ms": {
+        "median": 152.15895837172866,
+        "minimum": 145.69408335955814,
+        "maximum": 162.91250003268942
+      },
+      "warmP95Ms": {
+        "median": 182.87537497235462,
+        "minimum": 151.9546250347048,
+        "maximum": 199.57200001226738
+      }
+    },
+    "311m-fp32-512-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999996898,
+      "loadMs": {
+        "median": 5477.87437500665,
+        "minimum": 3188.4260833612643,
+        "maximum": 7324.3783750222065
+      },
+      "firstPredictionMs": {
+        "median": 156.88562503783032,
+        "minimum": 152.54962496692315,
+        "maximum": 172.2651249729097
+      },
+      "warmP50Ms": {
+        "median": 25.638833350967616,
+        "minimum": 25.48358333297074,
+        "maximum": 25.74354165699333
+      },
+      "warmP95Ms": {
+        "median": 26.198791689239442,
+        "minimum": 26.129624980967492,
+        "maximum": 32.86445833509788
+      }
+    },
+    "311m-selective-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        1,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999379766873,
+      "loadMs": {
+        "median": 3141.426083340775,
+        "minimum": 988.0949999787845,
+        "maximum": 3719.076249981299
+      },
+      "firstPredictionMs": {
+        "median": 193.19054164225236,
+        "minimum": 132.10745836840943,
+        "maximum": 510.8433333225548
+      },
+      "warmP50Ms": {
+        "median": 9.668625018093735,
+        "minimum": 9.343124984297901,
+        "maximum": 9.674541710410267
+      },
+      "warmP95Ms": {
+        "median": 10.29249996645376,
+        "minimum": 9.826624998822808,
+        "maximum": 10.2974166511558
+      }
+    },
+    "311m-selective-128-ane": {
+      "runs": 3,
+      "thermalStates": [
+        1,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999985262859629,
+      "loadMs": {
+        "median": 6412.389958335552,
+        "minimum": 143.81158334435895,
+        "maximum": 6505.43333333917
+      },
+      "firstPredictionMs": {
+        "median": 41.0985000198707,
+        "minimum": 40.21725000347942,
+        "maximum": 57.30220832629129
+      },
+      "warmP50Ms": {
+        "median": 27.44862501276657,
+        "minimum": 27.203083329368383,
+        "maximum": 28.075458365492523
+      },
+      "warmP95Ms": {
+        "median": 28.987833356950432,
+        "minimum": 28.736583306454122,
+        "maximum": 29.127458343282342
+      }
+    },
+    "311m-selective-128-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        1,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999379766873,
+      "loadMs": {
+        "median": 1993.557374982629,
+        "minimum": 971.1069166660309,
+        "maximum": 2017.2142916708253
+      },
+      "firstPredictionMs": {
+        "median": 138.92683334415779,
+        "minimum": 129.6292917104438,
+        "maximum": 142.55012501962483
+      },
+      "warmP50Ms": {
+        "median": 9.572208335157484,
+        "minimum": 9.488375042565167,
+        "maximum": 9.914125024806708
+      },
+      "warmP95Ms": {
+        "median": 9.880708297714591,
+        "minimum": 9.793750010430813,
+        "maximum": 10.525958321522921
+      }
+    },
+    "311m-selective-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999994749354423,
+      "loadMs": {
+        "median": 1021.5462917112745,
+        "minimum": 990.9707499900833,
+        "maximum": 2666.8725416529924
+      },
+      "firstPredictionMs": {
+        "median": 153.9010416599922,
+        "minimum": 145.37154167192057,
+        "maximum": 648.8994583487511
+      },
+      "warmP50Ms": {
+        "median": 24.82699998654425,
+        "minimum": 24.77045828709379,
+        "maximum": 24.999458342790604
+      },
+      "warmP95Ms": {
+        "median": 25.454458314925432,
+        "minimum": 25.162916630506516,
+        "maximum": 30.026708380319178
+      }
+    },
+    "311m-selective-512-ane": {
+      "runs": 3,
+      "thermalStates": [
+        1,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999986663120062,
+      "loadMs": {
+        "median": 53237.539208319504,
+        "minimum": 13576.467499951832,
+        "maximum": 119495.31616666354
+      },
+      "firstPredictionMs": {
+        "median": 520.7229583174922,
+        "minimum": 397.9164583142847,
+        "maximum": 657.3586666490883
+      },
+      "warmP50Ms": {
+        "median": 328.03145836805925,
+        "minimum": 309.9620416178368,
+        "maximum": 376.26749998889863
+      },
+      "warmP95Ms": {
+        "median": 360.3738333331421,
+        "minimum": 323.6197500373237,
+        "maximum": 401.6609583632089
+      }
+    },
+    "311m-selective-512-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999994749354423,
+      "loadMs": {
+        "median": 1564.1931666759774,
+        "minimum": 1106.8569999770261,
+        "maximum": 3244.8510833201
+      },
+      "firstPredictionMs": {
+        "median": 154.66912504052743,
+        "minimum": 149.37162498245016,
+        "maximum": 178.05724998470396
+      },
+      "warmP50Ms": {
+        "median": 24.953041633125395,
+        "minimum": 24.745416711084545,
+        "maximum": 25.18933330429718
+      },
+      "warmP95Ms": {
+        "median": 25.463041674811393,
+        "minimum": 25.307249976322055,
+        "maximum": 26.087833335623145
+      }
+    },
+    "97m-fp32-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999995555,
+      "loadMs": {
+        "median": 1054.4955832883716,
+        "minimum": 975.2871250384487,
+        "maximum": 1576.050125004258
+      },
+      "firstPredictionMs": {
+        "median": 83.94100004807115,
+        "minimum": 79.31754167657346,
+        "maximum": 276.7735416418873
+      },
+      "warmP50Ms": {
+        "median": 5.972625047434121,
+        "minimum": 5.241249979007989,
+        "maximum": 6.909458315931261
+      },
+      "warmP95Ms": {
+        "median": 7.074541645124555,
+        "minimum": 5.875125003512949,
+        "maximum": 7.91416666470468
+      }
+    },
+    "97m-fp32-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999991998,
+      "loadMs": {
+        "median": 970.8137916750275,
+        "minimum": 931.0184583300725,
+        "maximum": 1522.3560417070985
+      },
+      "firstPredictionMs": {
+        "median": 99.19999999692664,
+        "minimum": 95.08037503110245,
+        "maximum": 307.18658334808424
+      },
+      "warmP50Ms": {
+        "median": 8.83716664975509,
+        "minimum": 8.595958352088928,
+        "maximum": 8.937291684560478
+      },
+      "warmP95Ms": {
+        "median": 9.14674997329712,
+        "minimum": 9.107624995522201,
+        "maximum": 9.718666668049991
+      }
+    },
+    "97m-fp32-512-ane": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999996554,
+      "loadMs": {
+        "median": 1404.3344166711904,
+        "minimum": 953.8556666811928,
+        "maximum": 2963.7218749849126
+      },
+      "firstPredictionMs": {
+        "median": 71.86629169154912,
+        "minimum": 71.21491670841351,
+        "maximum": 81.07979170745239
+      },
+      "warmP50Ms": {
+        "median": 52.99012496834621,
+        "minimum": 51.83549999492243,
+        "maximum": 56.19375000242144
+      },
+      "warmP95Ms": {
+        "median": 57.22795834299177,
+        "minimum": 53.267083305399865,
+        "maximum": 59.81445830548182
+      }
+    },
+    "97m-fp32-512-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999999999991998,
+      "loadMs": {
+        "median": 1116.9486666913144,
+        "minimum": 742.6870833733119,
+        "maximum": 1892.2622083337046
+      },
+      "firstPredictionMs": {
+        "median": 99.8589166556485,
+        "minimum": 94.99987500021234,
+        "maximum": 101.36291664093733
+      },
+      "warmP50Ms": {
+        "median": 8.672500029206276,
+        "minimum": 8.570500009227544,
+        "maximum": 8.949833281803876
+      },
+      "warmP95Ms": {
+        "median": 9.517666709143668,
+        "minimum": 8.994208357762545,
+        "maximum": 13.567708374466747
+      }
+    },
+    "97m-palette4-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.8784310414509235,
+      "loadMs": {
+        "median": 4347.076416655909,
+        "minimum": 4223.286958294921,
+        "maximum": 4436.3155833561905
+      },
+      "firstPredictionMs": {
+        "median": 104.0558333043009,
+        "minimum": 100.56758334394544,
+        "maximum": 216.7287083575502
+      },
+      "warmP50Ms": {
+        "median": 11.534041666891426,
+        "minimum": 11.32583332946524,
+        "maximum": 11.583666666410863
+      },
+      "warmP95Ms": {
+        "median": 11.855125019792467,
+        "minimum": 11.820333311334252,
+        "maximum": 12.109166651498526
+      }
+    },
+    "97m-palette6-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9788593912121031,
+      "loadMs": {
+        "median": 4722.168458334636,
+        "minimum": 4560.276500007603,
+        "maximum": 5850.127833371516
+      },
+      "firstPredictionMs": {
+        "median": 695.3760416945443,
+        "minimum": 666.3977916468866,
+        "maximum": 954.8618749831803
+      },
+      "warmP50Ms": {
+        "median": 10.322333371732384,
+        "minimum": 10.299541638232768,
+        "maximum": 10.39125001989305
+      },
+      "warmP95Ms": {
+        "median": 10.890375007875264,
+        "minimum": 10.708708316087723,
+        "maximum": 16.72870834590867
+      }
+    },
+    "97m-selective-128-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999999849030433,
+      "loadMs": {
+        "median": 1326.519708323758,
+        "minimum": 909.0449583018199,
+        "maximum": 1560.0937083363533
+      },
+      "firstPredictionMs": {
+        "median": 103.96991664310917,
+        "minimum": 86.51941665448248,
+        "maximum": 354.8437499557622
+      },
+      "warmP50Ms": {
+        "median": 6.017250008881092,
+        "minimum": 5.088291654828936,
+        "maximum": 6.448875006753951
+      },
+      "warmP95Ms": {
+        "median": 7.077291666064411,
+        "minimum": 6.81454170262441,
+        "maximum": 8.902125002350658
+      }
+    },
+    "97m-selective-128-ane": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999983092004368,
+      "loadMs": {
+        "median": 2723.369166662451,
+        "minimum": 2722.278041706886,
+        "maximum": 3321.4347916655242
+      },
+      "firstPredictionMs": {
+        "median": 24.23941664164886,
+        "minimum": 22.174624959006906,
+        "maximum": 26.463083340786397
+      },
+      "warmP50Ms": {
+        "median": 13.70866666547954,
+        "minimum": 13.578249956481159,
+        "maximum": 14.080916706006974
+      },
+      "warmP95Ms": {
+        "median": 14.242041681427509,
+        "minimum": 14.217749994713813,
+        "maximum": 14.425833302084357
+      }
+    },
+    "97m-selective-128-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.999999849030433,
+      "loadMs": {
+        "median": 655.5908333393745,
+        "minimum": 558.6820416501723,
+        "maximum": 842.6256666425616
+      },
+      "firstPredictionMs": {
+        "median": 97.60483331046999,
+        "minimum": 88.55329168727621,
+        "maximum": 123.99704166455194
+      },
+      "warmP50Ms": {
+        "median": 6.424833321943879,
+        "minimum": 5.970041616819799,
+        "maximum": 6.547041644807905
+      },
+      "warmP95Ms": {
+        "median": 7.590458379127085,
+        "minimum": 7.031833345536143,
+        "maximum": 8.7493333267048
+      }
+    },
+    "97m-selective-512-all": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999998525656971,
+      "loadMs": {
+        "median": 1401.1183333350345,
+        "minimum": 529.4235833571292,
+        "maximum": 1403.5429999930784
+      },
+      "firstPredictionMs": {
+        "median": 90.95683332998306,
+        "minimum": 88.00062502268702,
+        "maximum": 95.42054170742631
+      },
+      "warmP50Ms": {
+        "median": 10.298041685018688,
+        "minimum": 10.184166720137,
+        "maximum": 10.45591669389978
+      },
+      "warmP95Ms": {
+        "median": 10.614791652187705,
+        "minimum": 10.451916663441807,
+        "maximum": 11.190749995876104
+      }
+    },
+    "97m-selective-512-ane": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999803373137344,
+      "loadMs": {
+        "median": 5818.371458328329,
+        "minimum": 5633.088250004221,
+        "maximum": 5957.6180833391845
+      },
+      "firstPredictionMs": {
+        "median": 119.27466664928943,
+        "minimum": 87.88520836969838,
+        "maximum": 132.82870833063498
+      },
+      "warmP50Ms": {
+        "median": 114.60662499302998,
+        "minimum": 113.68366668466479,
+        "maximum": 128.3808333100751
+      },
+      "warmP95Ms": {
+        "median": 156.096083286684,
+        "minimum": 146.63941669277847,
+        "maximum": 168.0384167120792
+      }
+    },
+    "97m-selective-512-gpu": {
+      "runs": 3,
+      "thermalStates": [
+        0,
+        1,
+        1
+      ],
+      "nonfiniteValues": 0,
+      "minimumCosine": 0.9999998626467573,
+      "loadMs": {
+        "median": 795.0911666848697,
+        "minimum": 712.8945833537728,
+        "maximum": 974.2657916503958
+      },
+      "firstPredictionMs": {
+        "median": 101.23425000347197,
+        "minimum": 99.69204163644463,
+        "maximum": 361.02187499636784
+      },
+      "warmP50Ms": {
+        "median": 9.536166675388813,
+        "minimum": 9.510874981060624,
+        "maximum": 9.573083312716335
+      },
+      "warmP95Ms": {
+        "median": 9.938333358149976,
+        "minimum": 9.863416664302349,
+        "maximum": 10.300500027369708
+      }
+    }
+  },
+  "retrieval": {
+    "311m-bounded-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184844021844911,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999985284137114,
+        "meanCosine": 0.9999995724900266,
+        "p01Cosine": 0.9999987704179819,
+        "maximumComponentError": 0.0011384327923811832
+      }
+    },
+    "311m-bounded-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184844021844911,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843161201374,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999850278873631,
+        "meanCosine": 0.9999995034371159,
+        "p01Cosine": 0.9999985512751447,
+        "maximumComponentError": 0.0017320561796589917
+      }
+    },
+    "311m-bounded-paired-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184844021844911,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184829330542105,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999985284137114,
+        "meanCosine": 0.9999995724900266,
+        "p01Cosine": 0.9999987704179819,
+        "maximumComponentError": 0.0011384327923811832
+      }
+    },
+    "311m-fp32-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.999999999993939,
+        "meanCosine": 0.9999999999998562,
+        "p01Cosine": 0.9999999999998016,
+        "maximumComponentError": 4.2465787573886526e-07
+      }
+    },
+    "311m-palette6-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5588235294117647,
+        "hitAt5": 0.7352941176470589,
+        "evidenceRecallAt5": 0.7352941176470589,
+        "MRR": 0.6370348093452164,
+        "top1Agreement": 0.7647058823529411,
+        "top5Overlap": 0.6313725490196079
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5882352941176471,
+        "hitAt5": 0.7745098039215687,
+        "evidenceRecallAt5": 0.7745098039215687,
+        "MRR": 0.6688907162239716,
+        "top1Agreement": 0.7843137254901961,
+        "top5Overlap": 0.6941176470588234
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.1304634273406498,
+        "meanCosine": 0.922743820022433,
+        "p01Cosine": 0.23551108916416363,
+        "maximumComponentError": 0.7227244777110268
+      }
+    },
+    "311m-selective-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843388366715,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999982804754097,
+        "meanCosine": 0.9999999297894457,
+        "p01Cosine": 0.9999998072860152,
+        "maximumComponentError": 0.0002387052003248319
+      }
+    },
+    "311m-selective-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.718484326746498,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184828576162177,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999933326728366,
+        "meanCosine": 0.9999999308052239,
+        "p01Cosine": 0.9999997174418377,
+        "maximumComponentError": 0.000427486433208793
+      }
+    },
+    "311m-selective-paired-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843301194399
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184843388366715,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.6372549019607843,
+        "hitAt5": 0.8137254901960784,
+        "evidenceRecallAt5": 0.8137254901960784,
+        "MRR": 0.7184828464138354,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999982804754097,
+        "meanCosine": 0.9999999297894457,
+        "p01Cosine": 0.9999998072860152,
+        "maximumComponentError": 0.0002387052003248319
+      }
+    },
+    "97m-bounded-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6506520695092262,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9960784313725489
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.999959438685504,
+        "meanCosine": 0.9999895570295735,
+        "p01Cosine": 0.9999775153392199,
+        "maximumComponentError": 0.0017720859872941697
+      }
+    },
+    "97m-bounded-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765660897338,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6507650818824945,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9980392156862745
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999906833261634,
+        "meanCosine": 0.9999994673151762,
+        "p01Cosine": 0.9999982101719769,
+        "maximumComponentError": 0.0011079338181332332
+      }
+    },
+    "97m-bounded-paired-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6506520695092262,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9960784313725489
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7450980392156863,
+        "evidenceRecallAt5": 0.7352941176470589,
+        "MRR": 0.6503298469951438,
+        "top1Agreement": 1.0,
+        "top5Overlap": 0.9960784313725489
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.999959438685504,
+        "meanCosine": 0.9999895570295735,
+        "p01Cosine": 0.9999775153392199,
+        "maximumComponentError": 0.0017720859872941697
+      }
+    },
+    "97m-fp32-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999999999996558,
+        "meanCosine": 0.9999999999998381,
+        "p01Cosine": 0.9999999999996598,
+        "maximumComponentError": 2.705390631518867e-07
+      }
+    },
+    "97m-palette4-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5,
+        "hitAt5": 0.7352941176470589,
+        "evidenceRecallAt5": 0.7254901960784313,
+        "MRR": 0.6030945467033485,
+        "top1Agreement": 0.7058823529411765,
+        "top5Overlap": 0.588235294117647
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.49019607843137253,
+        "hitAt5": 0.7156862745098039,
+        "evidenceRecallAt5": 0.7058823529411765,
+        "MRR": 0.5884184590157466,
+        "top1Agreement": 0.5588235294117647,
+        "top5Overlap": 0.47058823529411764
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.7731068852449465,
+        "meanCosine": 0.9173418695473842,
+        "p01Cosine": 0.8681407994667907,
+        "maximumComponentError": 0.1605292734403807
+      }
+    },
+    "97m-palette6-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5882352941176471,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6681540164879056,
+        "top1Agreement": 0.8529411764705882,
+        "top5Overlap": 0.8058823529411763
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5294117647058824,
+        "hitAt5": 0.7254901960784313,
+        "evidenceRecallAt5": 0.7058823529411765,
+        "MRR": 0.6171195853576663,
+        "top1Agreement": 0.8235294117647058,
+        "top5Overlap": 0.7039215686274508
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9537144971466738,
+        "meanCosine": 0.9814761780909276,
+        "p01Cosine": 0.9560930046932087,
+        "maximumComponentError": 0.10635051391690431
+      }
+    },
+    "97m-palette8-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5588235294117647,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6449431432583982,
+        "top1Agreement": 0.9901960784313726,
+        "top5Overlap": 0.9764705882352942
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7450980392156863,
+        "evidenceRecallAt5": 0.7352941176470589,
+        "MRR": 0.6496064222758204,
+        "top1Agreement": 0.9901960784313726,
+        "top5Overlap": 0.9705882352941176
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9958650630477687,
+        "meanCosine": 0.9997409969017169,
+        "p01Cosine": 0.9983144278338686,
+        "maximumComponentError": 0.014671266986293514
+      }
+    },
+    "97m-selective-128-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6507658489288384,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999996436327059,
+        "meanCosine": 0.999999879741365,
+        "p01Cosine": 0.9999997474708804,
+        "maximumComponentError": 0.0002276850592669577
+      }
+    },
+    "97m-selective-512-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6507691787076206,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6507689377058522,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999947366316054,
+        "meanCosine": 0.9999998498768299,
+        "p01Cosine": 0.9999994820208034,
+        "maximumComponentError": 0.00044416572417108903
+      }
+    },
+    "97m-selective-paired-comparison": {
+      "baseline": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765718489546
+      },
+      "queryCount": 102,
+      "passageCount": 1677,
+      "mixed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.6507658489288384,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "reindexed": {
+        "labeledQueries": 102,
+        "hitAt1": 0.5686274509803921,
+        "hitAt5": 0.7549019607843137,
+        "evidenceRecallAt5": 0.7450980392156863,
+        "MRR": 0.650765636722159,
+        "top1Agreement": 1.0,
+        "top5Overlap": 1.0
+      },
+      "embeddingAgreement": {
+        "minimumCosine": 0.9999996436327059,
+        "meanCosine": 0.999999879741365,
+        "p01Cosine": 0.9999997474708804,
+        "maximumComponentError": 0.0002276850592669577
+      }
+    }
+  },
+  "computePlans": {
+    "311m-bounded-128-plan": {
+      "allowedComputeUnits": "ALL",
+      "plannedOperationCounts": {
+        "MLGPUComputeDevice": 861,
+        "unknown": 942
+      },
+      "estimatedCostByDevice": {
+        "MLGPUComputeDevice": 1.0000000000000204
+      },
+      "operationsWithoutCost": 942
+    },
+    "311m-selective-128-plan": {
+      "allowedComputeUnits": "ALL",
+      "plannedOperationCounts": {
+        "MLGPUComputeDevice": 1123,
+        "unknown": 1203
+      },
+      "estimatedCostByDevice": {
+        "MLGPUComputeDevice": 1.0000000000000013
+      },
+      "operationsWithoutCost": 1203
+    },
+    "97m-bounded-128-plan": {
+      "allowedComputeUnits": "ALL",
+      "plannedOperationCounts": {
+        "MLCPUComputeDevice": 3,
+        "unknown": 521,
+        "MLNeuralEngineComputeDevice": 396,
+        "MLGPUComputeDevice": 82
+      },
+      "estimatedCostByDevice": {
+        "MLCPUComputeDevice": 1.8516955518524184e-05,
+        "MLNeuralEngineComputeDevice": 0.37861688513566943,
+        "MLGPUComputeDevice": 0.6213645979088107
+      },
+      "operationsWithoutCost": 521
+    },
+    "97m-selective-128-plan": {
+      "allowedComputeUnits": "ALL",
+      "plannedOperationCounts": {
+        "MLGPUComputeDevice": 623,
+        "unknown": 662
+      },
+      "estimatedCostByDevice": {
+        "MLGPUComputeDevice": 1.0000000000000042
+      },
+      "operationsWithoutCost": 662
+    }
+  },
+  "multifunctionParity": {
+    "queries": 102,
+    "passages": 1677,
+    "97m": {
+      "maximumAbsoluteDifference": 0,
+      "packageBytes": 195756662
+    },
+    "311m": {
+      "maximumAbsoluteDifference": 0,
+      "packageBytes": 624742558
+    }
+  },
+  "realLibrarySearch": {
+    "model": "granite97M",
+    "meetings": 366,
+    "windows": 39066,
+    "queries": 16,
+    "failures": 0,
+    "baseline": {
+      "medianMs": 4360.436499118805,
+      "minMs": 4353.948950767517,
+      "maxMs": 4383.569002151489,
+      "freshIndexSeconds": 571.8850439786911
+    },
+    "packed": {
+      "meetings": 366,
+      "completed": 366,
+      "failures": 0,
+      "projectionRebuildSeconds": 83.50500798225403,
+      "queries": 16,
+      "medianMs": 416.33301973342896,
+      "minMs": 407.8230857849121,
+      "maxMs": 433.2079887390137,
+      "sameOrderedTop5": 16,
+      "maximumScoreDifference": 1.2822115136312817e-07
+    },
+    "metadataBytes": 23315099,
+    "vectorBytes": 60005376,
+    "notes": "Single sequential pass per implementation, warmed model, uncontrolled filesystem cache; no UI or speaker bonus in this comparison."
+  }
+}

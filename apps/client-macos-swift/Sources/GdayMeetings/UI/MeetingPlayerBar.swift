@@ -127,7 +127,7 @@ struct MeetingPlayerBar: View {
                             }
                         }.frame(width: 44, height: 44)
                     }
-                    .buttonStyle(ActionButtonStyle())
+                    .buttonStyle(Self.transportStyle)
                     .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
                     .help(playback.isPlaying ? "Pause playback" : "Play recording")
                     .disabled(playback.isPlaybackBlocked || playback.isLoading)
@@ -323,9 +323,12 @@ struct MeetingPlayerBar: View {
             ? playback.trackNames[playback.selectedTrack] : "All Tracks"
     }
 
+    // Half the 44-point target, so hover draws a circle inside the capsule.
+    private static let transportStyle = ActionButtonStyle(cornerRadius: 22)
+
     private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 44, height: 44) }
-            .buttonStyle(ActionButtonStyle()).accessibilityLabel(title).help(title)
+            .buttonStyle(Self.transportStyle).accessibilityLabel(title).help(title)
             .disabled(playback.isLoading || playback.isPlaybackBlocked || playback.duration <= 0)
     }
 }

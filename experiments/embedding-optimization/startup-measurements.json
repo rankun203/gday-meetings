@@ -1,0 +1,56 @@
+{
+  "cacheCondition": "Fresh app processes; filesystem and Core ML caches not cleared",
+  "windowBoundary": "Visible titled window with content layout complete; not display scan-out",
+  "queryBoundary": "Submission handler to completed native result layout",
+  "model": "granite97M mixed-fp16-v1",
+  "backgroundTasksDisabled": true,
+  "queryLimit": 100,
+  "runs": [
+    {
+      "windowReadyMilliseconds": 1004.166841506958,
+      "searchReadyMilliseconds": 3551.6090393066406,
+      "indexOpenMilliseconds": 1.2161731719970703,
+      "modelPrepareMilliseconds": 2501.8157958984375,
+      "modelAcquireMilliseconds": 838.5481834411621,
+      "tokenizerMilliseconds": 1576.0619640350342,
+      "warmupMilliseconds": 86.58289909362793,
+      "queryMilliseconds": [
+        675.4570007324219,
+        518.0041790008545,
+        483.8290214538574,
+        468.7490463256836,
+        495.8062171936035
+      ],
+      "firstQueryMilliseconds": 675.4570007324219,
+      "subsequentMedianMilliseconds": 489.81761932373047,
+      "peakRSSBytesAtSearchReady": 978190336,
+      "peakRSSBytes": 1079951360,
+      "thermalStates": [
+        0
+      ]
+    },
+    {
+      "windowReadyMilliseconds": 712.3270034790039,
+      "searchReadyMilliseconds": 3386.328935623169,
+      "indexOpenMilliseconds": 2.147197723388672,
+      "modelPrepareMilliseconds": 2621.0789680480957,
+      "modelAcquireMilliseconds": 850.2418994903564,
+      "tokenizerMilliseconds": 1673.4068393707275,
+      "warmupMilliseconds": 96.82226181030273,
+      "queryMilliseconds": [
+        697.504997253418,
+        538.0949974060059,
+        458.0981731414795,
+        466.3848876953125,
+        519.6537971496582
+      ],
+      "firstQueryMilliseconds": 697.504997253418,
+      "subsequentMedianMilliseconds": 493.01934242248535,
+      "peakRSSBytesAtSearchReady": 963624960,
+      "peakRSSBytes": 1019576320,
+      "thermalStates": [
+        0
+      ]
+    }
+  ]
+}

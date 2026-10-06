@@ -1,0 +1,72 @@
+[
+  {
+    "tokens": 8,
+    "function": "query128",
+    "loadMs": 1038.615999976173,
+    "firstPredictionMs": 101.95099998963997,
+    "warmP50Ms": 6.371458352077752,
+    "warmP95Ms": 7.370750012341887,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 32,
+    "function": "query128",
+    "loadMs": 173.7462499877438,
+    "firstPredictionMs": 85.44120832812041,
+    "warmP50Ms": 6.824916636105627,
+    "warmP95Ms": 8.021583314985037,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 64,
+    "function": "query128",
+    "loadMs": 174.0662917145528,
+    "firstPredictionMs": 84.2672917060554,
+    "warmP50Ms": 6.049333373084664,
+    "warmP95Ms": 8.188083302229643,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 96,
+    "function": "query128",
+    "loadMs": 174.879708327353,
+    "firstPredictionMs": 82.11083331843838,
+    "warmP50Ms": 6.689708330668509,
+    "warmP95Ms": 8.762750017922372,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 128,
+    "function": "query128",
+    "loadMs": 172.0029583084397,
+    "firstPredictionMs": 81.81162498658523,
+    "warmP50Ms": 5.862208374310285,
+    "warmP95Ms": 8.272583305370063,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 256,
+    "function": "passage512",
+    "loadMs": 1214.051249960903,
+    "firstPredictionMs": 89.6822499926202,
+    "warmP50Ms": 10.100916668307036,
+    "warmP95Ms": 10.283041629008949,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  },
+  {
+    "tokens": 512,
+    "function": "passage512",
+    "loadMs": 173.35499997716397,
+    "firstPredictionMs": 88.37312500691041,
+    "warmP50Ms": 10.102208296302706,
+    "warmP95Ms": 10.293958301190287,
+    "thermalState": 0,
+    "nonfiniteValues": 0
+  }
+]

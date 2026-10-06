@@ -8,63 +8,57 @@ struct LibrarySearchResultsView: View {
     var retry: () -> Void
     var openPerson: (UUID) -> Void = { _ in }
 
-    private var footerText: String? {
-        guard !session.isLoading, session.error == nil, !session.canLoadMore,
-            !session.displayResults.isEmpty, let total = session.total
-        else { return nil }
-        if session.usesRankedSearch {
-            return ListCountFooter.text(
-                count: session.displayResults.count, singular: "Result Shown", plural: "Results Shown")
-        }
-        return ListCountFooter.text(count: total, singular: "Match", plural: "Matches")
+    var play: (SearchDisplayResult) -> Void = { _ in }
+    var canPlay = true
+    var index: LibraryIndex?
+    @AppStorage("showSearchRankingDetails") private var showRankingDetails = false
+    @ViewState private var summaries: [UUID: String] = [:]
+    @ViewState private var playableMeetings: Set<UUID> = []
+
+    private var matchedPeople: [PeopleNameCandidate] {
+        session.peopleResolution.candidates.filter { session.peopleResolution.unambiguousPeople.contains($0.personID) }
+    }
+    private var possiblePeople: [PeopleNameCandidate] {
+        session.peopleResolution.candidates.filter { !session.peopleResolution.unambiguousPeople.contains($0.personID) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("“\(session.query)”").font(.headline).textSelection(.enabled)
+                    Text(session.total.map { "\($0.formatted()) \($0 == 1 ? "result" : "results")" } ?? "Searching…")
+                        .font(.headline)
+                    if session.isLoading { ProgressView().controlSize(.small) }
                     Spacer()
+                    Toggle("Show Ranking Details", isOn: $showRankingDetails).toggleStyle(.checkbox)
+                        .disabled(session.mode != .semantic || !session.usesRankedSearch)
                     SearchModePicker(selection: $mode)
                 }
-                if let message = session.peopleError {
-                    Text(message).font(.callout).foregroundStyle(.secondary)
-                }
-                if !session.peopleResolution.candidates.isEmpty {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            peopleSection("People Matches", candidates: session.peopleResolution.confident)
-                            peopleSection(
-                                "People Suggestions",
-                                candidates: session.peopleResolution.candidates.filter { !$0.isConfident })
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 176)
-                }
-                if !session.contentQuery.isEmpty {
-                    Text("Content Results").font(.headline)
-                    if session.contentQuery != session.query {
-                        Text("Topic: \(session.contentQuery)").font(.callout).foregroundStyle(.secondary)
+                if !matchedPeople.isEmpty {
+                    ViewThatFits(in: .horizontal) {
+                        peopleRow(matchedPeople, limit: 4)
+                        peopleRow(matchedPeople, limit: 1)
                     }
                 }
-                if let total = session.total, !session.contentQuery.isEmpty {
-                    Text(
-                        (session.usesRankedSearch ? "Top " : "")
-                            + "\(total.formatted()) \(total == 1 ? "match" : "matches")"
-                    )
-                    .foregroundStyle(.secondary).font(.callout)
+                if !possiblePeople.isEmpty {
+                    DisclosureGroup("Possible Matches (\(possiblePeople.count))") {
+                        Text("These names do not affect ranking.").font(.caption).foregroundStyle(.secondary)
+                        peopleRow(possiblePeople, limit: 3)
+                    }.font(.callout)
+                }
+                if let message = session.peopleError { Text(message).foregroundStyle(.secondary) }
+                if session.error == nil, !session.providerFailures.isEmpty {
+                    HStack {
+                        Text(session.providerFailures.values.sorted().joined(separator: " ")).font(.callout)
+                        Button("Try Again", action: retry)
+                    }
                 }
             }.padding(AppTheme.contentInset)
-            if session.error == nil, !session.providerFailures.isEmpty {
-                HStack {
-                    Text(session.providerFailures.values.sorted().joined(separator: " "))
-                        .font(.callout).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Try Again", action: retry)
-                }.padding(.horizontal, AppTheme.contentInset).padding(.bottom, AppTheme.contentSpacing)
-            }
             NativeSearchResults(
                 session: session, results: session.displayResults, generation: session.generation,
-                footerText: footerText, open: open
+                showRankingDetails: showRankingDetails, summaries: summaries, playableMeetings: playableMeetings,
+                canPlay: canPlay,
+                open: open, play: play
             )
             .overlay {
                 if session.isLoading && session.displayResults.isEmpty {
@@ -83,43 +77,62 @@ struct LibrarySearchResultsView: View {
                     }
                 }
             }
-            if !session.displayResults.isEmpty {
+            if let error = session.error, !session.displayResults.isEmpty {
                 HStack {
-                    Text("Double-click a result or press Return to open it.").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    if session.isLoading { ProgressView().controlSize(.small) }
-                    if let error = session.error {
-                        Text(error).font(.callout)
-                        Button("Try Again", action: retry)
-                    }
+                    Text(error)
+                    Button("Try Again", action: retry)
                 }.padding(AppTheme.contentSpacing)
             }
         }
         .background(AppTheme.readingBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    @ViewBuilder private func peopleSection(_ title: String, candidates: [PeopleNameCandidate]) -> some View {
-        if !candidates.isEmpty {
-            Text(title).font(.headline)
-            ForEach(candidates) { candidate in
-                Button {
-                    openPerson(candidate.personID)
-                } label: {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(candidate.name).font(.body)
-                        Text("Matched “\(candidate.matchedPhrase)”").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                    }.contentShape(Rectangle())
+        .task(id: session.displayResults.map(\.meetingID)) {
+            let ids = Set(session.displayResults.map(\.meetingID))
+            let index = index
+            let values = await Task.detached(priority: .utility) {
+                var values: [UUID: MeetingListEntry] = [:]
+                for id in ids {
+                    if let entry = try? index?.entry(id: id) { values[id] = entry }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open \(candidate.name)")
-                .accessibilityHint(candidate.isConfident ? "People name match" : "Possible People name match")
+                return values
+            }.value
+            if !Task.isCancelled {
+                summaries = values.mapValues { MeetingSummaryPreview.text($0.summary) }
+                playableMeetings = Set(values.values.filter { !$0.audioFiles.isEmpty }.map(\.id))
             }
-            ListCountFooter(text: ListCountFooter.text(count: candidates.count, singular: "Person", plural: "People"))
         }
     }
 
+    private func peopleRow(_ candidates: [PeopleNameCandidate], limit: Int) -> some View {
+        HStack(spacing: 6) {
+            Text("People:").font(.callout).foregroundStyle(.secondary)
+            ForEach(candidates.prefix(limit)) { candidate in
+                let tint = TranscriptSpeakerPalette.color(for: candidate.personID.uuidString)
+                Button {
+                    openPerson(candidate.personID)
+                } label: {
+                    Text(candidate.name).lineLimit(1)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
+                        .background(Color(nsColor: tint).opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                }.buttonStyle(.plain)
+                    .help(
+                        "Matched “\(candidate.matchedPhrase)”. "
+                            + (session.peopleResolution.unambiguousPeople.contains(candidate.personID)
+                                ? "Passages spoken by this person receive the speaker match boost."
+                                : "This possible match does not affect ranking.")
+                    )
+                    .accessibilityLabel("Open \(candidate.name)")
+            }
+            if candidates.count > limit {
+                Menu("+\(candidates.count - limit)") {
+                    ForEach(candidates.dropFirst(limit)) { candidate in
+                        Button(candidate.name) { openPerson(candidate.personID) }
+                    }
+                }.fixedSize()
+            }
+        }.fixedSize(horizontal: true, vertical: false)
+    }
 }
 
 /// Reusable native cells retain a pixel viewport and selection when returning from a meeting.
@@ -127,8 +140,12 @@ private struct NativeSearchResults: NSViewRepresentable {
     let session: LibrarySearchSession
     let results: [SearchDisplayResult]
     let generation: UUID
-    let footerText: String?
+    let showRankingDetails: Bool
+    let summaries: [UUID: String]
+    let playableMeetings: Set<UUID>
+    let canPlay: Bool
     let open: (SearchDisplayResult) -> Void
+    let play: (SearchDisplayResult) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -140,7 +157,7 @@ private struct NativeSearchResults: NSViewRepresentable {
         table.headerView = nil
         table.style = .inset
         table.backgroundColor = .clear
-        table.rowHeight = 78
+        table.rowHeight = 96
         table.intercellSpacing = NSSize(width: 0, height: 1)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.autoresizingMask = [.width]
@@ -183,12 +200,14 @@ private struct NativeSearchResults: NSViewRepresentable {
         func update(_ value: NativeSearchResults) {
             guard let table, let scroll else { return }
             updating = true
-            let footerChanged = parent.footerText != value.footerText
+            let presentationChanged =
+                parent.showRankingDetails != value.showRankingDetails || parent.summaries != value.summaries
+                || parent.canPlay != value.canPlay
             parent = value
             let reset = generation != value.generation
             if reset { announced = false }
             generation = value.generation
-            if rows != value.results || reset || footerChanged {
+            if rows != value.results || reset || presentationChanged {
                 let offset = value.session.scrollOffset
                 rows = value.results
                 table.reloadData()
@@ -233,10 +252,10 @@ private struct NativeSearchResults: NSViewRepresentable {
                 Task { @MainActor in session.loadMore() }
             }
         }
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.footerText == nil ? 0 : 1) }
+        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            rows.indices.contains(row) ? 78 : 40
+            parent.showRankingDetails && rows[row].scoreBreakdown != nil ? 118 : 96
         }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
@@ -251,14 +270,19 @@ private struct NativeSearchResults: NSViewRepresentable {
             parent.open(rows[table.clickedRow])
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-            if row == rows.count, let text = parent.footerText {
-                return NativeListCountCell.make(in: tableView, text: text)
-            }
             let identifier = NSUserInterfaceItemIdentifier("search-result")
             let cell =
                 tableView.makeView(withIdentifier: identifier, owner: nil) as? SearchResultCell ?? SearchResultCell()
             cell.identifier = identifier
-            cell.configure(rows[row])
+            let result = rows[row]
+            cell.configure(
+                result, summary: parent.summaries[result.meetingID], showScore: parent.showRankingDetails,
+                canPlay: parent.canPlay && parent.playableMeetings.contains(result.meetingID))
+            cell.open = { [weak self] in
+                self?.parent.session.selection = result.id
+                self?.parent.open(result)
+            }
+            cell.play = { [weak self] in self?.parent.play(result) }
             return cell
         }
     }
@@ -279,46 +303,93 @@ private final class SearchResultsTable: NSTableView {
 private final class SearchResultCell: NSTableCellView {
     let title = NSTextField(labelWithString: "")
     let metadata = NSTextField(labelWithString: "")
-    let excerpt = NSTextField(labelWithString: "")
+    let summary = NSTextField(labelWithString: "")
+    let excerpt = NSTextField(wrappingLabelWithString: "")
+    let score = NSTextField(labelWithString: "")
+    let playButton = NSButton(title: "Play", target: nil, action: nil)
+    let openButton = NSButton(title: "Open", target: nil, action: nil)
+    var open: (() -> Void)?
+    var play: (() -> Void)?
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         title.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-        metadata.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        metadata.textColor = .secondaryLabelColor
+        for field in [metadata, summary, score] {
+            field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            field.textColor = .secondaryLabelColor
+        }
         excerpt.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for field in [title, metadata, excerpt] {
-            field.lineBreakMode = .byTruncatingTail
-            field.maximumNumberOfLines = 1
+        for field in [title, metadata, summary, excerpt, score] {
+            field.lineBreakMode = field === excerpt ? .byWordWrapping : .byTruncatingTail
+            field.maximumNumberOfLines = field === excerpt ? 2 : 1
             field.translatesAutoresizingMaskIntoConstraints = false
             addSubview(field)
-            NSLayoutConstraint.activate([
-                field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-                field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            ])
         }
+        for button in [playButton, openButton] {
+            button.bezelStyle = .rounded
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.target = self
+            addSubview(button)
+        }
+        playButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
+        playButton.imagePosition = .imageLeading
+        playButton.action = #selector(playResult)
+        openButton.action = #selector(openResult)
         NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             title.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            metadata.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
-            excerpt.topAnchor.constraint(equalTo: metadata.bottomAnchor, constant: 5),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: metadata.leadingAnchor, constant: -16),
+            metadata.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -16),
+            metadata.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            openButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            openButton.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            openButton.widthAnchor.constraint(equalToConstant: 64),
+            playButton.trailingAnchor.constraint(equalTo: openButton.trailingAnchor),
+            playButton.topAnchor.constraint(equalTo: openButton.bottomAnchor, constant: 6),
+            playButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
+            playButton.heightAnchor.constraint(equalToConstant: 44),
+            summary.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            summary.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
+            summary.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -16),
+            excerpt.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            excerpt.topAnchor.constraint(equalTo: summary.bottomAnchor, constant: 5),
+            excerpt.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -16),
+            excerpt.heightAnchor.constraint(equalToConstant: 36),
+            score.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            score.trailingAnchor.constraint(equalTo: excerpt.trailingAnchor),
+            score.topAnchor.constraint(equalTo: excerpt.bottomAnchor, constant: 4),
         ])
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textField = title
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func configure(_ result: SearchDisplayResult) {
+    @objc private func openResult() { open?() }
+    @objc private func playResult() { play?() }
+    func configure(_ result: SearchDisplayResult, summary summaryTitle: String?, showScore: Bool, canPlay: Bool) {
         title.stringValue = result.title
+        metadata.stringValue = result.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? ""
         let source: String
         switch result.passage?.kind {
         case .title: source = "Meeting"
         case .notes: source = "Notes"
         case .summary: source = "Summary"
         case .transcript: source = "Transcript · " + playbackTime(result.passage?.start ?? 0)
-        case nil: source = "Voice · " + playbackTime(result.audio?.start ?? 0)
+        case nil: source = "Audio · " + playbackTime(result.audio?.start ?? 0)
         }
-        metadata.stringValue = [result.createdAt?.formatted(date: .abbreviated, time: .shortened), source].compactMap {
-            $0
-        }.joined(separator: " · ")
+        summary.stringValue = [source, summaryTitle?.isEmpty == false ? summaryTitle : nil].compactMap { $0 }.joined(
+            separator: " · ")
+        score.stringValue = showScore ? result.scoreBreakdown?.description ?? "" : ""
+        score.isHidden = !showScore || result.scoreBreakdown == nil
         excerpt.stringValue = result.excerpt.replacingOccurrences(of: "\n", with: " ")
-        setAccessibilityLabel([title.stringValue, metadata.stringValue, excerpt.stringValue].joined(separator: ". "))
+        let start = result.passage?.start ?? result.audio?.start
+        playButton.isHidden = start == nil
+        playButton.isEnabled = canPlay && start != nil
+        playButton.toolTip =
+            canPlay
+            ? start.map { "Play from " + playbackTime($0) }
+            : "Playback is unavailable while recording or when this meeting has no audio."
+        playButton.setAccessibilityLabel("Play \(result.title) from \(playbackTime(start ?? 0))")
+        openButton.setAccessibilityLabel("Open \(result.title)")
+        openButton.toolTip = "Open this passage in the meeting"
         toolTip = result.excerpt
     }
 }

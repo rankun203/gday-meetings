@@ -63,12 +63,12 @@ private struct DataSettingsContent: View {
                     AppInlineMessage(text: error, systemImage: "exclamationmark.circle", tint: .red)
                 }
             }
-            Section("Index") {
+            Section("Library Index") {
                 HStack {
                     LabeledContent(
                         "Index Size",
                         value: ByteCountFormatter.string(fromByteCount: status.indexBytes, countStyle: .file))
-                    Button("Rebuild Index") { store.libraryMonitor?.rebuild() }
+                    Button("Rebuild Library Index") { store.libraryMonitor?.rebuild() }
                         .disabled(status.isBuilding || store.isChangingLibrary)
                 }
                 if store.indexDirectory != store.dataDirectory {
@@ -93,6 +93,7 @@ private struct DataSettingsContent: View {
                         text: "Couldn’t update the index. \(error)", systemImage: "exclamationmark.circle", tint: .red)
                 }
             }
+            SearchIndexSettings(controller: store.localSearch)
             Section("Library") {
                 LabeledContent("Meetings", value: status.meetingCount.formatted())
                 LabeledContent("People", value: store.people.count.formatted())
@@ -137,5 +138,31 @@ private struct DataSettingsContent: View {
             store.libraryFolderError = nil
         }
         catch { store.libraryFolderError = error.localizedDescription }
+    }
+}
+
+private struct SearchIndexSettings: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject var controller: LocalSearchController
+    var body: some View {
+        Section("Search Index") {
+            if let provider = store.selectedSearchProvider {
+                LabeledContent("Model", value: (provider.localSearch ?? .init()).selectedModel.title)
+                Text(controller.status).font(.callout)
+                if let progress = controller.progress {
+                    ProgressView(value: Double(progress.completed), total: Double(max(1, progress.total)))
+                    Text("\(progress.completed) of \(progress.total) passages in the current meeting")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let error = controller.error {
+                    AppInlineMessage(text: error, systemImage: "exclamationmark.circle", tint: .orange)
+                }
+                Button("Rebuild Search Index") { store.scheduleSearchIndexing(rebuild: true) }
+                    .disabled(!store.libraryWritable || store.isChangingLibrary || controller.scanTask != nil)
+            }
+            else {
+                Text("Add Local Search in Service Providers to search by meaning.")
+            }
+        }
     }
 }

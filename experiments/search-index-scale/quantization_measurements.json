@@ -1,0 +1,1534 @@
+{
+  "version": "2.26.4",
+  "dimensions": 384,
+  "queries": 102,
+  "passages": 1677,
+  "scoreEquivalentTolerance": 1e-06,
+  "baseline": {
+    "byLimit": {
+      "10": {
+        "hit": 0.803921568627451,
+        "evidenceRecall": 0.7990196078431373,
+        "overlap": 1.0,
+        "scoreEquivalentOverlap": 1.0
+      },
+      "20": {
+        "hit": 0.8235294117647058,
+        "evidenceRecall": 0.8235294117647058,
+        "overlap": 1.0,
+        "scoreEquivalentOverlap": 1.0
+      },
+      "50": {
+        "hit": 0.8725490196078431,
+        "evidenceRecall": 0.8725490196078431,
+        "overlap": 1.0,
+        "scoreEquivalentOverlap": 1.0
+      },
+      "100": {
+        "hit": 0.9019607843137255,
+        "evidenceRecall": 0.9019607843137255,
+        "overlap": 1.0,
+        "scoreEquivalentOverlap": 1.0
+      }
+    },
+    "hitAt1": 0.5686274509803921,
+    "hitAt5": 0.7549019607843137,
+    "evidenceRecallAt5": 0.7450980392156863,
+    "MRR": 0.650765636722159,
+    "top1Agreement": 1.0,
+    "top5Overlap": 1.0
+  },
+  "cases": [
+    {
+      "dtype": "f32",
+      "method": "compressed-exhaustive",
+      "hardware": "neon",
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9916666666666667,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9980392156862745,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9987254901960785,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.650765636722159,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6467553688141923,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6467553688141923,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9911764705882352,
+          "scoreEquivalentOverlap": 0.9995098039215686
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6483002291825821,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9911764705882352,
+          "scoreEquivalentOverlap": 0.9995098039215686
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6483002291825821,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 0.9995098039215686
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9966666666666668,
+          "scoreEquivalentOverlap": 0.9986274509803922
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6499510378794265,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9995098039215686
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9966666666666668,
+          "scoreEquivalentOverlap": 0.9986274509803922
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6499510378794265,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9981372549019608,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6504464468467026,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9981372549019608,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6504464468467026,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6505295309277928,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6505295309277928,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f32",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "compressed-exhaustive",
+      "hardware": "neon",
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9906862745098038,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.997450980392157,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9979411764705881,
+          "scoreEquivalentOverlap": 0.9993137254901961
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507689955933978,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6467553688141923,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6467553688141923,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9897058823529411,
+          "scoreEquivalentOverlap": 0.9980392156862745
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6483002291825821,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9897058823529411,
+          "scoreEquivalentOverlap": 0.9980392156862745
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6483002291825821,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9980392156862745,
+          "scoreEquivalentOverlap": 0.9980392156862745
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9960784313725491,
+          "scoreEquivalentOverlap": 0.9978431372549021
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6499510378794265,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9985294117647058,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9960784313725491,
+          "scoreEquivalentOverlap": 0.9978431372549021
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6499510378794265,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9994117647058823,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9973529411764707,
+          "scoreEquivalentOverlap": 0.9987254901960785
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6504497478303958,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9973529411764707,
+          "scoreEquivalentOverlap": 0.9987254901960785
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6504464468467026,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9994117647058823,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9991176470588234,
+          "scoreEquivalentOverlap": 0.9992156862745099
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6505328319114858,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6505295309277928,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9994117647058823,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9991176470588234,
+          "scoreEquivalentOverlap": 0.9992156862745099
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507528362586869,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9990196078431373,
+          "scoreEquivalentOverlap": 0.9990196078431373
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9994117647058823,
+          "scoreEquivalentOverlap": 0.9994117647058823
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9991176470588234,
+          "scoreEquivalentOverlap": 0.9992156862745099
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507528362586869,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "f16",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "compressed-exhaustive",
+      "hardware": "neonsdot",
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9034313725490196,
+          "scoreEquivalentOverlap": 0.9112745098039218
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9205882352941177,
+          "scoreEquivalentOverlap": 0.9207843137254902
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9269607843137254,
+          "scoreEquivalentOverlap": 0.9275490196078431
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.653744187119602,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6494397759103641,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 10,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6467164643635231,
+      "top1Agreement": 1.0,
+      "top5Overlap": 0.9960784313725489
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9068627450980393,
+          "scoreEquivalentOverlap": 0.9112745098039218
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6516184251478369,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 20,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9068627450980393,
+          "scoreEquivalentOverlap": 0.9112745098039218
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6487904252610136,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9112745098039218,
+          "scoreEquivalentOverlap": 0.9117647058823529
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9203921568627452,
+          "scoreEquivalentOverlap": 0.9205882352941177
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6530571033950258,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 50,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9203921568627452,
+          "scoreEquivalentOverlap": 0.9205882352941177
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6501844025811485,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9112745098039218,
+          "scoreEquivalentOverlap": 0.9117647058823529
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9205882352941177,
+          "scoreEquivalentOverlap": 0.9207843137254902
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9268627450980391,
+          "scoreEquivalentOverlap": 0.9274509803921568
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6533818059256106,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 100,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 0.9996078431372549,
+          "scoreEquivalentOverlap": 0.9996078431372549
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9268627450980391,
+          "scoreEquivalentOverlap": 0.9274509803921568
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6504497478303958,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9112745098039218,
+          "scoreEquivalentOverlap": 0.9117647058823529
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9205882352941177,
+          "scoreEquivalentOverlap": 0.9207843137254902
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9269607843137254,
+          "scoreEquivalentOverlap": 0.9275490196078431
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6535864415556063,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 200,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9999019607843138,
+          "scoreEquivalentOverlap": 0.9999019607843138
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6506285629646567,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9112745098039218,
+          "scoreEquivalentOverlap": 0.9117647058823529
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9205882352941177,
+          "scoreEquivalentOverlap": 0.9207843137254902
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9269607843137254,
+          "scoreEquivalentOverlap": 0.9275490196078431
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6537282296390753,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 800,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": false,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 0.9058823529411767,
+          "scoreEquivalentOverlap": 0.9058823529411767
+        },
+        "20": {
+          "hit": 0.8333333333333334,
+          "evidenceRecall": 0.8333333333333334,
+          "overlap": 0.9112745098039218,
+          "scoreEquivalentOverlap": 0.9117647058823529
+        },
+        "50": {
+          "hit": 0.8823529411764706,
+          "evidenceRecall": 0.8823529411764706,
+          "overlap": 0.9205882352941177,
+          "scoreEquivalentOverlap": 0.9207843137254902
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 0.9269607843137254,
+          "scoreEquivalentOverlap": 0.9275490196078431
+        }
+      },
+      "hitAt1": 0.5784313725490197,
+      "hitAt5": 0.7352941176470589,
+      "evidenceRecallAt5": 0.7205882352941176,
+      "MRR": 0.6537282296390753,
+      "top1Agreement": 0.9313725490196079,
+      "top5Overlap": 0.9058823529411765
+    },
+    {
+      "dtype": "i8",
+      "method": "hnsw",
+      "candidates": 1000,
+      "fp32Rerank": true,
+      "byLimit": {
+        "10": {
+          "hit": 0.803921568627451,
+          "evidenceRecall": 0.7990196078431373,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "20": {
+          "hit": 0.8235294117647058,
+          "evidenceRecall": 0.8235294117647058,
+          "overlap": 0.9995098039215686,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "50": {
+          "hit": 0.8725490196078431,
+          "evidenceRecall": 0.8725490196078431,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        },
+        "100": {
+          "hit": 0.9019607843137255,
+          "evidenceRecall": 0.9019607843137255,
+          "overlap": 1.0,
+          "scoreEquivalentOverlap": 1.0
+        }
+      },
+      "hitAt1": 0.5686274509803921,
+      "hitAt5": 0.7549019607843137,
+      "evidenceRecallAt5": 0.7450980392156863,
+      "MRR": 0.6507494773874481,
+      "top1Agreement": 1.0,
+      "top5Overlap": 1.0
+    }
+  ]
+}

@@ -90,11 +90,14 @@ struct MicrophoneDeviceChoice: Codable, Equatable {
 }
 
 struct AppSettings: Codable, Equatable {
-    var serviceProviders: [ServiceProvider] = []
+    private static let defaultSearchProvider = ServiceProvider(kind: .localSearch)
+    var serviceProviders: [ServiceProvider] = [Self.defaultSearchProvider]
+    var searchDefaultsVersion = 1
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
-    var searchProviderID: UUID?
-    var defaultSearchMode: SearchMode = .text
+    var searchProviderID: UUID? = Self.defaultSearchProvider.id
+    var defaultSearchMode: SearchMode = .semantic
+    var automaticallyLoadSearch = true
     var liveDiarizationProviderID: UUID?
     var diarizationProviderID: UUID?
     var speakerRecognitionProviderID: UUID?
@@ -134,6 +137,7 @@ struct AppSettings: Codable, Equatable {
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID, searchProviderID, defaultSearchMode,
+            automaticallyLoadSearch, searchDefaultsVersion,
             liveDiarizationProviderID, diarizationProviderID, speakerRecognitionProviderID,
             showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers, labelRecordedSpeakers,
             initializedProviderCapabilities, explicitlyDisabledFeatures,
@@ -265,7 +269,18 @@ extension AppSettings {
         transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         searchProviderID = try values.decodeIfPresent(UUID.self, forKey: .searchProviderID)
-        defaultSearchMode = try values.decodeIfPresent(SearchMode.self, forKey: .defaultSearchMode) ?? .text
+        let savedSearchMode = try values.decodeIfPresent(SearchMode.self, forKey: .defaultSearchMode)
+        defaultSearchMode = savedSearchMode == .text ? .text : .semantic
+        automaticallyLoadSearch = try values.decodeIfPresent(Bool.self, forKey: .automaticallyLoadSearch) ?? true
+        searchDefaultsVersion = try values.decodeIfPresent(Int.self, forKey: .searchDefaultsVersion) ?? 0
+        if searchDefaultsVersion < 1 {
+            if !serviceProviders.contains(where: { $0.kind == .localSearch }) {
+                serviceProviders.append(ServiceProvider(kind: .localSearch))
+            }
+            defaultSearchMode = .semantic
+            searchDefaultsVersion = 1
+        }
+        selectSoleSearchProvider()
         liveDiarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .liveDiarizationProviderID)
         diarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .diarizationProviderID)
         speakerRecognitionProviderID = try values.decodeIfPresent(UUID.self, forKey: .speakerRecognitionProviderID)

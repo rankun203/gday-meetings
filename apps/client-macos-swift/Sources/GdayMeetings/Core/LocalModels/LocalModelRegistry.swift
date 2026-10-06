@@ -3,7 +3,7 @@ import Foundation
 
 enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
     case nemotronLow, nemotronFast, nemotronFast32, nemotronFast128, nemotronOffline, nemotronFast32SplitW8A8,
-        nemotronC128SplitW8A8, community1, voiceEmbedding, clsp
+        nemotronC128SplitW8A8, community1, voiceEmbedding, clsp, granite97M, granite311M
     var id: String { rawValue }
     var nemotronPreset: String? {
         switch self {
@@ -14,7 +14,7 @@ enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .nemotronOffline: return "offline"
         case .nemotronFast32SplitW8A8: return "fast32-split-w8a8"
         case .nemotronC128SplitW8A8: return "c128-split-w8a8"
-        case .community1, .voiceEmbedding, .clsp: return nil
+        case .community1, .voiceEmbedding, .clsp, .granite97M, .granite311M: return nil
         }
     }
 }
@@ -228,6 +228,8 @@ enum LocalModelRegistry {
     ]
     static func descriptor(_ id: LocalModelID) -> LocalModelDescriptor {
         switch id {
+        case .granite97M, .granite311M:
+            return semanticDescriptor(id)
         case .clsp:
             return .init(
                 id: id, title: "CLSP", repository: "rankun203/yfyeung-clsp-coreml", revision: "v1",

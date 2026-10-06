@@ -297,6 +297,7 @@ extension MeetingStore {
                 Task { @MainActor in
                     guard let self else { return }
                     self.meetingIndexRevision = UUID()
+                    self.scheduleSearchIndexing()
                     if rebuilt {
                         do {
                             self.libraryIndex = try LibraryIndex(

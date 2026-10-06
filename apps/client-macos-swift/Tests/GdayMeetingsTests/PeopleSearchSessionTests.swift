@@ -26,7 +26,7 @@ private actor TopicRequests {
         }
     }
 
-    @Test func confidentNamesUseResidualTopicAndNameOnlyDoesNotQueryContent() async throws {
+    @Test func confidentNamesAndNameOnlyQueriesKeepCompleteContent() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let requests = TopicRequests()
@@ -40,14 +40,14 @@ private actor TopicRequests {
         #expect(session.submit("Zora Vale budget", index: index))
         try await waitForSearchCompletion(session)
         #expect(session.query == "Zora Vale budget")
-        #expect(session.contentQuery == "budget")
-        #expect(await requests.values == ["budget"])
-        #expect(session.submit("Zora Vale", index: nil))
+        #expect(session.contentQuery == "Zora Vale budget")
+        #expect(await requests.values == ["Zora Vale budget"])
+        #expect(session.submit("Zora Vale", index: index))
         try await waitForSearchCompletion(session)
         #expect(session.peopleResolution.confident.first?.personID == person.id)
-        #expect(session.contentQuery.isEmpty)
+        #expect(session.contentQuery == "Zora Vale")
         #expect(session.error == nil)
-        #expect(await requests.values == ["budget"])
+        #expect(await requests.values == ["Zora Vale budget", "Zora Vale"])
     }
     @Test func renamingPeopleRefreshesExistingQueryWithoutStaleIdentity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -88,7 +88,7 @@ extension PeopleSearchSessionTests {
         let old = PeopleNameRecord(id: UUID(), name: "Earlier Person")
         let new = PeopleNameRecord(id: UUID(), name: "Current Person")
         session.updatePeople([old])
-        session.beginPreparation("budget", mode: .voice)
+        session.beginPreparation("budget", mode: .semantic)
         while await !gate.started(old.name) {
             try Task.checkCancellation()
             await Task.yield()
@@ -119,14 +119,14 @@ extension PeopleSearchSessionTests {
         let session = LibrarySearchSession()
         let person = PeopleNameRecord(id: UUID(), name: "Zora Vale")
         session.updatePeople([person])
-        session.beginPreparation("Zora Vale", mode: .voice)
+        session.beginPreparation("Zora Vale", mode: .semantic)
         await session.waitForPeopleResolution()
-        #expect(session.contentQuery.isEmpty)
+        #expect(session.contentQuery == "Zora Vale")
         session.finishPeopleOnly()
         session.updatePeople([], refreshSearch: false)
         #expect(session.error == nil)
-        #expect(session.contentQuery.isEmpty)
-        session.beginPreparation(session.query, mode: .voice)
+        #expect(session.contentQuery == "Zora Vale")
+        session.beginPreparation(session.query, mode: .semantic)
         await session.waitForPeopleResolution()
         #expect(session.contentQuery == "Zora Vale")
         #expect(session.error == nil)

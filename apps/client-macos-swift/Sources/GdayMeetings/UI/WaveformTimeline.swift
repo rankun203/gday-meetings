@@ -32,7 +32,7 @@ struct WaveformTimeline: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                focused = true
+                                // Pointer seeking never requests keyboard focus.
                                 isScrubbing = true
                                 scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
                             }
@@ -56,7 +56,8 @@ struct WaveformTimeline: View {
                 ).allowsHitTesting(false)
             }
         }
-        .focusable().focused($focused)
+        // Accept keyboard navigation without SwiftUI's click-to-edit focus.
+        .focusable(interactions: .activate).focused($focused)
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(focused ? Color.accentColor : .clear, lineWidth: 2))
         .onKeyPress(.leftArrow) {
             seek(max(0, time - 5))

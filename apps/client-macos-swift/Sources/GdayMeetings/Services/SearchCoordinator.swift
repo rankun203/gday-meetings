@@ -10,10 +10,14 @@ struct SearchProgress: Sendable {
 /// Independent providers can publish at different speeds. Each event replaces that
 /// provider's results; failures remain visible while successful providers continue.
 struct SearchCoordinator: Sendable {
+    static let maximumResults = 100
     let providers: [any SearchProvider]
 
     func search(_ request: ProviderSearchRequest) -> AsyncThrowingStream<SearchProgress, Error> {
-        AsyncThrowingStream { continuation in
+        var boundedRequest = request
+        boundedRequest.limit = max(0, min(Self.maximumResults, request.limit))
+        let request = boundedRequest
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 let selected = providers.filter { provider in
                     request.mode == .fusion
@@ -45,7 +49,9 @@ struct SearchCoordinator: Sendable {
                                 provider.descriptor.modes.contains(request.mode)
                                 ? request.mode
                                 : (provider.descriptor.modes.contains(.voice) ? .voice : .text)
-                            child.ranked = true
+                            child.ranked = request.mode == .fusion || request.ranked
+                            // Fusion needs a stable candidate pool before the display limit is applied.
+                            if request.mode == .fusion { child.limit = Self.maximumResults }
                             do {
                                 var finished = false
                                 for try await event in provider.search(child) {
@@ -114,9 +120,28 @@ private actor SearchProgressCollector {
         publish()
     }
     private func publish() {
+        let results: [FusedSearchResult]
+        if request.mode == .semantic {
+            results = fusion.snapshots.values.flatMap(\.results).sorted {
+                let left = $0.scoreBreakdown?.total ?? -.infinity
+                let right = $1.scoreBreakdown?.total ?? -.infinity
+                return left == right ? $0.id < $1.id : left > right
+            }.prefix(request.limit).map {
+                .init(meetingID: $0.meetingID, score: $0.scoreBreakdown?.total ?? 0, evidence: [$0])
+            }
+        }
+        else if request.mode == .text, ids.count == 1, let snapshot = fusion.snapshots.values.first {
+            // Preserve the text provider's passage order and separate hits from the same meeting.
+            results = snapshot.results.prefix(request.limit).enumerated().map { position, result in
+                .init(meetingID: result.meetingID, score: 1 / Double(position + 1), evidence: [result])
+            }
+        }
+        else {
+            results = fusion.results(limit: request.limit)
+        }
         continuation.yield(
             .init(
-                requestID: request.id, results: fusion.results(limit: request.limit),
+                requestID: request.id, results: results,
                 failures: failures, isFinal: completed == ids))
     }
 }

@@ -26,6 +26,15 @@ struct PeopleNameResolution: Equatable, Sendable {
     let candidates: [PeopleNameCandidate]
     let residualQuery: String
     var confident: [PeopleNameCandidate] { candidates.filter(\.isConfident) }
+    var unambiguousPeople: Set<UUID> {
+        Set(
+            confident.filter { match in
+                !candidates.contains { other in
+                    other.personID != match.personID && other.score >= match.score - 0.02
+                        && NSIntersectionRange(other.span, match.span).length > 0
+                }
+            }.map(\.personID))
+    }
     static func empty(_ query: String) -> Self { .init(query: query, candidates: [], residualQuery: query) }
 }
 
@@ -68,8 +77,6 @@ struct PeopleNameIndex: Sendable {
     private let lengthLookup: [Int: [Int]]
     private let initialsLookup: [String: [Int]]
     private let maximumAliasLength: Int
-    private let knownWords: Set<String>
-    private let knownPrefixes: Set<String>
     let count: Int
 
     init(people: [PeopleNameRecord]) {
@@ -123,36 +130,12 @@ struct PeopleNameIndex: Sendable {
         prefixLookup = prefixes
         lengthLookup = lengths
         maximumAliasLength = lengths.keys.max() ?? 0
-        knownWords = Set(entries.flatMap(\.words))
-        knownPrefixes = Set(
-            knownWords.flatMap { word in
-                word.count >= 3 ? (3...word.count).map { String(word.prefix($0)) } : []
-            })
         count = entries.count
     }
 
-    func resolve(
-        _ query: String, frequentWords: Set<String>,
-        detectNames: (String) -> [NSRange] = Self.personalNameRanges
-    ) -> PeopleNameResolution {
-        // Bound phrase generation; keep original offsets and the unexamined suffix intact.
+    func resolve(_ query: String) -> PeopleNameResolution {
         let tokens = Array(Self.tokens(query).prefix(128))
         guard !tokens.isEmpty, !entries.isEmpty else { return .empty(query) }
-        var detectedNames: [NSRange]?
-        var grammaticalWords: [NSRange]?
-        func isGrammar(_ range: NSRange) -> Bool {
-            if grammaticalWords == nil { grammaticalWords = Self.grammaticalRanges(query) }
-            return grammaticalWords?.contains { NSIntersectionRange($0, range).length == range.length } == true
-        }
-        func names() -> [NSRange] {
-            if let detectedNames { return detectedNames }
-            let result = detectNames(query)
-            detectedNames = result
-            return result
-        }
-        func isNamed(_ range: NSRange) -> Bool {
-            names().contains { NSIntersectionRange($0, range).length == range.length }
-        }
         var matches: [Match] = []
         var phraseCache: [String: [Int: (Double, PeopleNameMatchKind, Bool)]] = [:]
         for start in tokens.indices {
@@ -188,38 +171,7 @@ struct PeopleNameIndex: Sendable {
                 }
                 for (entryIndex, value) in base {
                     let entry = entries[entryIndex]
-                    var best = value
-                    if !best.2, end == start, entry.words.count > 1 {
-                        // A surname or given-name word must not silently absorb a contradictory adjacent name.
-                        for adjacent in [start - 1, end + 1] where tokens.indices.contains(adjacent) {
-                            let token = tokens[adjacent]
-                            let word = token.latin
-                            let adjacentRange = NSRange(token.range, in: query)
-                            let gap =
-                                adjacent < start
-                                ? query[token.range.upperBound..<tokens[start].range.lowerBound]
-                                : query[tokens[end].range.upperBound..<token.range.lowerBound]
-                            if gap.contains(where: { !$0.isWhitespace && $0 != "-" }) { continue }
-                            if isGrammar(adjacentRange) { continue }
-                            let plausible =
-                                knownWords.contains(word)
-                                || (word.count >= 3 && knownPrefixes.contains(word))
-                                || (!frequentWords.contains(token.normalized) && token.text.first?.isUppercase == true)
-                                || (frequentWords.contains(token.normalized) && isNamed(adjacentRange))
-                            // Without contextual name evidence, a separated noun-like token may be an
-                            // unknown given name or a topic. Preserve that ambiguity instead of removing
-                            // the known surname confidently. Unspaced CJK segmentation is not a name pair.
-                            let unresolvedPair = !gap.isEmpty && gap.allSatisfy(\.isWhitespace) && !isNamed(span)
-                            if (plausible || unresolvedPair) && !entry.words.contains(word) {
-                                best.0 = min(best.0, 0.8)
-                            }
-                        }
-                    }
-                    let commonExpansion =
-                        best.1 == .initials && tokens[start...end].contains { frequentWords.contains($0.normalized) }
-                    if frequentWords.contains(rawNormalized) || frequentWords.contains(normalized) || commonExpansion {
-                        if !isNamed(span) { best.0 *= 0.5 }
-                    }
+                    let best = value
                     matches.append(.init(entry: entry, score: best.0, kind: best.1, span: span, full: best.2))
                 }
             }
@@ -257,11 +209,11 @@ struct PeopleNameIndex: Sendable {
                 personID: match.entry.person.id, name: match.entry.person.name,
                 score: match.score, kind: match.kind, span: match.span,
                 matchedPhrase: (query as NSString).substring(with: match.span),
-                residualQuery: Self.removing([match.span], from: query))
+                residualQuery: query)
         }
         return .init(
             query: query, candidates: candidates,
-            residualQuery: Self.removing(candidates.filter(\.isConfident).map(\.span), from: query))
+            residualQuery: query)
     }
 
     private func baseMatches(
@@ -350,33 +302,6 @@ struct PeopleNameIndex: Sendable {
         }
         return result
     }
-    static func personalNameRanges(_ query: String) -> [NSRange] {
-        let tagger = NLTagger(tagSchemes: [.nameType])
-        tagger.string = query
-        var names: [NSRange] = []
-        tagger.enumerateTags(
-            in: query.startIndex..<query.endIndex, unit: .word, scheme: .nameType,
-            options: [.omitPunctuation, .omitWhitespace, .joinNames]
-        ) { tag, range in
-            if tag == .personalName { names.append(NSRange(range, in: query)) }
-            return true
-        }
-        return names
-    }
-    private static func grammaticalRanges(_ query: String) -> [NSRange] {
-        let tagger = NLTagger(tagSchemes: [.lexicalClass])
-        tagger.string = query
-        let grammar: Set<NLTag> = [.verb, .adverb, .pronoun, .determiner, .preposition, .conjunction, .particle]
-        var ranges: [NSRange] = []
-        tagger.enumerateTags(
-            in: query.startIndex..<query.endIndex, unit: .word, scheme: .lexicalClass,
-            options: [.omitPunctuation, .omitWhitespace]
-        ) { tag, range in
-            if let tag, grammar.contains(tag) { ranges.append(NSRange(range, in: query)) }
-            return true
-        }
-        return ranges
-    }
     private static func similarity(_ a: [Character], _ b: [Character]) -> Double {
         let size = max(a.count, b.count)
         let edits = size / 4
@@ -396,24 +321,5 @@ struct PeopleNameIndex: Sendable {
             previous = current
         }
         return 1 - Double(previous[b.count]) / Double(size)
-    }
-    private static func removing(_ ranges: [NSRange], from query: String) -> String {
-        let result = NSMutableString(string: query)
-        var merged: [NSRange] = []
-        for range in Set(ranges).sorted(by: { $0.location < $1.location }) {
-            if let last = merged.last, NSMaxRange(last) >= range.location {
-                merged[merged.count - 1] = NSUnionRange(last, range)
-            }
-            else {
-                merged.append(range)
-            }
-        }
-        for range in merged.reversed() { result.replaceCharacters(in: range, with: " ") }
-        let trimmed = (result as String).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-        var words = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
-        let connectors: Set<String> = ["and", "with", "和", "与", "跟", "及"]
-        while let first = words.first, connectors.contains(first.lowercased()) { words.removeFirst() }
-        while let last = words.last, connectors.contains(last.lowercased()) { words.removeLast() }
-        return words.joined(separator: " ")
     }
 }

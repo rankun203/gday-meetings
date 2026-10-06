@@ -1,9 +1,16 @@
 import Foundation
 
-/// Paths are arguments to an owned worker process, never a shell command.
+/// Model selection and ranking for Local Search. Legacy worker fields decode old configurations only.
 struct LocalSearchConfiguration: Codable, Equatable, Sendable {
     var executableURL: URL?
     var modelCacheURL: URL?
+    var semanticModel: SemanticModelID?
+    var speakerMatchBoost: Double?
+    var selectedModel: SemanticModelID { semanticModel ?? .granite97M }
+    var boost: Double {
+        let value = speakerMatchBoost ?? 0.1
+        return value.isFinite ? min(0.2, max(0, value)) : 0.1
+    }
 
     static let modelID = "yfyeung/CLSP"
     static let modelRevision = "30355ce67960e4cc1562e4e5fa154baf86a21430"

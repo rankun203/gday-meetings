@@ -1,0 +1,33 @@
+{
+  "cacheCondition": "Fresh app processes; filesystem and Core ML caches not cleared",
+  "windowBoundary": "Visible titled window with content layout complete; not display scan-out",
+  "queryBoundary": "Submission handler to completed native result layout",
+  "model": "granite97M mixed-fp16-v1",
+  "backgroundTasksDisabled": false,
+  "queryLimit": 100,
+  "runs": [
+    {
+      "windowReadyMilliseconds": 1783.6101055145264,
+      "searchReadyMilliseconds": 7488.63410949707,
+      "indexOpenMilliseconds": 1.3349056243896484,
+      "modelPrepareMilliseconds": 5635.083198547363,
+      "modelAcquireMilliseconds": 1921.3910102844238,
+      "tokenizerMilliseconds": 1673.595905303955,
+      "warmupMilliseconds": 2039.452075958252,
+      "queryMilliseconds": [
+        739.5610809326172,
+        472.43595123291016,
+        453.0751705169678,
+        454.35309410095215,
+        444.9188709259033
+      ],
+      "firstQueryMilliseconds": 739.5610809326172,
+      "subsequentMedianMilliseconds": 453.71413230895996,
+      "peakRSSBytesAtSearchReady": 1113702400,
+      "peakRSSBytes": 1113702400,
+      "thermalStates": [
+        0
+      ]
+    }
+  ]
+}

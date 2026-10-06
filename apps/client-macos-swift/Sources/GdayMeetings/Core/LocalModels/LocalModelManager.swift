@@ -67,6 +67,9 @@ final class LocalModelManager: ObservableObject {
     }
 
     var isBusy: Bool { storageOperations > 0 || !tasks.isEmpty || !leases.isEmpty }
+    var isBusyExceptSearch: Bool {
+        storageOperations > 0 || !tasks.isEmpty || leases.values.contains { $0 != .granite97M && $0 != .granite311M }
+    }
     private var storageOperations = 0
     private var storageSuspended = false
 

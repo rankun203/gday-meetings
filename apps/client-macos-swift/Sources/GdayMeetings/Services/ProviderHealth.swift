@@ -32,7 +32,7 @@ extension ServiceProvider {
         guard isEnabled else { return .notReady("Provider is turned off.") }
         guard enabledCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
         if kind == .localSearch {
-            return await (models ?? .shared).health(for: .clsp)
+            return await (models ?? .shared).health(for: (localSearch ?? .init()).selectedModel.localID)
         }
         if kind.isLocalSpeaker {
             let id: LocalModelID?

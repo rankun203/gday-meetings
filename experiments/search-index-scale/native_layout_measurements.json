@@ -1,0 +1,287 @@
+{
+  "coordinatorCapBypassedForMeasurement": true,
+  "providerRetrievalIncluded": false,
+  "queryEmbeddingIncluded": false,
+  "samples": [
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 164.980708,
+      "repetition": 0,
+      "tableReloadMilliseconds": 3.442875,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 78.647792,
+      "repetition": 0,
+      "tableReloadMilliseconds": 2.751167,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 97.021959,
+      "repetition": 0,
+      "tableReloadMilliseconds": 2.5065,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 68.007666,
+      "repetition": 0,
+      "tableReloadMilliseconds": 2.876125,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 83.466875,
+      "repetition": 1,
+      "tableReloadMilliseconds": 2.939583,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 83.451125,
+      "repetition": 1,
+      "tableReloadMilliseconds": 2.669375,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 78.250375,
+      "repetition": 1,
+      "tableReloadMilliseconds": 3.058542,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 76.328208,
+      "repetition": 1,
+      "tableReloadMilliseconds": 2.874833,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 80.800875,
+      "repetition": 2,
+      "tableReloadMilliseconds": 2.515417,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 95.917,
+      "repetition": 2,
+      "tableReloadMilliseconds": 2.866083,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 79.94925,
+      "repetition": 2,
+      "tableReloadMilliseconds": 3.019292,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 67.718083,
+      "repetition": 2,
+      "tableReloadMilliseconds": 2.506833,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 158.821375,
+      "repetition": 3,
+      "tableReloadMilliseconds": 2.747666,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 84.082583,
+      "repetition": 3,
+      "tableReloadMilliseconds": 2.42575,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 80.460125,
+      "repetition": 3,
+      "tableReloadMilliseconds": 2.449875,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 70.994292,
+      "repetition": 3,
+      "tableReloadMilliseconds": 3.118333,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 67.262458,
+      "repetition": 4,
+      "tableReloadMilliseconds": 2.454833,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 83.59075,
+      "repetition": 4,
+      "tableReloadMilliseconds": 3.10125,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 63.848791,
+      "repetition": 4,
+      "tableReloadMilliseconds": 2.597541,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 69.204292,
+      "repetition": 4,
+      "tableReloadMilliseconds": 2.79275,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 20,
+      "materializedCells": 8,
+      "milliseconds": 85.08975,
+      "repetition": 5,
+      "tableReloadMilliseconds": 2.538792,
+      "tableRows": 20,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 50,
+      "materializedCells": 8,
+      "milliseconds": 81.080458,
+      "repetition": 5,
+      "tableReloadMilliseconds": 2.438417,
+      "tableRows": 50,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 100,
+      "materializedCells": 8,
+      "milliseconds": 80.0765,
+      "repetition": 5,
+      "tableReloadMilliseconds": 2.796167,
+      "tableRows": 100,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    },
+    {
+      "count": 10,
+      "materializedCells": 8,
+      "milliseconds": 71.758834,
+      "repetition": 5,
+      "tableReloadMilliseconds": 2.881209,
+      "tableRows": 10,
+      "viewportHeight": 720,
+      "viewportWidth": 1280
+    }
+  ],
+  "scope": "Production native results table in an offscreen window; host construction and synchronous layout only, not visible presentation or display scanout",
+  "limitations": "Offscreen table only. Excludes the SwiftUI header, asynchronous summary lookup, actual on-screen presentation, display scanout, and scrolling to later rows.",
+  "warmSummary": [
+    {
+      "count": 10,
+      "samples": 5,
+      "constructionMedianMilliseconds": 76.328208,
+      "reloadMedianMilliseconds": 2.874833,
+      "materializedCells": [
+        8
+      ]
+    },
+    {
+      "count": 20,
+      "samples": 5,
+      "constructionMedianMilliseconds": 83.466875,
+      "reloadMedianMilliseconds": 2.538792,
+      "materializedCells": [
+        8
+      ]
+    },
+    {
+      "count": 50,
+      "samples": 5,
+      "constructionMedianMilliseconds": 80.800875,
+      "reloadMedianMilliseconds": 2.597541,
+      "materializedCells": [
+        8
+      ]
+    },
+    {
+      "count": 100,
+      "samples": 5,
+      "constructionMedianMilliseconds": 80.0765,
+      "reloadMedianMilliseconds": 2.796167,
+      "materializedCells": [
+        8
+      ]
+    }
+  ]
+}

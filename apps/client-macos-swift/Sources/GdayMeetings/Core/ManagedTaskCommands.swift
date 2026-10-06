@@ -34,6 +34,12 @@ extension MeetingStore {
         }
     }
 
+    @discardableResult func queueSearchIndex(id: UUID, revision: String, force: Bool = false) async -> UUID? {
+        await enqueueCommand(kind: .searchIndex, meetingID: id) {
+            await self.queueSearchIndexCommand(id: id, revision: revision, force: force)
+        }
+    }
+
     func loadManagedTask(id: UUID) async -> ManagedTaskRecord? {
         await managedTaskPreparation?.value
         return await managedTaskCommands.run { await self.loadManagedTaskCommand(id: id) }

@@ -1,0 +1,277 @@
+{
+  "scale": 10,
+  "windows": 390660,
+  "limit": 5,
+  "scope": "Actual production retrieval; test-only task and autorelease lifetime diagnostics",
+  "cacheCondition": "Fresh processes; filesystem caches not cleared",
+  "cases": [
+    {
+      "afterOpen": {
+        "cpuSeconds": 0.028572,
+        "peakRSS": 27000832,
+        "physicalFootprint": 6111760,
+        "readBytes": 8192,
+        "rss": 27000832,
+        "thermalState": 0,
+        "writtenBytes": 45056
+      },
+      "beforeOpen": {
+        "cpuSeconds": 0.021647,
+        "peakRSS": 23347200,
+        "physicalFootprint": 4260272,
+        "readBytes": 0,
+        "rss": 23347200,
+        "thermalState": 0,
+        "writtenBytes": 0
+      },
+      "catalogOpenMilliseconds": 11.060959,
+      "final": {
+        "cpuSeconds": 12.121676,
+        "peakRSS": 164888576,
+        "physicalFootprint": 25346672,
+        "readBytes": 24576,
+        "rss": 164888576,
+        "thermalState": 0,
+        "writtenBytes": 45056
+      },
+      "idleMilliseconds": 200,
+      "indexOpenMilliseconds": 0.597,
+      "limit": 5,
+      "modelsLoaded": false,
+      "queries": [
+        {
+          "after": {
+            "cpuSeconds": 4.085161,
+            "peakRSS": 158351360,
+            "physicalFootprint": 134054512,
+            "readBytes": 24576,
+            "rss": 158351360,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 4.108206,
+            "peakRSS": 158482432,
+            "physicalFootprint": 79594096,
+            "readBytes": 24576,
+            "rss": 158482432,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 0.028787,
+            "peakRSS": 27164672,
+            "physicalFootprint": 6210064,
+            "readBytes": 8192,
+            "rss": 27164672,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 4069.146292,
+          "queryIndex": 0
+        },
+        {
+          "after": {
+            "cpuSeconds": 8.093338,
+            "peakRSS": 162398208,
+            "physicalFootprint": 83509872,
+            "readBytes": 24576,
+            "rss": 162398208,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 8.1147,
+            "peakRSS": 162414592,
+            "physicalFootprint": 22872688,
+            "readBytes": 24576,
+            "rss": 162414592,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 4.108248,
+            "peakRSS": 158482432,
+            "physicalFootprint": 79594096,
+            "readBytes": 24576,
+            "rss": 158482432,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 3998.022666,
+          "queryIndex": 8
+        },
+        {
+          "after": {
+            "cpuSeconds": 12.104217,
+            "peakRSS": 164855808,
+            "physicalFootprint": 25313904,
+            "readBytes": 24576,
+            "rss": 164855808,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 12.121642,
+            "peakRSS": 164888576,
+            "physicalFootprint": 25346672,
+            "readBytes": 24576,
+            "rss": 164888576,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 8.114724,
+            "peakRSS": 162414592,
+            "physicalFootprint": 22872688,
+            "readBytes": 24576,
+            "rss": 162414592,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 4002.060667,
+          "queryIndex": 16
+        }
+      ],
+      "queryLifecycle": "separate-tasks",
+      "scale": 10,
+      "sqliteVersion": "3.51.0",
+      "windows": 390660,
+      "resultsIdenticalToBaseline": true
+    },
+    {
+      "afterOpen": {
+        "cpuSeconds": 0.027064,
+        "peakRSS": 26951680,
+        "physicalFootprint": 6062608,
+        "readBytes": 8192,
+        "rss": 26951680,
+        "thermalState": 0,
+        "writtenBytes": 45056
+      },
+      "beforeOpen": {
+        "cpuSeconds": 0.021083,
+        "peakRSS": 23281664,
+        "physicalFootprint": 4211144,
+        "readBytes": 0,
+        "rss": 23281664,
+        "thermalState": 0,
+        "writtenBytes": 0
+      },
+      "catalogOpenMilliseconds": 10.759208,
+      "final": {
+        "cpuSeconds": 12.186116,
+        "peakRSS": 174571520,
+        "physicalFootprint": 34390664,
+        "readBytes": 8192,
+        "rss": 174571520,
+        "thermalState": 0,
+        "writtenBytes": 45056
+      },
+      "idleMilliseconds": 200,
+      "indexOpenMilliseconds": 0.570083,
+      "limit": 5,
+      "modelsLoaded": false,
+      "queries": [
+        {
+          "after": {
+            "cpuSeconds": 4.113301,
+            "peakRSS": 161693696,
+            "physicalFootprint": 83018352,
+            "readBytes": 8192,
+            "rss": 161693696,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 4.113559,
+            "peakRSS": 161742848,
+            "physicalFootprint": 83034736,
+            "readBytes": 8192,
+            "rss": 161742848,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 0.027262,
+            "peakRSS": 27115520,
+            "physicalFootprint": 6160912,
+            "readBytes": 8192,
+            "rss": 27115520,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 4099.910875,
+          "queryIndex": 0
+        },
+        {
+          "after": {
+            "cpuSeconds": 8.145792,
+            "peakRSS": 169902080,
+            "physicalFootprint": 29721224,
+            "readBytes": 8192,
+            "rss": 169902080,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 8.145897,
+            "peakRSS": 169902080,
+            "physicalFootprint": 29721224,
+            "readBytes": 8192,
+            "rss": 169902080,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 4.113627,
+            "peakRSS": 161759232,
+            "physicalFootprint": 83051120,
+            "readBytes": 8192,
+            "rss": 161759232,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 4045.02025,
+          "queryIndex": 8
+        },
+        {
+          "after": {
+            "cpuSeconds": 12.185984,
+            "peakRSS": 174571520,
+            "physicalFootprint": 34390664,
+            "readBytes": 8192,
+            "rss": 174571520,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "afterIdle": {
+            "cpuSeconds": 12.186076,
+            "peakRSS": 174571520,
+            "physicalFootprint": 34390664,
+            "readBytes": 8192,
+            "rss": 174571520,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "before": {
+            "cpuSeconds": 8.145922,
+            "peakRSS": 169902080,
+            "physicalFootprint": 29721224,
+            "readBytes": 8192,
+            "rss": 169902080,
+            "thermalState": 0,
+            "writtenBytes": 45056
+          },
+          "milliseconds": 4059.150709,
+          "queryIndex": 16
+        }
+      ],
+      "queryLifecycle": "explicit-autorelease-pool",
+      "scale": 10,
+      "sqliteVersion": "3.51.0",
+      "windows": 390660,
+      "resultsIdenticalToBaseline": true
+    }
+  ]
+}

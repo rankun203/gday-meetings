@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "dimensions": 384,
+  "hnswPrecisionScaleCells": 30,
+  "hnswQueryObservations": 75600,
+  "sqliteScaleCellsPerEngine": 10,
+  "sqliteQueryObservations": 19800,
+  "speakerUnionQueries": 2400,
+  "nativeCountScaleCells": 40,
+  "nativeQueries": 440,
+  "lifecycleCells": 50,
+  "labeledQueries": 102,
+  "knownDiskANNDeletedPointLookupFailure": true
+}

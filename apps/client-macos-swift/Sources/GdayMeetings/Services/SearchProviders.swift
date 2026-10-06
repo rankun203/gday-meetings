@@ -1,7 +1,7 @@
 import Foundation
 
-/// Text and voice are retrieval channels; fusion combines their independently ranked outputs.
-enum SearchMode: String, Codable, CaseIterable, Sendable { case text, voice, fusion }
+/// Text and semantic are offered in the app. Voice and fusion decode legacy settings and support experiments.
+enum SearchMode: String, Codable, CaseIterable, Sendable { case text, voice, fusion, semantic }
 
 struct SearchProviderDescriptor: Sendable {
     let id: UUID
@@ -18,6 +18,7 @@ struct ProviderSearchRequest: Sendable {
     var excludingTagIDs: Set<UUID> = []
     /// Ranked pages use an offset cursor; legacy passage-order pages use a passage ID.
     var ranked = false
+    var identifiedPeople: Set<UUID> = []
 }
 
 struct ProviderSearchAudioRange: Equatable, Codable, Sendable {
@@ -36,6 +37,7 @@ struct ProviderSearchResult: Identifiable, Equatable, Sendable {
     let passage: LibrarySearchResult?
     var audio: ProviderSearchAudioRange? = nil
     var createdAt: Date? = nil
+    var scoreBreakdown: SpeakerMatchScore? = nil
 }
 
 struct ProviderSearchSnapshot: Sendable {
@@ -55,14 +57,25 @@ protocol SearchProvider: Sendable {
 }
 
 protocol SearchIndexProvider: SearchProvider {
-    func index(_ document: ProviderSearchDocument) async throws -> ProviderResult<Void>
-    func remove(meetingID: String) async throws -> ProviderResult<Void>
+    func prepare() async throws
+    func updateIndex(meetingID: UUID, rebuild: Bool, progress: @escaping @Sendable (SearchIndexProgress) -> Void)
+        async throws
+    func resetIndex() async throws
+    func removeIndex(meetingID: UUID) async throws
+    func unload() async
+}
+
+struct SearchIndexProgress: Sendable {
+    let meetingID: UUID
+    let completed: Int
+    let total: Int
 }
 
 enum SearchProviderError: Error, LocalizedError {
-    case unsupportedMode, incompleteResponse, invalidResponse
+    case unsupportedMode, incompleteResponse, invalidResponse, sourceChanged
     var errorDescription: String? {
         switch self {
+        case .sourceChanged: "The meeting changed while indexing. Indexing will restart."
         case .unsupportedMode: "This search provider doesn’t support the selected search mode."
         case .incompleteResponse: "The search provider stopped before returning a complete result."
         case .invalidResponse: "The search provider returned an invalid result."

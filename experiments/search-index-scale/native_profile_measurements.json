@@ -1,0 +1,216 @@
+{
+  "method": "15-second Time Profiler-only attachment; inclusive CPU stack samples, not wall-time stage instrumentation",
+  "scale": 10,
+  "sampleWeightMilliseconds": 15444.0,
+  "exclusiveCategoriesPercent": {
+    "JSON decoding": 50.78347578347579,
+    "Other retrieval work": 23.01217301217301,
+    "Source fingerprint validation": 19.65811965811966,
+    "SQLite calls": 5.251230251230251,
+    "Outside retrieval": 0.8352758352758352,
+    "Accelerate vector kernels": 0.45972545972545975
+  },
+  "inclusiveFrames": [
+    {
+      "symbol": "closure #3 in NativeSearchScaleTests.runNativeSearchMeasurement()",
+      "percent": 99.56617456617457
+    },
+    {
+      "symbol": "completeTaskWithClosure(swift::AsyncContext*, swift::SwiftError*)",
+      "percent": 99.56617456617457
+    },
+    {
+      "symbol": "partial apply for closure #3 in NativeSearchScaleTests.runNativeSearchMeasurement()",
+      "percent": 99.56617456617457
+    },
+    {
+      "symbol": "SemanticSearchIndex.search(vector:model:request:boost:)",
+      "percent": 98.98989898989899
+    },
+    {
+      "symbol": "dispatch thunk of JSONDecoder.decode<A>(_:from:)",
+      "percent": 50.72520072520072
+    },
+    {
+      "symbol": "JSONDecoder.decode<A>(_:from:)",
+      "percent": 50.71872571872572
+    },
+    {
+      "symbol": "closure #1 in static JSONDecoder.withUTF8Representation<A>(of:_:)",
+      "percent": 50.71872571872572
+    },
+    {
+      "symbol": "partial apply for closure #1 in JSONDecoder._decode<A>(_:from:)",
+      "percent": 50.7057757057757
+    },
+    {
+      "symbol": "closure #1 in JSONDecoder._decode<A>(_:from:)",
+      "percent": 50.68635068635069
+    },
+    {
+      "symbol": "partial apply for closure #1 in JSONDecoder.decode<A>(_:from:)",
+      "percent": 41.873866873866874
+    },
+    {
+      "symbol": "specialized JSONDecoderImpl.unwrap<A, B>(_:as:for:_:)",
+      "percent": 41.860916860916866
+    },
+    {
+      "symbol": "dispatch thunk of Decodable.init(from:)",
+      "percent": 41.82206682206682
+    },
+    {
+      "symbol": "_KeyedDecodingContainerBox.decode<A, B>(_:forKey:)",
+      "percent": 41.148666148666145
+    },
+    {
+      "symbol": "protocol witness for KeyedDecodingContainerProtocol.decode<A>(_:forKey:) in conformance JSONDecoderImpl.KeyedContainer<A>",
+      "percent": 41.142191142191145
+    },
+    {
+      "symbol": "KeyedDecodingContainer.decode<A>(_:forKey:)",
+      "percent": 41.142191142191145
+    },
+    {
+      "symbol": "JSONDecoderImpl.KeyedContainer.decode<A>(_:forKey:)",
+      "percent": 41.08391608391608
+    },
+    {
+      "symbol": "JSONDecoderImpl.unwrap<A, B>(_:as:for:_:)",
+      "percent": 41.01269101269101
+    },
+    {
+      "symbol": "protocol witness for Decodable.init(from:) in conformance <A> [A]",
+      "percent": 40.786065786065784
+    },
+    {
+      "symbol": "Array<A>.init(from:)",
+      "percent": 40.675990675990676
+    },
+    {
+      "symbol": "protocol witness for Decodable.init(from:) in conformance SemanticMeetingArtifact",
+      "percent": 40.64361564361565
+    },
+    {
+      "symbol": "SemanticMeetingArtifact.init(from:)",
+      "percent": 40.63714063714064
+    },
+    {
+      "symbol": "protocol witness for UnkeyedDecodingContainer.decode<A>(_:) in conformance JSONDecoderImpl.UnkeyedContainer",
+      "percent": 39.95078995078995
+    },
+    {
+      "symbol": "JSONDecoderImpl.UnkeyedContainer.decode<A>(_:)",
+      "percent": 39.93783993783994
+    },
+    {
+      "symbol": "protocol witness for Decodable.init(from:) in conformance SemanticWindow",
+      "percent": 38.578088578088575
+    },
+    {
+      "symbol": "SemanticWindow.init(from:)",
+      "percent": 38.19606319606319
+    },
+    {
+      "symbol": "static SemanticSource.fingerprint(folder:)",
+      "percent": 19.65811965811966
+    },
+    {
+      "symbol": "specialized static SemanticSource.fingerprint(folder:)",
+      "percent": 19.334369334369335
+    },
+    {
+      "symbol": "static MeetingFolderLocation.resolve(id:directory:date:)",
+      "percent": 13.487438487438489
+    },
+    {
+      "symbol": "KeyedDecodingContainer.decode(_:forKey:)",
+      "percent": 10.016835016835017
+    },
+    {
+      "symbol": "_KeyedDecodingContainerBox.decode<A>(_:forKey:)",
+      "percent": 9.777259777259777
+    },
+    {
+      "symbol": "static MeetingFolderLocation.validate(_:directory:)",
+      "percent": 9.55063455063455
+    },
+    {
+      "symbol": "specialized static MeetingFolderLocation.validate(_:directory:)",
+      "percent": 9.414659414659415
+    },
+    {
+      "symbol": "bool swift::RefCounts<swift::RefCountBitsT<(swift::RefCountInlinedness)1>>::doDecrementSlow<(swift::PerformDeinit)1>(swift::RefCountBitsT<(swift::RefCountInlinedness)1>, unsigned int)",
+      "percent": 9.14918414918415
+    },
+    {
+      "symbol": "protocol witness for KeyedDecodingContainerProtocol.decode(_:forKey:) in conformance JSONDecoderImpl.KeyedContainer<A>",
+      "percent": 8.903133903133902
+    },
+    {
+      "symbol": "JSONScanner.scan()",
+      "percent": 8.695933695933695
+    },
+    {
+      "symbol": "JSONScanner.scanObject(withoutBraces:)",
+      "percent": 8.676508676508677
+    },
+    {
+      "symbol": "JSONScanner._scanObjectLoop(withoutBraces:count:done:)",
+      "percent": 8.637658637658637
+    },
+    {
+      "symbol": "JSONScanner.scanArray()",
+      "percent": 8.372183372183372
+    },
+    {
+      "symbol": "JSONDecoderImpl.KeyedContainer.decode(_:forKey:)",
+      "percent": 7.964257964257965
+    },
+    {
+      "symbol": "URL.appendingPathComponent(_:)",
+      "percent": 7.4074074074074066
+    },
+    {
+      "symbol": "protocol witness for Decodable.init(from:) in conformance UUID",
+      "percent": 6.993006993006993
+    },
+    {
+      "symbol": "JSONScanner.scanString()",
+      "percent": 6.857031857031857
+    },
+    {
+      "symbol": "specialized closure #1 in JSONMap.withBuffer<A>(for:perform:)",
+      "percent": 6.844081844081844
+    },
+    {
+      "symbol": "_swift_release_dealloc",
+      "percent": 6.805231805231806
+    },
+    {
+      "symbol": "UUID.init(from:)",
+      "percent": 6.675731675731676
+    },
+    {
+      "symbol": "protocol witness for Decodable.init(from:) in conformance <> Set<A>",
+      "percent": 6.559181559181559
+    },
+    {
+      "symbol": "dispatch thunk of Decoder.container<A>(keyedBy:)",
+      "percent": 6.500906500906501
+    },
+    {
+      "symbol": "protocol witness for Decoder.container<A>(keyedBy:) in conformance JSONDecoderImpl",
+      "percent": 6.455581455581455
+    },
+    {
+      "symbol": "partial apply for closure #1 in JSONDecoderImpl.unwrapString<A>(from:for:_:)",
+      "percent": 6.442631442631443
+    },
+    {
+      "symbol": "Set<>.init(from:)",
+      "percent": 6.371406371406371
+    }
+  ],
+  "limitations": "One short capture. Inlined vector-loop work can fall under Other retrieval work; CPU shares are approximate. Profiled queries are excluded from latency measurements."
+}

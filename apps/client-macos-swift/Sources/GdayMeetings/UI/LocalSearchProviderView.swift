@@ -6,7 +6,6 @@ struct LocalSearchProviderView: View {
     @EnvironmentObject private var drafts: ProviderDraftCoordinator
     @ObservedObject private var health = ProviderHealthStore.shared
     @ObservedObject private var localModels = LocalModelManager.shared
-    @ObservedObject var controller: VoiceSearchController
     @Binding var draft: ServiceProvider
     @ViewState private var failure: String?
 
@@ -20,68 +19,31 @@ struct LocalSearchProviderView: View {
                 TextField("Name", text: $draft.name)
                 Toggle("Enable This Provider", isOn: $draft.isEnabled)
                 Text(
-                    "Searches descriptions of voices in recorded audio on this Mac. CLSP is experimental; results may miss relevant clips."
+                    "Searches meeting titles, notes, summaries, and transcripts by meaning on this Mac."
                 )
                 .font(.callout).foregroundStyle(.secondary)
             }
             Section("Search Model") {
-                LabeledContent("Model", value: LocalSearchConfiguration.modelID)
-                LocalModelDownloadView(modelID: .clsp)
-                Text(
-                    "The Core ML model files haven’t been published yet. Use Manual Installation with the prepared files."
-                )
-                .font(.callout).foregroundStyle(.secondary)
-                Text("The downloaded model processes voice descriptions and recorded audio on this Mac.")
+                Picker("Model", selection: modelBinding) {
+                    ForEach(SemanticModelID.allCases) { model in Text(model.title).tag(model) }
+                }
+                LocalModelDownloadView(modelID: configuration.selectedModel.localID)
+                Text("Changing models builds a separate search index. Progress appears in Data and Tasks.")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Section("Readiness") {
-                ProviderHealthSummary(title: "Voice Search", health: readiness)
+            Section("Ranking") {
+                LabeledContent(
+                    "Speaker Match Boost", value: configuration.boost.formatted(.number.precision(.fractionLength(2))))
+                Slider(value: boostBinding, in: 0...0.2, step: 0.01) { Text("Speaker Match Boost") }.labelsHidden()
                 Text(
-                    "Readiness checks the installed model files. It does not process recordings or measure search quality."
+                    "Ranks passages higher when identified people in your query speak in them. Set to 0 to rank by content similarity only."
                 )
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
+            }
+            Section("Readiness") {
+                ProviderHealthSummary(title: "Search", health: readiness)
                 Button("Refresh") { Task { await store.refreshProviderHealth(providerID: draft.id) } }
                     .disabled(changed)
-            }
-            Section("Voice Index") {
-                Text(
-                    "Build the index to make saved recordings searchable by voice description. This processes audio locally and can take time. Text search remains available."
-                )
-                .font(.callout)
-                if let progress = controller.progress {
-                    ProgressView(value: Double(progress.completedClips), total: Double(max(1, progress.totalClips)))
-                    Text(
-                        "\(progress.completedClips.formatted()) of \(progress.totalClips.formatted()) clips in the current track"
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
-                }
-                if let status = controller.statusMessage { Text(status).font(.callout) }
-                if let error = controller.error {
-                    AppInlineMessage(text: error, systemImage: "exclamationmark.circle", tint: .orange)
-                }
-                HStack {
-                    Button("Build Voice Index") {
-                        controller.buildLibrary(
-                            configuration: draft.localSearch ?? LocalSearchConfiguration(),
-                            libraryIndex: store.libraryIndex,
-                            excludingTagIDs: Set(store.tags.filter(\.isExcluded).map(\.id)),
-                            excludingMeetingIDs: Set([store.recordingID].compactMap { $0 }))
-                    }
-                    .disabled(
-                        changed || !readiness.isReady || controller.isBuilding || !store.libraryWritable
-                            || store.recordingID != nil
-                            || store.isFinalizingRecording)
-                    if controller.isBuilding { Button("Stop", role: .cancel) { controller.cancel() } }
-                }
-                Button("Rebuild from Saved Embeddings") { controller.rebuildSavedEmbeddings() }
-                    .disabled(!store.libraryWritable || controller.isBuilding)
-                Text(
-                    "Rebuilding restores the local index from saved embeddings without loading the model or processing audio again."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                if changed {
-                    Text("Save your changes before building the index.").font(.caption).foregroundStyle(.secondary)
-                }
             }
             Section {
                 if let failure { AppInlineMessage(text: failure, systemImage: "exclamationmark.circle", tint: .orange) }
@@ -90,7 +52,7 @@ struct LocalSearchProviderView: View {
                         .disabled(!changed || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button(
                         store.settings.searchProviderID == draft.id
-                            ? "Selected for Voice Search" : "Use for Voice Search"
+                            ? "Selected for Search" : "Use for Search"
                     ) {
                         let previous = store.settings
                         store.settings.selectProvider(draft.id, for: .search)
@@ -104,11 +66,31 @@ struct LocalSearchProviderView: View {
             }
         }
         .formStyle(.grouped)
-        .task(id: localModels.state(for: .clsp).healthIdentity) {
+        .task(id: localModels.state(for: configuration.selectedModel.localID).healthIdentity) {
             await store.refreshProviderHealth(providerID: draft.id)
+            store.searchConfigurationChanged()
         }
     }
 
+    private var configuration: LocalSearchConfiguration { draft.localSearch ?? .init() }
+    private var modelBinding: Binding<SemanticModelID> {
+        Binding(
+            get: { configuration.selectedModel },
+            set: { value in
+                var next = configuration
+                next.semanticModel = value
+                draft.localSearch = next
+            })
+    }
+    private var boostBinding: Binding<Double> {
+        Binding(
+            get: { configuration.boost },
+            set: { value in
+                var next = configuration
+                next.speakerMatchBoost = value
+                draft.localSearch = next
+            })
+    }
     private func save() {
         guard let index = store.settings.serviceProviders.firstIndex(where: { $0.id == draft.id }) else { return }
         let previous = store.settings
@@ -130,12 +112,11 @@ struct SearchModePicker: View {
     var body: some View {
         Picker("Search Mode", selection: $selection) {
             Text("Text").tag(SearchMode.text)
-            Text("Voice").tag(SearchMode.voice)
-            Text("Fusion").tag(SearchMode.fusion)
+            Text("Semantic").tag(SearchMode.semantic)
         }
         .pickerStyle(.menu)
         .fixedSize()
-        .help("Text searches written content. Voice searches recorded audio. Fusion combines their ranked results.")
+        .help("Text matches words. Semantic searches by meaning with the selected model.")
     }
 }
 

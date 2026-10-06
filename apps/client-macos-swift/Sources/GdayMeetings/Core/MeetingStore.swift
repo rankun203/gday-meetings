@@ -111,6 +111,7 @@ final class MeetingStore: ObservableObject {
     var recordingLevels: RecordingLevels { recordingMeter.levels }
     let dataDirectory: URL
     let indexDirectory: URL
+    lazy var localSearch = LocalSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
     lazy var voiceSearch: VoiceSearchController = {
         let controller = VoiceSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
         voiceSearchJobObservation = controller.$isBuilding.dropFirst().sink { [weak self] _ in
@@ -130,7 +131,8 @@ final class MeetingStore: ObservableObject {
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
         !isPreparingToQuit && voiceAssignmentRefreshCount == 0
-            && !LocalModelManager.shared.isBusy && !voiceSearch.isBuilding && !isChangingLibrary
+            && !LocalModelManager.shared.isBusyExceptSearch && !localSearch.isLoading && !voiceSearch.isBuilding
+            && !isChangingLibrary
             && recordingID == nil && !isStartingRecording
             && !isFinalizingRecording
             && !captureTransition && backgroundJobs.isEmpty && managedTaskOperations.isEmpty
@@ -318,6 +320,7 @@ final class MeetingStore: ObservableObject {
             guard !copyCurrent || libraryWritable else {
                 throw MeetingError.message("The current data folder is unavailable. Choose an existing library.")
             }
+            await localSearch.shutdown()
             try LocalModelManager.shared.suspendForLibraryChange()
             writableBeforeFolderChange = canSave
             previousFolderPreference = folderPreferences.data
@@ -678,6 +681,7 @@ final class MeetingStore: ObservableObject {
             errorMessage = "Restore the local library before changing settings."
             return false
         }
+        settings.selectSoleSearchProvider()
         do {
             let settingsData = try JSONEncoder().encode(settings)
             let persist = {
@@ -721,6 +725,7 @@ final class MeetingStore: ObservableObject {
             return false
         }
         ProviderHealthStore.shared.invalidateChangedConfiguration(settings: settings)
+        searchConfigurationChanged()
         return true
     }
     func insertImportedMeeting(_ meeting: Meeting) async throws {
@@ -804,6 +809,7 @@ final class MeetingStore: ObservableObject {
                 self.meetingCatalog.removeAll { $0.id == id }
                 self.visibleMeetingIDs.removeAll { $0 == id }
                 self.voiceSearch.invalidateDeletedMeeting(id)
+                await self.localSearch.removeMeeting(id)
                 do { try await self.notesStorage.discard(id) }
                 catch {
                     self.errorMessage =
@@ -1242,6 +1248,7 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func finalizeForQuit() async -> Bool {
         isPreparingToQuit = true
+        await localSearch.shutdown()
         await voiceSearch.shutdown()
         libraryCopyTask?.cancel()
         await libraryCopyTask?.value

@@ -4,6 +4,35 @@ import Testing
 @testable import GdayMeetings
 
 struct SearchProviderTests {
+    @MainActor @Test func textCapPreservesPassagesOrderingAndExcludedTags() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let excluded = UUID()
+        var hidden = Meeting(title: "Hidden parcel")
+        hidden.tagIDs = [excluded]
+        hidden.transcript = [.init(text: "parcel")]
+        var visible = Meeting(title: "Visible fixture")
+        visible.transcript = (0..<150).map {
+            .init(start: Double($0 * 60), end: Double($0 * 60 + 8), text: "parcel passage \($0)")
+        }
+        try MeetingFolderStorage.write(hidden, directory: root)
+        try MeetingFolderStorage.write(visible, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        let expected = try index.searchPage(query: "parcel", limit: 100, excludingTagIDs: [excluded])
+        #expect(expected.results.count == 100)
+        let session = LibrarySearchSession()
+        #expect(
+            session.submit(
+                "parcel", mode: .text, providers: [LocalTextSearchProvider(index: index)],
+                excludingTagIDs: [excluded]))
+        #expect(try await waitForMainActorTestCondition(timeout: .seconds(5)) { !session.isLoading })
+        #expect(session.displayResults.count == 100)
+        #expect(session.displayResults.map { $0.passage?.id } == expected.results.map { Optional($0.id) })
+        #expect(session.displayResults.allSatisfy { $0.meetingID == visible.id })
+        #expect(!session.canLoadMore)
+    }
+
     @Test func rankedTextPagesUseRelevanceAndOffsetCursor() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -128,9 +157,14 @@ private struct FixtureSearchProvider: SearchProvider {
     let descriptor: SearchProviderDescriptor
     let meeting: UUID
     var fails = false
+    var resultCount = 1
+    var expectedLimit: Int? = nil
+    var meetingIDs: [UUID]? = nil
+    var respectsLimit = false
     func search(_ request: ProviderSearchRequest) -> AsyncThrowingStream<ProviderResult<ProviderSearchSnapshot>, Error>
     {
         AsyncThrowingStream { continuation in
+            if let expectedLimit { #expect(request.limit == expectedLimit) }
             if fails {
                 continuation.finish(throwing: SearchProviderError.incompleteResponse)
                 return
@@ -139,12 +173,14 @@ private struct FixtureSearchProvider: SearchProvider {
                 .init(
                     value: .init(
                         requestID: request.id, providerID: descriptor.id, sequence: 0,
-                        results: [
+                        results: (0..<(respectsLimit ? min(resultCount, request.limit) : resultCount)).map { position in
                             .init(
-                                id: "fixture", meetingID: meeting, title: "Fixture", excerpt: "Match",
+                                id: "fixture-\(position)",
+                                meetingID: meetingIDs?[position] ?? (resultCount == 1 ? meeting : UUID()),
+                                title: "Fixture", excerpt: "Match",
                                 sourceRevision: nil, passage: nil)
-                        ],
-                        total: 1, nextCursor: nil, isFinal: true),
+                        },
+                        total: resultCount, nextCursor: nil, isFinal: true),
                     dataFlow: .init(
                         location: .local, targetID: descriptor.id,
                         targetName: descriptor.name, startedAt: Date(), endedAt: Date(), bodies: ["Search query"],
@@ -155,9 +191,57 @@ private struct FixtureSearchProvider: SearchProvider {
 }
 
 extension SearchProviderTests {
+    @Test(arguments: [SearchMode.text, .voice, .fusion, .semantic], [0, 1, 5, 20, 50, 100, 1000])
+    func coordinatedResultsRespectRequestLimit(mode: SearchMode, limit: Int) async throws {
+        let expected = min(100, limit)
+        let first = FixtureSearchProvider(
+            descriptor: .init(id: UUID(), name: "First fixture", modes: [mode == .fusion ? .text : mode]),
+            meeting: UUID(), resultCount: 150, expectedLimit: mode == .fusion ? 100 : expected)
+        let second = FixtureSearchProvider(
+            descriptor: .init(id: UUID(), name: "Second fixture", modes: [mode == .fusion ? .voice : mode]),
+            meeting: UUID(), resultCount: 150, expectedLimit: mode == .fusion ? 100 : expected)
+        var final: SearchProgress?
+        for try await event in SearchCoordinator(providers: [first, second]).search(
+            .init(query: "parcel", mode: mode, limit: limit))
+        {
+            #expect(event.results.count <= expected)
+            if event.isFinal { final = event }
+        }
+        #expect(final?.results.count == expected)
+    }
+
+    @Test func fusionKeepsCandidatesBeyondDisplayLimit() async throws {
+        let shared = UUID()
+        let text = FixtureSearchProvider(
+            descriptor: .init(id: UUID(), name: "Text fixture", modes: [.text]), meeting: UUID(),
+            resultCount: 21, expectedLimit: 100, meetingIDs: (0..<20).map { _ in UUID() } + [shared],
+            respectsLimit: true)
+        let voice = FixtureSearchProvider(
+            descriptor: .init(id: UUID(), name: "Voice fixture", modes: [.voice]), meeting: UUID(),
+            resultCount: 21, expectedLimit: 100, meetingIDs: (0..<20).map { _ in UUID() } + [shared],
+            respectsLimit: true)
+        for try await result in SearchCoordinator(providers: [text, voice]).search(
+            .init(query: "parcel", mode: .fusion, limit: 20)) where result.isFinal
+        {
+            #expect(result.results.count == 20)
+            #expect(result.results.first?.meetingID == shared)
+        }
+    }
+
+    @MainActor @Test func sessionRequestsOneHundredAndCapsOverReturningProvider() async throws {
+        let session = LibrarySearchSession()
+        let provider = FixtureSearchProvider(
+            descriptor: .init(id: UUID(), name: "Text fixture", modes: [.text]), meeting: UUID(),
+            resultCount: 120, expectedLimit: 100)
+        #expect(session.submit("parcel", mode: .text, providers: [provider]))
+        #expect(try await waitForMainActorTestCondition(timeout: .seconds(5)) { !session.isLoading })
+        #expect(session.rankedResults.count == 100)
+        #expect(!session.canLoadMore)
+    }
+
     @MainActor @Test func rankedSessionFinishesWithoutEnablingLegacyPaging() async throws {
         let provider = FixtureSearchProvider(
-            descriptor: .init(id: UUID(), name: "Voice fixture", modes: [.voice]), meeting: UUID())
+            descriptor: .init(id: UUID(), name: "Voice fixture", modes: [.voice]), meeting: UUID(), expectedLimit: 100)
         let session = LibrarySearchSession()
         #expect(session.submit("quiet voice", mode: .voice, providers: [provider]))
         let finished = try await waitForMainActorTestCondition(timeout: .seconds(5)) { !session.isLoading }

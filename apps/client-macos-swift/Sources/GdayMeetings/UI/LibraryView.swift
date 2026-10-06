@@ -30,6 +30,8 @@ struct LibraryView: View {
     }
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage("settingsTab") private var settingsTab = "defaults"
     @AppStorage("displaySummaryTitleOnMeetings") private var displaySummaryTitleOnMeetings = true
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
@@ -44,12 +46,13 @@ struct LibraryView: View {
     @StateObject private var workspace = LibraryWorkspaceState()
     @ViewState private var showsSearchResults = false
     @ViewState private var openedSearchResult: SearchDisplayResult?
-    @FocusState private var searchFocused: Bool
+    @ViewState private var searchFocused = false
+    @ViewState private var searchModelNotice: ServiceProvider?
+    @ViewState private var promptedSearchModels: Set<String> = []
     @StateObject private var sidebarFocus = LibrarySidebarFocusRequest()
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewState private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
-    @ViewState private var searchPresented = false
     @ViewState private var sidebarTransition = UUID()
     private let sidebarControl: LibrarySidebarControl?
 
@@ -218,7 +221,8 @@ struct LibraryView: View {
                                 destination = .people
                                 selectedPeople = [id]
                                 search = ""
-                            }
+                            },
+                            play: playSearchResult, canPlay: !recordingActive, index: store.libraryIndex
                         )
                         .onExitCommand {
                             showsSearchResults = false
@@ -279,34 +283,6 @@ struct LibraryView: View {
     @ViewBuilder private var selectedDetail: some View {
         if destination == .meetings, let id = selectedMeeting {
             VStack(spacing: 0) {
-                if openedSearchResult != nil {
-                    HStack {
-                        Button("Back to Search Results", systemImage: "chevron.left") {
-                            showsSearchResults = true
-                            search = searchSession.query
-                        }
-                        Spacer()
-                        if let audio = openedSearchResult?.audio {
-                            Text("Voice match · \(playbackTime(audio.start))")
-                                .font(.callout).foregroundStyle(.secondary)
-                            Button("Play Match", systemImage: "play.fill") {
-                                playback.requestPlayback(
-                                    load: {
-                                        guard await store.ensureMeetingLoaded(id: id) else { return nil }
-                                        return store.meeting(id: id)
-                                    },
-                                    play: { meeting in
-                                        playback.playExcerpt(
-                                            meeting: meeting, directory: store.directory(for: id),
-                                            audioFile: audio.filename, start: audio.start,
-                                            end: audio.start + audio.duration)
-                                    })
-                            }
-                            .disabled(store.recordingID != nil)
-                        }
-                    }.padding(.horizontal, AppTheme.contentInset).padding(
-                        .top, AppTheme.contentSpacing)
-                }
                 MeetingDetailView(
                     meetingID: id,
                     initialTranscriptRowID: openedSearchResult?.segmentID,
@@ -345,6 +321,10 @@ struct LibraryView: View {
 
     private var addMeetingMenu: some View {
         Menu {
+            Button("New Meeting Recording…", systemImage: "record.circle") {
+                store.presentsRecordingSetup = true
+            }
+            .disabled(!store.canStartRecording)
             Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
                 MeetingPanels.importAudio(store)
             }
@@ -409,14 +389,29 @@ struct LibraryView: View {
     }
 
     @ToolbarContentBuilder private var meetingToolbar: some ToolbarContent {
+        if !showsSearchResults && openedSearchResult != nil && (destination != .meetings || !showsMeetingTabs) {
+            ToolbarItem(placement: .navigation) {
+                backToSearchResultsButton
+            }
+        }
         if !showsSearchResults && destination == .meetings {
             if showsMeetingTabs {
-                ToolbarItem(placement: .principal) {
+                ToolbarItemGroup(placement: .principal) {
+                    if openedSearchResult != nil {
+                        backToSearchResultsButton
+                    }
                     MeetingContentTabs(selection: $workspace.meetingTab)
                 }
             }
             ToolbarSpacer(.flexible, placement: .primaryAction)
         }
+    }
+
+    private var backToSearchResultsButton: some View {
+        Button("Back to Search Results", systemImage: "chevron.left") {
+            showsSearchResults = true
+            search = searchSession.query
+        }.help("Back to Search Results").keyboardShortcut("[", modifiers: .command)
     }
 
     @ToolbarContentBuilder private var recordingToolbar: some ToolbarContent {
@@ -433,7 +428,12 @@ struct LibraryView: View {
             ToolbarItem(placement: .primaryAction) { recordButton }
         #endif
         ToolbarSpacer(.fixed, placement: .primaryAction)
-        DefaultToolbarItem(kind: .search, placement: .primaryAction)
+        ToolbarItem(id: "library-search", placement: .primaryAction) {
+            LibrarySearchField(
+                controller: store.localSearch, text: $search, focused: $searchFocused,
+                activate: activateLibrarySearch,
+                submit: submitSearch)
+        }
     }
 
     var body: some View {
@@ -444,9 +444,6 @@ struct LibraryView: View {
             navigationWorkspace
                 .navigationSplitViewStyle(.balanced)
                 .scrollEdgeEffectStyle(.soft, for: .top)
-                .searchable(text: $search, isPresented: $searchPresented, placement: .toolbar, prompt: "Search")
-                .searchFocused($searchFocused)
-                .onSubmit(of: .search, submitSearch)
                 .toolbar {
                     meetingToolbar
                     recordingToolbar
@@ -492,7 +489,10 @@ struct LibraryView: View {
             openedSearchResult = nil
             destination = .tasks
         }
-        .task { searchSession.updatePeople(store.people.map { .init(id: $0.id, name: $0.name) }) }
+        .task {
+            searchSession.updatePeople(store.people.map { .init(id: $0.id, name: $0.name) })
+            store.searchConfigurationChanged()
+        }
         .onChange(of: store.people) { previous, people in
             let records = people.map { PeopleNameRecord(id: $0.id, name: $0.name) }
             guard records != previous.map({ PeopleNameRecord(id: $0.id, name: $0.name) }) else { return }
@@ -519,6 +519,25 @@ struct LibraryView: View {
             if query.isEmpty, showsSearchResults { showsSearchResults = false }
         }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
+        .alert(
+            "Download a Search Model",
+            isPresented: Binding(
+                get: { searchModelNotice != nil },
+                set: { if !$0 { searchModelNotice = nil } }),
+            presenting: searchModelNotice
+        ) { provider in
+            Button("Open Local Search Settings") {
+                searchFocused = false
+                ProviderHealthStore.shared.settingsProviderID = provider.id
+                settingsTab = "providers"
+                openSettings()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { provider in
+            Text(
+                "Searching by meaning requires downloading \((provider.localSearch ?? .init()).selectedModel.title). Open Local Search settings to download the model or install it manually."
+            )
+        }
         // Messages lead with the problem; that sentence is the title, and what was
         // kept and technical detail follow as the smaller message text.
         .alert(
@@ -592,7 +611,14 @@ struct LibraryView: View {
         openedSearchResult = nil
         searchFocused = false
         if mode == .text {
-            _ = searchSession.submit(query, index: store.libraryIndex, excludingTagIDs: store.excludedTagIDs)
+            if let index = store.libraryIndex {
+                _ = searchSession.submit(
+                    query, mode: .text, providers: [LocalTextSearchProvider(index: index)],
+                    excludingTagIDs: store.excludedTagIDs)
+            }
+            else {
+                _ = searchSession.submit(query, index: nil, excludingTagIDs: store.excludedTagIDs)
+            }
             return
         }
         searchSession.beginPreparation(query, mode: mode)
@@ -609,20 +635,13 @@ struct LibraryView: View {
                     $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
                 })
             else {
-                searchSession.preparationFailed("Choose and prepare a Voice Search provider in Service Providers.")
+                searchSession.preparationFailed("Choose and prepare a Local Search provider in Service Providers.")
                 return
             }
             do {
-                let voice = try await store.voiceSearch.provider(
-                    configuration: configured.localSearch ?? LocalSearchConfiguration())
+                let provider = try await store.localSearch.prepare(configured)
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
-                var providers: [any SearchProvider] = [voice]
-                if mode == .fusion {
-                    guard let index = store.libraryIndex else {
-                        throw ServiceError("Wait for the library index to finish loading, then try again.")
-                    }
-                    providers.append(LocalTextSearchProvider(index: index))
-                }
+                let providers: [any SearchProvider] = [provider]
                 _ = searchSession.submit(query, mode: mode, providers: providers, excludingTagIDs: exclusions)
             }
             catch {
@@ -664,6 +683,19 @@ struct LibraryView: View {
         }
     }
 
+    private func playSearchResult(_ result: SearchDisplayResult) {
+        guard !recordingActive, let start = result.passage?.start ?? result.audio?.start else { return }
+        playback.requestPlayback(
+            load: {
+                guard await store.ensureMeetingLoaded(id: result.meetingID), !recordingActive else { return nil }
+                return store.meeting(id: result.meetingID)
+            },
+            play: { meeting in
+                let files = store.audioURLs(for: meeting)
+                if !files.isEmpty { playback.play(meeting: meeting, files: files, at: start) }
+            })
+    }
+
     private func openSearchResult(_ result: SearchDisplayResult) {
         workspace.selectMeeting(result.meetingID)
         selectedMeeting = result.meetingID
@@ -672,8 +704,27 @@ struct LibraryView: View {
         showsSearchResults = false
     }
 
+    private func activateLibrarySearch() {
+        guard let provider = store.selectedSearchProvider else { return }
+        Task { @MainActor in
+            let model = (provider.localSearch ?? .init()).selectedModel
+            let manager = LocalModelManager.shared
+            let health = await manager.health(for: model.localID)
+            guard store.selectedSearchProvider == provider else { return }
+            if health.isReady {
+                store.localSearch.preload(provider)
+                return
+            }
+            guard ![.downloading, .verifying, .preparing].contains(manager.state(for: model.localID).phase) else {
+                return
+            }
+            let key = provider.id.uuidString + ":" + model.space
+            guard promptedSearchModels.insert(key).inserted else { return }
+            searchModelNotice = provider
+        }
+    }
+
     private func focusLibrarySearch() {
-        searchPresented = true
         searchFocused = true
     }
 
@@ -713,9 +764,9 @@ struct LibraryView: View {
         }
         else {
             ContentUnavailableView {
-                Label("Select a Meeting", systemImage: "waveform")
+                Label("G’day", systemImage: "waveform")
             } description: {
-                Text("Choose a meeting from the list, or start a new recording.")
+                Text("No meeting is selected.")
             } actions: {
                 Button("New Recording…") { store.presentsRecordingSetup = true }
                     .disabled(!store.canStartRecording)

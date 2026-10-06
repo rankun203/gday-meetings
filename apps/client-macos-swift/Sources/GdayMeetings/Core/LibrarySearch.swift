@@ -35,6 +35,7 @@ struct SearchDisplayResult: Identifiable, Equatable, Sendable {
     let createdAt: Date?
     let passage: LibrarySearchResult?
     let audio: ProviderSearchAudioRange?
+    var scoreBreakdown: SpeakerMatchScore? = nil
     var segmentID: UUID? { passage?.segmentID }
 }
 
@@ -183,7 +184,7 @@ final class LibrarySearchSession: ObservableObject {
             guard request == nameRequest else { return }
             completedNameRequest = request
             peopleResolution = resolution
-            contentQuery = resolution.confident.isEmpty ? query : resolution.residualQuery
+            contentQuery = query
             guard !preparingProviders else {
                 if error != nil { isLoading = false }
                 return
@@ -246,10 +247,10 @@ final class LibrarySearchSession: ObservableObject {
                 guard let first = fused.evidence.first else { return nil }
                 let passage = fused.evidence.compactMap(\.passage).first
                 return .init(
-                    id: "meeting:" + fused.meetingID.uuidString, meetingID: fused.meetingID,
+                    id: first.id, meetingID: fused.meetingID,
                     title: first.title, excerpt: passage?.excerpt ?? first.excerpt,
                     createdAt: passage?.createdAt ?? first.createdAt, passage: passage,
-                    audio: fused.evidence.compactMap(\.audio).first)
+                    audio: fused.evidence.compactMap(\.audio).first, scoreBreakdown: first.scoreBreakdown)
             }
         }
         return results.map {
@@ -283,7 +284,7 @@ final class LibrarySearchSession: ObservableObject {
         return true
     }
 
-    /// Voice and fusion publish bounded ranked snapshots as providers finish.
+    /// Providers publish bounded ranked snapshots as they finish.
     @discardableResult
     func submit(_ draft: String, mode: SearchMode, providers: [any SearchProvider], excludingTagIDs: Set<UUID> = [])
         -> Bool
@@ -325,8 +326,9 @@ final class LibrarySearchSession: ObservableObject {
         generation = UUID()
         let generation = generation
         let request = ProviderSearchRequest(
-            id: generation, query: contentQuery, mode: mode, limit: 100,
-            excludingTagIDs: excludingTagIDs, ranked: true)
+            id: generation, query: contentQuery, mode: mode, limit: SearchCoordinator.maximumResults,
+            excludingTagIDs: excludingTagIDs, ranked: mode != .text,
+            identifiedPeople: peopleResolution.unambiguousPeople)
         isLoading = true
         error = nil
         providerFailures = [:]

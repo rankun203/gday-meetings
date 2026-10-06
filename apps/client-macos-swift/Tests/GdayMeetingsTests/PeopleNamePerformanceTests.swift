@@ -17,13 +17,13 @@ struct PeopleNamePerformanceTests {
         var times: [Duration] = []
         for _ in 0..<5 {
             let start = ContinuousClock.now
-            let result = index.resolve(query, frequentWords: [], detectNames: { _ in [] })
+            let result = index.resolve(query)
             times.append(start.duration(to: .now))
             #expect(result.confident.first?.personID == people[240].id)
         }
         let longQuery = Array(repeating: "quarterly delivery planning context", count: 40).joined(separator: " ")
         let start = ContinuousClock.now
-        let result = index.resolve(longQuery, frequentWords: [], detectNames: { _ in [] })
+        let result = index.resolve(longQuery)
         #expect(result.confident.isEmpty)
         #expect(result.residualQuery == longQuery)
         print(

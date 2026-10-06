@@ -56,14 +56,14 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .gdayWebsite: return "Gday Meetings Website"
         case .nemotron: return "Live Speaker Labeling (Nemotron)"
         case .community1: return "Speaker Labeling (Community-1)"
-        case .localSearch: return "Local Voice Search (CLSP)"
+        case .localSearch: return "Local Search"
         }
     }
     var systemImage: String {
         switch self {
         case .appleSpeech: "desktopcomputer"
         case .nemotron, .community1: "person.wave.2"
-        case .localSearch: "waveform"
+        case .localSearch: "text.magnifyingglass"
         case .gdayWebsite: "globe"
         case .runpod, .openAICompatible, .filedrop: "server.rack"
         }
@@ -125,6 +125,9 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = try values.decode(String.self, forKey: .model)
         localSearch = try values.decodeIfPresent(LocalSearchConfiguration.self, forKey: .localSearch)
+        if kind == .localSearch, ["Local Voice Search (CLSP)", "Local Voice Search"].contains(name) {
+            name = "Local Search"
+        }
         isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
         enabledCapabilities = try values.decode(Set<ProviderCapability>.self, forKey: .enabledCapabilities)
         uploadProviderID = try values.decodeIfPresent(UUID.self, forKey: .uploadProviderID)

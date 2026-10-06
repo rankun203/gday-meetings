@@ -1,0 +1,128 @@
+{
+  "scope": "Descriptive least-squares fits over all ten measured scales; no extrapolation",
+  "processMemoryScope": "Includes benchmark runtime; excludes embedding model and OS filesystem cache",
+  "engines": {
+    "hnsw-f32": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": 183.9604868373491,
+        "intercept": 43.522916666666525,
+        "rSquared": 0.9999261892101393,
+        "maximumAbsoluteResidual": 3.794696969696929,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      },
+      "graphDisk": {
+        "unit": "MB",
+        "per100000Windows": 181.2341882967286,
+        "intercept": 0.00011199999976201097,
+        "rSquared": 1.0,
+        "maximumAbsoluteResidual": 3.410605131648481e-13,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    },
+    "hnsw-f16": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": 110.70838355913612,
+        "intercept": 43.44270833333322,
+        "rSquared": 0.9997573198820285,
+        "maximumAbsoluteResidual": 3.843655303030175,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      },
+      "graphDisk": {
+        "unit": "MB",
+        "per100000Windows": 104.43418829672859,
+        "intercept": 0.0001119999999058147,
+        "rSquared": 1.0,
+        "maximumAbsoluteResidual": 2.2737367544323206e-13,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    },
+    "hnsw-i8": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": 73.99894545206325,
+        "intercept": 43.645833333333265,
+        "rSquared": 0.9994715190621792,
+        "maximumAbsoluteResidual": 3.928882575757541,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      },
+      "graphDisk": {
+        "unit": "MB",
+        "per100000Windows": 66.0341882967286,
+        "intercept": 0.00011199999995075338,
+        "rSquared": 1.0,
+        "maximumAbsoluteResidual": 1.1368683772161603e-13,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    },
+    "native-exhaustive": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": 33.55917491610933,
+        "intercept": 44.57812499999997,
+        "rSquared": 0.9954426427974855,
+        "maximumAbsoluteResidual": 4.961931818181881,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    },
+    "sqlite-diskann": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": -0.3240921734624678,
+        "intercept": 62.17916666666666,
+        "rSquared": 0.17166512198028616,
+        "maximumAbsoluteResidual": 1.7712121212121232,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      },
+      "indexDisk": {
+        "unit": "MB",
+        "per100000Windows": 1486.5522835791487,
+        "intercept": 0.024302933332261592,
+        "rSquared": 0.9999999999961702,
+        "maximumAbsoluteResidual": 0.005362036365113454,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    },
+    "sqlite-exact": {
+      "processRSS": {
+        "unit": "MiB",
+        "per100000Windows": 0.12386768933381717,
+        "intercept": 49.30104166666666,
+        "rSquared": 0.03953196464724151,
+        "maximumAbsoluteResidual": 0.986553030303007,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      },
+      "indexDisk": {
+        "unit": "MB",
+        "per100000Windows": 156.10703179855687,
+        "intercept": 0.8956586666664397,
+        "rSquared": 0.999994340979321,
+        "maximumAbsoluteResidual": 0.7611609212118537,
+        "observations": 10,
+        "minimumWindows": 39066,
+        "maximumWindows": 390660
+      }
+    }
+  }
+}

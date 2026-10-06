@@ -407,7 +407,7 @@ struct TaskQueueView: View {
                         Text("Dismiss discards this saved request. The provider may continue processing it.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if record.state == .running && record.kind != .diarization {
+                    if record.state == .running && record.kind != .diarization && record.kind != .searchIndex {
                         Text("The provider may continue processing after you stop waiting.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -440,7 +440,9 @@ struct TaskQueueView: View {
                 Button("Run Next") { Task { await store.prioritizeManagedTask(id: record.id) } }
             }
             Button(
-                record.state == .queued ? "Remove from Queue" : record.kind == .diarization ? "Cancel" : "Stop Waiting"
+                record.state == .queued
+                    ? "Remove from Queue"
+                    : [.diarization, .searchIndex].contains(record.kind) ? "Cancel" : "Stop Waiting"
             ) {
                 Task { await store.cancelManagedTask(id: record.id) }
             }
@@ -462,6 +464,7 @@ struct TaskQueueView: View {
         switch kind {
         case .transcription: "Transcription"
         case .summary: "Summary"
+        case .searchIndex: "Search Index"
         case .diarization: "Speaker Labeling"
         case .chat, .contextChat: "Chat"
         case .archive: "Archive"

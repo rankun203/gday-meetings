@@ -87,7 +87,7 @@ struct ServiceProvidersView: View {
             }
             else if let provider = store.settings.serviceProviders.first(where: { $0.id == selection }) {
                 if provider.kind == .localSearch {
-                    LocalSearchProviderView(controller: store.voiceSearch, draft: draftBinding(provider)).id(
+                    LocalSearchProviderView(draft: draftBinding(provider)).id(
                         provider.id)
                 }
                 else if provider.kind.isLocalSpeaker {

@@ -8,7 +8,7 @@ struct PeopleNameIndexTests {
     private func resolve(_ text: String, _ people: [PeopleNameRecord], frequent: Set<String> = [])
         -> PeopleNameResolution
     {
-        PeopleNameIndex(people: people).resolve(text, frequentWords: frequent, detectNames: { _ in [] })
+        PeopleNameIndex(people: people).resolve(text)
     }
 
     @Test func fullNamesReversedOrderAndDuplicateRecordsRemainDistinct() {
@@ -18,7 +18,8 @@ struct PeopleNameIndexTests {
             let result = resolve(query, [first, duplicate])
             #expect(Set(result.confident.map(\.personID)) == [first.id, duplicate.id])
             #expect(result.confident.allSatisfy { $0.score == 1 })
-            #expect(result.residualQuery == "budget")
+            #expect(result.residualQuery == query)
+            #expect(result.unambiguousPeople.isEmpty)
         }
     }
     @Test func wholeNameSuppressesConflictingShorterNameButNotAnotherMention() {
@@ -31,35 +32,13 @@ struct PeopleNameIndexTests {
         let separate = resolve("Zora Vale and Zora budget", [full, first])
         #expect(Set(separate.confident.map(\.personID)) == [full.id, first.id])
     }
-    @Test func grammarIsNotConflictingSurnameAndLowercasePrefixIsNameEvidence() {
-        let sam = person("Sam Vale")
-        #expect(
-            resolve("Sam discussed budgets", [sam], frequent: ["discussed", "budgets"]).confident.first?.score == 1)
-        let alexander = person("Alexander")
-        let other = person("Bo Wang")
-        let result = resolve("alex wang", [alexander, other], frequent: ["alex"])
-        #expect(result.candidates.first { $0.personID == alexander.id }?.kind == .prefix)
-        #expect(result.candidates.first { $0.personID == other.id }?.score ?? 0 <= 0.8)
-        #expect(result.confident.isEmpty)
-    }
-    @Test func unknownAdjacentNamesAndNounTopicsRemainUncertain() {
+    @Test func exactMatchesDoNotNeedContextualNameDetection() {
         let person = person("Bo Wang")
-        for query in ["alex wang", "budget wang", "wang budget"] {
-            let result = resolve(query, [person], frequent: ["alex", "budget"])
-            #expect(result.candidates.first { $0.personID == person.id }?.score == 0.8)
-            #expect(result.confident.isEmpty)
+        for query in ["alex wang", "budget wang", "wang budget", "Bo Wang budget"] {
+            let result = resolve(query, [person])
+            #expect(result.unambiguousPeople == [person.id])
             #expect(result.residualQuery == query)
         }
-        #expect(resolve("Wang discussed budgets", [person]).confident.first?.score == 1)
-        #expect(resolve("Bo Wang budget", [person]).confident.first?.score == 1)
-        #expect(resolve("Bo Wang budget", [person]).residualQuery == "budget")
-    }
-    @Test func extraSurnamePreservesSingleNameAndCapsConflictingRecord() {
-        let first = person("Zora")
-        let conflicting = person("Mira Singh")
-        let result = resolve("Zora Singh", [first, conflicting])
-        #expect(result.confident.first?.personID == first.id)
-        #expect(result.candidates.first { $0.personID == conflicting.id }?.score ?? 0 <= 0.8)
     }
     @Test func prefixAndShortSpellingStaySuggestions() {
         let alex = person("Alexander")
@@ -90,20 +69,17 @@ struct PeopleNameIndexTests {
         #expect(resolve("Lena Zhao", [full, initials]).confident.map(\.personID) == [full.id])
         #expect(resolve("宇明讲了计划", [unrelated]).confident.isEmpty)
     }
-    @Test func commonWordsAndOrdinaryInitialsExpansionsNeedContextualNameEvidence() {
+    @Test func commonWordsCanMatchPeopleWithoutRewritingTheQuery() {
         let grace = person("Grace")
-        let initials = person("HT")
-        let pinyin = person("Li Wu")
-        let index = PeopleNameIndex(people: [grace, initials, pinyin])
-        let words: Set<String> = ["grace", "how", "things", "礼物"]
-        #expect(
-            index.resolve("grace period", frequentWords: words, detectNames: { _ in [] }).candidates.first?.score == 0.5
-        )
-        #expect(index.resolve("how things work", frequentWords: words, detectNames: { _ in [] }).confident.isEmpty)
-        #expect(index.resolve("礼物", frequentWords: words, detectNames: { _ in [] }).confident.isEmpty)
-        let named = index.resolve(
-            "Grace talked", frequentWords: words, detectNames: { _ in [NSRange(location: 0, length: 5)] })
-        #expect(named.confident.first?.personID == grace.id)
+        let result = resolve("grace period", [grace])
+        #expect(result.unambiguousPeople == [grace.id])
+        #expect(result.residualQuery == "grace period")
+    }
+    @Test func sharedFirstNameDoesNotBoostEitherPerson() {
+        let first = person("Zora Vale")
+        let second = person("Zora Reed")
+        #expect(resolve("Zora discussed the plan", [first, second]).unambiguousPeople.isEmpty)
+        #expect(resolve("Zora Vale discussed the plan", [first, second]).unambiguousPeople == [first.id])
     }
     @Test func spansReferToOriginalUTF16AndUncertainWordsRemainInTopic() throws {
         let name = person("Zora Vale")
@@ -114,8 +90,8 @@ struct PeopleNameIndexTests {
         #expect((query as NSString).substring(with: found.span) == "Zora Vale")
         #expect(found.matchedPhrase == "Zora Vale")
         #expect(result.residualQuery.contains("alex budget"))
-        #expect(!result.residualQuery.contains("Zora Vale"))
-        #expect(resolve("Zora Vale", [name]).residualQuery.isEmpty)
+        #expect(result.residualQuery == query)
+        #expect(resolve("Zora Vale", [name]).residualQuery == "Zora Vale")
     }
     @Test func indexRebuildsOnlyWhenNamesChangeAndRemovesDeletedPeople() async throws {
         let resolver = PeopleNameResolver()
