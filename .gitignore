@@ -39,3 +39,10 @@ node_modules/
 
 # Private local analysis and meeting data
 /tmp/
+
+# Local experiment inputs, downloaded models, and generated artifacts
+/experiments/*/private/
+/experiments/*/models/
+/experiments/*/artifacts/
+/experiments/*/runs/
+/experiments/*/.cache/

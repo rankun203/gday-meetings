@@ -39,6 +39,12 @@ scope: repository-workflow
 - Check current official documentation for replacement APIs and validate the resulting behavior. Do not introduce deprecated APIs into new code.
 - If migration is blocked by a dependency or a supported older platform, document the warning, reason, compatibility fallback, and concrete follow-up in the worklog. Report remaining warnings explicitly; do not describe a build as warning-free when it is not.
 
+## Experiments
+
+- Put new experiments in `experiments/<name>/`, with reproducible scripts, a `README.md` for running them, and a self-contained `RESULTS.md`.
+- Structure `RESULTS.md` with Findings, References (brief literature review), Experiment Setup, and results such as comparison matrices; include ablations when useful. Define each method, metric, and other referenced concept in a concise paragraph, and record limitations.
+- Keep private inputs, model downloads, and generated artifacts in ignored directories; commit source, synthetic fixtures, and aggregate reports.
+
 ## Worklogs
 
 When a task changes repository code, create or update a concise worklog under
