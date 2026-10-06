@@ -33,16 +33,20 @@ node_modules/
 *.tsbuildinfo
 .venv/
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
 !**/.env.example
 .pnpm-store/
 
 # Private local analysis and meeting data
 /tmp/
+# Local interactive session output
+/:memory:.ses
 
 # Local experiment inputs, downloaded models, and generated artifacts
-/experiments/*/private/
-/experiments/*/models/
-/experiments/*/artifacts/
-/experiments/*/runs/
-/experiments/*/.cache/
+/experiments/**/private/
+/experiments/**/models/
+/experiments/**/artifacts/
+/experiments/**/runs/
+/experiments/**/.cache/
+/experiments/**/*.private.*

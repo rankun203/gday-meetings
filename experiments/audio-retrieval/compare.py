@@ -1,13 +1,13 @@
 """Compare retrieval runs and export a method-blinded relevance pool."""
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
 import time
+from collections import Counter
+from pathlib import Path
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -102,7 +102,14 @@ def main():
     parser.add_argument("dataset", type=Path)
     parser.add_argument("runs", type=Path)
     parser.add_argument("--judgments", type=Path)
+    parser.add_argument("--clsp-run", type=Path, help="Verify an expanded CLSP run against the dataset fingerprint.")
+    parser.add_argument("--skip-clsp", action="store_true", help="Prepare a partial comparison before the CLSP run completes.")
+    parser.add_argument("--text-run", action="append", default=[], metavar="NAME=PATH",
+                        help="Include a completed text-only encoding run.")
+    parser.add_argument("--output", type=Path, help="Write comparisons separately from the original run.")
     args = parser.parse_args()
+    output = args.output or args.runs
+    output.mkdir(parents=True, exist_ok=True)
     qs = read_jsonl(args.dataset / "queries.jsonl")
     cs = read_jsonl(args.dataset / "corpus.jsonl")
     qids, cids = [q["query_id"] for q in qs], [c["segment_id"] for c in cs]
@@ -133,8 +140,14 @@ def main():
             scores[name] = (vectorizer.transform(texts) @ d.T).toarray()
         timings[name] = time.perf_counter() - start
         lexical.add(name)
-    scores["clsp-audio"] = np.load(args.dataset / "reference-similarities.npy")
-    if scores["clsp-audio"].shape != (len(qs), len(cs)):
+    if not args.skip_clsp:
+        scores["clsp-audio"] = np.load(args.dataset / "reference-similarities.npy")
+    if args.clsp_run:
+        signature = json.loads((args.clsp_run / "manifest.json").read_text())
+        completed = json.loads((args.clsp_run / "complete.json").read_text())
+        if signature["inputs_sha256"] != digest.hexdigest() or completed["queries"] != len(qs) or completed["windows"] != len(cs):
+            raise ValueError("CLSP run does not cover these exact inputs.")
+    if not args.skip_clsp and scores["clsp-audio"].shape != (len(qs), len(cs)):
         raise ValueError("CLSP matrix dimensions differ from the input corpus.")
     for model in ["e5", "jina", "clap"]:
         folder = args.runs / model
@@ -143,7 +156,7 @@ def main():
         manifest = json.loads((folder / "manifest.json").read_text())
         if manifest["inputs_sha256"] != digest.hexdigest():
             raise ValueError(f"{model} was encoded from different inputs.")
-        def vectors(kind, keys):
+        def vectors(kind, keys, folder=folder):
             return [np.load(folder / f"{kind}-{key}.npz")["embedding"] for key in keys]
         q = np.concatenate(vectors("query", qids))
         if model != "clap":
@@ -157,6 +170,22 @@ def main():
                 scores["clap-audio-mean"] = q @ pooled.T
             else:
                 scores[model + "-audio"] = q @ np.concatenate(audio).T
+    for specification in args.text_run:
+        name, folder_name = specification.split("=", 1)
+        folder = Path(folder_name)
+        if not name or name in scores:
+            raise ValueError("Additional methods must have distinct nonempty names.")
+        completion = json.loads((folder / "complete.json").read_text())
+        manifest = json.loads((folder / "manifest.json").read_text())
+        if manifest["inputs_sha256"] != digest.hexdigest() or completion["tasks"] != len(qs) + len(cs):
+            raise ValueError("Text run does not cover these exact inputs.")
+        arrays = []
+        for kind, keys in [("query", qids), ("transcript", cids)]:
+            value = np.concatenate([np.load(folder / f"{kind}-{key}.npz")["embedding"] for key in keys])
+            if value.ndim != 2 or len(value) != len(keys) or not np.allclose(np.linalg.norm(value, axis=1), 1, atol=1e-4):
+                raise ValueError("Text run must contain one normalized vector per input.")
+            arrays.append(value)
+        scores[name] = arrays[0] @ arrays[1].T
     if any(matrix.shape != (len(qs), len(cs)) or not np.isfinite(matrix).all() for matrix in scores.values()):
         raise ValueError("Score matrices must be finite and cover all queries and documents.")
     orders = {name: order_scores(matrix, cids, name in lexical) for name, matrix in scores.items()}
@@ -164,15 +193,18 @@ def main():
         "hybrid-e5-bm25": ["e5-transcript", "bm25"],
         "hybrid-jina-audio-bm25": ["jina-audio", "bm25"],
         "hybrid-jina-transcript-bm25": ["jina-transcript", "bm25"],
+        "hybrid-jina-audio-transcript": ["jina-audio", "jina-transcript"],
     }.items():
         if all(member in orders for member in members):
             scores[name] = rrf([orders[member] for member in members], len(cs))
             orders[name] = order_scores(scores[name], cids)
-    np.savez(args.runs / "scores.npz", **scores)
+    np.savez(output / "scores.npz", **scores)
     groups = {"all": list(range(len(qs))), "cross_language": [i for i, v in enumerate(cross) if v],
               "same_language": [i for i, v in enumerate(cross) if not v]}
     for language in sorted({q["language"] for q in qs}):
         groups[language] = [i for i, q in enumerate(qs) if q["language"] == language]
+    for cohort in sorted({q.get("cohort", "original") for q in qs}):
+        groups["cohort_" + cohort] = [i for i, q in enumerate(qs) if q.get("cohort", "original") == cohort]
     per_query = {name: [evidence_metrics(order, positive) for order, positive in zip(ranking, positives)]
                  for name, ranking in orders.items()}
     result = {
@@ -190,12 +222,13 @@ def main():
         documents.add(control)
         for di in sorted(documents):
             token = hashlib.sha256(f"review-v1:{qids[qi]}:{cids[di]}".encode()).hexdigest()[:16]
-            pool.append({"review_id": token, "query": query["query"], "passage": docs[di]})
+            pool.append({"review_id": token, "query": query["query"], "passage": docs[di],
+                         "reference_evidence": [p.get("transcript_evidence", "") for p in query["positives"]]})
             secret.append({"review_id": token, "query_id": qids[qi], "segment_id": cids[di]})
     pool.sort(key=lambda row: row["review_id"])
     for filename, rows in [("blind-pool.jsonl", pool), ("pool-key.jsonl", secret)]:
-        (args.runs / filename).write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
-    (args.runs / "rankings.json").write_text(json.dumps({
+        (output / filename).write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    (output / "rankings.json").write_text(json.dumps({
         name: {qids[qi]: [cids[di] for di in order] for qi, order in enumerate(ranking)}
         for name, ranking in orders.items()}, indent=2) + "\n")
     if args.judgments:
@@ -222,10 +255,10 @@ def main():
         result["judged_pairs"] = len(seen)
         result["additional_useful_pairs"] = sum(g >= 2 and di not in positives[qi]
                                                 for qi, row in enumerate(grades) for di, g in row.items())
-        (args.runs / "per-query-relevance.json").write_text(json.dumps(relevance, indent=2) + "\n")
-    (args.runs / "metrics.json").write_text(json.dumps(result, indent=2) + "\n")
-    (args.runs / "per-query-evidence.json").write_text(json.dumps(per_query, indent=2) + "\n")
-    print(json.dumps({"methods": list(orders), "pool_pairs": len(pool), "results": str(args.runs / "metrics.json")}))
+        (output / "per-query-relevance.json").write_text(json.dumps(relevance, indent=2) + "\n")
+    (output / "metrics.json").write_text(json.dumps(result, indent=2) + "\n")
+    (output / "per-query-evidence.json").write_text(json.dumps(per_query, indent=2) + "\n")
+    print(json.dumps({"methods": list(orders), "pool_pairs": len(pool), "results": str(output / "metrics.json")}))
 
 
 if __name__ == "__main__":

@@ -43,6 +43,7 @@ scope: repository-workflow
 
 - Put new experiments in `experiments/<name>/`, with reproducible scripts, a `README.md` for running them, and a self-contained `RESULTS.md`.
 - Structure `RESULTS.md` with Findings, References (brief literature review), Experiment Setup, and results such as comparison matrices; include ablations when useful. Define each method, metric, and other referenced concept in a concise paragraph, and record limitations.
+- Maintain `RESULTS.md` as one coherent account of the whole experiment. Integrate each update into the relevant setup, definitions, comparison matrices, findings, and limitations; revise affected conclusions and remove stale or duplicate material. Do not merely append new rounds, progress updates, or chapters. Keep each topic in one clear location and distinguish completed measurements from pending work.
 - Keep private inputs, model downloads, and generated artifacts in ignored directories; commit source, synthetic fixtures, and aggregate reports.
 
 ## Worklogs
