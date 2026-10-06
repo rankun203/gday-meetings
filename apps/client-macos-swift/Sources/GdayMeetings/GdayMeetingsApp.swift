@@ -6,6 +6,7 @@ import SwiftUI
 struct GdayMeetingsApp: App {
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.librarySearchAction) private var librarySearchAction
+    @FocusedValue(\.newMeetingNotesAction) private var newMeetingNotesAction
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
     @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
@@ -55,15 +56,23 @@ struct GdayMeetingsApp: App {
                     store.presentsRecordingSetup = true
                 }
                 .keyboardShortcut("n")
-                .disabled(
-                    !store.libraryWritable || store.recordingID != nil || store.isStartingRecording
-                        || store.isFinalizingRecording)
-                Button("Import Audio…") { MeetingPanels.importAudio(store) }.keyboardShortcut("o")
-                    .disabled(!store.libraryWritable)
+                .disabled(!store.canStartRecording)
+                Button("New Meeting Notes") { newMeetingNotesAction?() }
+                    .disabled(!store.libraryWritable || newMeetingNotesAction == nil)
+                Button("Import Audio or Video…") { MeetingPanels.importAudio(store) }.keyboardShortcut("o")
+                    .disabled(
+                        !store.libraryWritable || store.recordingID != nil || store.isStartingRecording
+                            || store.isFinalizingRecording || store.isImportingAudio)
+                Divider()
                 Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
                     .disabled(!store.libraryWritable)
                 Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
                     .disabled(!store.libraryWritable)
+                Button("Open Meetings Folder") {
+                    if !NSWorkspace.shared.open(store.dataDirectory) {
+                        store.errorMessage = "Could not open the meetings folder in Finder."
+                    }
+                }
             }
             CommandMenu("Format") {
                 Button("Bold") { NSApp.sendAction(#selector(NotesTextView.markdownBold(_:)), to: nil, from: nil) }
@@ -74,9 +83,10 @@ struct GdayMeetingsApp: App {
                     .keyboardShortcut("k")
             }
             CommandMenu("Recording") {
-                Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
+                Button(store.recordingID == nil ? "New Recording…" : "Stop & Save") {
                     if store.recordingID == nil {
-                        Task { await store.startRecording() }
+                        openWindow(id: "main")
+                        store.presentsRecordingSetup = true
                     }
                     else {
                         Task { await store.stopRecording() }

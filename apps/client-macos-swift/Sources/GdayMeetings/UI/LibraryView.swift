@@ -6,7 +6,15 @@ private struct LibrarySearchActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+private struct NewMeetingNotesActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
+    var newMeetingNotesAction: (() -> Void)? {
+        get { self[NewMeetingNotesActionKey.self] }
+        set { self[NewMeetingNotesActionKey.self] = newValue }
+    }
     var librarySearchAction: (() -> Void)? {
         get { self[LibrarySearchActionKey.self] }
         set { self[LibrarySearchActionKey.self] = newValue }
@@ -88,13 +96,24 @@ struct LibraryView: View {
     }
 
     private var meetingsPlaceholder: some View {
+        ContentUnavailableView("No Meetings", systemImage: "waveform")
+    }
+
+    private var createMeetingPlaceholder: some View {
         ContentUnavailableView {
-            Label("No Meetings", systemImage: "waveform")
+            Label("Create a Meeting", systemImage: "waveform")
         } description: {
-            Text("Record a meeting or import audio to get started.")
+            Text("Start a recording, import audio or video, or create meeting notes.")
         } actions: {
-            Button("New Recording") { store.presentsRecordingSetup = true }
-                .disabled(!store.canStartRecording)
+            VStack(spacing: 8) {
+                Button("New Recording…") { store.presentsRecordingSetup = true }
+                    .disabled(!store.canStartRecording)
+                    .buttonStyle(.borderedProminent)
+                Button("Import Audio or Video…") { MeetingPanels.importAudio(store) }
+                    .disabled(!canImportAudio)
+                Button("New Meeting Notes", action: createMeetingNotes)
+                    .disabled(!store.libraryWritable)
+            }
         }
     }
 
@@ -151,6 +170,9 @@ struct LibraryView: View {
             meetingCountResult = (request, count)
         }
         .navigationTitle("Meetings")
+        .toolbar {
+            ToolbarItem(placement: .navigation) { addMeetingMenu }
+        }
         .overlay {
             if store.isSearchingMeetings || (filteredMeetings.isEmpty && store.isLoadingMeetingPage) {
                 ProgressView("Loading meetings…")
@@ -323,36 +345,39 @@ struct LibraryView: View {
 
     private var addMeetingMenu: some View {
         Menu {
-            Group {
-                Button("New Meeting Notes", systemImage: "square.and.pencil") {
-                    let previousMeeting = selectedMeeting
-                    let previousDestination = destination
-                    Task {
-                        let id = await store.createMeeting(title: "Untitled Meeting")
-                        guard store.meeting(id: id) != nil, selectedMeeting == previousMeeting,
-                            destination == previousDestination
-                        else { return }
-                        showMeeting(id)
-                    }
-                }
-                Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
-                    MeetingPanels.importAudio(store)
-                }
-                .disabled(recordingActive || store.isImportingAudio)
-                Divider()
-                Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
-                Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
-            }.disabled(!store.libraryWritable)
-            Divider()
-            Button("Open Meetings Folder", systemImage: "folder") {
-                if !NSWorkspace.shared.open(store.dataDirectory) {
-                    store.errorMessage = "Could not open the meetings folder in Finder."
-                }
+            Button("Import Audio or Video…", systemImage: "square.and.arrow.down") {
+                MeetingPanels.importAudio(store)
             }
+            .disabled(!canImportAudio)
+            Button("New Meeting Notes", systemImage: "square.and.pencil", action: createMeetingNotes)
+                .disabled(!store.libraryWritable)
         } label: {
             Label("Add Meeting", systemImage: "plus")
         }
         .help("Add Meeting")
+    }
+
+    private var canImportAudio: Bool {
+        store.libraryWritable && !recordingActive && !store.isImportingAudio
+    }
+
+    private func createMeetingNotes() {
+        let previousMeeting = selectedMeeting
+        let previousDestination = destination
+        Task {
+            let id = await store.createMeeting(title: "Untitled Meeting")
+            guard store.meeting(id: id) != nil, selectedMeeting == previousMeeting,
+                destination == previousDestination
+            else { return }
+            showMeeting(id)
+            workspace.meetingTab = 1
+        }
+    }
+
+    private var recordingActionTitle: String {
+        if store.isFinalizingRecording { return "Saving Recording…" }
+        if store.isStartingRecording { return "Starting Recording…" }
+        return store.recordingID != nil ? "Show Recording" : "New Recording…"
     }
 
     private var recordButton: some View {
@@ -365,18 +390,18 @@ struct LibraryView: View {
             }
         } label: {
             Label(
-                store.isFinalizingRecording ? "Saving…" : recordingActive ? "Recording" : "New Recording",
+                recordingActionTitle,
                 systemImage: store.isFinalizingRecording
                     ? "hourglass.circle.fill"
                     : recordingActive ? "waveform.circle.fill" : "record.circle.fill"
             )
-            .font(.title2)
-            .frame(minWidth: 32, minHeight: 32)
             .modifier(RecordingToolbarForeground())
         }
         .labelStyle(.iconOnly).tint(.red)
-        .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
-        .disabled(!store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording)
+        .help(recordingActionTitle)
+        .disabled(
+            store.isStartingRecording || store.isFinalizingRecording
+                || (store.recordingID == nil && !store.canStartRecording))
     }
 
     private var showsMeetingTabs: Bool {
@@ -385,7 +410,6 @@ struct LibraryView: View {
 
     @ToolbarContentBuilder private var meetingToolbar: some ToolbarContent {
         if !showsSearchResults && destination == .meetings {
-            ToolbarItem(placement: .secondaryAction) { addMeetingMenu }
             if showsMeetingTabs {
                 ToolbarItem(placement: .principal) {
                     MeetingContentTabs(selection: $workspace.meetingTab)
@@ -461,6 +485,7 @@ struct LibraryView: View {
         }
         .background(PlaybackSpaceKey(playback: playback))
         .focusedSceneValue(\.librarySearchAction, focusLibrarySearch)
+        .focusedSceneValue(\.newMeetingNotesAction, createMeetingNotes)
         .environment(\.showManagedTask) { id in
             focusedTaskID = id
             showsSearchResults = false
@@ -683,10 +708,18 @@ struct LibraryView: View {
             ContentUnavailableView(
                 "Select a Tag", systemImage: "tag", description: Text("Choose a tag to see its meetings."))
         }
+        else if filteredMeetings.isEmpty && !store.isLoadingMeetingPage && store.meetingPageError == nil {
+            createMeetingPlaceholder
+        }
         else {
-            Text("No Meeting Selected")
-                .font(.title2).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ContentUnavailableView {
+                Label("Select a Meeting", systemImage: "waveform")
+            } description: {
+                Text("Choose a meeting from the list, or start a new recording.")
+            } actions: {
+                Button("New Recording…") { store.presentsRecordingSetup = true }
+                    .disabled(!store.canStartRecording)
+            }
         }
     }
 
