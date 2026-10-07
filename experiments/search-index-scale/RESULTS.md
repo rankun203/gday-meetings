@@ -9,15 +9,17 @@ scope: experiment-results
 
 ## Findings
 
-The current experiment compares the production app's exhaustive search,
+The experiment compares the app's exhaustive search at commit `e1fbb7f`,
 SQLite exhaustive search, SQLite DiskANN, and HNSW at **384 dimensions**, from
 39,066 through 390,660 windows. The grid is complete. Quantized HNSW
 is measured at FP32, FP16, and INT8, with and without FP32 reranking from
-disk. No production backend has been changed.
+disk. The subsequent app integration is documented in the
+[HNSW worklog](../../docs/worklogs/2026-10-07-hnsw-search.md); the matrices below
+retain their original measurement boundaries and baseline revision.
 
 The raw FP32 vectors occupy 60,005,376 bytes at 1× and 600,053,760 bytes at
 10×. These figures exclude graph edges, metadata, allocator overhead, and
-loaded models. The current app streams meeting batches from SQLite rather
+loaded models. The measured exhaustive baseline streams meeting batches from SQLite rather
 than retaining all vectors in one array. Actual process memory must therefore
 be measured separately from payload size.
 Process RSS and physical footprint exclude the operating system's filesystem
@@ -125,7 +127,7 @@ integration measurement; these timings do not include that lookup overhead.
 
 ### Native app and model timing boundaries
 
-The native harness calls unchanged production `SemanticSearchIndex.search`,
+The native harness calls `SemanticSearchIndex.search` from baseline commit `e1fbb7f`,
 including source fingerprints, metadata decoding, cosine scoring, and boosting
 before top-result selection. The first grid measured top 5 and top 100 at every scale. The follow-up
 measures final limits 10, 20, 50, and 100 with separate query tasks and an
@@ -422,7 +424,7 @@ exhaustive storage. Cumulative DiskANN construction takes 961 seconds.
 The deletion curve is approximately linear over this range. Low process
 memory does not compensate for this update cost in a frequently edited library.
 
-### Resource growth and next implementation
+### Resource growth and integration choice
 
 [Descriptive fits](growth_measurements.json) use all ten measured sizes,
 39,066–390,660 windows. They describe this range and are not extrapolations.
@@ -441,20 +443,22 @@ process memory, not a meaningful decrease as the library grows. HNSW graph
 figures exclude the separate FP32 reranking file: add 153.6 MB per 100,000
 windows on disk. Process RSS excludes the embedding model and OS page cache.
 
-INT8 HNSW with FP32 reranking is the preferred next integration prototype.
+INT8 HNSW with FP32 reranking was selected for app integration.
 At 10× it uses 335 MiB RSS, a 258 MB graph, and a 600 MB FP32 disk file.
 It retrieves and reranks 1,000 candidates in 7.19 ms; speaker-aware retrieval
 takes 16.77 ms and recovers 99.5% of boosted top 100. These are engine timings,
 not app response times. Preserve the common provider interface, confirmed
 speaker bonus, tag behavior, model-space separation, and cancellation. Measure
-SQLite vector lookups and hydrate metadata only for final results. Define
-snapshot recovery and validate those features before changing the app backend.
+SQLite vector lookups and hydrate metadata only for final results. The
+[integration worklog](../../docs/worklogs/2026-10-07-hnsw-search.md) records
+packed SQLite lookup, snapshot recovery, and provider regression validation.
 
 ## Limitations and decision gates
 
 - Approximate candidate truncation can lose speaker-boosted or filtered results,
   even if compressed distances are accurate. Exact speaker union is a candidate
-  strategy, not yet a production integration.
+  strategy; it is now implemented in the app, but the benchmark grid does not
+  measure the integrated provider’s total response time.
 - Native memory depends on query lifetime. The separate-task diagnostic avoids
   the continuous-task accumulation, but neither process includes the full UI
   and loaded embedding model; use the separate app startup measurements for that.
@@ -462,9 +466,10 @@ snapshot recovery and validate those features before changing the app backend.
   per configuration, and four text templates per length limit generalization.
 - DiskANN's returned-distance and missing-row behavior remain contract failures.
   Metadata filtering, direct updates, and model-space separation require an
-  integration design. HNSW snapshot recovery requires separate durability work.
+  integration design. HNSW journal and snapshot recovery are covered separately
+  by integration regression tests, not by this engine grid.
 - Concurrent recording/indexing/search, energy use, multiple people, ambiguous
   names, arbitrary person prevalence, and static Swift linking are not measured.
-- The app still uses the packed exhaustive index. Promotion requires favorable
-  memory/latency/quality results and regression checks for the actual provider
-  capabilities, not only a fast standalone nearest-neighbor query.
+- The app integration uses packed INT8 HNSW with SQLite FP32 reranking. Its
+  storage and recovery checks are separate from this grid; standalone engine
+  timings do not establish end-to-end application response times.

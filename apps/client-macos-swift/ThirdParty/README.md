@@ -42,6 +42,7 @@ For direct SwiftPM/Xcode use, first run:
 
 ```sh
 bash scripts/build-audio-dependencies.sh
+bash scripts/build-search-dependencies.sh
 ```
 
 Builds target the current host architecture (arm64 or x86_64), with macOS 26 as
@@ -55,6 +56,13 @@ To upgrade, fetch a stable release from Xiph, verify its published checksum,
 replace the archive and license, update the script/version documentation, and run
 a clean build plus the decoder, streaming, waveform, and app regression tests.
 No automatic upstream upgrades occur during a user's build.
+
+## Native semantic search
+
+Local Search also statically links checksum-pinned USearch and NumKong sources.
+See [search dependencies](search-licenses/README.md) for versions, native dispatch,
+build details, and license packaging. Normal Make entry points build both audio
+and search dependencies automatically.
 
 ## CLSP native inference
 

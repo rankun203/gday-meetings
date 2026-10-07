@@ -1,0 +1,4 @@
+module USearchC [system] {
+    header "usearch.h"
+    export *
+}

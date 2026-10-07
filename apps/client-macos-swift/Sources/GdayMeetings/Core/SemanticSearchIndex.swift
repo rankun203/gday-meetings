@@ -87,27 +87,102 @@ enum SemanticSource {
     }
 }
 
-/// A disposable projection with little-endian FP32 vectors, scanned one meeting at a time.
+/// SQLite holds recoverable packed vectors; only the INT8 graph is resident.
 actor SemanticSearchIndex {
     static let module = IndexDatabase.Module(
-        namespace: "provider_semantic", version: 2,
+        namespace: "provider_semantic", version: 3,
         tables: [
             .init(
                 name: "provider_semantic_meetings",
                 definition:
-                    "(space TEXT NOT NULL,meeting TEXT NOT NULL,fingerprint TEXT NOT NULL,artifact BLOB NOT NULL,vectors BLOB NOT NULL,dimensions INTEGER NOT NULL,PRIMARY KEY(space,meeting))"
-            )
-        ], indexes: "", initialValues: "")
-    private let connection: IndexDatabase.Connection
-    private let directory: URL
-    private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+                    "(space TEXT NOT NULL,meeting TEXT NOT NULL,fingerprint TEXT NOT NULL,entry BLOB NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(space,meeting))"
+            ),
+            .init(
+                name: "provider_semantic_windows",
+                definition:
+                    "(key INTEGER PRIMARY KEY AUTOINCREMENT,space TEXT NOT NULL,meeting TEXT NOT NULL,identity TEXT NOT NULL,metadata BLOB NOT NULL,fp32 BLOB NOT NULL,int8 BLOB NOT NULL,UNIQUE(space,meeting,identity))"
+            ),
+            .init(
+                name: "provider_semantic_people",
+                definition:
+                    "(space TEXT NOT NULL,person TEXT NOT NULL,key INTEGER NOT NULL,PRIMARY KEY(space,person,key))"),
+            .init(
+                name: "provider_semantic_tags",
+                definition:
+                    "(space TEXT NOT NULL,tag TEXT NOT NULL,meeting TEXT NOT NULL,PRIMARY KEY(space,tag,meeting))"),
+            .init(
+                name: "provider_semantic_state",
+                definition:
+                    "(space TEXT PRIMARY KEY,epoch TEXT NOT NULL,dimensions INTEGER NOT NULL,sequence INTEGER NOT NULL DEFAULT 0,checkpoint INTEGER NOT NULL DEFAULT 0)"
+            ),
+            .init(
+                name: "provider_semantic_journal",
+                definition:
+                    "(sequence INTEGER PRIMARY KEY AUTOINCREMENT,space TEXT NOT NULL,key INTEGER NOT NULL,int8 BLOB)"),
+        ],
+        indexes:
+            "CREATE INDEX IF NOT EXISTS provider_semantic_windows_meeting ON provider_semantic_windows(space,meeting); CREATE INDEX IF NOT EXISTS provider_semantic_people_key ON provider_semantic_people(key); CREATE INDEX IF NOT EXISTS provider_semantic_journal_space ON provider_semantic_journal(space,sequence)",
+        initialValues: "")
+    let connection: IndexDatabase.Connection
+    let directory: URL
+    let cacheDirectory: URL
+    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    var graph: SemanticHNSWGraph?
+    var graphSpace: String?
+    var graphEpoch: String?
+    var graphNeedsSave = false
+    var graphSequence: Int64 = 0
+    var changesSinceCheckpoint = 0
+    var lastCheckpoint = ContinuousClock.now
+    var checkpointTask: Task<Void, Never>?
+
     init(directory: URL, indexDirectory: URL) throws {
         self.directory = directory
+        cacheDirectory = indexDirectory.appendingPathComponent(".index-search-graphs", isDirectory: true)
+        guard
+            cacheDirectory.resolvingSymlinksInPath().deletingLastPathComponent().resolvingSymlinksInPath().path
+                == indexDirectory.resolvingSymlinksInPath().path
+        else { throw SearchProviderError.invalidResponse }
         connection = try IndexDatabase.open(at: indexDirectory.appendingPathComponent("index.db"))
         try connection.register(Self.module)
     }
-    private func bind(_ text: String, _ column: Int32, _ statement: OpaquePointer) {
+    func bind(_ text: String, _ column: Int32, _ statement: OpaquePointer) {
         sqlite3_bind_text(statement, column, text, -1, transient)
+    }
+    func bind(_ data: Data, _ column: Int32, _ statement: OpaquePointer) {
+        if data.isEmpty {
+            sqlite3_bind_zeroblob(statement, column, 0)
+        }
+        else {
+            _ = data.withUnsafeBytes {
+                sqlite3_bind_blob(statement, column, $0.baseAddress, Int32(data.count), transient)
+            }
+        }
+    }
+    func text(_ statement: OpaquePointer, _ column: Int32) -> String {
+        sqlite3_column_text(statement, column).map { String(cString: $0) } ?? ""
+    }
+    func blob(_ statement: OpaquePointer, _ column: Int32) -> Data {
+        guard let pointer = sqlite3_column_blob(statement, column) else { return Data() }
+        return Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, column)))
+    }
+    func execute(_ sql: String, strings: [String] = []) throws {
+        let statement = try connection.prepare(sql)
+        defer { connection.release(statement) }
+        for (offset, value) in strings.enumerated() { bind(value, Int32(offset + 1), statement) }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw connection.failure() }
+    }
+    func keys(_ sql: String, strings: [String]) throws -> [Int64] {
+        let statement = try connection.prepare(sql)
+        defer { connection.release(statement) }
+        for (offset, value) in strings.enumerated() { bind(value, Int32(offset + 1), statement) }
+        var values: [Int64] = []
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { return values }
+            guard step == SQLITE_ROW else { throw connection.failure() }
+            values.append(sqlite3_column_int64(statement, 0))
+        }
     }
     func isCurrent(_ id: UUID, space: String, fingerprint: String) throws -> Bool {
         let statement = try connection.prepare(
@@ -115,154 +190,214 @@ actor SemanticSearchIndex {
         defer { connection.release(statement) }
         bind(space, 1, statement)
         bind(id.uuidString, 2, statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return false }
-        return sqlite3_column_text(statement, 0).map { String(cString: $0) } == fingerprint
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return false }
+        guard step == SQLITE_ROW else { throw connection.failure() }
+        return text(statement, 0) == fingerprint
     }
     func persist(_ artifact: SemanticMeetingArtifact, fingerprint: String) throws {
+        try autoreleasepool { try persistMeeting(artifact, fingerprint: fingerprint) }
+    }
+    private func persistMeeting(_ artifact: SemanticMeetingArtifact, fingerprint: String) throws {
+        try Task.checkCancellation()
         let folder = try MeetingFolderLocation.resolve(id: artifact.meetingID, directory: directory)
         guard try SemanticSource.fingerprint(folder: folder) == fingerprint else {
             throw SearchProviderError.sourceChanged
         }
-        let dimensions = artifact.windows.first?.vector.count ?? 0
-        guard
-            artifact.windows.allSatisfy({ window in
-                window.vector.count == dimensions && dimensions > 0
-                    && window.vector.allSatisfy(\.isFinite)
-                    && abs(window.vector.reduce(0) { $0 + $1 * $1 } - 1) < 0.0001
-            })
-        else { throw SearchProviderError.invalidResponse }
-        // Keep reusable provider artifacts independent of the disposable SQLite format.
-        let data = try JSONEncoder().encode(artifact)
-        let coordinates = artifact.windows.flatMap { $0.vector.map { Float($0).bitPattern.littleEndian } }
-        let vectors = coordinates.withUnsafeBytes { Data($0) }
-        let metadata = SemanticMeetingArtifact(
-            space: artifact.space, meetingID: artifact.meetingID, revision: artifact.revision,
-            windows: artifact.windows.map { window in
-                var metadata = window
-                metadata.vector = []
-                return metadata
-            })
-        let metadataData = try JSONEncoder().encode(metadata)
-        let saved = folder.appendingPathComponent(
-            "providers/local-search/" + SemanticSource.hash(Data(artifact.space.utf8)))
-        let canonical = saved.resolvingSymlinksInPath()
-        guard canonical.path.hasPrefix(folder.resolvingSymlinksInPath().path + "/providers/") else {
-            throw SearchProviderError.invalidResponse
-        }
-        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
-        try data.write(to: saved.appendingPathComponent("embeddings.json"), options: .atomic)
-        try connection.write(module: Self.module) {
-            let statement = try connection.prepare(
-                "INSERT INTO provider_semantic_meetings VALUES(?,?,?,?,?,?) ON CONFLICT(space,meeting) DO UPDATE SET fingerprint=excluded.fingerprint,artifact=excluded.artifact,vectors=excluded.vectors,dimensions=excluded.dimensions"
-            )
-            defer { connection.release(statement) }
-            bind(artifact.space, 1, statement)
-            bind(artifact.meetingID.uuidString, 2, statement)
-            bind(fingerprint, 3, statement)
-            _ = metadataData.withUnsafeBytes {
-                sqlite3_bind_blob(statement, 4, $0.baseAddress, Int32(metadataData.count), transient)
-            }
-            if vectors.isEmpty {
-                sqlite3_bind_zeroblob(statement, 5, 0)
-            }
-            else {
-                _ = vectors.withUnsafeBytes {
-                    sqlite3_bind_blob(statement, 5, $0.baseAddress, Int32(vectors.count), transient)
+        let packed = try PackedSemanticArtifact(artifact)
+        let entryData = try Data(contentsOf: folder.appendingPathComponent("metadata.json"))
+        let entry = try JSONDecoder().decode(MeetingListEntry.self, from: entryData)
+        try packed.save(folder: folder)
+        do {
+            try connection.write(module: Self.module) {
+                let dimensions =
+                    packed.dimensions == 0
+                    ? (SemanticModelID.allCases.first { $0.space == artifact.space }?.dimensions ?? 384)
+                    : packed.dimensions
+                if let state = try state(space: artifact.space) {
+                    guard state.dimensions == dimensions else { throw SearchProviderError.invalidResponse }
                 }
+                else {
+                    try execute(
+                        "INSERT INTO provider_semantic_state(space,epoch,dimensions) VALUES(?,?,?)",
+                        strings: [artifact.space, UUID().uuidString, String(dimensions)])
+                }
+                let existing = try retainedWindows(artifact)
+                let meeting = try connection.prepare(
+                    "INSERT INTO provider_semantic_meetings VALUES(?,?,?,?,?) ON CONFLICT(space,meeting) DO UPDATE SET fingerprint=excluded.fingerprint,entry=excluded.entry,revision=excluded.revision"
+                )
+                defer { connection.release(meeting) }
+                bind(artifact.space, 1, meeting)
+                bind(artifact.meetingID.uuidString, 2, meeting)
+                bind(fingerprint, 3, meeting)
+                bind(entryData, 4, meeting)
+                bind(artifact.revision, 5, meeting)
+                guard sqlite3_step(meeting) == SQLITE_DONE else { throw connection.failure() }
+                try execute(
+                    "DELETE FROM provider_semantic_tags WHERE space=? AND meeting=?",
+                    strings: [artifact.space, artifact.meetingID.uuidString])
+                for tag in entry.tagIDs {
+                    try execute(
+                        "INSERT INTO provider_semantic_tags VALUES(?,?,?)",
+                        strings: [artifact.space, tag.uuidString, artifact.meetingID.uuidString])
+                }
+                for (position, window) in packed.metadata.windows.enumerated() {
+                    try Task.checkCancellation()
+                    let f32 = packed.fp32.subdata(in: position * dimensions * 4..<(position + 1) * dimensions * 4)
+                    let i8 = packed.int8.subdata(in: position * dimensions..<(position + 1) * dimensions)
+                    let statement = try connection.prepare(
+                        "INSERT INTO provider_semantic_windows(space,meeting,identity,metadata,fp32,int8) VALUES(?,?,?,?,?,?) ON CONFLICT(space,meeting,identity) DO UPDATE SET metadata=excluded.metadata,fp32=excluded.fp32,int8=excluded.int8 RETURNING key"
+                    )
+                    bind(artifact.space, 1, statement)
+                    bind(artifact.meetingID.uuidString, 2, statement)
+                    bind(window.id, 3, statement)
+                    bind(try JSONEncoder().encode(window), 4, statement)
+                    bind(f32, 5, statement)
+                    bind(i8, 6, statement)
+                    let step = sqlite3_step(statement)
+                    guard step == SQLITE_ROW else {
+                        let error = connection.failure()
+                        connection.release(statement)
+                        throw error
+                    }
+                    let key = sqlite3_column_int64(statement, 0)
+                    let done = sqlite3_step(statement)
+                    connection.release(statement)
+                    guard done == SQLITE_DONE else { throw connection.failure() }
+                    try execute("DELETE FROM provider_semantic_people WHERE key=?", strings: [String(key)])
+                    for person in window.people {
+                        let relation = try connection.prepare("INSERT INTO provider_semantic_people VALUES(?,?,?)")
+                        bind(artifact.space, 1, relation)
+                        bind(person.uuidString, 2, relation)
+                        sqlite3_bind_int64(relation, 3, key)
+                        let step = sqlite3_step(relation)
+                        connection.release(relation)
+                        guard step == SQLITE_DONE else { throw connection.failure() }
+                    }
+                    if existing[window.id] != i8 { try journal(space: artifact.space, key: key, vector: i8) }
+                }
+                // Recheck after file decoding and packed writes, before publishing the projection.
+                guard try SemanticSource.fingerprint(folder: folder) == fingerprint else {
+                    throw SearchProviderError.sourceChanged
+                }
+                try advanceSequence(space: artifact.space)
             }
-            sqlite3_bind_int(statement, 6, Int32(dimensions))
-            guard sqlite3_step(statement) == SQLITE_DONE else { throw connection.failure() }
+            // SQLite commits coordinates and journal together before the native graph changes.
+            try refreshGraph(
+                space: artifact.space,
+                dimensions: packed.dimensions == 0
+                    ? (SemanticModelID.allCases.first { $0.space == artifact.space }?.dimensions ?? 384)
+                    : packed.dimensions)
+            try saveGraph()
+        }
+        catch {
+            discardGraph()
+            throw error
         }
     }
-    func reset(space: String) throws {
-        try connection.write(module: Self.module) {
-            let statement = try connection.prepare("DELETE FROM provider_semantic_meetings WHERE space=?")
-            defer { connection.release(statement) }
-            bind(space, 1, statement)
-            guard sqlite3_step(statement) == SQLITE_DONE else { throw connection.failure() }
-        }
-    }
-    func remove(_ id: UUID) throws {
-        try connection.write(module: Self.module) {
-            let statement = try connection.prepare("DELETE FROM provider_semantic_meetings WHERE meeting=?")
-            defer { connection.release(statement) }
-            bind(id.uuidString, 1, statement)
-            guard sqlite3_step(statement) == SQLITE_DONE else { throw connection.failure() }
-        }
-    }
-    func search(vector: [Double], model: SemanticModelID, request: ProviderSearchRequest, boost: Double) throws
-        -> [ProviderSearchResult]
-    {
-        guard vector.count == model.dimensions, vector.allSatisfy(\.isFinite) else {
-            throw SearchProviderError.invalidResponse
-        }
-        let query = vector.map(Float.init)
-        let limit = max(1, min(request.limit, 100))
+    /// Keep unchanged graph keys; an appended passage must not reinsert every old passage.
+    func retainedWindows(_ artifact: SemanticMeetingArtifact) throws -> [String: Data] {
+        let identities = Set(artifact.windows.map(\.id))
+        guard identities.count == artifact.windows.count else { throw SearchProviderError.invalidResponse }
         let statement = try connection.prepare(
-            "SELECT meeting,fingerprint,artifact,vectors,dimensions FROM provider_semantic_meetings WHERE space=? ORDER BY meeting"
-        )
+            "SELECT key,identity,int8 FROM provider_semantic_windows WHERE space=? AND meeting=?")
+        bind(artifact.space, 1, statement)
+        bind(artifact.meetingID.uuidString, 2, statement)
+        var retained: [String: Data] = [:]
+        var removed: [Int64] = []
         defer { connection.release(statement) }
-        bind(model.space, 1, statement)
-        var best: [(ProviderSearchResult, Double)] = []
         while true {
-            try Task.checkCancellation()
             let step = sqlite3_step(statement)
             if step == SQLITE_DONE { break }
             guard step == SQLITE_ROW else { throw connection.failure() }
-            guard let rawID = sqlite3_column_text(statement, 0), let id = UUID(uuidString: String(cString: rawID)),
-                let fingerprint = sqlite3_column_text(statement, 1), let bytes = sqlite3_column_blob(statement, 2),
-                let folder = try? MeetingFolderLocation.resolve(id: id, directory: directory),
-                (try? SemanticSource.fingerprint(folder: folder)) == String(cString: fingerprint),
-                let entry = try? JSONDecoder().decode(
-                    MeetingListEntry.self, from: Data(contentsOf: folder.appendingPathComponent("metadata.json"))),
-                Set(entry.tagIDs).isDisjoint(with: request.excludingTagIDs)
-            else { continue }
-            let artifact = try JSONDecoder().decode(
-                SemanticMeetingArtifact.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 2))))
-            guard artifact.space == model.space, artifact.meetingID == id,
-                sqlite3_column_int(statement, 4) == model.dimensions,
-                Int(sqlite3_column_bytes(statement, 3)) == artifact.windows.count * model.dimensions
-                    * MemoryLayout<Float>.size,
-                let vectorBytes = sqlite3_column_blob(statement, 3)
-            else { continue }
-            // Supported macOS architectures are little-endian. SQLite owns this
-            // aligned buffer until the next step; no whole-library vector cache is needed.
-            let coordinates = vectorBytes.assumingMemoryBound(to: Float.self)
-            for (position, window) in artifact.windows.enumerated() {
-                if position.isMultiple(of: 64) { try Task.checkCancellation() }
-                let values = coordinates.advanced(by: position * model.dimensions)
-                var norm: Float = 0
-                var similarity: Float = 0
-                vDSP_svesq(values, 1, &norm, vDSP_Length(model.dimensions))
-                vDSP_dotpr(query, 1, values, 1, &similarity, vDSP_Length(model.dimensions))
-                guard norm.isFinite, similarity.isFinite, abs(norm - 1) < 0.0001
-                else { continue }
-                let score = SpeakerMatchScore(
-                    similarity: Double(similarity), identified: request.identifiedPeople, speakers: window.people,
-                    boost: boost)
-                let resultID = id.uuidString + ":" + window.id
-                if best.count == limit, let last = best.last,
-                    score.total < last.1 || (score.total == last.1 && resultID >= last.0.id)
-                {
-                    continue
-                }
-                let passage = LibrarySearchResult(
-                    id: 0, meetingID: id, title: entry.title, createdAt: entry.createdAt,
-                    kind: LibrarySearchKind(rawValue: window.kind) ?? .transcript, segmentID: window.segmentID,
-                    start: window.start, excerpt: window.text)
-                let audio: ProviderSearchAudioRange? = window.track.flatMap { track in
-                    guard let start = window.start, let end = window.end, end > start else { return nil }
-                    return .init(filename: track, start: start, duration: end - start)
-                }
-                let result = ProviderSearchResult(
-                    id: resultID, meetingID: id, title: entry.title,
-                    excerpt: window.text, sourceRevision: artifact.revision, passage: passage, audio: audio,
-                    createdAt: entry.createdAt, scoreBreakdown: score)
-                best.append((result, score.total))
-                best.sort { $0.1 == $1.1 ? $0.0.id < $1.0.id : $0.1 > $1.1 }
-                if best.count > limit { best.removeLast() }
+            let identity = text(statement, 1)
+            if identities.contains(identity) {
+                retained[identity] = blob(statement, 2)
+            }
+            else {
+                removed.append(sqlite3_column_int64(statement, 0))
             }
         }
-        return best.map(\.0)
+        for key in removed {
+            try execute("DELETE FROM provider_semantic_people WHERE key=?", strings: [String(key)])
+            try execute("DELETE FROM provider_semantic_windows WHERE key=?", strings: [String(key)])
+            try journal(space: artifact.space, key: key, vector: nil)
+        }
+        return retained
+    }
+    func deleteMeetingRows(_ id: UUID, space: String) throws {
+        let removed = try keys(
+            "SELECT key FROM provider_semantic_windows WHERE space=? AND meeting=?", strings: [space, id.uuidString])
+        try execute(
+            "DELETE FROM provider_semantic_people WHERE key IN (SELECT key FROM provider_semantic_windows WHERE space=? AND meeting=?)",
+            strings: [space, id.uuidString])
+        for table in ["windows", "tags", "meetings"] {
+            try execute(
+                "DELETE FROM provider_semantic_\(table) WHERE space=? AND meeting=?", strings: [space, id.uuidString])
+        }
+        for key in removed { try journal(space: space, key: key, vector: nil) }
+    }
+    func reset(space: String) throws {
+        try connection.write(module: Self.module) {
+            for table in ["people", "tags", "windows", "meetings", "journal", "state"] {
+                try execute("DELETE FROM provider_semantic_\(table) WHERE space=?", strings: [space])
+            }
+        }
+        if graphSpace == space { discardGraph() }
+        try removeSnapshots(space: space)
+    }
+    func remove(_ id: UUID) throws {
+        do {
+            try connection.write(module: Self.module) {
+                let statement = try connection.prepare("SELECT space FROM provider_semantic_meetings WHERE meeting=?")
+                defer { connection.release(statement) }
+                bind(id.uuidString, 1, statement)
+                var spaces: [String] = []
+                while true {
+                    let step = sqlite3_step(statement)
+                    if step == SQLITE_DONE { break }
+                    guard step == SQLITE_ROW else { throw connection.failure() }
+                    spaces.append(text(statement, 0))
+                }
+                for space in spaces {
+                    try deleteMeetingRows(id, space: space)
+                    try advanceSequence(space: space)
+                }
+            }
+            if let space = graphSpace, let graph { try refreshGraph(space: space, dimensions: graph.dimensions) }
+            try saveGraph()
+        }
+        catch {
+            discardGraph()
+            throw error
+        }
+    }
+    func unload() {
+        // A cache failure cannot discard committed vectors or their replay journal.
+        try? saveGraph(force: true)
+        discardGraph()
+    }
+    func discardGraph() {
+        checkpointTask?.cancel()
+        checkpointTask = nil
+        graph = nil
+        graphEpoch = nil
+        graphSequence = 0
+        changesSinceCheckpoint = 0
+        graphNeedsSave = false
+        graphSpace = nil
+    }
+    func prepare(model: SemanticModelID) throws {
+        try connection.execute("BEGIN")
+        do {
+            _ = try ensureGraph(space: model.space, dimensions: model.dimensions)
+            try connection.execute("COMMIT")
+            try saveGraph(force: true)
+        }
+        catch {
+            try? connection.execute("ROLLBACK")
+            discardGraph()
+            throw error
+        }
     }
 }

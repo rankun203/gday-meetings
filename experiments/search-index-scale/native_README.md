@@ -7,6 +7,12 @@ scope: search-index-native-baseline
 
 # Implementation under measurement
 
+These baseline measurements use production code at commit `e1fbb7f`, before
+native HNSW integration. Use that revision to reproduce the exhaustive results;
+the current `SemanticSearchIndex` has a different storage schema and algorithm.
+The current pipeline's opt-in measurement is
+`SemanticHNSWTests.measureFrozenVectorsThroughProductionPipeline`.
+
 `native_search.swift` is a Swift Testing harness compiled into an isolated release test target with `@testable import GdayMeetings`. It invokes the unchanged production `SemanticSearchIndex.search`, `persist`, and `remove` implementations. It does not reimplement retrieval. Search therefore includes meeting-folder resolution through the registered production Library Index, source-file fingerprint checks, `MeetingListEntry` decoding, full passage-metadata JSON decoding, FP32 Accelerate dot products and norm checks, speaker bonus calculation before top-K, and result construction.
 
 Models, tokenization, People-name resolution, and UI rendering are excluded. Query vectors are the same precomputed 384-coordinate inputs used by the SQLite experiment. This is a retrieval comparison, not total app startup or query latency. The harness records the system SQLite version, process baseline and post-query RSS, peak RSS, physical footprint, CPU time, physical disk I/O, and thermal state.
@@ -52,7 +58,7 @@ Validation checks that inserted records are current, a confirmed synthetic speak
 
 # Results and validation
 
-`native_limit_measurements.json` is the completed result-limit comparison: ten corpus sizes × four returned counts × eleven query vectors, with 440 queries. Every requested top-K result set matches the shared exact reference; the largest score difference is 0.000000537, below the declared 0.000002 tolerance. The recorded production search source hash matches the current repository implementation. At 10×, warm retrieval takes 4.26–4.28 seconds across counts, with 172–179 MiB final process RSS. All thermal states are nominal. No embedding model is loaded in these processes.
+`native_limit_measurements.json` is the completed result-limit comparison: ten corpus sizes × four returned counts × eleven query vectors, with 440 queries. Every requested top-K result set matches the shared exact reference; the largest score difference is 0.000000537, below the declared 0.000002 tolerance. The recorded production search source hash matches the implementation at baseline commit `e1fbb7f`. At 10×, warm retrieval takes 4.26–4.28 seconds across counts, with 172–179 MiB final process RSS. All thermal states are nominal. No embedding model is loaded in these processes.
 
 | Corpus scale | 10 results | 20 results | 50 results | 100 results |
 | --- | ---: | ---: | ---: | ---: |
@@ -71,7 +77,7 @@ The table shows warm medians. Corpus size dominates this full-scan implementatio
 
 `native_measurements.json` preserves the earlier continuous-task baseline: 20 search cases at top5/top100 and ten mutation cases. That run validated only the first five results and measured 416 ms warm at 1× and 4,043 ms at 10× for top5. Its top100 warm median was 4,070 ms at 10×. The result-limit comparison changes task lifetime and adds idle intervals, so differences between these two runs are not evidence of a production regression. Appending 1,000 windows takes 175–184 ms across scales; removing them takes 2–29 ms. All ten mutation cases pass speaker-boost ordering and deletion/reopen checks. Physical I/O counters measure writes charged during the interval, not all eventual buffered writes.
 
-The initial release build passed in 275 seconds, the memory diagnostic rebuild in 264 seconds, and the full shared test-target build for the count comparison in 440 seconds. Existing linker warnings report missing Command Line Tools Developer framework and library search directories; these did not prevent linking or test execution. No production code changed. Disposable fixture payloads were removed after aggregation; the shared build cache was retained for the following app release validation.
+The initial release build passed in 275 seconds, the memory diagnostic rebuild in 264 seconds, and the full shared test-target build for the count comparison in 440 seconds. Existing linker warnings report missing Command Line Tools Developer framework and library search directories; these did not prevent linking or test execution. Those baseline runs changed no production code. Disposable fixture payloads were removed after aggregation; the shared build cache was retained for the following app release validation.
 
 ## Memory lifetime
 
@@ -114,3 +120,24 @@ Warm host construction and layout medians are 76.3, 83.5, 80.8, and 80.1 ms for 
 # Technical debt
 
 No production debt is introduced. The opt-in benchmark retains a representative metadata fixture because the original snapshot changed; its text-vector associations cannot validate semantic relevance. The fixture preparation records this explicitly and checks exact snapshot alignment by default. A future end-to-end relevance comparison must freeze metadata and vectors together. The harness uses a Command Line Tools Swift Testing plugin workaround; remove it when the supported toolchain discovers that plugin without an explicit path.
+
+# Current HNSW integration checks
+
+The checked-in `SemanticHNSWTests` run against the current provider and native
+library. Build the release test target through `swift_package` in
+`apps/client-macos-swift/scripts/common.sh`, which prepares both native libraries.
+The CLT environment used the existing explicit Swift Testing plugin flag described
+by the baseline harness. Opt-in measurements emit aggregate counts and timings:
+
+| Test filter | Environment | Scope |
+| --- | --- | --- |
+| `measureFrozenVectorsThroughProductionPipeline` | `GDAY_HNSW_BENCHMARK_VECTORS` points to a private packed FP32 fixture | Build synthetic metadata, index vectors, reload, and retrieve. |
+| `rebuildConvertedLibraryProjection` | `GDAY_HNSW_CONVERTED_LIBRARY` points to a converted disposable copy | Use the production provider to update the copy and search its passages. This writes the specified copy. |
+| `measureExistingPackedIndex` | `GDAY_HNSW_EXISTING_INDEX_ROOT` points to that built copy; also set the vector fixture variable | Fresh-process load and search without model loading or fixture construction. |
+
+Convert an isolated temporary copy with `pack-search-artifacts.py --apply
+--isolated-copy --library COPY --backup SEPARATE_BACKUP`. For a live library,
+quit the app and omit `--isolated-copy`. Keep private files and model assets out
+of version control. The [integration worklog](../../docs/worklogs/2026-10-07-hnsw-search.md)
+records timing boundaries and validation limits; this is separate from the
+historical full scale grid.

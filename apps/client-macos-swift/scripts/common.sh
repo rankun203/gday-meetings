@@ -36,6 +36,7 @@ check_tools() {
 
 swift_package() {
     /bin/bash "$client_dir/scripts/build-audio-dependencies.sh"
+    /bin/bash "$client_dir/scripts/build-search-dependencies.sh"
     # Swift Build can stamp the deployment target as the SDK version, which
     # selects older AppKit/SwiftUI compatibility behavior. Pass both versions
     # explicitly to the linker; this does not raise the deployment target.

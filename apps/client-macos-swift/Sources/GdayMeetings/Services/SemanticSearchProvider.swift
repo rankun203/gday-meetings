@@ -7,8 +7,14 @@ struct SemanticSearchProvider: SearchIndexProvider {
     let index: SemanticSearchIndex
     let encoder: any SemanticEmbedding
     var descriptor: SearchProviderDescriptor { .init(id: id, name: "Local Search", modes: [.semantic]) }
-    func prepare() async throws { try await encoder.prepare() }
-    func unload() async { await encoder.unload() }
+    func prepare() async throws {
+        try await index.prepare(model: configuration.selectedModel)
+        try await encoder.prepare()
+    }
+    func unload() async {
+        await encoder.unload()
+        await index.unload()
+    }
     func resetIndex() async throws { try await index.reset(space: configuration.selectedModel.space) }
     func removeIndex(meetingID: UUID) async throws { try await index.remove(meetingID) }
 
@@ -38,18 +44,14 @@ struct SemanticSearchProvider: SearchIndexProvider {
                 windows.map {
                     "\($0.id):\($0.start ?? -1):\($0.end ?? -1):\($0.track ?? ""):\($0.people.map(\.uuidString).sorted().joined(separator: ",")):\($0.text)"
                 }.joined(separator: "\n").utf8))
-        let saved = folder.appendingPathComponent(
-            "providers/local-search/" + SemanticSource.hash(Data(model.space.utf8)) + "/embeddings.json")
         let reusable: [String: SemanticWindow] = await Task.detached(priority: .utility) {
             guard !rebuild,
-                saved.resolvingSymlinksInPath().path.hasPrefix(folder.resolvingSymlinksInPath().path + "/providers/"),
-                let data = try? Data(contentsOf: saved),
-                let old = try? JSONDecoder().decode(SemanticMeetingArtifact.self, from: data),
-                old.space == model.space, old.meetingID == meetingID
+                let old = try? PackedSemanticArtifact.read(folder: folder, space: model.space, meetingID: meetingID)
             else { return [:] }
             return Dictionary(old.windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         }.value
         progress(.init(meetingID: meetingID, completed: 0, total: windows.count))
+        var lastProgress = ContinuousClock.now
         for position in windows.indices {
             try Task.checkCancellation()
             if let old = reusable[windows[position].id], old.text == windows[position].text,
@@ -61,7 +63,10 @@ struct SemanticSearchProvider: SearchIndexProvider {
             else {
                 windows[position].vector = try await encoder.embed(windows[position].text, isQuery: false)
             }
-            progress(.init(meetingID: meetingID, completed: position + 1, total: windows.count))
+            if position + 1 == windows.count || lastProgress.duration(to: .now) >= .milliseconds(250) {
+                progress(.init(meetingID: meetingID, completed: position + 1, total: windows.count))
+                lastProgress = .now
+            }
             await Task.yield()
         }
         try Task.checkCancellation()

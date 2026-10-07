@@ -191,3 +191,12 @@ pilot mutation datasets, duplicate vectors, and the unused Vectorlite source
 checkout. Retained aggregate reports, detailed receipts, one frozen vector
 input set, the latest INT8 graph, the profiling trace, and the signed app build.
 No user library data or installed models were removed.
+
+## App integration
+
+The app now uses packed INT8 HNSW retrieval with SQLite FP32 reranking and
+journaled checkpoints. [The integration worklog](2026-10-07-hnsw-search.md)
+records native dependency validation, provider regression tests, and measurements
+against a private library copy. The scale experiment's exhaustive measurements
+remain tied to baseline commit `e1fbb7f`; its engine timings are not app response
+times. Live-library migration is deferred so the user can keep using the old app.
