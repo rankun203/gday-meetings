@@ -29,111 +29,44 @@ enum AudioPlaybackPreparation {
     static func opusChannels(_ source: URL) throws -> Int { try OggOpusReader(source).channels }
     static func opusMetadata(_ source: URL) async throws -> (channels: Int, duration: Double) {
         let reader = try OggOpusReader(source)
-        var final: Int64?
-        var frames: Int64 = 0
-        var lastPacketFrames: Int64 = 0
-        while let packet = try reader.nextAudioPacket() {
-            try Task.checkCancellation()
-            lastPacketFrames = Int64(try opusPacketFrames(packet.data))
-            frames += lastPacketFrames
-            if let granule = packet.finalGranule { final = granule }
-        }
-        guard let final, final >= max(Int64(reader.preSkip), frames - lastPacketFrames), final <= frames, reader.sawEnd
-        else { throw ServiceError("The Opus recording has no valid final duration.") }
-        return (reader.channels, Double(final - Int64(reader.preSkip)) / 48000)
+        while try reader.nextAudioPacket() != nil { try Task.checkCancellation() }
+        let decoder = try OpusFileDecoder(source)
+        return (decoder.channels, Double(decoder.totalFrames) / 48000)
     }
 
-    /// Core Audio supports the Opus codec but AVAsset doesn't open its Ogg container.
-    /// Demux packets without buffering the recording; decode to a seekable temporary CAF.
-    /// https://developer.apple.com/documentation/avfaudio/avaudioconverter
-    /// https://www.rfc-editor.org/rfc/rfc7845 (pre-skip, output gain and final granule)
+    /// Validate the container before decoding, then use the same libopusfile
+    /// timing, pre-skip, gain, and end trimming as interactive playback.
     private static func decodeOpus(_ source: URL, to destination: URL) throws {
         let reader = try OggOpusReader(source)
-        var description = AudioStreamBasicDescription(
-            mSampleRate: 48000, mFormatID: kAudioFormatOpus, mFormatFlags: 0, mBytesPerPacket: 0, mFramesPerPacket: 0,
-            mBytesPerFrame: 0, mChannelsPerFrame: UInt32(reader.channels), mBitsPerChannel: 0, mReserved: 0)
-        guard let compressed = AVAudioFormat(streamDescription: &description),
-            let pcm = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: UInt32(reader.channels)),
-            let converter = AVAudioConverter(from: compressed, to: pcm),
-            let output = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: 5760)
-        else { throw ServiceError("The native Opus decoder is unavailable on this Mac.") }
-        converter.primeMethod = .none
-        var file: AVAudioFile? = try AVAudioFile(forWriting: destination, settings: pcm.settings)
+        while try reader.nextAudioPacket() != nil { try Task.checkCancellation() }
+        let decoder = try OpusFileDecoder(source)
+        guard decoder.totalFrames > 0,
+            let pcm = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: UInt32(decoder.channels)),
+            let output = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: 8192),
+            let decoded = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: 8192)
+        else { throw ServiceError("The Opus recording has no playable samples.") }
+        let file = try AVAudioFile(forWriting: destination, settings: pcm.settings)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        var skipped = 0
         var written: Int64 = 0
-        var decoded: Int64 = 0
-        while let packet = try reader.nextAudioPacket() {
+        while written < decoder.totalFrames {
             try Task.checkCancellation()
-            let input = AVAudioCompressedBuffer(
-                format: compressed, packetCapacity: 1, maximumPacketSize: max(1, packet.data.count))
-            input.byteLength = UInt32(packet.data.count)
-            input.packetCount = 1
-            packet.data.copyBytes(to: input.data.assumingMemoryBound(to: UInt8.self), count: packet.data.count)
-            input.packetDescriptions?.pointee = AudioStreamPacketDescription(
-                mStartOffset: 0, mVariableFramesInPacket: UInt32(try opusPacketFrames(packet.data)),
-                mDataByteSize: UInt32(packet.data.count))
-            var supplied = false
-            var error: NSError?
-            output.frameLength = 0
-            let status = converter.convert(to: output, error: &error) { _, state in
-                if supplied {
-                    state.pointee = .noDataNow
-                    return nil
-                }
-                supplied = true
-                state.pointee = .haveData
-                return input
+            try decoder.read(into: decoded, frames: decoded.frameCapacity)
+            guard decoded.frameLength > 0 else {
+                throw ServiceError("The Opus recording ended before its saved duration.")
             }
-            if status == .error { throw error ?? ServiceError("The Opus packet could not be decoded.") }
-            decoded += Int64(output.frameLength)
-            let discard = min(Int(output.frameLength), max(0, reader.preSkip - skipped))
-            skipped += discard
-            var count = Int(output.frameLength) - discard
-            if let granule = packet.finalGranule {
-                guard granule >= Int64(reader.preSkip) + written, granule <= decoded else {
-                    throw ServiceError("The Opus final duration lies outside its final decoded packet.")
-                }
-                count = Int(granule - Int64(reader.preSkip) - written)
+            output.frameLength = decoded.frameLength
+            for channel in 0..<decoder.channels {
+                output.floatChannelData![channel].update(
+                    from: decoded.floatChannelData![channel], count: Int(decoded.frameLength))
             }
-            if count > 0 {
-                guard let samples = output.floatChannelData else { throw ServiceError("Missing decoded Opus samples.") }
-                let gain = Float(pow(10, Double(reader.outputGain) / 5120))
-                for channel in 0..<reader.channels {
-                    for frame in 0..<count { samples[channel][frame] = samples[channel][frame + discard] * gain }
-                }
-                output.frameLength = UInt32(count)
-                try file?.write(from: output)
-                written += Int64(count)
-            }
+            try file.write(from: output)
+            written += Int64(decoded.frameLength)
         }
-        guard written > 0, reader.sawEnd else { throw ServiceError("The Opus recording is empty or incomplete.") }
-        file = nil
+        guard written == decoder.totalFrames else {
+            throw ServiceError("The decoded Opus duration does not match the recording.")
+        }
     }
-    private static func opusPacketFrames(_ packet: Data) throws -> Int {
-        guard let toc = packet.first else { throw ServiceError("An Opus packet is empty.") }
-        let config = Int(toc >> 3)
-        let frame: Int
-        if config >= 16 {
-            frame = 120 << (config & 3)
-        }
-        else if config >= 12 {
-            frame = 480 << (config & 1)
-        }
-        else {
-            frame = config & 3 == 3 ? 2880 : 480 << (config & 3)
-        }
-        let count: Int
-        switch toc & 3 {
-        case 0: count = 1
-        case 1, 2: count = 2
-        default:
-            guard packet.count > 1 else { throw ServiceError("Invalid Opus frame count.") }
-            count = Int(packet[1] & 63)
-        }
-        guard count > 0, frame * count <= 5760 else { throw ServiceError("Invalid Opus packet duration.") }
-        return frame * count
-    }
+
 }
 
 private final class OggOpusReader {
@@ -142,8 +75,6 @@ private final class OggOpusReader {
         let finalGranule: Int64?
     }
     private(set) var channels = 0
-    private(set) var preSkip = 0
-    private(set) var outputGain: Int16 = 0
     private let file: FileHandle
     private var packets: [Packet] = []
     private var partial = Data()
@@ -159,8 +90,6 @@ private final class OggOpusReader {
             throw ServiceError("Only mono/stereo Ogg Opus mapping family zero is supported.")
         }
         channels = Int(identification[9])
-        preSkip = Int(identification[10]) | (Int(identification[11]) << 8)
-        outputGain = Int16(bitPattern: UInt16(identification[16]) | (UInt16(identification[17]) << 8))
         guard let tags = try nextPacket()?.data, tags.prefix(8) == Data("OpusTags".utf8) else {
             throw ServiceError("The Opus comment header is missing.")
         }

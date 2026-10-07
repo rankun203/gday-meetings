@@ -55,10 +55,50 @@ struct OpusPlaybackTests {
         let samples = try #require(buffer.floatChannelData?[0])
         #expect((0..<Int(buffer.frameLength)).reduce(0.0) { $0 + Double(samples[$1] * samples[$1]) } > 1)
         #expect(try Data(contentsOf: source) == fixture.data)
+        let playback = try OpusFileDecoder(source)
+        let playbackBuffer = try #require(
+            AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: UInt32(audio.length)))
+        try playback.read(into: playbackBuffer, frames: playbackBuffer.frameCapacity)
+        #expect(playbackBuffer.frameLength == buffer.frameLength)
+        for channel in 0..<fixture.channels {
+            let preparedSamples = try #require(buffer.floatChannelData?[channel])
+            let playbackSamples = try #require(playbackBuffer.floatChannelData?[channel])
+            #expect(
+                (0..<Int(buffer.frameLength)).allSatisfy {
+                    abs(preparedSamples[$0] - playbackSamples[$0]) < 0.000001
+                })
+        }
         let serverAudio = try await prepareServerAudio(source)
         #expect(serverAudio.url == source)
         #expect(!serverAudio.temporary)
         #expect(serverAudio.channels == fixture.channels)
+    }
+    @Test func preparesAudioWhenEndTrimmingSpansPacketsOnFinalPage() async throws {
+        var data = OpusFixture.all[0].data
+        var offset = 0
+        while data[offset + 5] & 4 == 0 {
+            let segments = Int(data[offset + 26])
+            offset += 27 + segments + data[(offset + 27)..<(offset + 27 + segments)].reduce(0) { $0 + Int($1) }
+        }
+        // Keep 1,000 samples after the 312-sample pre-skip. The final page
+        // contains several packets, so trimming crosses a packet boundary.
+        let granule: UInt64 = 1312
+        for index in 0..<8 { data[offset + 6 + index] = UInt8(truncatingIfNeeded: granule >> (index * 8)) }
+        for index in 22..<26 { data[offset + index] = 0 }
+        var crc: UInt32 = 0
+        for byte in data[offset...] {
+            crc ^= UInt32(byte) << 24
+            for _ in 0..<8 { crc = crc & 0x8000_0000 != 0 ? (crc << 1) ^ 0x04c1_1db7 : crc << 1 }
+        }
+        for index in 0..<4 { data[offset + 22 + index] = UInt8(truncatingIfNeeded: crc >> (index * 8)) }
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
+        try data.write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let prepared = try await AudioPlaybackPreparation.prepare(source)
+        defer { try? FileManager.default.removeItem(at: prepared.url) }
+        #expect(try AVAudioFile(forReading: prepared.url).length == 1000)
+        let metadata = try await AudioPlaybackPreparation.opusMetadata(source)
+        #expect(abs(metadata.duration - Double(1000) / 48000) < 0.000001)
     }
     @Test func rejectsCorruptTruncatedChainedAndNonOpusOgg() async throws {
         let original = OpusFixture.all[0].data
