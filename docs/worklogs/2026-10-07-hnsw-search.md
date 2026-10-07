@@ -109,10 +109,18 @@ replacing newer user data.
 Subsequent validation uses a private temporary clone, with SQLite's backup API
 for a consistent database snapshot. `--isolated-copy` permits migration only below
 a temporary directory while the app continues using its original library. The
-copy contains 366 artifacts because the live library continued changing. Final
-live-library migration is deferred at the user's request: quit the app, take a
-fresh backup, convert current artifacts, and rebuild with the new provider. Do not
-reuse this validation copy to overwrite newer user data.
+copy contains 366 artifacts because the live library continued changing. The
+user initially deferred live migration, then requested it after installing the
+new app. With the app stopped, a fresh copy-on-write library backup was retained
+under ignored `tmp/search-migration-backup-2026-10-07-current/`. Conversion
+validated and packed 368 existing artifacts. The production provider rebuilt
+369 meetings / 39,461 windows in 87.77 seconds, including the meeting without
+a saved artifact. All 12 retrieval checks passed (58.7–116.5 ms); snapshot reload
+took 23.35 ms. SQLite and the verified snapshot both reached sequence 39,461,
+with no pending journal entries. Packed coordinate payloads total 60,612,096 FP32
+bytes and 15,153,024 INT8 bytes. All 9,139 checked source documents were unchanged.
+Both macOS 26 and macOS 27 CI release builds passed. The app can now reopen the
+migrated library. This migration did not replace the installed app.
 
 Swift decoded and validated the Python-generated synthetic format fixture.
 The frozen benchmark contains 39,066 windows; do not treat the newer library
