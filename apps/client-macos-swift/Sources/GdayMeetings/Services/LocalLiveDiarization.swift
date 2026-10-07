@@ -48,6 +48,7 @@ actor LocalLiveDiarization {
     private let consumer = UUID()
     private var sessions: [Session] = []
     private var lease: LocalModelLease?
+    private var communityLease: LocalModelLease?
     private var sink: LiveAudioSink?
     private var modelID: LocalModelID?
     private var cancelled = false
@@ -89,6 +90,12 @@ actor LocalLiveDiarization {
         self.failure = failure
         self.sample = sample
         do {
+            let voices = try await manager.acquire(.community1, modelNames: ["FBank", "Embedding"], priority: .capture)
+            guard !cancelled, !Task.isCancelled else {
+                await manager.release(voices)
+                throw CancellationError()
+            }
+            communityLease = voices
             let modelName = URL(fileURLWithPath: config.modelFileName).deletingPathExtension().lastPathComponent
             guard let loaded = acquired.models[modelName] else { throw LocalModelError.unavailable }
             let silence = try Self.floats(
@@ -356,9 +363,13 @@ actor LocalLiveDiarization {
     }
 
     private func releaseLease() async {
-        guard let lease else { return }
+        guard let manager = leaseManager else { return }
+        let held = lease
+        let voices = communityLease
         self.lease = nil
-        await leaseManager?.release(lease)
+        communityLease = nil
         leaseManager = nil
+        if let held { await manager.release(held) }
+        if let voices { await manager.release(voices) }
     }
 }

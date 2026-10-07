@@ -35,17 +35,16 @@ extension ServiceProvider {
             return await (models ?? .shared).health(for: (localSearch ?? .init()).selectedModel.localID)
         }
         if kind.isLocalSpeaker {
-            let id: LocalModelID?
-            if capability == .speakerRecognition {
-                id = .voiceEmbedding
+            guard capability == .diarization || LocalModelID(rawValue: model)?.nemotronPreset != nil else {
+                return .notReady("Choose a supported Nemotron preset.")
             }
-            else {
-                id = LocalModelID(rawValue: model)
+            for id in localModelIDs(for: capability) {
+                let result = await (models ?? .shared).health(for: id)
+                if !result.isReady {
+                    return .notReady("\(LocalModelRegistry.descriptor(id).title): \(result.reason ?? result.title)")
+                }
             }
-            guard let id, kind != .nemotron || capability == .speakerRecognition || id.nemotronPreset != nil,
-                kind != .community1 || capability == .speakerRecognition || id == .community1
-            else { return .notReady("Choose a supported model.") }
-            return await (models ?? .shared).health(for: id)
+            return .ready
         }
         do {
             // Check the requested capability independently of other enabled capabilities.
@@ -205,7 +204,7 @@ extension ThisMacProvider {
             (.liveTranscription, settings.liveTranscriptionProviderID),
             (.transcription, settings.transcriptionProviderID),
             (.liveDiarization, settings.liveDiarizationProviderID), (.diarization, settings.diarizationProviderID),
-            (.speakerRecognition, settings.speakerRecognitionProviderID), (.summarization, settings.summaryProviderID),
+            (.summarization, settings.summaryProviderID),
         ]
         await withTaskGroup(of: Void.self) { group in
             for (capability, id) in pairs {
@@ -247,8 +246,15 @@ extension ThisMacProvider {
                 }
                 else if let provider {
                     let estimate = await provider.health(for: capability, settings: settings)
-                    if estimate.isReady, let id = provider.localModelID(for: capability) {
-                        completed[capability] = await LocalModelManager.shared.validate(id)
+                    if estimate.isReady {
+                        completed[capability] = .ready
+                        for id in provider.localModelIDs(for: capability) {
+                            let result = await LocalModelManager.shared.validate(id)
+                            if !result.isReady {
+                                completed[capability] = result
+                                break
+                            }
+                        }
                     }
                     else {
                         completed[capability] = estimate
@@ -320,9 +326,12 @@ extension MeetingStore {
 }
 
 extension ServiceProvider {
-    func localModelID(for capability: ProviderCapability) -> LocalModelID? {
-        if kind == .localSearch, capability == .search { return (localSearch ?? .init()).selectedModel.localID }
-        guard kind.isLocalSpeaker else { return nil }
-        return capability == .speakerRecognition ? .voiceEmbedding : LocalModelID(rawValue: model)
+    func localModelIDs(for capability: ProviderCapability) -> [LocalModelID] {
+        if kind == .localSearch, capability == .search { return [(localSearch ?? .init()).selectedModel.localID] }
+        guard kind.isLocalSpeaker else { return [] }
+        if capability == .diarization { return [.community1] }
+        guard capability == .liveDiarization, let model = LocalModelID(rawValue: model), model.nemotronPreset != nil
+        else { return [] }
+        return [model, .community1]
     }
 }

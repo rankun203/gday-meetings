@@ -180,7 +180,7 @@ extension TaskAttentionTimingTests {
         let store = MeetingStore(dataDirectory: root)
         await store.flushManagedTaskCommands()
         let meetingID = await store.createMeeting(title: "Synthetic meeting")
-        let provider = ServiceProvider(kind: .community1)
+        let provider = ServiceProvider(kind: .speakerLabeling)
         store.settings.serviceProviders = [provider]
         store.settings.diarizationProviderID = provider.id
         var recordingBegan = false
@@ -205,7 +205,7 @@ extension TaskAttentionTimingTests {
         let store = MeetingStore(dataDirectory: root)
         await store.flushManagedTaskCommands()
         let meetingID = await store.createMeeting(title: "Synthetic meeting")
-        let provider = ServiceProvider(kind: .community1)
+        let provider = ServiceProvider(kind: .speakerLabeling)
         store.settings.serviceProviders = [provider]
         store.settings.diarizationProviderID = provider.id
         store.recordingID = UUID()

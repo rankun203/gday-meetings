@@ -11,16 +11,14 @@ struct LocalSpeakerProviderView: View {
     @ViewState private var failure: String?
 
     private var choices: [LocalModelID] {
-        draft.kind == .nemotron
-            ? LocalModelID.allCases.filter { $0.rawValue.hasPrefix("nemotron") }
-            : [.community1]
+        LocalModelID.allCases.filter { $0.nemotronPreset != nil }
     }
     private var modelID: LocalModelID? { LocalModelID(rawValue: draft.model) }
     private var changed: Bool { store.settings.serviceProviders.first { $0.id == draft.id } != draft }
     private var modelHealthIdentity: [LocalModelID: LocalModelState.HealthIdentity] {
         let savedModel = store.settings.serviceProviders.first { $0.id == draft.id }
             .flatMap { LocalModelID(rawValue: $0.model) }
-        return localModels.states.filter { $0.key == savedModel || $0.key == .voiceEmbedding }
+        return localModels.states.filter { $0.key == savedModel || $0.key == .community1 }
             .mapValues(\.healthIdentity)
     }
 
@@ -31,13 +29,13 @@ struct LocalSpeakerProviderView: View {
                     .font(.title2.weight(.semibold))
                 TextField("Name", text: $draft.name)
                 Toggle("Enable This Provider", isOn: $draft.isEnabled)
-                Text("Audio and speaker association stay on this Mac. Model downloads connect to Hugging Face.")
+                Text("Audio is processed on this Mac. Model downloads connect to Hugging Face.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Capabilities") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     Toggle(
-                        capability.title,
+                        capability == .diarization ? "Recorded Speaker Labeling" : capability.title,
                         isOn: Binding(
                             get: { draft.enabledCapabilities.contains(capability) },
                             set: { enabled in
@@ -49,20 +47,18 @@ struct LocalSpeakerProviderView: View {
                                 }
                             }))
                 }
-                Text(
-                    draft.kind == .nemotron
-                        ? "Adds speaker labels during recording independently of live transcription."
-                        : "Labels speakers in saved audio without transcribing again. Speaker Association uses compatible voice samples from the People Library."
-                )
-                .font(.caption).foregroundStyle(.secondary)
+                Text("Live labeling uses Nemotron and Community-1. Recorded labeling uses Community-1.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Readiness") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     let result = health.validationState(providerID: draft.id, capability: capability)
-                    ProviderHealthSummary(title: capability.title, health: result)
+                    ProviderHealthSummary(
+                        title: capability == .diarization ? "Recorded Speaker Labeling" : capability.title,
+                        health: result)
                 }
             }
-            Section("Model") {
+            Section("Nemotron") {
                 Picker("Preset", selection: $draft.model) {
                     ForEach(choices) { id in Text(LocalModelRegistry.descriptor(id).title).tag(id.rawValue) }
                 }
@@ -85,14 +81,12 @@ struct LocalSpeakerProviderView: View {
                 Text("Changes apply to the next recording or labeling job.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if draft.kind == .nemotron || draft.enabledCapabilities.contains(.speakerRecognition) {
-                Section("Speaker Association Model") {
-                    LocalModelDownloadView(modelID: .voiceEmbedding)
-                    Text(
-                        "Associates speakers with people in the People Library. Speaker labels work without this model."
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
-                }
+            Section("Community-1") {
+                LocalModelDownloadView(modelID: .community1)
+                Text(
+                    "Used for recorded speaker labeling and voice samples. Required with Nemotron for live speaker labeling."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 if let failure {

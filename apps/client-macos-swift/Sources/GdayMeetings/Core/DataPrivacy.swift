@@ -203,7 +203,7 @@ enum DataPrivacy {
                 for trigger in triggers {
                     routes.append(.init(data: [.audio, .meetingDetails], trigger: trigger, receivers: [transcriber]))
                 }
-            case .openAICompatible, .filedrop, .nemotron, .community1, .localSearch, .appleSpeech:
+            case .openAICompatible, .filedrop, .speakerLabeling, .localSearch, .appleSpeech:
                 continue
             }
         }

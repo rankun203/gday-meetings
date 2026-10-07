@@ -5,34 +5,28 @@ import Testing
 
 struct LocalProviderConfigurationTests {
     @Test func localSpeakerProvidersDoNotRequireTranscriptionOrNetworkCredentials() {
-        let live = ServiceProvider(kind: .nemotron)
-        let saved = ServiceProvider(kind: .community1)
+        let live = ServiceProvider(kind: .speakerLabeling)
+        let saved = ServiceProvider(kind: .speakerLabeling)
         #expect(live.supports(.liveDiarization))
-        #expect(live.supports(.speakerRecognition))
         #expect(!live.supports(.transcription))
         #expect(!live.supports(.liveTranscription))
         #expect(saved.supports(.diarization))
-        #expect(saved.supports(.speakerRecognition))
         #expect(!saved.supports(.transcription))
         #expect(ProviderConfigurationEligibility.canSelect(live, for: .liveDiarization, providers: []))
         #expect(ProviderConfigurationEligibility.canSelect(saved, for: .diarization, providers: []))
-        #expect(ProviderConfigurationEligibility.canSelect(saved, for: .speakerRecognition, providers: []))
         var unsupported = live
         unsupported.model = "unknown-model"
         #expect(!ProviderConfigurationEligibility.canSelect(unsupported, for: .liveDiarization, providers: []))
-        #expect(ProviderConfigurationEligibility.canSelect(unsupported, for: .speakerRecognition, providers: []))
     }
 
     @Test func speakerDefaultsRoundTripIndependentlyAndOldSettingsStayOff() throws {
         var settings = AppSettings()
-        let live = ServiceProvider(kind: .nemotron)
-        var saved = ServiceProvider(kind: .community1)
-        saved.enabledCapabilities = [.speakerRecognition]
-        settings.serviceProviders = [live, saved]
+        var saved = ServiceProvider(kind: .speakerLabeling)
+        saved.enabledCapabilities = []
+        settings.serviceProviders = [saved]
         settings.transcriptionProviderID = UUID()
         settings.liveDiarizationProviderID = UUID()
         settings.diarizationProviderID = UUID()
-        settings.speakerRecognitionProviderID = UUID()
         settings.showLiveSpeakerLabels = true
         settings.recognizeSpeakers = true
         settings.recognizeLiveSpeakers = false
@@ -40,7 +34,6 @@ struct LocalProviderConfigurationTests {
         #expect(decoded.transcriptionProviderID == settings.transcriptionProviderID)
         #expect(decoded.liveDiarizationProviderID == settings.liveDiarizationProviderID)
         #expect(decoded.diarizationProviderID == settings.diarizationProviderID)
-        #expect(decoded.speakerRecognitionProviderID == settings.speakerRecognitionProviderID)
         #expect(decoded.showLiveSpeakerLabels && decoded.recognizeSpeakers)
         #expect(!decoded.recognizeLiveSpeakers)
         settings.recognizeSpeakers = false
@@ -51,12 +44,11 @@ struct LocalProviderConfigurationTests {
         let old = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         #expect(!old.showLiveSpeakerLabels && !old.recognizeSpeakers && !old.recognizeLiveSpeakers)
         #expect(old.liveDiarizationProviderID == nil && old.diarizationProviderID == nil)
-        #expect(old.speakerRecognitionProviderID == nil)
     }
 
     @Test func everyCatalogPresetCanBeConfiguredBeforeDownload() throws {
         for model in LocalModelID.allCases where model.nemotronPreset != nil {
-            var provider = ServiceProvider(kind: .nemotron)
+            var provider = ServiceProvider(kind: .speakerLabeling)
             provider.model = model.rawValue
             #expect(ProviderConfigurationEligibility.canSelect(provider, for: .liveDiarization, providers: []))
             let restored = try JSONDecoder().decode(ServiceProvider.self, from: JSONEncoder().encode(provider))
@@ -72,11 +64,11 @@ struct LocalProviderConfigurationTests {
         var meeting = Meeting(title: "Synthetic speaker check")
         meeting.transcript = [TranscriptSegment(start: 0, end: 1, speaker: "", text: "Example passage")]
         try await store.insertImportedMeeting(meeting)
-        var disabled = ServiceProvider(kind: .community1)
+        var disabled = ServiceProvider(kind: .speakerLabeling)
         disabled.isEnabled = false
-        var labelsOff = ServiceProvider(kind: .community1)
-        labelsOff.enabledCapabilities = [.speakerRecognition]
-        for provider in [nil, disabled, labelsOff, ServiceProvider(kind: .nemotron)] {
+        var labelsOff = ServiceProvider(kind: .speakerLabeling)
+        labelsOff.enabledCapabilities = []
+        for provider in [nil, disabled, labelsOff, ServiceProvider(kind: .openAICompatible)] {
             store.settings.serviceProviders = provider.map { [$0] } ?? []
             store.settings.diarizationProviderID = provider?.id
             await store.diarizeLocally(id: meeting.id)
@@ -88,10 +80,12 @@ struct LocalProviderConfigurationTests {
 }
 
 extension LocalProviderConfigurationTests {
-    @Test func unifiedLiveRecognitionPreservesEitherLegacySettingAndSynchronizesEdits() throws {
-        for json in ["{\"showLiveSpeakerLabels\":true}", "{\"recognizeLiveSpeakers\":true}"] {
+    @Test func unifiedLiveControlsPreserveLabelingAndRespectAssociationMigration() throws {
+        for (json, enabled) in [
+            ("{\"showLiveSpeakerLabels\":true}", true), ("{\"recognizeLiveSpeakers\":true}", false),
+        ] {
             var settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
-            #expect(settings.liveSpeakerRecognitionEnabled)
+            #expect(settings.liveSpeakerRecognitionEnabled == enabled)
             #expect(!settings.recognizeSpeakers)
             let untouched = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
             #expect(untouched == settings)

@@ -57,8 +57,8 @@ struct ServiceProvidersView: View {
                                 Label(kind.title, systemImage: kind.systemImage)
                             }
                             .disabled(
-                                kind == .gdayWebsite
-                                    && store.settings.serviceProviders.contains { $0.kind == .gdayWebsite })
+                                (kind == .gdayWebsite || kind == .speakerLabeling)
+                                    && store.settings.serviceProviders.contains { $0.kind == kind })
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -161,6 +161,9 @@ struct ServiceProvidersView: View {
     }
 
     private func add(_ kind: ServiceProviderKind) {
+        guard kind != .speakerLabeling || !store.settings.serviceProviders.contains(where: { $0.kind == kind }) else {
+            return
+        }
         guard drafts.confirmLeaving(store: store) else { return }
         let provider = ServiceProvider(kind: kind)
         let previous = store.settings
@@ -196,9 +199,6 @@ struct ServiceProvidersView: View {
             if store.settings.searchProviderID == selection { store.settings.searchProviderID = nil }
             if store.settings.liveDiarizationProviderID == selection { store.settings.liveDiarizationProviderID = nil }
             if store.settings.diarizationProviderID == selection { store.settings.diarizationProviderID = nil }
-            if store.settings.speakerRecognitionProviderID == selection {
-                store.settings.speakerRecognitionProviderID = nil
-            }
             guard store.saveSettings() else {
                 store.settings = previous
                 saveError = store.errorMessage
@@ -540,7 +540,7 @@ private struct ServiceProviderPanel: View {
             "Enter the address of the Gday Meetings website that hosts this account."
         case .filedrop:
             "Enter the Filedrop service base URL supplied by the service administrator."
-        case .nemotron, .community1, .localSearch, .appleSpeech:
+        case .speakerLabeling, .localSearch, .appleSpeech:
             "This provider processes audio on this Mac."
         }
     }
@@ -562,7 +562,6 @@ private struct ServiceProviderPanel: View {
         switch capability {
         case .liveTranscription: "Transcribes audio during recording."
         case .liveDiarization: "Labels speakers during recording on this Mac."
-        case .speakerRecognition: "Matches compatible voice samples to People on this Mac."
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization:

@@ -99,6 +99,7 @@ final class LocalModelManager: ObservableObject {
         storageOperations += 1
         defer { storageOperations -= 1 }
         try await worker.importLegacyStorage(from: legacyRoot)
+        try await worker.consolidateCommunityAssets(descriptor(.community1))
         try await worker.retireLegacyModels()
     }
 
@@ -116,6 +117,14 @@ final class LocalModelManager: ObservableObject {
     private var operations: [LocalModelID: UUID] = [:]
     private var leases: [UUID: LocalModelID] = [:]
     private var removing: Set<LocalModelID> = []
+    private var communityModels: [String: MLModel] = [:]
+    private var communityModelNames: Set<String> = []
+    private struct CommunityPreparation {
+        let id = UUID()
+        let names: Set<String>
+        let task: Task<[String: MLModel], Error>
+    }
+    private var communityPreparation: CommunityPreparation?
 
     init(
         root: URL,
@@ -149,21 +158,7 @@ final class LocalModelManager: ObservableObject {
     /// Inspect receipt and file metadata without hashing files or loading Core ML.
     func health(for id: LocalModelID) async -> ProviderHealth {
         guard storageAvailable, !storageSuspended else { return .notReady("The data folder is unavailable.") }
-        let result = await worker.health(descriptor(id), directory: modelDirectory(for: id))
-        if id == .voiceEmbedding, !result.isReady {
-            return await worker.health(descriptor(id), directory: modelDirectory(for: .community1))
-        }
-        return result
-    }
-
-    private func materializeEmbeddingIfNeeded(_ id: LocalModelID) async throws {
-        guard id == .voiceEmbedding,
-            !(await worker.health(descriptor(id), directory: modelDirectory(for: id))).isReady,
-            await worker.health(descriptor(id), directory: modelDirectory(for: .community1)).isReady
-        else { return }
-        try await worker.materializeSubset(
-            descriptor(id), sourceDescriptor: descriptor(.community1),
-            source: modelDirectory(for: .community1), destination: modelDirectory(for: id))
+        return await worker.health(descriptor(id), directory: modelDirectory(for: id))
     }
 
     func refresh(_ ids: Set<LocalModelID> = Set(LocalModelID.allCases)) async {
@@ -221,7 +216,6 @@ final class LocalModelManager: ObservableObject {
             guard let self else { return }
             do {
                 try await prepareStorage()
-                if !download { try await materializeEmbeddingIfNeeded(id) }
                 if download {
                     try await worker.install(descriptor, directory: directory) { [weak self] count in
                         Task { @MainActor in
@@ -247,23 +241,6 @@ final class LocalModelManager: ObservableObject {
                 catch {
                     states[id]?.message =
                         "The model is ready. Verify it again after restarting because its verification receipt could not be saved."
-                }
-                if id == .community1, tasks[.voiceEmbedding] == nil, state(for: .voiceEmbedding).inUse == 0 {
-                    let subset = self.descriptor(.voiceEmbedding)
-                    let subsetDirectory = modelDirectory(for: .voiceEmbedding)
-                    // The embedding graph and preprocessing were just prepared as part of Community-1.
-                    // Materialize the identical verified files without another network request.
-                    do {
-                        try await worker.materializeSubset(
-                            subset, sourceDescriptor: descriptor, source: directory, destination: subsetDirectory)
-                        try? await worker.recordPreparation(subset, directory: subsetDirectory)
-                        states[.voiceEmbedding] = .init(
-                            phase: .ready, completedBytes: subset.downloadBytes, totalBytes: subset.downloadBytes)
-                    }
-                    catch {
-                        states[.voiceEmbedding]?.phase = .failed
-                        states[.voiceEmbedding]?.message = error.localizedDescription
-                    }
                 }
                 states[id]?.phase = .ready
                 states[id]?.completedBytes = descriptor.downloadBytes
@@ -302,7 +279,8 @@ final class LocalModelManager: ObservableObject {
     }
 
     func acquire(
-        _ id: LocalModelID, semanticFunction: String? = nil, priority: ProcessingCoordinator.Priority = .processing
+        _ id: LocalModelID, semanticFunction: String? = nil, modelNames: Set<String>? = nil,
+        priority: ProcessingCoordinator.Priority = .processing
     ) async throws -> LocalModelLease {
         storageOperations += 1
         defer { storageOperations -= 1 }
@@ -312,7 +290,6 @@ final class LocalModelManager: ObservableObject {
         // It never invokes a separate temporary validation/preparation first.
         if let task = tasks[id] { await task.value }
         try Task.checkCancellation()
-        try await materializeEmbeddingIfNeeded(id)
         guard tasks[id] == nil, !removing.contains(id) else { throw LocalModelError.busy }
         let token = UUID()
         leases[token] = id
@@ -320,14 +297,30 @@ final class LocalModelManager: ObservableObject {
         let descriptor = descriptor(id)
         let directory = modelDirectory(for: id)
         do {
+            var requested = descriptor
+            if let modelNames {
+                guard !modelNames.isEmpty, modelNames.isSubset(of: Set(descriptor.modelNames)) else {
+                    throw LocalModelError.unavailable
+                }
+                requested.modelNames = descriptor.modelNames.filter { modelNames.contains($0) }
+            }
+            let loadingDescriptor = requested
             let worker = worker
             let loaded = try await ProcessingCoordinator.shared.withPermit(for: .modelPreparation, priority: priority) {
                 try await worker.verify(descriptor, directory: directory)
-                let models = try await worker.prepare(
-                    descriptor, directory: directory, semanticFunction: semanticFunction)
+                let models: [String: MLModel]
+                if id == .community1 {
+                    models = try await self.prepareCommunityModels(loadingDescriptor, directory: directory)
+                }
+                else {
+                    models = try await worker.prepare(
+                        loadingDescriptor, directory: directory, semanticFunction: semanticFunction)
+                }
                 try Task.checkCancellation()
                 try await worker.assertUnchanged(descriptor, directory: directory)
-                if semanticFunction == nil { try? await worker.recordPreparation(descriptor, directory: directory) }
+                if semanticFunction == nil, modelNames == nil {
+                    try? await worker.recordPreparation(descriptor, directory: directory)
+                }
                 return LocalModelLease(
                     id: id, token: token, directory: directory, revision: descriptor.revision, models: models)
             }
@@ -338,6 +331,7 @@ final class LocalModelManager: ObservableObject {
         catch {
             leases.removeValue(forKey: token)
             states[id]?.inUse -= 1
+            discardUnusedCommunityModels()
             if error is CancellationError {
                 states[id]?.phase = state(for: id).inUse > 0 ? .ready : .cancelled
                 states[id]?.message = nil
@@ -353,6 +347,51 @@ final class LocalModelManager: ObservableObject {
     func release(_ lease: LocalModelLease) {
         guard let id = leases.removeValue(forKey: lease.token) else { return }
         states[id]?.inUse -= 1
+        discardUnusedCommunityModels()
+    }
+
+    /// Active users share each graph. Concurrent requests join the same load,
+    /// and a full offline request loads only graphs missing from a voice lease.
+    private func prepareCommunityModels(_ descriptor: LocalModelDescriptor, directory: URL) async throws
+        -> [String: MLModel]
+    {
+        let requested = Set(descriptor.modelNames)
+        while !requested.isSubset(of: communityModelNames) {
+            try Task.checkCancellation()
+            let pending: CommunityPreparation
+            if let current = communityPreparation {
+                pending = current
+            }
+            else {
+                var missing = descriptor
+                missing.modelNames.removeAll { communityModelNames.contains($0) }
+                let loading = missing
+                let worker = worker
+                pending = CommunityPreparation(
+                    names: Set(loading.modelNames),
+                    task: Task { try await worker.prepare(loading, directory: directory) })
+                communityPreparation = pending
+            }
+            do {
+                let loaded = try await pending.task.value
+                if communityPreparation?.id == pending.id {
+                    communityModels.merge(loaded) { _, new in new }
+                    communityModelNames.formUnion(pending.names)
+                    communityPreparation = nil
+                }
+            }
+            catch {
+                if communityPreparation?.id == pending.id { communityPreparation = nil }
+                throw error
+            }
+        }
+        return communityModels.filter { requested.contains($0.key) }
+    }
+
+    private func discardUnusedCommunityModels() {
+        guard state(for: .community1).inUse == 0 else { return }
+        communityModels.removeAll()
+        communityModelNames.removeAll()
     }
 
     func remove(_ id: LocalModelID) async throws {
@@ -544,6 +583,27 @@ actor LocalModelFiles {
         self.remover = remover
     }
 
+    /// Reuse the retired standalone extractor download without keeping a second installation.
+    func consolidateCommunityAssets(_ descriptor: LocalModelDescriptor) throws {
+        let fm = FileManager.default
+        let retired = root.appendingPathComponent("voiceEmbedding", isDirectory: true)
+        let source = retired.appendingPathComponent(descriptor.revision, isDirectory: true)
+        guard fm.fileExists(atPath: source.path) else { return }
+        let destination = root.appendingPathComponent(descriptor.id.rawValue, isDirectory: true)
+            .appendingPathComponent(descriptor.revision, isDirectory: true)
+        for asset in descriptor.assets {
+            let old = try safeURL(asset, directory: source)
+            let target = try safeURL(asset, directory: destination)
+            guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: target.path) else { continue }
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: old, to: target)
+        }
+        // Acquisition verifies every file before loading; old preparation receipts are not transferred.
+        try fm.removeItem(at: source)
+        if try fm.contentsOfDirectory(atPath: retired.path).isEmpty { try fm.removeItem(at: retired) }
+        try refreshLinkReceipts()
+    }
+
     func retireLegacyModels() throws { try RetiredVoiceSearchMigration.removeModels(root: root) }
 
     /// Publish a complete copy only when this library has no model folder yet.
@@ -713,62 +773,6 @@ actor LocalModelFiles {
             try JSONEncoder().encode(cached).write(
                 to: directory.appendingPathComponent(".gday-validation.json"), options: .atomic)
         }
-    }
-
-    func materializeSubset(
-        _ descriptor: LocalModelDescriptor, sourceDescriptor: LocalModelDescriptor, source: URL, destination: URL
-    ) throws {
-        if let fullIdentity = try? identity(sourceDescriptor, directory: source),
-            let cached = verified[source] ?? receipt(directory: source),
-            cached.files == fullIdentity.files, cached.revision == fullIdentity.revision
-        {
-            verified[source] = cached
-            verifiedDescriptors[source] = sourceDescriptor
-        }
-        let sourceIdentity = try identity(descriptor, directory: source)
-        if let destinationIdentity = try? identity(descriptor, directory: destination),
-            let cached = verified[destination] ?? receipt(directory: destination),
-            destinationIdentity.files == cached.files, destinationIdentity.revision == cached.revision
-        {
-            return
-        }
-        // A subset must never replace the full source manifest or runtime receipt.
-        let sourceReceipt = verified[source] ?? receipt(directory: source)
-        if sourceReceipt?.revision != sourceIdentity.revision
-            || !sourceIdentity.files.allSatisfy({ sourceReceipt?.files.contains($0) == true })
-        {
-            metrics.verificationPasses += 1
-            for asset in descriptor.assets {
-                try Task.checkCancellation()
-                guard try matches(asset, at: safeURL(asset, directory: source)) else {
-                    rejected[source] = (sourceIdentity, asset.path)
-                    throw LocalModelError.invalidFile(asset.path)
-                }
-            }
-        }
-        let fm = FileManager.default
-        let objects = root.appendingPathComponent("objects", isDirectory: true)
-        try fm.createDirectory(at: objects, withIntermediateDirectories: true)
-        for asset in descriptor.assets {
-            try Task.checkCancellation()
-            let object = objects.appendingPathComponent(asset.digest)
-            if try !matches(asset, at: object) {
-                if fm.fileExists(atPath: object.path) { try fm.removeItem(at: object) }
-                try fm.copyItem(at: safeURL(asset, directory: source), to: object)
-            }
-            let target = try safeURL(asset, directory: destination)
-            if try matches(asset, at: target) { continue }
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
-            try fm.linkItem(at: object, to: target)
-        }
-        try refreshLinkReceipts()
-        var destinationReceipt = try identity(descriptor, directory: destination)
-        destinationReceipt.runtimeValidated = verified[source]?.runtimeValidated == true
-        verified[destination] = destinationReceipt
-        verifiedDescriptors[destination] = descriptor
-        try JSONEncoder().encode(destinationReceipt).write(
-            to: destination.appendingPathComponent(".gday-validation.json"), options: .atomic)
     }
 
     /// Presence is an estimate. Neither hashing nor runtime preparation belongs here.

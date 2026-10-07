@@ -11,21 +11,13 @@ enum ProviderConfigurationEligibility {
             return true
         }
         if provider.kind.isLocalSpeaker {
-            if capability == .speakerRecognition { return true }
-            switch provider.kind {
-            case .nemotron:
-                return LocalModelID.allCases.contains {
-                    $0.rawValue.hasPrefix("nemotron") && $0.rawValue == provider.model
-                }
-            case .community1: return provider.model == "community1"
-            default: return false
-            }
+            return capability == .diarization || LocalModelID(rawValue: provider.model)?.nemotronPreset != nil
         }
         guard
             (try? ProviderEndpoint.base(provider.endpoint)) != nil
         else { return false }
         switch provider.kind {
-        case .nemotron, .community1, .localSearch, .appleSpeech: return false
+        case .speakerLabeling, .localSearch, .appleSpeech: return false
         case .runpod:
             guard (try? ProviderEndpoint.runpod(provider.endpoint)) != nil,
                 hasText(provider.apiKey)

@@ -90,7 +90,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
         let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let meeting = Meeting(title: "Synthetic speaker task")
         try await store.insertImportedMeeting(meeting)
-        let provider = ServiceProvider(kind: .community1)
+        let provider = ServiceProvider(kind: .speakerLabeling)
         store.settings.serviceProviders = [provider]
         store.settings.diarizationProviderID = provider.id
         await store.diarizeLocally(id: meeting.id)
@@ -109,7 +109,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
         let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let meeting = Meeting(title: "Synthetic queued labels")
         try await store.insertImportedMeeting(meeting)
-        let provider = ServiceProvider(kind: .community1)
+        let provider = ServiceProvider(kind: .speakerLabeling)
         store.settings.serviceProviders = [provider]
         store.settings.diarizationProviderID = provider.id
         store.isSchedulingManagedTasks = true

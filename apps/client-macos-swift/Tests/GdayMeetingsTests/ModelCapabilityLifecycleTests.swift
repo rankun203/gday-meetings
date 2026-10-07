@@ -77,43 +77,6 @@ struct ModelCapabilityLifecycleTests {
         #expect(manager.state(for: .granite97M).phase == .missing)
     }
 
-    @Test func subsetInstallationPreservesFullValidationAndTrustedLinkIdentity() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let data = Data("synthetic shared asset".utf8)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let shared = LocalModelAsset(path: "shared", remotePath: "shared", bytes: Int64(data.count), digest: digest)
-        let extra = LocalModelAsset(path: "extra", remotePath: "extra", bytes: Int64(data.count), digest: digest)
-        let manager = LocalModelManager(
-            root: root,
-            descriptor: { id in
-                .init(
-                    id: id, title: "Synthetic", repository: "synthetic/model", revision: "pinned",
-                    assets: id == .voiceEmbedding ? [shared] : [shared, extra], modelNames: ["Synthetic"])
-            }, preparer: { _, _ in [:] })
-        let objects = root.appendingPathComponent("objects")
-        try FileManager.default.createDirectory(at: objects, withIntermediateDirectories: true)
-        let object = objects.appendingPathComponent(digest)
-        try data.write(to: object)
-        let full = manager.modelDirectory(for: .community1)
-        try FileManager.default.createDirectory(at: full, withIntermediateDirectories: true)
-        for asset in [shared, extra] {
-            try FileManager.default.linkItem(at: object, to: full.appendingPathComponent(asset.path))
-        }
-        #expect(await manager.validate(.community1) == .ready)
-        let first = await manager.lifecycleMetrics()
-        #expect(first.preparationCount == 1)
-        #expect(await manager.validate(.community1) == .ready)
-        #expect(await manager.validate(.voiceEmbedding) == .ready)
-        #expect(await manager.lifecycleMetrics().verificationPasses == first.verificationPasses)
-        #expect(await manager.lifecycleMetrics().preparationCount == first.preparationCount)
-        let lease = try await manager.acquire(.community1)
-        manager.release(lease)
-        try await manager.remove(.voiceEmbedding)
-        #expect(await manager.validate(.community1) == .ready)
-        #expect(await manager.lifecycleMetrics().verificationPasses == first.verificationPasses)
-    }
-
     @Test func suspendedMaintenancePreparationCanBeCancelledWithoutResumingCapture() async throws {
         let (root, manager) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -129,20 +92,20 @@ struct ModelCapabilityLifecycleTests {
         await ProcessingCoordinator.shared.setMaintenanceSuspended(false)
     }
 
-    @Test func copiedCommunityAssetsMakeAssociationAvailableBeforeValidation() async throws {
+    @Test func copiedCommunityAssetsAreUsedDirectlyWithoutAnotherInstallation() async throws {
         let (root, manager) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let source = manager.modelDirectory(for: .community1)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
         try bytes.write(to: source.appendingPathComponent("data"))
-        #expect(await manager.health(for: .voiceEmbedding) == .ready)
+        #expect(await manager.health(for: .community1) == .ready)
         #expect(await manager.lifecycleMetrics().verificationPasses == 0)
         #expect(await manager.lifecycleMetrics().preparationCount == 0)
-        #expect(!FileManager.default.fileExists(atPath: manager.modelDirectory(for: .voiceEmbedding).path))
-        let lease = try await manager.acquire(.voiceEmbedding)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("voiceEmbedding").path))
+        let lease = try await manager.acquire(.community1)
         #expect(await manager.lifecycleMetrics().preparationCount == 1)
         manager.release(lease)
-        #expect(manager.state(for: .voiceEmbedding).inUse == 0)
+        #expect(manager.state(for: .community1).inUse == 0)
     }
 
     @Test func availabilityDoesNotHashOrLoadAndAcquisitionLoadsOnce() async throws {

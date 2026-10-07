@@ -21,6 +21,8 @@ These documents define the common meaning of requests and results. They also ide
 
 [File transfer](file-transfer.md) is a supporting transport for URL-based workers. It is separate from the five meeting capabilities above.
 
+Speaker Association is shared app logic, separate from provider capabilities. It matches typed voice embeddings against compatible reviewed samples in the People Library. Matching requires agreement on model identity, revision, representation version, dimensions, and normalization; equal dimensions alone do not establish compatibility. Creating an embedding requires an extractor, but matching existing embeddings requires no model download. The local Speaker Labeling provider owns Nemotron for live labeling and the full Community-1 package for recorded labeling and voice extraction. Live labeling requires both packages. Community-1 graphs are loaded once while leased and shared across these workflows; synchronous inference is serialized.
+
 The [meeting experience](../design/meeting-experience.md) describes provider settings, task defaults, and data destinations. The [Swift client guide](../../apps/client-macos-swift/README.md) describes setup. Existing [website APIs](../../apps/server/docs/api.md) and the [audio worker contract](../../apps/worker-audio-extraction/README.md) remain transport references.
 
 ## Swift implementation

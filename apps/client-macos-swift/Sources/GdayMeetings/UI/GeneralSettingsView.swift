@@ -62,8 +62,7 @@ struct GeneralSettingsView: View {
                                 capability: .liveDiarization, provider: store.settings.liveDiarizationProviderID)
                             feature(
                                 "Automatically Associate People",
-                                enabled: setting(\.recognizeLiveSpeakers),
-                                capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
+                                enabled: setting(\.recognizeLiveSpeakers), status: .ready,
                                 prerequisite: liveAssociationPrerequisite)
                         }
                         group("After Recording") {
@@ -82,9 +81,7 @@ struct GeneralSettingsView: View {
                                 capability: .diarization, provider: store.settings.diarizationProviderID,
                                 prerequisite: recordedLabelingPrerequisite)
                             feature(
-                                "Automatically Associate People", enabled: setting(\.recognizeSpeakers),
-                                capability: .speakerRecognition, provider: store.settings.speakerRecognitionProviderID,
-                                prerequisite: recordedAssociationPrerequisite)
+                                "Automatically Associate People", enabled: setting(\.recognizeSpeakers), status: .ready)
                             feature(
                                 "Automatically Summarize", enabled: setting(\.autoSummarize),
                                 capability: .summarization, provider: store.settings.summaryProviderID)
@@ -111,9 +108,6 @@ struct GeneralSettingsView: View {
                             provider(
                                 "Live Speaker Labeling", capability: .liveDiarization,
                                 selected: store.settings.liveDiarizationProviderID)
-                            provider(
-                                "Speaker Association", capability: .speakerRecognition,
-                                selected: store.settings.speakerRecognitionProviderID)
                             provider(
                                 "Recorded Transcription", capability: .transcription,
                                 selected: store.settings.transcriptionProviderID)
@@ -169,19 +163,6 @@ struct GeneralSettingsView: View {
         return nil
     }
 
-    private var recordedAssociationPrerequisite: String? {
-        store.settings.recordedAssociationPrerequisite(
-            liveLabelingReady: store.settings.liveDiarizationProviderID.map {
-                health.state(providerID: $0, capability: .liveDiarization).isReady
-            } ?? false,
-            liveAssociationReady: store.settings.speakerRecognitionProviderID.map {
-                health.state(providerID: $0, capability: .speakerRecognition).isReady
-            } ?? false,
-            recordedLabelingReady: store.settings.diarizationProviderID.map {
-                health.state(providerID: $0, capability: .diarization).isReady
-            } ?? false)
-    }
-
     private struct HealthIdentity: Equatable {
         let configuration: ProviderHealthStore.Configuration
         let selections: [UUID?]
@@ -197,7 +178,7 @@ struct GeneralSettingsView: View {
             configuration: .init(store.settings),
             selections: [
                 store.settings.liveTranscriptionProviderID, store.settings.liveDiarizationProviderID,
-                store.settings.speakerRecognitionProviderID, store.settings.transcriptionProviderID,
+                store.settings.transcriptionProviderID,
                 store.settings.diarizationProviderID, store.settings.summaryProviderID, store.settings.searchProviderID,
             ])
     }
@@ -220,6 +201,12 @@ struct GeneralSettingsView: View {
         let status: ProviderHealth =
             provider.map { health.state(providerID: $0, capability: capability) }
             ?? .notReady("Choose a provider.")
+        return feature(title, enabled: enabled, status: status, prerequisite: prerequisite)
+    }
+
+    private func feature(
+        _ title: String, enabled: Binding<Bool>, status: ProviderHealth, prerequisite: String? = nil
+    ) -> some View {
         let reason = prerequisite ?? status.reason
         let ready = prerequisite == nil && status.isReady
         return VStack(alignment: .leading, spacing: AppTheme.compactSpacing) {

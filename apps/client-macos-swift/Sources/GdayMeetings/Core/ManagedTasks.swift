@@ -98,15 +98,15 @@ extension MeetingStore {
     }
 
     @discardableResult func queueSpeakerLabelingCommand(id: UUID, providerID: UUID? = nil) async -> UUID? {
-        let selectedID = providerID ?? settings.diarizationProviderID
+        let selectedID = settings.resolvedSpeakerProviderID(providerID ?? settings.diarizationProviderID)
         guard libraryWritable, await ensureMeetingLoaded(id: id), recordingID != id,
             !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
             let meeting = meetings.first(where: { $0.id == id }), meeting.transcriptionAttempt == nil,
             settings.serviceProviders.contains(where: {
-                $0.id == selectedID && $0.kind == .community1 && $0.supports(.diarization)
+                $0.id == selectedID && $0.kind == .speakerLabeling && $0.supports(.diarization)
             })
         else {
-            errorMessage = "Choose Community-1 for Speaker Labeling in Settings before labeling a saved transcript."
+            errorMessage = "Choose the Speaker Labeling provider in Settings before labeling a saved transcript."
             return nil
         }
         return await enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
@@ -592,7 +592,8 @@ extension MeetingStore {
             return recordingID != task.meetingID && !isJobRunning(.transcription, .meeting(task.meetingID))
                 && !isJobRunning(.importAudio, .meeting(task.meetingID))
                 && settings.serviceProviders.contains {
-                    $0.id == task.providerID && $0.kind == .community1 && $0.supports(.diarization)
+                    $0.id == settings.resolvedSpeakerProviderID(task.providerID) && $0.kind == .speakerLabeling
+                        && $0.supports(.diarization)
                 }
         }
         if let current = meetings.first(where: { $0.id == task.meetingID })?.transcriptionAttempt {

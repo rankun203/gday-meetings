@@ -211,7 +211,7 @@ extension LiveTranscriptEditingTests {
         #expect(controller.speakerRecognitionStatus == "Speaker association is waiting for speaker labeling.")
         controller.setSpeakerLabelsEnabled(true)
         #expect(controller.speakerLabelsEnabled)
-        #expect(controller.speakerLabelStatus.contains("Choose a Nemotron provider"))
+        #expect(controller.speakerLabelStatus.contains("Choose the Speaker Labeling provider"))
         controller.setSpeakerLabelsEnabled(false)
         #expect(controller.speakerRecognitionEnabled)
         #expect(controller.speakerLabelStatus == "Live speaker labels are off.")
@@ -226,9 +226,9 @@ extension LiveTranscriptEditingTests {
     @Test func missingVoiceModelDiagnosticDistinguishesWorkingSpeakerLabels() {
         let message = LiveSpeakerModelDiagnostics.voiceFailure(
             phase: .missing, error: LocalModelError.unavailable, labelsAvailable: true)
-        #expect(message.contains("Speaker association needs a separate model"))
-        #expect(message.contains("speaker association provider in Settings → Service Providers"))
-        #expect(message.contains("Speaker Association Model"))
+        #expect(message.contains("Creating voice samples requires Community-1"))
+        #expect(message.contains("Settings → Service Providers → Speaker Labeling"))
+        #expect(message.contains("Community-1"))
         #expect(message.contains("Anonymous speaker labels continue"))
         let unavailableLabels = LiveSpeakerModelDiagnostics.voiceFailure(
             phase: .unverified, error: LocalModelError.unavailable, labelsAvailable: false)
@@ -256,7 +256,7 @@ extension LiveTranscriptEditingTests {
         controller.setSpeakerLabelsEnabled(true)
         controller.setSpeakerRecognitionEnabled(true)
         #expect(controller.liveTranscriptIssues.count == 1)
-        #expect(controller.liveTranscriptIssues[0].contains("Nemotron"))
+        #expect(controller.liveTranscriptIssues[0].contains("Speaker Labeling"))
         #expect(controller.canOpenProviderSettings)
         controller.setSpeakerLabelsEnabled(false)
         controller.setSpeakerRecognitionEnabled(false)

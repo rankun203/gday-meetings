@@ -26,15 +26,27 @@ enum TranscriptionLanguage {
 
 /// App capability contracts are documented in docs/protocols/.
 enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
-    case transcription, liveTranscription, liveDiarization, diarization, speakerRecognition, summarization, search,
+    case transcription, liveTranscription, liveDiarization, diarization, summarization, search,
         playback, fileTransfer
+    /// Retired association entries must not prevent older settings from opening.
+    static func decodeActive(from decoder: Decoder) throws -> Set<Self> {
+        let container = try decoder.singleValueContainer()
+        let values = try container.decode([String].self)
+        return try Set(
+            values.filter { $0 != "speakerRecognition" }.map { value in
+                guard let capability = Self(rawValue: value) else {
+                    throw DecodingError.dataCorruptedError(
+                        in: container, debugDescription: "Unknown provider capability.")
+                }
+                return capability
+            })
+    }
     var id: String { rawValue }
     var title: String {
         switch self {
         case .transcription: return "Transcription"
         case .liveTranscription: return "Live Transcription"
         case .liveDiarization: return "Live Speaker Labeling"
-        case .speakerRecognition: return "Speaker Association"
         case .diarization: return "Speaker Labeling"
         case .summarization: return "Summarization"
         case .search: return "Search"
@@ -45,7 +57,20 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
 }
 
 enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
-    case runpod, openAICompatible, gdayWebsite, filedrop, nemotron, community1, localSearch, appleSpeech
+    case runpod, openAICompatible, gdayWebsite, filedrop, speakerLabeling, localSearch, appleSpeech
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if value == "nemotron" || value == "community1" {
+            self = .speakerLabeling
+        }
+        else if let kind = Self(rawValue: value) {
+            self = kind
+        }
+        else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown service provider.")
+        }
+    }
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -54,15 +79,14 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
         case .gdayWebsite: return "Gday Meetings Website"
-        case .nemotron: return "Live Speaker Labeling (Nemotron)"
-        case .community1: return "Speaker Labeling (Community-1)"
+        case .speakerLabeling: return "Speaker Labeling"
         case .localSearch: return "Local Search"
         }
     }
     var systemImage: String {
         switch self {
         case .appleSpeech: "desktopcomputer"
-        case .nemotron, .community1: "person.wave.2"
+        case .speakerLabeling: "person.wave.2"
         case .localSearch: "text.magnifyingglass"
         case .gdayWebsite: "globe"
         case .runpod, .openAICompatible, .filedrop: "server.rack"
@@ -76,12 +100,11 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .openAICompatible: return [.summarization]
         // Search and remote playback have no app adapters. Do not advertise them as available.
         case .gdayWebsite: return [.transcription, .diarization]
-        case .nemotron: return [.liveDiarization, .speakerRecognition]
-        case .community1: return [.diarization, .speakerRecognition]
+        case .speakerLabeling: return [.liveDiarization, .diarization]
         case .localSearch: return [.search]
         }
     }
-    var isLocalSpeaker: Bool { self == .nemotron || self == .community1 }
+    var isLocalSpeaker: Bool { self == .speakerLabeling }
     var isLocal: Bool { isLocalSpeaker || self == .localSearch || self == .appleSpeech }
 }
 
@@ -103,27 +126,30 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var uploadProviderID: UUID?
     var isEnabled = true
     var enabledCapabilities: Set<ProviderCapability> = []
-    // Older Nemotron providers could not opt in or out of association.
-    private var capabilityVersion = 2
     init(kind: ServiceProviderKind) {
         self.kind = kind
         name = kind.title
         enabledCapabilities = kind.capabilities
-        if kind == .nemotron { model = "nemotronLow" }
-        if kind == .community1 { model = "community1" }
+        if kind == .speakerLabeling { model = "nemotronLow" }
         if kind == .localSearch { localSearch = LocalSearchConfiguration() }
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
-        case summaryImageOverride, capabilityVersion, localSearch
+        case summaryImageOverride, localSearch
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         kind = try values.decode(ServiceProviderKind.self, forKey: .kind)
         id = try values.decode(UUID.self, forKey: .id)
         name = try values.decode(String.self, forKey: .name)
+        if kind == .speakerLabeling,
+            ["Live Speaker Labeling (Nemotron)", "Speaker Labeling (Community-1)"].contains(name)
+        {
+            name = kind.title
+        }
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = try values.decode(String.self, forKey: .model)
+        if kind == .speakerLabeling, model == "community1" { model = "nemotronLow" }
         localSearch = try values.decodeIfPresent(LocalSearchConfiguration.self, forKey: .localSearch)
         if kind == .localSearch, ["Local Voice Search (CLSP)", "Local Voice Search"].contains(name) {
             name = "Local Search"
@@ -143,13 +169,11 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
                 model = ""
             }
         }
-        enabledCapabilities = try values.decode(Set<ProviderCapability>.self, forKey: .enabledCapabilities)
+        enabledCapabilities = try ProviderCapability.decodeActive(
+            from: values.superDecoder(forKey: .enabledCapabilities))
         uploadProviderID = try values.decodeIfPresent(UUID.self, forKey: .uploadProviderID)
         summarizationPrompt = try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
         summaryImageOverride = try values.decodeIfPresent(SummaryImageOverride.self, forKey: .summaryImageOverride)
-        if kind == .nemotron, (try values.decodeIfPresent(Int.self, forKey: .capabilityVersion) ?? 1) < 2 {
-            enabledCapabilities.insert(.speakerRecognition)
-        }
     }
 
     private struct RetiredSearchConfiguration: Decodable {
@@ -444,7 +468,7 @@ struct OpenAISummaryProvider: SummarizationProvider {
             let server = suppliedServer ?? GdayServerService.shared
             let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
             switch provider.kind {
-            case .nemotron, .community1, .localSearch, .appleSpeech:
+            case .speakerLabeling, .localSearch, .appleSpeech:
                 throw ServiceError("Manage local model readiness in Service Providers.")
             case .filedrop:
                 return try await FiledropProvider(provider: provider).checkConnection().value

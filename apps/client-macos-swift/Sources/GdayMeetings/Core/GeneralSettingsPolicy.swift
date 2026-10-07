@@ -31,7 +31,6 @@ extension AppSettings {
         case .transcription: transcriptionProviderID
         case .liveDiarization: liveDiarizationProviderID
         case .diarization: diarizationProviderID
-        case .speakerRecognition: speakerRecognitionProviderID
         case .summarization: summaryProviderID
         case .search: searchProviderID
         default: nil
@@ -51,7 +50,6 @@ extension AppSettings {
         case .transcription: transcriptionProviderID = id
         case .liveDiarization: liveDiarizationProviderID = id
         case .diarization: diarizationProviderID = id
-        case .speakerRecognition: speakerRecognitionProviderID = id
         case .summarization: summaryProviderID = id
         case .search: searchProviderID = id
         default: break
@@ -68,7 +66,7 @@ extension AppSettings {
             guard
                 [
                     .liveTranscription, .transcription, .liveDiarization, .diarization,
-                    .speakerRecognition, .summarization,
+                    .summarization,
                 ].contains(capability)
             else { continue }
             selectProvider(id, for: capability)
@@ -83,39 +81,11 @@ extension AppSettings {
         case .transcription: enableInitially(\.autoTranscribe)
         case .liveDiarization: enableInitially(\.showLiveSpeakerLabels)
         case .diarization: enableInitially(\.labelRecordedSpeakers)
-        case .speakerRecognition:
-            enableInitially(\.recognizeLiveSpeakers)
-            enableInitially(\.recognizeSpeakers)
         case .summarization:
             enableInitially(\.autoSummarize)
             enableInitially(\.autoExtractTodos)
         default: break
         }
-    }
-
-    func recordedAssociationPrerequisite(
-        liveLabelingReady: Bool, liveAssociationReady: Bool, recordedLabelingReady: Bool
-    ) -> String? {
-        if labelRecordedSpeakers {
-            guard
-                serviceProviders.contains(where: {
-                    $0.id == diarizationProviderID && $0.kind == .community1
-                })
-            else {
-                return "Choose Community-1 for Recorded Speaker Labeling to create compatible voice samples."
-            }
-            return recordedLabelingReady ? nil : "Recorded Speaker Labeling must be ready."
-        }
-        if autoTranscribe && (autoTranscribeEvenWithLiveTranscript || !showLiveTranscript) {
-            return "Use Community-1 for Recorded Speaker Labeling to associate speakers after replacing the transcript."
-        }
-        guard showLiveSpeakerLabels, recognizeLiveSpeakers else {
-            return "Turn on live speaker association or use Community-1 after recording to create voice samples."
-        }
-        guard liveLabelingReady, liveAssociationReady else {
-            return "Live Speaker Labeling and Speaker Association must be ready."
-        }
-        return nil
     }
 
     func shouldLabelDuringTranscription(providerID: UUID) -> Bool {

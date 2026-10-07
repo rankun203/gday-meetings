@@ -1141,10 +1141,7 @@ final class MeetingStore: ObservableObject {
                     $0.id == settings.liveDiarizationProviderID && $0.supports(.liveDiarization)
                 },
                 speakerLabelsEnabled: settings.showLiveSpeakerLabels,
-                speakerRecognitionEnabled: settings.recognizeLiveSpeakers
-                    && settings.serviceProviders.contains {
-                        $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
-                    },
+                speakerRecognitionEnabled: settings.recognizeLiveSpeakers,
                 people: { [weak self] in self?.people ?? [] },
                 enrollVoice: { [weak self] personID, speakerID, embedding in
                     Task {

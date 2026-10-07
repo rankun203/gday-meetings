@@ -140,101 +140,41 @@ import Testing
         #expect(await second.value == .ready)
     }
 
-    @Test func localModelCompletionAssignsUnconfiguredAssociationWithoutCheckingRemoteProviders() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
-        let local = ServiceProvider(kind: .nemotron)
-        let remote = ServiceProvider(kind: .openAICompatible)
-        store.settings.serviceProviders = [local, remote]
-        store.settings.selectProvider(local.id, for: .liveDiarization)
-        store.settings.recordExplicitFeatureChoice(\.recognizeSpeakers, enabled: false)
-        var embeddingReady = false
-        var checked: [UUID] = []
-        let health = ProviderHealthStore { id, capability, _ in
-            checked.append(id)
-            return capability == .speakerRecognition && !embeddingReady ? .notReady("Model is preparing.") : .ready
-        }
-        await store.refreshLocalProviderHealth(health: health)
-        #expect(store.settings.speakerRecognitionProviderID == nil)
-        embeddingReady = true
-        await store.refreshLocalProviderHealth(health: health)
-        #expect(store.settings.speakerRecognitionProviderID == local.id)
-        #expect(store.settings.recognizeLiveSpeakers)
-        #expect(!store.settings.recognizeSpeakers)
-        #expect(!checked.contains(remote.id))
-        #expect(health.state(providerID: local.id, capability: .speakerRecognition) == .ready)
-    }
-
-    @Test func localModelCompletionPreservesExplicitNoneAndDisabledFeatures() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
-        let provider = ServiceProvider(kind: .nemotron)
-        store.settings.serviceProviders = [provider]
-        store.settings.selectProvider(nil, for: .speakerRecognition)
-        var checked: Set<ProviderCapability> = []
-        let health = ProviderHealthStore { _, capability, _ in
-            checked.insert(capability)
-            return .ready
-        }
-        await store.refreshLocalProviderHealth(health: health)
-        #expect(store.settings.speakerRecognitionProviderID == nil)
-        #expect(!checked.contains(.speakerRecognition))
-        #expect(store.settings.liveDiarizationProviderID == provider.id)
-    }
-
-    @Test func nemotronAssociationUsesEmbeddingHealthIndependentlyOfLabelingPreset() async throws {
+    @Test func liveLabelingNeedsBothModelsAndRecordedLabelingOnlyNeedsCommunity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let data = Data("test".utf8)
-        let descriptor = LocalModelDescriptor(
-            id: .voiceEmbedding, title: "Synthetic", repository: "synthetic/model", revision: "pinned",
-            assets: [
-                .init(
-                    path: "data", remotePath: "data", bytes: 4,
-                    digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
-            ],
-            modelNames: ["Model"])
         let manager = LocalModelManager(
-            root: root, descriptor: { _ in descriptor },
-            preparer: { _, _ in
-                Issue.record("Health must not load a model")
-                return [:]
+            root: root,
+            descriptor: { id in
+                .init(
+                    id: id, title: "Synthetic", repository: "synthetic/model", revision: "pinned",
+                    assets: [
+                        .init(
+                            path: "data", remotePath: "data", bytes: 4,
+                            digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+                    ], modelNames: [])
             })
-        let directory = manager.modelDirectory(for: .voiceEmbedding)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try data.write(to: directory.appendingPathComponent("data"))
-        let provider = ServiceProvider(kind: .nemotron)
-        #expect(provider.supports(.speakerRecognition))
-        #expect(await provider.health(for: .speakerRecognition, settings: AppSettings(), models: manager) == .ready)
-        #expect(!(await provider.health(for: .liveDiarization, settings: AppSettings(), models: manager)).isReady)
-        try Data("oops".utf8).write(to: directory.appendingPathComponent("data"))
-        // Availability checks file identity and size; acquisition performs content validation.
-        #expect(await provider.health(for: .speakerRecognition, settings: AppSettings(), models: manager) == .ready)
-        await #expect(throws: LocalModelError.self) { _ = try await manager.acquire(.voiceEmbedding) }
-    }
-
-    @Test func existingNemotronProvidersGainAssociationButExplicitDisableSurvivesReload() throws {
-        let provider = ServiceProvider(kind: .nemotron)
-        let data = try JSONEncoder().encode(provider)
-        var old = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        old.removeValue(forKey: "capabilityVersion")
-        old["enabledCapabilities"] = [ProviderCapability.liveDiarization.rawValue]
-        let restored = try JSONDecoder().decode(ServiceProvider.self, from: JSONSerialization.data(withJSONObject: old))
-        #expect(restored.supports(.speakerRecognition))
-        var disabled = restored
-        disabled.enabledCapabilities.remove(.speakerRecognition)
-        let reloaded = try JSONDecoder().decode(ServiceProvider.self, from: JSONEncoder().encode(disabled))
-        #expect(!reloaded.supports(.speakerRecognition))
-        #expect(reloaded.supports(.liveDiarization))
+        let provider = ServiceProvider(kind: .speakerLabeling)
+        let community = manager.modelDirectory(for: .community1)
+        try FileManager.default.createDirectory(at: community, withIntermediateDirectories: true)
+        try data.write(to: community.appendingPathComponent("data"))
+        #expect(await provider.health(for: .diarization, settings: .init(), models: manager) == .ready)
+        #expect(!(await provider.health(for: .liveDiarization, settings: .init(), models: manager)).isReady)
+        let nemotron = manager.modelDirectory(for: .nemotronLow)
+        try FileManager.default.createDirectory(at: nemotron, withIntermediateDirectories: true)
+        try data.write(to: nemotron.appendingPathComponent("data"))
+        #expect(await provider.health(for: .liveDiarization, settings: .init(), models: manager) == .ready)
+        try await manager.remove(.community1)
+        #expect(!(await provider.health(for: .liveDiarization, settings: .init(), models: manager)).isReady)
+        #expect(!(await provider.health(for: .diarization, settings: .init(), models: manager)).isReady)
     }
 
     @Test func localHealthInspectsFilesWithoutPreparingModel() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let descriptor = LocalModelDescriptor(
-            id: .voiceEmbedding, title: "Synthetic", repository: "synthetic/model", revision: "pinned",
+            id: .community1, title: "Synthetic", repository: "synthetic/model", revision: "pinned",
             assets: [
                 .init(
                     path: "data", remotePath: "data", bytes: 4,
@@ -246,15 +186,15 @@ import Testing
                 Issue.record("Readiness must not prepare a model")
                 return [:]
             })
-        #expect(!(await manager.health(for: .voiceEmbedding)).isReady)
-        let directory = manager.modelDirectory(for: .voiceEmbedding)
+        #expect(!(await manager.health(for: .community1)).isReady)
+        let directory = manager.modelDirectory(for: .community1)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("test".utf8).write(to: directory.appendingPathComponent("data"))
-        #expect(await manager.health(for: .voiceEmbedding) == .ready)
+        #expect(await manager.health(for: .community1) == .ready)
         try Data("pinned".utf8).write(to: directory.appendingPathComponent(".gday-prepared"))
-        #expect(await manager.health(for: .voiceEmbedding) == .ready)
-        #expect(manager.state(for: .voiceEmbedding).phase == .missing)
+        #expect(await manager.health(for: .community1) == .ready)
+        #expect(manager.state(for: .community1).phase == .missing)
         try Data("bad".utf8).write(to: directory.appendingPathComponent("data"))
-        #expect(!(await manager.health(for: .voiceEmbedding)).isReady)
+        #expect(!(await manager.health(for: .community1)).isReady)
     }
 }

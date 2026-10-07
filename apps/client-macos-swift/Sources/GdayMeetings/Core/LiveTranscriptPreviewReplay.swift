@@ -9,7 +9,7 @@ import Foundation
         controller.begin(
             meetingID: meetingID, language: "zh-Hans", directory: directory,
             sources: [.system], sink: LiveAudioSink(), enabled: true,
-            diarizationProvider: ServiceProvider(kind: .nemotron), speakerLabelsEnabled: true)
+            diarizationProvider: ServiceProvider(kind: .speakerLabeling), speakerLabelsEnabled: true)
         let session = UUID()
         let generation = UUID()
         let speakers = (0..<2).map {

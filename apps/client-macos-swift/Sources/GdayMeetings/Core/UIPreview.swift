@@ -195,12 +195,10 @@ enum UIPreview {
                 store.settings = syntheticProviderSettings(store.settings)
             }
             if UIPreviewPerformanceFixtures.flag("--synthetic-local-speakers", infoKey: "GdaySyntheticLocalSpeakers") {
-                let live = ServiceProvider(kind: .nemotron)
-                let saved = ServiceProvider(kind: .community1)
-                store.settings.serviceProviders.append(contentsOf: [live, saved])
-                store.settings.liveDiarizationProviderID = live.id
-                store.settings.diarizationProviderID = saved.id
-                store.settings.speakerRecognitionProviderID = saved.id
+                let provider = ServiceProvider(kind: .speakerLabeling)
+                store.settings.serviceProviders.append(provider)
+                store.settings.liveDiarizationProviderID = provider.id
+                store.settings.diarizationProviderID = provider.id
             }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-multiple-transcription-providers") {
                 store.settings = syntheticProviderSettings(store.settings)

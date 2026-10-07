@@ -8,7 +8,12 @@ import Testing
 
 private actor ModelPreparationCounter {
     private(set) var count = 0
+    private(set) var requests: [[String]] = []
     func increment() { count += 1 }
+    func record(_ names: [String]) {
+        count += 1
+        requests.append(names)
+    }
 }
 
 private final class ModelDownloadObservations: @unchecked Sendable {
@@ -64,18 +69,18 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: fixture) }
         let unavailable = LocalModelManager(root: fixture, storageAvailable: false)
-        await #expect(throws: (any Error).self) { try await unavailable.openableDirectory(for: .voiceEmbedding) }
+        await #expect(throws: (any Error).self) { try await unavailable.openableDirectory(for: .community1) }
         await unavailable.refresh()
-        #expect(unavailable.state(for: .voiceEmbedding).phase == .failed)
+        #expect(unavailable.state(for: .community1).phase == .failed)
         #expect(!FileManager.default.fileExists(atPath: fixture.path))
         let isolated = LocalModelManager(root: fixture)
         try await isolated.prepareStorage()
         #expect(!FileManager.default.fileExists(atPath: fixture.path))
         try isolated.suspendForLibraryChange()
-        await #expect(throws: LocalModelError.self) { try await isolated.openableDirectory(for: .voiceEmbedding) }
+        await #expect(throws: LocalModelError.self) { try await isolated.openableDirectory(for: .community1) }
         #expect(!FileManager.default.fileExists(atPath: fixture.path))
         isolated.resumeAfterLibraryChange()
-        let directory = try await isolated.openableDirectory(for: .voiceEmbedding)
+        let directory = try await isolated.openableDirectory(for: .community1)
         #expect(directory.path.hasPrefix(fixture.path + "/"))
     }
 
@@ -149,7 +154,7 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
-        let id = LocalModelID.voiceEmbedding
+        let id = LocalModelID.community1
         try writeModel(manager.modelDirectory(for: id))
         await manager.refresh()
         try await settle(manager, id: id)
@@ -168,7 +173,7 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
-        let id = LocalModelID.voiceEmbedding
+        let id = LocalModelID.community1
         try writeModel(manager.modelDirectory(for: id))
         let lease = try await manager.acquire(id)
         #expect(manager.state(for: id).phase == .ready)
@@ -185,7 +190,7 @@ private final class ModelDownloadObservations: @unchecked Sendable {
                 try await Task.sleep(for: .milliseconds(150))
                 return [:]
             })
-        let id = LocalModelID.voiceEmbedding
+        let id = LocalModelID.community1
         try writeModel(manager.modelDirectory(for: id))
         let file = manager.modelDirectory(for: id).appendingPathComponent("Model.mlmodelc/data")
         try Data(repeating: 1, count: bytes.count).write(to: file)
@@ -230,52 +235,100 @@ private final class ModelDownloadObservations: @unchecked Sendable {
             }
         }
         let community = LocalModelRegistry.descriptor(.community1)
-        let embeddings = LocalModelRegistry.descriptor(.voiceEmbedding)
-        #expect(Set(embeddings.assets).isSubset(of: Set(community.assets)))
+        #expect(Set(community.modelNames) == ["Segmentation", "FBank", "Embedding", "PldaRho"])
     }
 
     @Test func verifiedSharedFilesSurviveRemovingAnotherInstallation() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
-        let asset = try #require(descriptor(.voiceEmbedding).assets.first)
+        let asset = try #require(descriptor(.granite97M).assets.first)
         let object = root.appendingPathComponent("objects/" + asset.digest)
         try FileManager.default.createDirectory(
             at: object.deletingLastPathComponent(), withIntermediateDirectories: true)
         try bytes.write(to: object)
-        for id in [LocalModelID.community1, .voiceEmbedding] {
+        for id in [LocalModelID.community1, .granite97M] {
             manager.download(id)
             try await settle(manager, id: id)
             #expect(manager.state(for: id).phase == .ready)
         }
         try await manager.remove(.community1)
         #expect(FileManager.default.fileExists(atPath: object.path))
-        let lease = try await manager.acquire(.voiceEmbedding)
+        let lease = try await manager.acquire(.granite97M)
         manager.release(lease)
-        try await manager.remove(.voiceEmbedding)
+        try await manager.remove(.granite97M)
         #expect(!FileManager.default.fileExists(atPath: object.path))
     }
 
-    @Test func manuallyVerifiedCommunityProvidesEmbeddingFilesWithoutDownloading() async throws {
+    @Test func voiceExtractionLoadsOnlyItsGraphsAndProtectsTheSharedInstallation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var fixture = descriptor(.community1)
+        fixture.modelNames = ["Segmentation", "FBank", "Embedding", "PldaRho"]
+        let manager = LocalModelManager(
+            root: root, descriptor: { _ in fixture },
+            preparer: { requested, _ in
+                #expect(requested.modelNames == ["FBank", "Embedding"])
+                return [:]
+            })
+        try writeModel(manager.modelDirectory(for: .community1))
+        let lease = try await manager.acquire(.community1, modelNames: ["FBank", "Embedding"])
+        #expect(lease.id == .community1)
+        #expect(manager.state(for: .community1).inUse == 1)
+        await #expect(throws: LocalModelError.self) { try await manager.remove(.community1) }
+        manager.release(lease)
+        #expect(manager.state(for: .community1).inUse == 0)
+    }
+
+    @Test func retiredEmbeddingFilesMoveIntoCommunityInstallation() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
-        let source = manager.modelDirectory(for: .community1)
-        try writeModel(source)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o444], ofItemAtPath: source.appendingPathComponent("Model.mlmodelc/data").path)
-        manager.verify(.community1)
-        try await settle(manager, id: .community1)
-        #expect(manager.state(for: .voiceEmbedding).phase == .ready)
-        let reopened = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
-        let lease = try await reopened.acquire(.voiceEmbedding)
-        try await reopened.remove(.community1)
-        #expect(
-            FileManager.default.fileExists(atPath: lease.directory.appendingPathComponent("Model.mlmodelc/data").path))
-        reopened.release(lease)
+        let retired = root.appendingPathComponent("voiceEmbedding")
+            .appendingPathComponent(descriptor(.community1).revision)
+        try writeModel(retired)
+        try await manager.prepareStorage()
+        #expect(!FileManager.default.fileExists(atPath: retired.path))
+        let lease = try await manager.acquire(.community1)
+        #expect(lease.directory == manager.modelDirectory(for: .community1))
+        await #expect(throws: LocalModelError.self) { try await manager.remove(.community1) }
+        manager.release(lease)
+        try await manager.remove(.community1)
+        #expect(!(await manager.health(for: .community1)).isReady)
     }
 
-    @Test func concurrentLeasesPrepareSeparateCoreMLInstances() async throws {
+    @Test func concurrentLiveAndRecordedRequestsLoadEachCommunityGraphOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var fixture = descriptor(.community1)
+        fixture.modelNames = ["Segmentation", "FBank", "Embedding", "PldaRho"]
+        let counter = ModelPreparationCounter()
+        let manager = LocalModelManager(
+            root: root, descriptor: { _ in fixture },
+            preparer: { requested, _ in
+                await counter.record(requested.modelNames)
+                try await Task.sleep(for: .milliseconds(30))
+                return [:]
+            })
+        try writeModel(manager.modelDirectory(for: .community1))
+        async let first = manager.acquire(.community1, modelNames: ["FBank", "Embedding"], priority: .capture)
+        async let second = manager.acquire(.community1, modelNames: ["FBank", "Embedding"], priority: .capture)
+        let (live, voice) = try await (first, second)
+        #expect(await counter.requests == [["FBank", "Embedding"]])
+        let offline = try await manager.acquire(.community1)
+        #expect(await counter.requests == [["FBank", "Embedding"], ["Segmentation", "PldaRho"]])
+        manager.release(live)
+        manager.release(voice)
+        let another = try await manager.acquire(.community1, modelNames: ["FBank", "Embedding"])
+        #expect(await counter.count == 2)
+        manager.release(offline)
+        manager.release(another)
+        let reopened = try await manager.acquire(.community1, modelNames: ["FBank", "Embedding"])
+        #expect(await counter.count == 3)
+        manager.release(reopened)
+    }
+
+    @Test func communityLeasesShareResidentGraphsUntilTheLastRelease() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let counter = ModelPreparationCounter()
@@ -285,14 +338,17 @@ private final class ModelDownloadObservations: @unchecked Sendable {
                 await counter.increment()
                 return [:]
             })
-        try writeModel(manager.modelDirectory(for: .voiceEmbedding))
-        manager.verify(.voiceEmbedding)
-        try await settle(manager, id: .voiceEmbedding)
-        let first = try await manager.acquire(.voiceEmbedding)
-        let second = try await manager.acquire(.voiceEmbedding)
-        #expect(await counter.count == 3)
-        #expect(manager.state(for: .voiceEmbedding).inUse == 2)
+        try writeModel(manager.modelDirectory(for: .community1))
+        manager.verify(.community1)
+        try await settle(manager, id: .community1)
+        let first = try await manager.acquire(.community1)
+        let second = try await manager.acquire(.community1)
+        #expect(await counter.count == 2)
+        #expect(manager.state(for: .community1).inUse == 2)
         manager.release(first)
         manager.release(second)
+        let reopened = try await manager.acquire(.community1)
+        #expect(await counter.count == 3)
+        manager.release(reopened)
     }
 }

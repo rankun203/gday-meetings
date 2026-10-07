@@ -99,11 +99,11 @@ final class VoiceLibraryPreparation: ObservableObject {
                 type: nil,
                 unavailableReason: "RunPod does not provide a compatible voice extraction model. Use a local provider.")
         }
-        guard provider.supports(.speakerRecognition) else {
+        guard provider.isEnabled, provider.kind.isLocalSpeaker else {
             return .init(type: nil, unavailableReason: "This provider does not support preparing voice examples.")
         }
         switch provider.kind {
-        case .nemotron, .community1:
+        case .speakerLabeling:
             return .init(type: .community1, unavailableReason: nil)
         default:
             return .init(type: nil, unavailableReason: "This provider has no compatible voice extraction adapter.")

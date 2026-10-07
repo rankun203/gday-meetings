@@ -105,10 +105,9 @@ struct VoiceLibraryPreparationTests {
     }
 
     @Test func providersShareRepresentationWithoutTrustingEndpointOrDimensions() {
-        #expect(VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .nemotron)).type == .community1)
-        #expect(VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .community1)).type == .community1)
+        #expect(VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .speakerLabeling)).type == .community1)
         #expect(!VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .runpod)).isAvailable)
-        var disabled = ServiceProvider(kind: .community1)
+        var disabled = ServiceProvider(kind: .speakerLabeling)
         disabled.isEnabled = false
         #expect(!VoiceLibraryPreparation.capability(for: disabled).isAvailable)
     }
@@ -367,7 +366,7 @@ struct VoiceLibraryPreparationTests {
         }
         let jobID = try #require(
             preparation.start(
-                provider: ServiceProvider(kind: .community1), meetings: meetings,
+                provider: ServiceProvider(kind: .speakerLabeling), meetings: meetings,
                 directory: { _ in directory }, discover: true))
         preparation.pause(jobID: jobID)
         #expect(library.examples.isEmpty)

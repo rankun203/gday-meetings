@@ -3,8 +3,8 @@ import Foundation
 /// Admission is bounded around actual work, never around an idle model lease.
 actor ProcessingCoordinator {
     enum Resource: Sendable, Hashable {
-        case modelPreparation, inference, storage
-        var capacity: Int { 2 }
+        case modelPreparation, inference, communityInference, storage
+        var capacity: Int { self == .communityInference ? 1 : 2 }
     }
     enum Priority: Int, Sendable {
         case maintenance, processing, interactive, capture

@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct ProviderDraftCoordinatorTests {
-    @Test(arguments: [ServiceProviderKind.runpod, .openAICompatible, .nemotron, .community1, .localSearch])
+    @Test(arguments: [ServiceProviderKind.runpod, .openAICompatible, .speakerLabeling, .localSearch])
     func cancelAndFailedSaveRetainDraft(kind: ServiceProviderKind) {
         let coordinator = ProviderDraftCoordinator()
         let saved = ServiceProvider(kind: kind)

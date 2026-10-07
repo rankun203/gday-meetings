@@ -13,17 +13,11 @@ extension UIPreview {
     @MainActor static func configureGeneralScenario(_ store: MeetingStore, scenario: Int? = generalScenario) {
         guard enabled, let scenario, (1...10).contains(scenario) else { return }
         var settings = syntheticProviderSettings(AppSettings())
-        var live = ServiceProvider(kind: .nemotron)
-        live.name = "Live Speaker Provider"
-        var speakers = ServiceProvider(kind: .community1)
-        speakers.name = "Speaker Provider"
-        var alternate = ServiceProvider(kind: .nemotron)
-        alternate.name = "Alternative Speaker Provider"
-        settings.serviceProviders += [live, speakers, alternate]
+        let speakers = ServiceProvider(kind: .speakerLabeling)
+        settings.serviceProviders.append(speakers)
         settings.liveTranscriptionProviderID = ThisMacProvider.id
-        settings.liveDiarizationProviderID = live.id
+        settings.liveDiarizationProviderID = speakers.id
         settings.diarizationProviderID = speakers.id
-        settings.speakerRecognitionProviderID = speakers.id
         settings.showLiveTranscript = true
         settings.showLiveSpeakerLabels = true
         settings.recognizeLiveSpeakers = true
@@ -51,21 +45,20 @@ extension UIPreview {
             settings.autoExtractTodos = false
         case 3:
             settings.liveTranscriptionProviderID = nil
-            settings.speakerRecognitionProviderID = nil
         case 4:
             health.seed(
-                providerID: live.id, capability: .liveDiarization,
+                providerID: speakers.id, capability: .liveDiarization,
                 health: .notReady("Required files are missing."))
         case 5:
             health.seed(providerID: ThisMacProvider.id, capability: .liveTranscription, health: .checking)
-            health.seed(providerID: live.id, capability: .liveDiarization, health: .checking)
+            health.seed(providerID: speakers.id, capability: .liveDiarization, health: .checking)
         case 6:
             health.seed(
-                providerID: alternate.id, capability: .liveDiarization,
+                providerID: speakers.id, capability: .liveDiarization,
                 health: .notReady("Provider is turned off."))
         case 7:
             health.seed(
-                providerID: speakers.id, capability: .speakerRecognition,
+                providerID: speakers.id, capability: .diarization,
                 health: .notReady("Required files are missing."))
         case 8:
             health.seed(

@@ -24,6 +24,31 @@ private actor ProcessingTestOrder {
 }
 
 struct ProcessingCoordinatorTests {
+    @Test func sharedCommunityInferenceNeverOverlapsEvenForCapture() async throws {
+        let coordinator = ProcessingCoordinator()
+        let gate = ProcessingTestGate()
+        let order = ProcessingTestOrder()
+        let first = Task {
+            try await coordinator.withPermit(for: .communityInference, priority: .processing) {
+                await order.add("offline")
+                await gate.wait()
+            }
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while await !gate.isWaiting, ContinuousClock.now < deadline { await Task.yield() }
+        let capture = Task {
+            try await coordinator.withPermit(for: .communityInference, priority: .capture) {
+                await order.add("capture")
+            }
+        }
+        try await pending(1, in: coordinator)
+        #expect(await order.values == ["offline"])
+        await gate.open()
+        try await first.value
+        try await capture.value
+        #expect(await order.values == ["offline", "capture"])
+    }
+
     private func pending(_ count: Int, in coordinator: ProcessingCoordinator) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while await coordinator.pendingCount != count, ContinuousClock.now < deadline { await Task.yield() }

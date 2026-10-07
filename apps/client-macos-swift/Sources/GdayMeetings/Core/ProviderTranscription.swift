@@ -172,7 +172,7 @@ extension MeetingStore {
             }
         case .runpod:
             try await transcribeOnRunPod(id: id, provider: provider, meeting: meeting, attempt: &attempt)
-        case .openAICompatible, .filedrop, .nemotron, .community1, .localSearch:
+        case .openAICompatible, .filedrop, .speakerLabeling, .localSearch:
             throw ServiceError("This provider doesn’t support transcription.")
         }
     }

@@ -185,12 +185,13 @@ final class LiveTranscriptController: ObservableObject {
                 guard let self, self.sink != nil else { return }
                 if self.waitingForSpeakerModel, self.speakerLabelsEnabled,
                     let raw = self.diarizationProvider?.model, let model = LocalModelID(rawValue: raw),
-                    LocalModelManager.shared.state(for: model).phase == .ready
+                    LocalModelManager.shared.state(for: model).phase == .ready,
+                    LocalModelManager.shared.state(for: .community1).phase == .ready
                 {
                     self.setSpeakerLabelsEnabled(self.speakerLabelsEnabled)
                 }
                 if self.waitingForVoiceModel, self.speakerRecognitionEnabled,
-                    LocalModelManager.shared.state(for: .voiceEmbedding).phase == .ready
+                    LocalModelManager.shared.state(for: .community1).phase == .ready
                 {
                     self.setSpeakerRecognitionEnabled(true)
                 }
@@ -240,7 +241,7 @@ final class LiveTranscriptController: ObservableObject {
         guard let provider = diarizationProvider, provider.supports(.liveDiarization),
             let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil, let sink
         else {
-            speakerLabelStatus = "Choose a Nemotron provider in Settings to use live speaker labels."
+            speakerLabelStatus = "Choose the Speaker Labeling provider in Settings to use live speaker labels."
             speakerAnalysisIssue = speakerLabelStatus
             return
         }
@@ -282,7 +283,9 @@ final class LiveTranscriptController: ObservableObject {
                 acceptedSpeakerGenerations.remove(token)
                 speakerAnalysisReady = false
                 refreshVoiceReadyStatus()
-                waitingForSpeakerModel = LocalModelManager.shared.state(for: model).phase != .ready
+                waitingForSpeakerModel =
+                    LocalModelManager.shared.state(for: model).phase != .ready
+                    || LocalModelManager.shared.state(for: .community1).phase != .ready
                 speakerLabelStatus =
                     "Live speaker labels are unavailable. \(error.localizedDescription) Recording continues."
                 speakerAnalysisIssue = speakerLabelStatus
@@ -341,7 +344,7 @@ final class LiveTranscriptController: ObservableObject {
         guard speakerRecognitionEnabled else { return }
         if let error = voiceMatchingError {
             let message = LiveSpeakerModelDiagnostics.voiceFailure(
-                phase: LocalModelManager.shared.state(for: .voiceEmbedding).phase,
+                phase: LocalModelManager.shared.state(for: .community1).phase,
                 error: error, labelsAvailable: speakerAnalysisReady)
             speakerRecognitionStatus = message
             voiceMatchingIssue = message
@@ -381,7 +384,7 @@ final class LiveTranscriptController: ObservableObject {
         guard let provider = diarizationProvider, provider.supports(.liveDiarization),
             let model = LocalModelID(rawValue: provider.model), model.nemotronPreset != nil
         else {
-            speakerRecognitionStatus = "Choose a Nemotron provider in Settings for live speaker association."
+            speakerRecognitionStatus = "Choose the Speaker Labeling provider for Live Speaker Labeling in Settings."
             return
         }
         let token = voiceGeneration
@@ -403,10 +406,10 @@ final class LiveTranscriptController: ObservableObject {
             catch {
                 await worker.cancel()
                 guard token == voiceGeneration, !Task.isCancelled else { return }
-                waitingForVoiceModel = LocalModelManager.shared.state(for: .voiceEmbedding).phase != .ready
+                waitingForVoiceModel = LocalModelManager.shared.state(for: .community1).phase != .ready
                 voiceMatchingError = error
                 let message = LiveSpeakerModelDiagnostics.voiceFailure(
-                    phase: LocalModelManager.shared.state(for: .voiceEmbedding).phase,
+                    phase: LocalModelManager.shared.state(for: .community1).phase,
                     error: error, labelsAvailable: speakerAnalysisReady)
                 speakerRecognitionStatus = message
                 voiceMatchingIssue = message
@@ -819,13 +822,13 @@ enum LiveSpeakerModelDiagnostics {
         let action: String
         switch phase {
         case .downloading, .verifying, .preparing:
-            action = "Speaker association is waiting for the Speaker Association Model to finish setup."
+            action = "Speaker association is waiting for Community-1 to finish setup."
         case .failed:
             action =
-                "The Speaker Association Model couldn’t be prepared. Open the speaker association provider in Settings → Service Providers and choose Retry or Verify under Speaker Association Model."
+                "Community-1 couldn’t be prepared. Open Settings → Service Providers → Speaker Labeling and choose Retry or Refresh."
         case .missing, .unverified, .cancelled, .ready:
             action =
-                "Speaker association needs a separate model. Open the speaker association provider in Settings → Service Providers and download or verify Speaker Association Model."
+                "Creating voice samples requires Community-1. Open Settings → Service Providers → Speaker Labeling and download or refresh Community-1."
         }
         return action + continued
     }

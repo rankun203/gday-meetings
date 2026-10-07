@@ -3,7 +3,7 @@ import Foundation
 
 enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
     case nemotronLow, nemotronFast, nemotronFast32, nemotronFast128, nemotronOffline, nemotronFast32SplitW8A8,
-        nemotronC128SplitW8A8, community1, voiceEmbedding, granite97M, granite311M
+        nemotronC128SplitW8A8, community1, granite97M, granite311M
     var id: String { rawValue }
     var nemotronPreset: String? {
         switch self {
@@ -14,7 +14,7 @@ enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .nemotronOffline: return "offline"
         case .nemotronFast32SplitW8A8: return "fast32-split-w8a8"
         case .nemotronC128SplitW8A8: return "c128-split-w8a8"
-        case .community1, .voiceEmbedding, .granite97M, .granite311M: return nil
+        case .community1, .granite97M, .granite311M: return nil
         }
     }
 }
@@ -32,7 +32,7 @@ struct LocalModelDescriptor: Sendable {
     let repository: String
     let revision: String
     let assets: [LocalModelAsset]
-    let modelNames: [String]
+    var modelNames: [String]
     var inputBufferSeconds: Double? = nil
     var speakerCapacity: Int? = nil
     var downloadBytes: Int64 { assets.reduce(0) { $0 + $1.bytes } }
@@ -244,15 +244,15 @@ enum LocalModelRegistry {
                         || (config.splitGraph && $0.path == "pre_encode_proj_t.bin")
                 },
                 modelNames: [name], inputBufferSeconds: config.latencySeconds, speakerCapacity: 8)
-        case .community1, .voiceEmbedding:
-            let names = id == .community1 ? ["Segmentation", "FBank", "Embedding", "PldaRho"] : ["FBank", "Embedding"]
+        case .community1:
+            let names = ["Segmentation", "FBank", "Embedding", "PldaRho"]
             return .init(
-                id: id, title: id == .community1 ? "Community-1" : "Community-1 Voice Embeddings",
+                id: id, title: "Community-1",
                 repository: "FluidInference/speaker-diarization-coreml",
                 revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232",
                 assets: communityAssets.filter { asset in
                     names.contains { asset.path.hasPrefix($0 + ".mlmodelc/") }
-                        || (id == .community1 && asset.path == "plda-parameters.json")
+                        || asset.path == "plda-parameters.json"
                 }, modelNames: names)
         }
     }

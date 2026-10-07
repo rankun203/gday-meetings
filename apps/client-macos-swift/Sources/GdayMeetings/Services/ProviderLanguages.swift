@@ -69,7 +69,7 @@ struct ProviderLanguageIdentity: Hashable {
             }
         case .runpod:
             throw ServiceError("RunPod languages are built in and are not loaded.")
-        case .openAICompatible, .filedrop, .nemotron, .community1, .localSearch, .appleSpeech:
+        case .openAICompatible, .filedrop, .speakerLabeling, .localSearch, .appleSpeech:
             throw ServiceError("This provider does not support transcription.")
         }
     }

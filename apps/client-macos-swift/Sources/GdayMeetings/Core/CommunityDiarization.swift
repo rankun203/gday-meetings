@@ -56,6 +56,14 @@ actor CommunityDiarizationWorker {
     func run(files: [URL], lease: LocalModelLease, recognize: Bool, progress: (@Sendable (String) async -> Void)? = nil)
         async throws -> LocalDiarizationResult
     {
+        try await ProcessingCoordinator.shared.withPermit(for: .communityInference, priority: .processing) {
+            try await self.runSerial(files: files, lease: lease, recognize: recognize, progress: progress)
+        }
+    }
+
+    private func runSerial(
+        files: [URL], lease: LocalModelLease, recognize: Bool, progress: (@Sendable (String) async -> Void)?
+    ) async throws -> LocalDiarizationResult {
         guard let segmentation = lease.models["Segmentation"], let fbank = lease.models["FBank"],
             let embedding = lease.models["Embedding"], let plda = lease.models["PldaRho"]
         else { throw ServiceError("Download or verify the Community-1 model in Service Providers.") }
@@ -214,17 +222,13 @@ enum LocalDiarizationAssignment {
 extension MeetingStore {
     func scheduleAutomaticSpeakerLabeling(id: UUID) async {
         await voiceLibrary.awaitLoaded()
-        if settings.recognizeSpeakers,
-            settings.serviceProviders.contains(where: {
-                $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
-            }), let meeting = meeting(id: id)
-        {
+        if settings.recognizeSpeakers, let meeting = meeting(id: id) {
             _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: id))
             voiceLibrary.suggestReviewedPeople(from: people)
         }
         guard settings.labelRecordedSpeakers,
             settings.serviceProviders.contains(where: {
-                $0.id == settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+                $0.id == settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
             })
         else { return }
         Task { await diarizeLocally(id: id) }
@@ -242,11 +246,13 @@ extension MeetingStore {
         await voiceLibrary.awaitLoaded()
         guard libraryWritable, recordingID != id, let meeting = meeting(id: id),
             meeting.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(id)),
-            let provider = settings.serviceProviders.first(where: { $0.id == providerID }),
-            provider.kind == .community1, provider.supports(.diarization)
+            let provider = settings.serviceProviders.first(where: {
+                $0.id == settings.resolvedSpeakerProviderID(providerID)
+            }),
+            provider.kind == .speakerLabeling, provider.supports(.diarization)
         else {
             throw ServiceError(
-                "Choose Community-1 for Speaker Labeling in Settings before labeling a saved transcript.")
+                "Choose the Speaker Labeling provider in Settings before labeling a saved transcript.")
         }
         let files = audioURLs(for: meeting)
         guard !files.isEmpty else { throw ServiceError("This meeting has no local audio to label.") }
@@ -254,11 +260,7 @@ extension MeetingStore {
             throw ServiceError("Some meeting audio is missing. Restore the audio files before labeling speakers.")
         }
         let sourceRevisions = try LocalDiarizationInputPolicy.revisions(for: files)
-        let recognize =
-            settings.recognizeSpeakers
-            && settings.serviceProviders.contains {
-                $0.id == settings.speakerRecognitionProviderID && $0.kind.isLocal && $0.supports(.speakerRecognition)
-            }
+        let recognize = settings.recognizeSpeakers
         setJobProgress(.diarization, .meeting(id), "Preparing the speaker model…")
         let manager = LocalModelManager.shared
         let lease = try await manager.acquire(.community1)

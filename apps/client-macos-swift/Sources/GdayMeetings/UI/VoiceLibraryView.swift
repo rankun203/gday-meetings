@@ -519,7 +519,7 @@ private struct VoicePreparationControls: View {
                         Text("Choose a Provider").tag(UUID?.none)
                         ForEach(
                             store.settings.serviceProviders.filter {
-                                $0.kind.capabilities.contains(.speakerRecognition)
+                                $0.kind.isLocalSpeaker
                                     || $0.kind.capabilities.contains(.diarization)
                             }
                         ) { provider in
@@ -588,8 +588,7 @@ private struct VoicePreparationControls: View {
         .disclosureGroupStyle(AppDisclosureStyle())
         .onAppear {
             providerID =
-                store.settings.speakerRecognitionProviderID
-                ?? store.settings.serviceProviders.first { VoiceLibraryPreparation.capability(for: $0).isAvailable }?.id
+                store.settings.serviceProviders.first { VoiceLibraryPreparation.capability(for: $0).isAvailable }?.id
         }
     }
     private var canStart: Bool {

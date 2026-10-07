@@ -182,7 +182,7 @@ struct MeetingTranscriptView: View {
                 .help(labelingHistoryHelp)
         }
         else if store.settings.serviceProviders.contains(where: {
-            $0.id == store.settings.diarizationProviderID && $0.kind == .community1 && $0.supports(.diarization)
+            $0.id == store.settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
         }) {
             Button("Label Speakers") {
                 Task {

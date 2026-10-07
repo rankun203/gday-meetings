@@ -29,11 +29,10 @@ struct GeneralSettingsPolicyTests {
         settings.recordExplicitFeatureChoice(\.autoSummarize, enabled: false)
         settings = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
         let provider = UUID()
-        settings.assignInitiallyHealthyProvider(provider, capabilities: [.speakerRecognition, .summarization])
-        #expect(settings.speakerRecognitionProviderID == provider)
+        settings.assignInitiallyHealthyProvider(provider, capabilities: [.summarization])
         #expect(settings.summaryProviderID == provider)
         #expect(!settings.recognizeLiveSpeakers)
-        #expect(settings.recognizeSpeakers)
+        #expect(!settings.recognizeSpeakers)
         #expect(!settings.autoSummarize)
         #expect(settings.autoExtractTodos)
     }
@@ -73,13 +72,13 @@ struct GeneralSettingsPolicyTests {
                 """.utf8))
         let provider = UUID()
         settings.assignInitiallyHealthyProvider(
-            provider, capabilities: [.summarization, .speakerRecognition, .diarization])
+            provider, capabilities: [.summarization, .diarization])
         #expect(settings.summaryProviderID == provider)
         #expect(!settings.autoSummarize)
         #expect(!settings.autoExtractTodos)
         #expect(!settings.recognizeSpeakers)
         #expect(!settings.labelRecordedSpeakers)
-        #expect(settings.recognizeLiveSpeakers)
+        #expect(!settings.recognizeLiveSpeakers)
     }
 
     @Test func missingLegacyPreferencesAllowInitialSetup() throws {
@@ -89,7 +88,7 @@ struct GeneralSettingsPolicyTests {
         #expect(settings.labelRecordedSpeakers)
     }
 
-    @Test func legacyAssociationMigratesRecordedLabelingWithoutChangingLiveChoices() throws {
+    @Test func legacyAssociationRetainsLabelingButCannotEnableMatchingWithoutAnOldProvider() throws {
         let settings = try JSONDecoder().decode(
             AppSettings.self,
             from: Data(
@@ -97,47 +96,9 @@ struct GeneralSettingsPolicyTests {
                 {"recognizeSpeakers":true,"showLiveSpeakerLabels":false,"recognizeLiveSpeakers":true}
                 """.utf8))
         #expect(settings.labelRecordedSpeakers)
-        #expect(settings.recognizeSpeakers)
+        #expect(!settings.recognizeSpeakers)
         #expect(!settings.showLiveSpeakerLabels)
-        #expect(settings.recognizeLiveSpeakers)
-    }
-
-    @Test func recordedAssociationRequiresAnEmbeddingSource() {
-        var settings = AppSettings()
-        settings.showLiveSpeakerLabels = true
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: true, recordedLabelingReady: false) != nil)
-        settings.recognizeLiveSpeakers = true
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: true, recordedLabelingReady: false) == nil)
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: false, recordedLabelingReady: false) != nil)
-        settings.autoTranscribe = true
-        settings.autoTranscribeEvenWithLiveTranscript = true
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: true, recordedLabelingReady: false) != nil)
-        settings.autoTranscribeEvenWithLiveTranscript = false
-        settings.showLiveTranscript = false
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: true, recordedLabelingReady: false) != nil)
-        settings.labelRecordedSpeakers = true
-        let remote = ServiceProvider(kind: .runpod)
-        settings.serviceProviders = [remote]
-        settings.diarizationProviderID = remote.id
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: true, liveAssociationReady: true, recordedLabelingReady: true) != nil)
-        let local = ServiceProvider(kind: .community1)
-        settings.serviceProviders = [local]
-        settings.diarizationProviderID = local.id
-        #expect(
-            settings.recordedAssociationPrerequisite(
-                liveLabelingReady: false, liveAssociationReady: false, recordedLabelingReady: true) == nil)
+        #expect(!settings.recognizeLiveSpeakers)
     }
 
     @Test func remoteLabelingRequiresDesiredSwitchAndSelectedProvider() {

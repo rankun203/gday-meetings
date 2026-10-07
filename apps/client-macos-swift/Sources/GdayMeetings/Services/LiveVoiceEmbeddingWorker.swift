@@ -8,7 +8,8 @@ actor LiveVoiceEmbeddingWorker {
     private var activeExtractions = 0
 
     func prepare(priority: ProcessingCoordinator.Priority = .capture) async throws {
-        let acquired = try await LocalModelManager.shared.acquire(.voiceEmbedding, priority: priority)
+        let acquired = try await LocalModelManager.shared.acquire(
+            .community1, modelNames: ["FBank", "Embedding"], priority: priority)
         guard !cancelled, !Task.isCancelled else {
             await LocalModelManager.shared.release(acquired)
             throw CancellationError()
@@ -32,7 +33,9 @@ actor LiveVoiceEmbeddingWorker {
         let values: [Double]
         do {
             values = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: priority) {
-                try await extractor.extract(samples: sample.samples)
+                try await ProcessingCoordinator.shared.withPermit(for: .communityInference, priority: priority) {
+                    try await extractor.extract(samples: sample.samples)
+                }
             }
         }
         catch {
