@@ -143,7 +143,7 @@ final class LibraryIndex: @unchecked Sendable {
                 )
                 defer { release(locationInsert) }
                 let passageInsert = try statement(
-                    "INSERT INTO search_passages(meeting,kind,segment,start,text,rowid) VALUES(?,?,?,?,?,?)")
+                    "INSERT INTO search_passages(meeting,kind,segment,start,text,rowid,end) VALUES(?,?,?,?,?,?,?)")
                 defer { release(passageInsert) }
                 for passage in [LibrarySearchPassage(kind: .title, text: entry.title)] + passages {
                     sqlite3_reset(locationInsert)
@@ -161,6 +161,7 @@ final class LibraryIndex: @unchecked Sendable {
                     if let start = passage.start { sqlite3_bind_double(passageInsert, 4, start) }
                     bind(passage.text, 5, passageInsert)
                     sqlite3_bind_int64(passageInsert, 6, passageID)
+                    if let end = passage.end { sqlite3_bind_double(passageInsert, 7, end) }
                     guard sqlite3_step(passageInsert) == SQLITE_DONE else { throw failure() }
                 }
                 let locationDelete = try statement("DELETE FROM search_locations WHERE meeting=? AND revision!=?")
@@ -369,7 +370,7 @@ final class LibraryIndex: @unchecked Sendable {
         guard sqlite3_step(count) == SQLITE_ROW else { throw failure() }
         let total = Int(sqlite3_column_int64(count, 0))
         let stmt = try statement(
-            "SELECT p.rowid,m.id,m.title,m.created,p.kind,p.segment,p.start,snippet(search_passages,4,'','','…',32) FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
+            "SELECT p.rowid,m.id,m.title,m.created,p.kind,p.segment,p.start,snippet(search_passages,4,'','','…',32),p.end FROM search_passages p JOIN meetings m ON m.id=p.meeting WHERE search_passages MATCH ?"
                 + (ranked ? "" : " AND p.rowid>?")
                 + exclusion + (ranked ? " ORDER BY bm25(search_passages),p.rowid" : " ORDER BY p.rowid LIMIT ?")
         )
@@ -412,7 +413,8 @@ final class LibraryIndex: @unchecked Sendable {
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)), kind: kind,
                     segmentID: UUID(uuidString: text(5)),
                     start: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 6),
-                    excerpt: text(7)))
+                    excerpt: text(7),
+                    end: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8)))
         }
     }
 

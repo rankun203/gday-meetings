@@ -101,6 +101,8 @@ struct SemanticSearchTests {
         queryVector[0] = 1
         let persisted = try await reopened.search(vector: queryVector, model: .granite97M, request: request, boost: 0.1)
         #expect(persisted.first?.excerpt == "speaker passage")
+        #expect(persisted.first?.passage?.start == 0)
+        #expect(persisted.first?.passage?.end == 8)
         #expect(abs((persisted.first?.scoreBreakdown?.total ?? 0) - 0.86) < 0.000001)
         #expect(await encoder.queries == [query])
         var all = request

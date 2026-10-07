@@ -9,6 +9,7 @@ struct LibrarySearchPassage: Sendable {
     var segmentID: UUID? = nil
     var start: Double? = nil
     var text: String
+    var end: Double? = nil
 }
 
 struct LibrarySearchResult: Identifiable, Equatable, Sendable {
@@ -20,6 +21,7 @@ struct LibrarySearchResult: Identifiable, Equatable, Sendable {
     let segmentID: UUID?
     let start: Double?
     let excerpt: String
+    var end: Double? = nil
 }
 
 struct LibrarySearchPage: Sendable {
@@ -58,7 +60,7 @@ extension MeetingFolderStorage {
             }
         }
         passages += try TranscriptStorage.read(at: folder).map {
-            LibrarySearchPassage(kind: .transcript, segmentID: $0.id, start: $0.start, text: $0.text)
+            LibrarySearchPassage(kind: .transcript, segmentID: $0.id, start: $0.start, text: $0.text, end: $0.end)
         }
         return passages
     }

@@ -2,7 +2,7 @@ import Foundation
 
 extension IndexDatabase.Module {
     static let library = Self(
-        namespace: "core_library", version: 3,
+        namespace: "core_library", version: 4,
         tables: [
             .init(
                 name: "meetings",
@@ -23,12 +23,13 @@ extension IndexDatabase.Module {
             ),
             .init(
                 name: "search_passages",
-                definition: "USING fts5(meeting UNINDEXED,kind UNINDEXED,segment UNINDEXED,start UNINDEXED,text)",
-                virtual: true, copiedColumns: "rowid,meeting,kind,segment,start,text"),
+                definition:
+                    "USING fts5(meeting UNINDEXED,kind UNINDEXED,segment UNINDEXED,start UNINDEXED,text,end UNINDEXED)",
+                virtual: true, copiedColumns: "rowid,meeting,kind,segment,start,text,end"),
         ],
         indexes:
             "CREATE INDEX IF NOT EXISTS meeting_seek ON meetings(sortTime,id); CREATE INDEX IF NOT EXISTS relation_seek ON relations(kind,target,sortTime,meeting); CREATE INDEX IF NOT EXISTS search_location_meeting ON search_locations(meeting)",
-        initialValues: "INSERT OR IGNORE INTO index_state VALUES(1,0)", legacyVersion: 3, retiredTables: ["search"])
+        initialValues: "INSERT OR IGNORE INTO index_state VALUES(1,0)", retiredTables: ["search"])
 
     static let directory = Self(
         namespace: "core_directory", version: 1,

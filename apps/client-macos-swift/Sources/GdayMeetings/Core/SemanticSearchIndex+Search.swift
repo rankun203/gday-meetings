@@ -116,7 +116,7 @@ extension SemanticSearchIndex {
                 let passage = LibrarySearchResult(
                     id: 0, meetingID: entry.id, title: entry.title, createdAt: entry.createdAt,
                     kind: LibrarySearchKind(rawValue: window.kind) ?? .transcript, segmentID: window.segmentID,
-                    start: window.start, excerpt: window.text)
+                    start: window.start, excerpt: window.text, end: window.end)
                 let audio: ProviderSearchAudioRange? = window.track.flatMap { track in
                     guard let start = window.start, let end = window.end, end > start else { return nil }
                     return .init(filename: track, start: start, duration: end - start)

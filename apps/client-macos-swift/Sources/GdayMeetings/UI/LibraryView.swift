@@ -695,7 +695,7 @@ struct LibraryView: View {
     }
 
     private func playSearchResult(_ result: SearchDisplayResult) {
-        guard !recordingActive, let start = result.passage?.start ?? result.audio?.start else { return }
+        guard !recordingActive, let start = result.playbackStart else { return }
         playback.requestPlayback(
             load: {
                 guard await store.ensureMeetingLoaded(id: result.meetingID), !recordingActive else { return nil }
