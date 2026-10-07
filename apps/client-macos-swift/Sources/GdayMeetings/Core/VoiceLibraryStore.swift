@@ -7,16 +7,29 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var canUndo = false
     @Published private(set) var jobs: [VoicePreparationJob] = []
+    @Published private(set) var isLoaded = false
     private(set) var decisions: [VoiceSpeakerDecision] = []
     private var document = VoiceLibraryDocument()
     private let url: URL
     private let canWrite: () -> Bool
     private var persistence: VoiceLibraryPersistence?
+    enum Loading { case deferred, immediate }
+    // The worker exclusively owns this backend until it returns. After the
+    // handoff, only the main actor accesses it through the existing write gate.
+    private struct LoadedState: @unchecked Sendable {
+        var persistence: VoiceLibraryPersistence?
+        var document = VoiceLibraryDocument()
+        var errorMessage: String?
+    }
+    private var loadingTask: Task<LoadedState, Never>?
+    private let writeOverride: (@Sendable (Data, URL) throws -> Void)?
+    private let beforeLoad: (@Sendable () throws -> Void)?
     private var hydratedIDs: Set<UUID> = []
     private var exampleIndices: [UUID: Int] = [:]
     private var personExampleIDs: [UUID: Set<UUID>] = [:]
     @Published private(set) var representationsRevision = 0
     private var readable = true
+    private var unavailableError: String?
     private var pendingDocument: VoiceLibraryDocument?
     private var canonicalCommitInFlight = false
     private struct ProjectionCacheEntry {
@@ -29,24 +42,95 @@ final class VoiceLibraryStore: ObservableObject {
     var didChange: ((Set<UUID>) -> Void)?
 
     init(
-        directory: URL, canWrite: @escaping () -> Bool = { true },
-        write: (@Sendable (Data, URL) throws -> Void)? = nil
+        loading: Loading = .deferred, directory: URL, canWrite: @escaping () -> Bool = { true },
+        write: (@Sendable (Data, URL) throws -> Void)? = nil,
+        beforeLoad: (@Sendable () throws -> Void)? = nil
     ) {
         url = directory.appendingPathComponent("voice-library")
         self.canWrite = canWrite
-        do {
-            let persistence = try VoiceLibraryPersistence(directory: directory, writable: canWrite(), write: write)
-            self.persistence = persistence
-            document = try persistence.load() ?? VoiceLibraryDocument()
-            publish()
-        }
-        catch {
-            readable = false
-            errorMessage = "Couldn’t open the voice library. \(error.localizedDescription)"
+        writeOverride = write
+        self.beforeLoad = beforeLoad
+        if loading == .immediate {
+            adopt(
+                Self.load(
+                    directory: directory, writable: canWrite(), write: write, beforeLoad: beforeLoad,
+                    recoverInterruptedJobs: false))
         }
     }
 
-    /// Metadata is available immediately. Representations are read only when a
+    /// Shares one load across concurrent callers. Cancellation of a caller must
+    /// not cancel library recovery or publish a partial document.
+    @discardableResult
+    func awaitReady() async -> Bool {
+        if !isLoaded {
+            if loadingTask == nil {
+                let directory = url.deletingLastPathComponent()
+                let writable = canWrite()
+                let write = writeOverride
+                let beforeLoad = beforeLoad
+                loadingTask = Task.detached(priority: .utility) {
+                    Self.load(
+                        directory: directory, writable: writable, write: write, beforeLoad: beforeLoad,
+                        recoverInterruptedJobs: true)
+                }
+            }
+            if let task = loadingTask {
+                let state = await task.value
+                if !isLoaded { adopt(state) }
+            }
+        }
+        if !readable, errorMessage != unavailableError { errorMessage = unavailableError }
+        return readable && isLoaded
+    }
+
+    /// Workflows whose saved text does not depend on voice data still wait for
+    /// loading to finish, but can continue when voice storage is unavailable.
+    func awaitLoaded() async {
+        _ = await awaitReady()
+    }
+
+    private nonisolated static func load(
+        directory: URL, writable: Bool, write: (@Sendable (Data, URL) throws -> Void)?,
+        beforeLoad: (@Sendable () throws -> Void)?, recoverInterruptedJobs: Bool
+    ) -> LoadedState {
+        do {
+            try beforeLoad?()
+            let persistence = try VoiceLibraryPersistence(directory: directory, writable: writable, write: write)
+            var document = try persistence.load() ?? VoiceLibraryDocument()
+            if recoverInterruptedJobs {
+                let previous = document
+                for index in document.jobs.indices
+                where document.jobs[index].state == .running || document.jobs[index].state == .queued {
+                    document.jobs[index].state = .paused
+                }
+                if previous.jobs != document.jobs {
+                    // Checkpoint only jobs; representations remain unopened.
+                    var previousJobs = VoiceLibraryDocument()
+                    previousJobs.jobs = previous.jobs
+                    var nextJobs = VoiceLibraryDocument()
+                    nextJobs.jobs = document.jobs
+                    if writable { try persistence.commit(previous: previousJobs, next: nextJobs) }
+                }
+            }
+            return LoadedState(persistence: persistence, document: document)
+        }
+        catch {
+            return LoadedState(errorMessage: "Couldn’t open the voice library. \(error.localizedDescription)")
+        }
+    }
+
+    private func adopt(_ state: LoadedState) {
+        persistence = state.persistence
+        document = state.document
+        readable = state.errorMessage == nil
+        unavailableError = state.errorMessage
+        errorMessage = state.errorMessage
+        publish()
+        isLoaded = true
+        loadingTask = nil
+    }
+
+    /// Await readiness before voice actions. Representations are read only when a
     /// selected example or an explicit association operation needs them.
     func hydratedExample(id: UUID) -> VoiceExample? {
         guard !canonicalCommitInFlight else { return nil }
@@ -261,6 +345,7 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func setJobs(_ jobs: [VoicePreparationJob]) -> Bool {
+        guard isLoaded else { return false }
         guard jobs != document.jobs else { return true }
         guard admitVoiceWrite() else { return false }
         guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), let persistence else {
@@ -652,6 +737,11 @@ final class VoiceLibraryStore: ObservableObject {
         var persistence: VoiceLibraryPersistence.Snapshot
     }
     private func admitVoiceWrite() -> Bool {
+        guard isLoaded else {
+            errorMessage = "The voice library is still opening. Wait for it to finish, then try again."
+            return false
+        }
+        guard readable else { return false }
         guard !canonicalCommitInFlight, pendingDocument == nil else {
             errorMessage = "Voice changes are still saving. Wait for them to finish, then try again."
             return false
@@ -676,6 +766,7 @@ final class VoiceLibraryStore: ObservableObject {
         if refreshFailed {
             readable = false
             errorMessage = "Couldn’t refresh the voice library after saving. Reopen the library before changing voices."
+            unavailableError = errorMessage
         }
         else if let state {
             persistence?.adopt(state)
@@ -687,6 +778,7 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     func applyingDecisions(to meeting: Meeting) -> Meeting {
+        guard isLoaded, readable else { return meeting }
         var updated = meeting
         guard
             decisions.contains(where: { $0.meetingID == meeting.id })

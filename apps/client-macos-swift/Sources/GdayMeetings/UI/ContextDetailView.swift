@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContextDetailView: View {
+    @Environment(\.transcriptLayoutService) private var transcriptLayout
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @Environment(\.showManagedTask) private var showManagedTask
@@ -79,7 +80,10 @@ struct ContextDetailView: View {
             Button("Move to Trash", role: .destructive) {
                 deleting = nil
                 Task {
-                    if await store.deleteMeeting(id: meeting.id), listSelection == meeting.id { listSelection = nil }
+                    if await store.deleteMeeting(id: meeting.id) {
+                        transcriptLayout?.remove(meetingID: meeting.id)
+                        if listSelection == meeting.id { listSelection = nil }
+                    }
                 }
             }
             Button("Cancel", role: .cancel) { deleting = nil }

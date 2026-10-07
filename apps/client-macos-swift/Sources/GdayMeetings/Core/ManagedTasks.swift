@@ -372,7 +372,7 @@ extension MeetingStore {
             }
             try Task.checkCancellation()
             await completeManagedTask(id, state: .completed, recovery: .none)
-            if task.kind == .transcription { scheduleAutomaticSpeakerLabeling(id: task.meetingID) }
+            if task.kind == .transcription { await scheduleAutomaticSpeakerLabeling(id: task.meetingID) }
             if task.kind == .searchIndex { scheduleSearchIndexing() }
         }
         catch {

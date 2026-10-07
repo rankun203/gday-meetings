@@ -157,7 +157,7 @@ extension MeetingStore {
             meetings.append(value)
             rememberLoadedMeeting(value)
             evictLoadedMeetings(keeping: id)
-            await recoverUnadoptedLiveTranscript(value)
+            if voiceLibrary.isLoaded { await recoverUnadoptedLiveTranscript(value) }
             guard generation == externalReloadGeneration, !deletingMeetingIDs.contains(id),
                 let latest = meeting(id: id)
             else { return .failed }

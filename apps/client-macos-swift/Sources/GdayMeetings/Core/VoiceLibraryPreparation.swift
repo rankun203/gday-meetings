@@ -97,6 +97,10 @@ final class VoiceLibraryPreparation: ObservableObject {
 
     /// Selection can repair old source references without starting a model or scanning the library.
     func findPlayableExample(exampleID: UUID, directory: URL) async -> VoiceExample? {
+        guard await library.awaitReady() else {
+            errorMessage = library.errorMessage
+            return nil
+        }
         guard let original = library.examples.first(where: { $0.id == exampleID }) else { return nil }
         errorMessage = nil
         do {
@@ -123,6 +127,10 @@ final class VoiceLibraryPreparation: ObservableObject {
     func start(
         provider: ServiceProvider, meetings: [Meeting], directory: @escaping (UUID) -> URL, discover: Bool = false
     ) -> UUID? {
+        guard library.isLoaded else {
+            errorMessage = "The voice library is still opening. Wait for it to finish, then try again."
+            return nil
+        }
         guard let type = Self.capability(for: provider).type else {
             errorMessage = Self.capability(for: provider).unavailableReason
             return nil
@@ -176,6 +184,10 @@ final class VoiceLibraryPreparation: ObservableObject {
 
     /// Exposed internally for deterministic tests; production work is started by resume.
     func run(jobID: UUID, directory: (UUID) -> URL) async {
+        guard await library.awaitReady() else {
+            errorMessage = library.errorMessage
+            return
+        }
         await discoverRecordings(jobID: jobID, directory: directory)
         guard let job = library.jobs.first(where: { $0.id == jobID }), job.state == .running else { return }
         for exampleID in job.exampleIDs {
@@ -418,6 +430,9 @@ extension MeetingStore {
     /// Page the disk inventory without replacing the meeting list's bounded cache.
     /// Stage workers read one recording at a time; the inventory retains no transcripts.
     func voicePreparationMeetings() async throws -> [Meeting] {
+        guard await voiceLibrary.awaitReady() else {
+            throw ServiceError(voiceLibrary.errorMessage ?? "Couldn’t open the voice library.")
+        }
         guard !isChangingLibrary, let index = libraryIndex else {
             throw ServiceError("The meeting library is not ready. Try again after it finishes opening.")
         }

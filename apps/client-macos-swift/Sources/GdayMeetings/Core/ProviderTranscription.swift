@@ -397,7 +397,7 @@ extension MeetingStore {
         latest.transcriptionAttempt = nil
         if await updateMeeting(latest) {
             await reconcileManagedTaskCompletion(for: latest, kind: .transcription)
-            scheduleAutomaticSpeakerLabeling(id: meetingID)
+            await scheduleAutomaticSpeakerLabeling(id: meetingID)
             scheduleAutomaticSummary(id: meetingID)
         }
     }

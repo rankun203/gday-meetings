@@ -3,6 +3,7 @@ import SwiftUI
 /// The live tab uses the same native rows and editing gestures as saved text.
 /// Recognition updates remain isolated from the recording controls.
 struct LiveTranscriptView: View {
+    @Environment(\.transcriptLayoutService) private var layoutService
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject var controller: LiveTranscriptController
     @Environment(\.openSettings) private var openSettings
@@ -44,7 +45,7 @@ struct LiveTranscriptView: View {
             }
             else {
                 NativeTranscriptView(
-                    rows: [], generation: displayCache.revision, showsSpeakers: true,
+                    rows: [], layoutService: layoutService, generation: displayCache.revision, showsSpeakers: true,
                     editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
                     liveRows: displayCache,
                     captureSave: { id in

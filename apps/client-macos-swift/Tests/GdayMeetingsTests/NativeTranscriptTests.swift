@@ -72,7 +72,7 @@ import Testing
         coordinator.updatePlayback(meetingID: meetingID, time: -1)
         #expect(coordinator.activeRow == nil)
         #expect(coordinator.generation == 1)
-        #expect(coordinator.heights.measurements == 0)
+        #expect(coordinator.heights.statistics.measurements == 0)
     }
 
     @Test func playbackSubscriptionFollowsActualProgressIncludingScrub() {
@@ -159,7 +159,7 @@ import Testing
         #expect(coordinator.activeRows.isEmpty)
         coordinator.updatePlayback(meetingID: meeting.id, time: -1)
         #expect(coordinator.activeRows.isEmpty)
-        #expect(coordinator.heights.measurements == 0)
+        #expect(coordinator.heights.statistics.measurements == 0)
         coordinator.tearDown()
     }
 
@@ -218,9 +218,12 @@ import Testing
         coordinator.settleLayout()
         #expect(coordinator.activeRow == 1_000)
         #expect(table.rows(in: scroll.contentView.bounds).contains(1_000))
-        let positioned = scroll.contentView.bounds.minY
+        let targetOffset = scroll.contentView.bounds.minY - table.rect(ofRow: 1_000).minY
+        coordinator.requestVisibleMeasurements()
+        await coordinator.heights.waitUntilIdle()
         try await Task.sleep(for: .milliseconds(300))
-        #expect(abs(scroll.contentView.bounds.minY - positioned) < 1)
+        #expect(table.rows(in: scroll.contentView.bounds).contains(1_000))
+        #expect(abs(scroll.contentView.bounds.minY - table.rect(ofRow: 1_000).minY - targetOffset) < 1)
         // A provider result replaces a live/history version in the same meeting.
         // The old viewport must not stay below the end of the new document.
         view.transcriptSourceID = UUID()
@@ -349,12 +352,68 @@ import Testing
         #expect(scroll.contentView.bounds.minY > 0)
         coordinator.updatePlayback(meetingID: id, time: 80)
         coordinator.userScrolled()
-        let stopped = scroll.contentView.bounds.minY
+        let stoppedRow = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
+        let stoppedID = rows[stoppedRow].id
+        let stoppedOffset = scroll.contentView.bounds.minY - table.rect(ofRow: stoppedRow).minY
         coordinator.updatePlayback(meetingID: id, time: 90)
         try await Task.sleep(for: .milliseconds(300))
-        #expect(scroll.contentView.bounds.minY == stopped)
+        let currentRow = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
+        #expect(rows[currentRow].id == stoppedID)
+        #expect(abs(scroll.contentView.bounds.minY - table.rect(ofRow: currentRow).minY - stoppedOffset) < 1)
         #expect(coordinator.activeRow == 90)
         coordinator.cancelFollow()
+    }
+
+    @Test func measurementCorrectionCompletesPausedSeekIntoColdRows() async throws {
+        let id = UUID()
+        let rows = (0..<2_000).map {
+            TranscriptDisplayRow(
+                id: UUID(), start: Double($0), end: Double($0 + 1), speaker: "", speakerID: nil,
+                text: String(repeating: "Synthetic wrapped seek passage. ", count: 4))
+        }
+        let view = NativeTranscriptView(
+            rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
+            meetingID: id, play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        defer { coordinator.tearDown() }
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        let table = TranscriptNativeTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        table.usesAutomaticRowHeights = false
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        coordinator.updatePlayback(meetingID: id, time: 1_500)
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(!coordinator.isFollowing)
+        coordinator.requestVisibleMeasurements()
+        await coordinator.heights.waitUntilIdle()
+        coordinator.requestVisibleMeasurements()
+        #expect(!coordinator.hasNavigationAnchor)
+        #expect(coordinator.activeRow == 1_500)
+        #expect(table.rows(in: scroll.contentView.bounds).contains(1_500))
+        #expect(abs(table.rect(ofRow: 1_500).minY - scroll.contentView.bounds.minY - 90) < 1)
+        // Cancel a new seek before its target reaches the viewport. A later
+        // correction must preserve the reader's current position.
+        coordinator.updatePlayback(meetingID: id, time: 100)
+        coordinator.cancelFollow()
+        #expect(coordinator.hasNavigationAnchor)
+        let top = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
+        let offset = scroll.contentView.bounds.minY - table.rect(ofRow: top).minY
+        var revised = view
+        revised.rows[top] = TranscriptDisplayRow(
+            id: rows[top].id, start: rows[top].start, end: rows[top].end, speaker: "", speakerID: nil,
+            text: String(repeating: "Revised synthetic passage. ", count: 20))
+        revised.generation += 1
+        coordinator.update(revised)
+        coordinator.requestVisibleMeasurements()
+        await coordinator.heights.waitUntilIdle()
+        #expect(table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY)) == top)
+        #expect(abs(scroll.contentView.bounds.minY - table.rect(ofRow: top).minY - offset) < 1)
+        #expect(!coordinator.hasNavigationAnchor)
     }
 
     @Test func hoverWaitsUntilScrollingStops() async throws {
@@ -383,66 +442,6 @@ import Testing
         try await Task.sleep(for: .milliseconds(180))
         #expect(table.hoverEnabled)
         #expect(table.invalidations == before + 2)
-    }
-
-    @Test func heightCacheMeasuresOnlyChangedTextOrWidth() {
-        let cache = TranscriptHeightCache()
-        let id = UUID()
-        let row = TranscriptDisplayRow(
-            id: id, start: 0, end: 1, speaker: "Alex", speakerID: nil,
-            text: String(repeating: "Words that wrap across transcript lines. ", count: 8))
-        let wide = cache.height(row, width: 800, showsSpeakers: true)
-        for _ in 0..<1_000 { #expect(cache.height(row, width: 800, showsSpeakers: true) == wide) }
-        #expect(cache.measurements == 2)
-        let narrow = cache.height(row, width: 350, showsSpeakers: true)
-        #expect(narrow > wide)
-        #expect(cache.measurements == 3)
-        let changed = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "Alex", speakerID: nil, text: "Short")
-        #expect(cache.height(changed, width: 350, showsSpeakers: true) < narrow)
-        #expect(cache.measurements == 4)
-    }
-
-    @Test func fittingTranscriptLinesReuseExactNativeMetricsAcrossResize() {
-        let cache = TranscriptHeightCache()
-        for text in ["Short sentence.", "简短的示例文字。", "مرحبا بالعالم", "Emoji 👩🏽‍💻 sample", "", "a\tb"] {
-            let row = TranscriptDisplayRow(id: UUID(), start: 0, end: 1, speaker: "Alex", speakerID: nil, text: text)
-            let before = cache.measurements
-            let native = (text as NSString).boundingRect(
-                with: NSSize(width: 800 - 8 - 68 - 12 - 112 - 4, height: CGFloat.greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: NSFont.systemFont(ofSize: 13)]
-            )
-            for width in stride(from: CGFloat(800), through: 400, by: -1) {
-                #expect(cache.height(row, width: width, showsSpeakers: true) == max(20, ceil(native.height) + 2) + 8)
-            }
-            #expect(cache.measurements - before == 1)
-            for available in stride(from: max(36, native.width - 3), through: max(36, native.width) + 3, by: 0.25) {
-                let constrained = (text as NSString).boundingRect(
-                    with: NSSize(width: available, height: CGFloat.greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [.font: NSFont.systemFont(ofSize: 13)])
-                #expect(
-                    cache.height(row, width: available + 8 + 68 + 12 + 112 + 4, showsSpeakers: true)
-                        == max(20, ceil(constrained.height) + 2) + 8)
-            }
-        }
-    }
-
-    @Test func wrappingAndExplicitBreaksRetainNativeTranscriptHeight() {
-        let cache = TranscriptHeightCache()
-        let id = UUID()
-        for text in [
-            "Longer words that wrap around the available space.", "First\nSecond", "First\rSecond",
-            "First\u{2028}Second",
-        ] {
-            let row = TranscriptDisplayRow(id: id, start: 0, end: 1, speaker: "", speakerID: nil, text: text)
-            for width in [CGFloat(120), 300, 600, 120] {
-                let native = (text as NSString).boundingRect(
-                    with: NSSize(width: max(40, width - 8 - 68 - 12) - 4, height: CGFloat.greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [.font: NSFont.systemFont(ofSize: 13)])
-                #expect(cache.height(row, width: width, showsSpeakers: false) == max(20, ceil(native.height) + 2) + 8)
-            }
-        }
     }
 
     @Test func recycledCellCommitsToOriginalSegmentBeforeNewBinding() {

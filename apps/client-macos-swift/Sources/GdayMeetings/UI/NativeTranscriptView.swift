@@ -17,6 +17,32 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var recentWordRanges: [NSRange] = []
     var accessibilityHelp: String? = nil
     var isSourcePlaceholder = false
+    let textRevision: UInt64
+    init(
+        id: UUID, start: Double, end: Double, speaker: String, speakerID: UUID?, text: String,
+        personID: UUID? = nil, speakerColorIndex: Int? = nil, speakerColorKey: String? = nil,
+        isProvisional: Bool = false, provisionalTextRanges: [NSRange]? = nil,
+        recentWordRanges: [NSRange] = [], accessibilityHelp: String? = nil, isSourcePlaceholder: Bool = false
+    ) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.speakerID = speakerID
+        self.text = text
+        self.personID = personID
+        self.speakerColorIndex = speakerColorIndex
+        self.speakerColorKey = speakerColorKey
+        self.isProvisional = isProvisional
+        self.provisionalTextRanges = provisionalTextRanges
+        self.recentWordRanges = recentWordRanges
+        self.accessibilityHelp = accessibilityHelp
+        self.isSourcePlaceholder = isSourcePlaceholder
+        // Compute once when a row is constructed, never during a height lookup.
+        self.textRevision = text.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
+            ($0 ^ UInt64($1)) &* 1_099_511_628_211
+        }
+    }
     var canAssignPerson: Bool { speakerID != nil && !isSourcePlaceholder }
 }
 
@@ -24,6 +50,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
 /// editor. Scrolling performs no store lookups, file reads, or SwiftUI row builds.
 struct NativeTranscriptView: NSViewRepresentable {
     var rows: [TranscriptDisplayRow]
+    var layoutService: TranscriptLayoutService? = nil
     var generation: Int
     var showsSpeakers: Bool
     var editable: Bool
@@ -31,6 +58,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     var playback: MeetingPlayback? = nil
     var meetingID: UUID? = nil
     var transcriptSourceID: UUID? = nil
+    var sourceRowIDs: Set<UUID>? = nil
     /// A review link positions the transcript without selecting or starting audio.
     var initialRowID: UUID? = nil
     var liveRows: LiveTranscriptStreamDisplayCache? = nil
@@ -55,6 +83,9 @@ struct NativeTranscriptView: NSViewRepresentable {
             coordinator?.userScrolled()
         }
         let scroller = TranscriptNativeScroller()
+        scroller.trackingChanged = { [weak coordinator = context.coordinator] in
+            coordinator?.scrollerTrackingChanged($0)
+        }
         scroller.userScrolled = { [weak coordinator = context.coordinator] in coordinator?.userScrolled() }
         scroll.verticalScroller = scroller
         table.autoresizingMask = [.width]
@@ -98,7 +129,19 @@ struct NativeTranscriptView: NSViewRepresentable {
         weak var table: TranscriptNativeTable?
         var generation: Int?
         var rows: [TranscriptDisplayRow] = []
-        var heights = TranscriptHeightCache()
+        let heights: TranscriptLayoutService
+        private let pageID = UUID()
+        private let fallbackMeetingID = UUID()
+        private var knownSourceRowIDs: Set<UUID> = []
+        private var measurementKeys: [TranscriptMeasurementKey] = []
+        private var rowIndices: [UUID: Int] = [:]
+        private var navigationAnchorID: UUID?
+        private var scrollerTracking = false
+        private var duplicateAppliedHeights: [Int: CGFloat] = [:]
+        private var duplicateRowIndices: [UUID: [Int]] = [:]
+        private var appliedHeights: [UUID: CGFloat] = [:]
+        private var clipObserver: NSObjectProtocol?
+        private var measurementWork: DispatchWorkItem?
         var pendingClick: DispatchWorkItem?
         var popover: NSPopover?
         private var playbackSubscription: AnyCancellable?
@@ -107,7 +150,10 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var speakerColors: [String: Int] = [:]
         private var layoutWork: DispatchWorkItem?
         private var settledWidth: CGFloat?
+        private var settledScale: CGFloat?
         private var followTimer: Timer?
+        var isFollowing: Bool { followTimer != nil }
+        var hasNavigationAnchor: Bool { navigationAnchorID != nil }
         private var followStarted: TimeInterval = 0
         private var followStart: CGFloat = 0
         private var followTarget: CGFloat = 0
@@ -125,7 +171,11 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var liveFrozenCount = 0
         private var liveResetRevision: Int?
 
-        init(_ parent: NativeTranscriptView) { self.parent = parent }
+        init(_ parent: NativeTranscriptView) {
+            self.parent = parent
+            self.heights = parent.layoutService ?? TranscriptLayoutService()
+            super.init()
+        }
         func update(_ value: NativeTranscriptView) {
             if parent.meetingID != value.meetingID { speakerColors = [:] }
             let sourceChanged =
@@ -167,6 +217,8 @@ struct NativeTranscriptView: NSViewRepresentable {
                 deferredLiveUpdate = nil
                 liveFollowPaused = false
                 needsInitialPosition = true
+                navigationAnchorID = nil
+                duplicateAppliedHeights = [:]
                 userScrollUntil = 0
                 popover?.close()
             }
@@ -179,15 +231,30 @@ struct NativeTranscriptView: NSViewRepresentable {
             updatePlayback(meetingID: nil, time: 0, follows: false)
             let update: TranscriptRowUpdate
             var selectionBoundary = 0
+            var removedLiveIDs: Set<UUID> = []
             let liveReset = value.liveRows.map { liveResetRevision != $0.resetRevision } ?? false
             if let live = value.liveRows {
                 let boundary = sourceChanged || presentationChanged || liveReset ? 0 : min(liveFrozenCount, rows.count)
                 selectionBoundary = boundary
                 let previousTail = Array(rows[boundary...])
                 let nextTail = live.rows(from: boundary)
+                removedLiveIDs = Set(previousTail.map(\.id)).subtracting(nextTail.map(\.id))
+                if boundary > 0 {
+                    for row in previousTail {
+                        if let index = rowIndices[row.id], index >= boundary { rowIndices.removeValue(forKey: row.id) }
+                        if let duplicates = duplicateRowIndices[row.id] {
+                            let retained = duplicates.filter { $0 < boundary }
+                            if retained.isEmpty {
+                                duplicateRowIndices.removeValue(forKey: row.id)
+                            }
+                            else {
+                                duplicateRowIndices[row.id] = retained
+                            }
+                        }
+                    }
+                }
                 registerSpeakerColors(nextTail)
                 update = TranscriptRowUpdate(previous: previousTail, current: nextTail, offset: boundary)
-                for row in previousTail { heights.remove(id: row.id) }
                 rows.replaceSubrange(boundary..., with: nextTail)
                 liveFrozenCount = live.frozenCount
                 liveResetRevision = live.resetRevision
@@ -209,16 +276,32 @@ struct NativeTranscriptView: NSViewRepresentable {
                     maximumEnd = max(maximumEnd, interval.end)
                     return maximumEnd
                 }
-                heights.removeMissingIDs(Set(rows.map(\.id)))
+
             }
+            if value.liveRows == nil {
+                let authoritativeIDs = value.sourceRowIDs ?? Set(rows.map(\.id))
+                if !sourceChanged { removedLiveIDs.formUnion(knownSourceRowIDs.subtracting(authoritativeIDs)) }
+                knownSourceRowIDs = authoritativeIDs
+            }
+            for id in removedLiveIDs { appliedHeights.removeValue(forKey: id) }
+            let scale = table.window?.backingScaleFactor ?? 1
+            let width = TranscriptTextMeasurement.normalizedTextWidth(
+                table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers, scale: scale
+            )
+            let widthChanged = settledWidth != width || settledScale != scale
+            rebuildMeasurementKeys(from: value.liveRows != nil && !widthChanged ? selectionBoundary : 0)
+            if !removedLiveIDs.isEmpty {
+                heights.invalidate(meetingID: parent.meetingID ?? fallbackMeetingID, removing: removedLiveIDs)
+            }
+            if sourceChanged || heights.isAvailable(to: pageID) { activateMeasurements() }
             generation = value.generation
             activeRow = nil
             activeRows.removeAll(keepingCapacity: true)
             withoutLayoutAnimation {
-                let width = table.tableColumns.first?.width ?? table.bounds.width
-                // A source update can cache heights at an intermediate width,
-                // even when the next layout returns to the previously settled width.
-                if settledWidth != width { settledWidth = nil }
+                // The initial reload uses current keys. Partial updates also need
+                // every row's geometry invalidated when the column changed first.
+                settledWidth = width
+                settledScale = scale
                 if sourceChanged || presentationChanged || liveReset {
                     table.reloadData()
                 }
@@ -227,6 +310,9 @@ struct NativeTranscriptView: NSViewRepresentable {
                     if !update.removed.isEmpty { table.removeRows(at: update.removed, withAnimation: []) }
                     if !update.inserted.isEmpty { table.insertRows(at: update.inserted, withAnimation: []) }
                     table.endUpdates()
+                    if widthChanged {
+                        table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
+                    }
                     if !update.changed.isEmpty {
                         table.reloadData(
                             forRowIndexes: update.changed,
@@ -238,6 +324,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             observePlayback()
             refreshPlayback()
             scheduleLayout()
+            scheduleMeasurements()
             if let selection {
                 let index =
                     rows.indices.contains(selectedIndex) && rows[selectedIndex].id == selection
@@ -315,13 +402,23 @@ struct NativeTranscriptView: NSViewRepresentable {
             layoutWork?.cancel()
             layoutWork = nil
             playbackSubscription = nil
+            measurementWork?.cancel()
+            if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+            clipObserver = nil
+            heights.deactivate(pageID)
         }
         func userScrolled() {
+            navigationAnchorID = nil
             pauseLiveFollow()
             userScrollUntil = ProcessInfo.processInfo.systemUptime + 4
             cancelFollow()
         }
+        func scrollerTrackingChanged(_ tracking: Bool) {
+            scrollerTracking = tracking
+            if !tracking { scheduleMeasurements() }
+        }
         func userSelected() {
+            navigationAnchorID = nil
             guard parent.followsLive != nil else { return }
             pauseLiveFollow()
             cancelFollow()
@@ -347,7 +444,8 @@ struct NativeTranscriptView: NSViewRepresentable {
             let rowTop = table.rect(ofRow: row).minY
             let target = min(
                 max(0, rowTop - clip.bounds.height * 0.3), max(0, table.bounds.height - clip.bounds.height))
-            guard abs(target - clip.bounds.minY) > 40 else { return }
+            guard abs(target - clip.bounds.minY) > (force ? 1 : 40) else { return }
+            navigationAnchorID = rows[row].id
             cancelFollow()
             if !animated || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
@@ -377,11 +475,16 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            // Native table styles inset columns. Measure the actual cell width,
+            // Native table styles inset columns. Keys use the actual cell width,
             // not the wider scroll document, so wrapped final lines stay visible.
-            heights.height(
-                rows[row], width: tableView.tableColumns.first?.width ?? tableView.bounds.width,
-                showsSpeakers: parent.showsSpeakers)
+            guard measurementKeys.indices.contains(row) else { return 28 }
+            let estimate =
+                duplicateRowIndices[rows[row].id] == nil
+                ? appliedHeights[rows[row].id] : duplicateAppliedHeights[row]
+            let height = heights.height(for: measurementKeys[row]) ?? estimate ?? 44
+            appliedHeights[rows[row].id] = height
+            if duplicateRowIndices[rows[row].id] != nil { duplicateAppliedHeights[row] = height }
+            return height
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let view = TranscriptNativeRowView()
@@ -470,13 +573,17 @@ struct NativeTranscriptView: NSViewRepresentable {
             let offset = visibleRow >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: visibleRow).minY : 0
             withoutLayoutAnimation {
                 // Columns can settle to a new width while document bounds stay unchanged.
-                let width = table.tableColumns.first?.width ?? table.bounds.width
-                if settledWidth != width {
-                    // noteHeightOfRows schedules per-row geometry transitions inside
-                    // AppKit. A synchronous reload has no row movement animation.
-                    table.reloadData()
-                    table.layoutSubtreeIfNeeded()
+                let scale = table.window?.backingScaleFactor ?? 1
+                let width = TranscriptTextMeasurement.normalizedTextWidth(
+                    table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers,
+                    scale: scale)
+                if settledWidth != width || settledScale != scale {
+                    // Invalidate geometry without rebuilding unchanged cells.
+                    // The surrounding context disables implicit row animation.
+                    rebuildMeasurementKeys(indexesChanged: false)
+                    table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
                     settledWidth = width
+                    settledScale = scale
                 }
                 if parent.followsLive == true, !liveFollowPaused {
                     needsInitialPosition = false
@@ -499,11 +606,13 @@ struct NativeTranscriptView: NSViewRepresentable {
                         let target = min(
                             max(0, table.rect(ofRow: row).minY - scroll.contentView.bounds.height * 0.3),
                             max(0, table.bounds.height - scroll.contentView.bounds.height))
+                        navigationAnchorID = initialRowID
                         scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
                         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                         userScrollUntil = ProcessInfo.processInfo.systemUptime + 4
                     }
-                    else if activeRow != nil {
+                    else if let activeRow {
+                        navigationAnchorID = rows[activeRow].id
                         followActiveRow(force: true, animated: false)
                     }
                     else {
@@ -520,6 +629,158 @@ struct NativeTranscriptView: NSViewRepresentable {
                 }
                 scroll.reflectScrolledClipView(scroll.contentView)
             }
+            scheduleMeasurements()
+        }
+        private func rebuildMeasurementKeys(from boundary: Int = 0, indexesChanged: Bool = true) {
+            guard let table else {
+                measurementKeys = []
+                return
+            }
+            let width = TranscriptTextMeasurement.normalizedTextWidth(
+                table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers,
+                scale: table.window?.backingScaleFactor ?? 1)
+            let boundary = min(boundary, rows.count, measurementKeys.count)
+            if indexesChanged {
+                duplicateAppliedHeights = duplicateAppliedHeights.filter { $0.key < boundary }
+            }
+            if boundary == 0 && indexesChanged {
+                rowIndices.removeAll(keepingCapacity: true)
+                duplicateRowIndices.removeAll(keepingCapacity: true)
+            }
+            measurementKeys.replaceSubrange(
+                boundary...,
+                with: rows[boundary...].enumerated().map {
+                    let index = boundary + $0.offset
+                    let row = $0.element
+                    if indexesChanged {
+                        if rowIndices[row.id] == nil {
+                            rowIndices[row.id] = index
+                        }
+                        else {
+                            duplicateRowIndices[row.id, default: []].append(index)
+                        }
+                    }
+                    return TranscriptMeasurementKey(
+                        meetingID: parent.meetingID ?? fallbackMeetingID, rowID: row.id,
+                        textRevision: row.textRevision, effectiveWidth: width, typographyVersion: 1,
+                        layoutVersion: parent.showsSpeakers ? 2 : 1)
+                })
+        }
+        private func activateMeasurements() {
+            heights.activate(pageID, retry: { [weak self] in self?.scheduleMeasurements() }) {
+                [weak self] keys in self?.publishMeasurements(keys)
+            }
+        }
+        private func scheduleMeasurements() {
+            guard let clip = table?.enclosingScrollView?.contentView else { return }
+            if clipObserver == nil {
+                clip.postsBoundsChangedNotifications = true
+                clipObserver = NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+                ) { [weak self] _ in MainActor.assumeIsolated { self?.scheduleMeasurements() } }
+            }
+            guard measurementWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.measurementWork = nil
+                self.requestVisibleMeasurements()
+            }
+            measurementWork = work
+            DispatchQueue.main.async(execute: work)
+        }
+        func requestVisibleMeasurements() {
+            guard heights.isAvailable(to: pageID) else { return }
+            activateMeasurements()
+            guard let table, !rows.isEmpty, measurementKeys.count == rows.count else { return }
+            var visible = table.rows(in: table.visibleRect)
+            guard visible.location != NSNotFound else { return }
+            var start = min(rows.count, visible.location)
+            var end = min(rows.count, start + max(1, visible.length))
+            var nearby = max(0, start - 8)..<min(rows.count, end + 8)
+            var order = Array(start..<end) + nearby.filter { $0 < start || $0 >= end }
+            publishMeasurements(Set(order.map { measurementKeys[$0] }))
+            visible = table.rows(in: table.visibleRect)
+            guard visible.location != NSNotFound else { return }
+            start = min(rows.count, visible.location)
+            end = min(rows.count, start + max(1, visible.length))
+            nearby = max(0, start - 8)..<min(rows.count, end + 8)
+            order = Array(start..<end) + nearby.filter { $0 < start || $0 >= end }
+            if let anchor = navigationAnchorID, let index = rowIndices[anchor], (start..<end).contains(index),
+                editedID == nil, !scrollerTracking, parent.followsLive == nil || popover?.isShown != true,
+                order.allSatisfy({ row in
+                    guard let height = heights.height(for: measurementKeys[row]) else { return false }
+                    return height
+                        == (duplicateRowIndices[rows[row].id] == nil
+                            ? appliedHeights[rows[row].id] : duplicateAppliedHeights[row])
+                })
+            {
+                navigationAnchorID = nil
+            }
+            heights.request(
+                order.map { TranscriptMeasurementInput(key: measurementKeys[$0], text: rows[$0].text) },
+                owner: pageID)
+        }
+        private func publishMeasurements(_ keys: Set<TranscriptMeasurementKey>) {
+            guard let table, let scroll = table.enclosingScrollView, editedID == nil, !scrollerTracking,
+                parent.followsLive == nil || popover?.isShown != true
+            else { return }
+            // The current key includes meeting, revision, width, and typography.
+            var changed = IndexSet()
+            for key in keys {
+                let indices = rowIndices[key.rowID].map { [$0] } ?? []
+                for index in indices + (duplicateRowIndices[key.rowID] ?? []) {
+                    let applied =
+                        duplicateRowIndices[key.rowID] == nil
+                        ? appliedHeights[key.rowID] : duplicateAppliedHeights[index]
+                    guard measurementKeys[index] == key, let height = heights.height(for: key), height != applied
+                    else { continue }
+                    changed.insert(index)
+                }
+            }
+            guard !changed.isEmpty else { return }
+            let signposter = TranscriptLayoutMetrics.signposter
+            let state = signposter.beginInterval("Transcript height publication", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("Transcript height publication", state) }
+            let first = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
+            let wasFollowing = followTimer != nil
+            let visible = table.rows(in: table.visibleRect)
+            var navigationRow = navigationAnchorID.flatMap { rowIndices[$0] }
+            if let row = navigationRow, !wasFollowing,
+                visible.location == NSNotFound || !NSLocationInRange(row, visible)
+            {
+                navigationAnchorID = nil
+                navigationRow = nil
+            }
+            let anchorIndex = navigationRow ?? first
+            let anchor = rows.indices.contains(anchorIndex) ? rows[anchorIndex].id : nil
+            let offset = anchorIndex >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: anchorIndex).minY : 0
+            cancelFollow()
+            withoutLayoutAnimation {
+                table.noteHeightOfRows(withIndexesChanged: changed)
+                for index in changed {
+                    let height = heights.height(for: measurementKeys[index])
+                    appliedHeights[rows[index].id] = height
+                    if duplicateRowIndices[rows[index].id] != nil { duplicateAppliedHeights[index] = height }
+                }
+                if parent.followsLive == true, !liveFollowPaused {
+                    scroll.contentView.scroll(
+                        to: NSPoint(x: 0, y: max(0, table.bounds.height - scroll.contentView.bounds.height)))
+                }
+                else if let anchor, let index = rowIndices[anchor] {
+                    let y = min(
+                        max(0, table.rect(ofRow: index).minY + offset),
+                        max(0, table.bounds.height - scroll.contentView.bounds.height))
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                }
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            // Finish an interrupted seek using corrected geometry. Replaying the
+            // old animation target can otherwise strand a paused seek offscreen.
+            if wasFollowing {
+                navigationAnchorID = activeRow.map { rows[$0].id }
+                followActiveRow(force: true, animated: false)
+            }
+            scheduleMeasurements()
         }
         @objc func clicked(_ sender: NSTableView) {
             pendingClick?.cancel()
@@ -581,6 +842,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             beginEdit(cell, value: value)
         }
         func beginEdit(_ cell: TranscriptNativeCell, value: TranscriptDisplayRow) {
+            navigationAnchorID = nil
             pauseLiveFollow()
             cancelFollow()
             finishEdit()
@@ -651,65 +913,16 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
 }
 
-@MainActor final class TranscriptHeightCache {
-    private struct Entry {
-        var text: String
-        var speaker: String
-        var width: CGFloat
-        var height: CGFloat
-        var unwrapped: CGSize?
-    }
-    private var values: [UUID: Entry] = [:]
-    private(set) var measurements = 0
-    func height(_ row: TranscriptDisplayRow, width: CGFloat, showsSpeakers: Bool) -> CGFloat {
-        let textWidth = max(40, width - 8 - 68 - 12 - (showsSpeakers ? 112 : 0))
-        let speaker = showsSpeakers ? row.speaker : ""
-        if let value = values[row.id], value.text == row.text, value.speaker == speaker, value.width == textWidth {
-            return value.height
-        }
-        let font = NSFont.systemFont(ofSize: 13)
-        let previous = values[row.id]
-        let unwrapped: CGSize?
-        if row.text.contains(where: { $0.isNewline }) {
-            unwrapped = nil
-        }
-        else if let previous, previous.text == row.text {
-            unwrapped = previous.unwrapped
-        }
-        else {
-            unwrapped = Self.measure(row.text, width: .greatestFiniteMagnitude, font: font)
-            measurements += 1
-        }
-        let text: CGFloat
-        // The same native metrics remain valid at every width that fits the
-        // complete line. Keep a conservative point of slack at the wrap boundary.
-        if let unwrapped, textWidth - 4 >= ceil(unwrapped.width) + 1 {
-            text = ceil(unwrapped.height) + 2
-        }
-        else {
-            text = ceil(Self.measure(row.text, width: textWidth - 4, font: font).height) + 2
-            measurements += 1
-        }
-        let name =
-            showsSpeakers ? 20.0 : 0
-        let result = max(20, text, name) + 8
-        values[row.id] = Entry(text: row.text, speaker: speaker, width: textWidth, height: result, unwrapped: unwrapped)
-        return result
-    }
-    func remove(id: UUID) { values.removeValue(forKey: id) }
-    func removeMissingIDs(_ ids: Set<UUID>) { values = values.filter { ids.contains($0.key) } }
-    private static func measure(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
-        (text as NSString).boundingRect(
-            with: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]
-        ).size
-    }
-}
-
 @MainActor final class TranscriptNativeScroller: NSScroller {
     // Native drawing and action tracking support either system scroller style.
     override class var isCompatibleWithOverlayScrollers: Bool { true }
     var userScrolled: (() -> Void)?
+    var trackingChanged: ((Bool) -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        trackingChanged?(true)
+        defer { trackingChanged?(false) }
+        super.mouseDown(with: event)
+    }
     override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
         userScrolled?()
         let sent = super.sendAction(action, to: target)
@@ -798,6 +1011,10 @@ struct NativeTranscriptView: NSViewRepresentable {
         guard width > 0, width != lastWidth else { return }
         lastWidth = width
         DispatchQueue.main.async { [weak self] in self?.widthChanged?() }
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        widthChanged?()
     }
     override func keyDown(with event: NSEvent) {
         userInteracted?()
@@ -1102,7 +1319,9 @@ enum TranscriptSpeakerPalette {
             x: 84, y: 4, width: speakerWidth, height: min(bounds.height - 8, max(20, speakerHeight)))
         speaker.frame = badge.bounds.insetBy(dx: 6, dy: 2)
         let left: CGFloat = showsSpeakers ? 196 : 84
-        body.frame = NSRect(x: left, y: 4, width: max(40, bounds.width - left - 4), height: max(20, bounds.height - 8))
+        let width = TranscriptTextMeasurement.normalizedTextWidth(
+            bounds.width, showsSpeakers: showsSpeakers, scale: window?.backingScaleFactor ?? 1)
+        body.frame = NSRect(x: left, y: 4, width: width, height: max(20, bounds.height - 8))
     }
     private func updatePlaybackAccessibility() {
         time.setAccessibilityLabel(play == nil ? time.stringValue : "Play from \(time.stringValue)")
@@ -1137,6 +1356,10 @@ enum TranscriptSpeakerPalette {
             }
         }
         return menu
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
     }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()

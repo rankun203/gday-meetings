@@ -8,7 +8,7 @@ import Testing
     func multiplePeopleMergeAsOneTransaction(failSave: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let first = await store.addPerson(name: "Alex One")
         let second = await store.addPerson(name: "Alex Two")
         let kept = await store.addPerson(name: "Alex")
@@ -37,14 +37,14 @@ import Testing
         #expect(Set(diskPeople.map(\.id)) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
         let meeting = try MeetingFolderStorage.read(id: newer, directory: root)
         #expect(Set(meeting.personIDs) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
-        let voices = VoiceLibraryStore(directory: root)
+        let voices = VoiceLibraryStore(loading: .immediate, directory: root)
         #expect(Set(voices.examples.compactMap(\.personID)) == (failSave ? [first, second] : [kept]))
     }
 
     @Test func metadataOnlyMeetingAndLoadedMeetingBothMerge() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let source = await store.addPerson(name: "Alex")
         let target = await store.addPerson(name: "Alex")
         let unloaded = await store.createMeeting(title: "Metadata only")
@@ -68,7 +68,7 @@ import Testing
     @Test func voiceMergeKeepsReviewStateAndResolvesConflictingRejections() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let library = VoiceLibraryStore(directory: root)
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
         let source = UUID()
         let target = UUID()
         let confirmed = VoiceExample(
@@ -79,7 +79,7 @@ import Testing
             review: .suggested, rejectedPersonIDs: [target])
         #expect(library.upsert([confirmed, suggested]))
         #expect(library.mergePerson(id: source, into: target))
-        let reopened = VoiceLibraryStore(directory: root)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: root)
         let kept = try #require(reopened.examples.first { $0.id == confirmed.id })
         #expect(kept.personID == target && kept.review == .confirmed && kept.rejectedPersonIDs.isEmpty)
         let pending = try #require(reopened.examples.first { $0.id == suggested.id })
@@ -90,7 +90,7 @@ import Testing
     @Test func mergePreservesRelationshipsAcrossPagesAndRestart() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let sourceID = await store.addPerson(name: "Alex")
         let targetID = await store.addPerson(name: "Alex")
         let tag = await store.addTag(name: "Team")
@@ -137,7 +137,7 @@ import Testing
         store.clearLoadedMeetingCache()
         #expect(await store.mergePerson(id: sourceID, into: targetID))
         #expect(store.meetings.isEmpty)
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(reopened.people.count == 1)
         let person = try #require(reopened.people.first)
         #expect(person.id == targetID && person.email == target.email && person.tagIDs == [tag])
@@ -163,7 +163,7 @@ import Testing
     @Test func failedMergeRollsBackPeopleVoicesAndMeetingFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let sourceID = await store.addPerson(name: "Alex")
         let targetID = await store.addPerson(name: "Alex")
         let older = await store.createMeeting(title: "Older")

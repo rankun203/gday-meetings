@@ -24,7 +24,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
     func durableLabelBindingRevalidatesInputsAndKeepsUnrelatedEdits(changedTranscript: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         var original = Meeting(title: "Labeling fixture")
         original.notes = "Original notes"
         original.transcript = [.init(start: 0, end: 1, text: "Original transcript")]
@@ -87,7 +87,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
     @Test func missingAudioFailureIsPersistedAndAwaited() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let meeting = Meeting(title: "Synthetic speaker task")
         try await store.insertImportedMeeting(meeting)
         let provider = ServiceProvider(kind: .community1)
@@ -106,7 +106,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
     @Test func queuedLabelingCanBeCancelledWithoutStartingInference() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let meeting = Meeting(title: "Synthetic queued labels")
         try await store.insertImportedMeeting(meeting)
         let provider = ServiceProvider(kind: .community1)
@@ -125,7 +125,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
     @Test func interruptedLabelingRequiresExplicitRetry() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let meeting = Meeting(title: "Synthetic interruption")
         try await store.insertImportedMeeting(meeting)
         var task = ManagedTaskRecord(kind: .diarization, meetingID: meeting.id, meetingTitle: meeting.title)
@@ -142,7 +142,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
     @Test func persistedVoiceJobsCountOnceAndRecoverPausedAtLaunch() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         var job = VoicePreparationJob(
             providerID: UUID(), providerName: "Synthetic provider", type: .community1, discover: true, exampleIDs: [])
         job.state = .running
@@ -155,7 +155,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
         #expect(store.showsTaskQueueStatus)
         job.state = .running
         #expect(store.voiceLibrary.setJobs([job]))
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(reopened.voiceLibrary.jobs.first?.state == .paused)
         #expect(reopened.taskQueueActivitySummary.isEmpty)
 

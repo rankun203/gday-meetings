@@ -211,6 +211,11 @@ extension MeetingStore {
     /// Save the assignment and explicitly assigned sample together through the library's
     /// atomic save/rollback path. Reassignment removes its earlier training sample.
     func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async {
+        invalidatePendingLiveVoiceEnrollment(meetingID: meetingID, speakerID: speakerID)
+        guard await voiceLibrary.awaitReady() else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
         guard await ensureMeetingLoaded(id: meetingID) else { return }
         guard await flushCanonicalWrites() else { return }
         guard libraryWritable, var meeting = self.meeting(id: meetingID),

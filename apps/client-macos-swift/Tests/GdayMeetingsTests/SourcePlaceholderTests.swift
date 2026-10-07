@@ -66,7 +66,7 @@ import Testing
     @Test func savedSourcesKeepProvenanceAndRejectNewAssignments() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let id = await store.createMeeting(title: "Source example")
         let person = await store.addPerson(name: "Alex")
         var draft = LiveTranscriptDraft(meetingID: id, locale: "en")
@@ -76,7 +76,7 @@ import Testing
         #expect(speaker.sourcePlaceholder == .microphone)
         await store.assignSpeaker(meetingID: id, speakerID: speaker.id, personID: person)
         #expect(store.meeting(id: id)?.speakers.first?.personID == nil)
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: id))
         #expect(reopened.meeting(id: id)?.speakers.first?.sourcePlaceholder == .microphone)
     }
@@ -84,7 +84,7 @@ import Testing
     @Test func legacyCheckpointRecoversSourcesWithoutGuessingFromLabelOrEmbedding() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let id = await store.createMeeting(title: "Legacy example")
         let person = await store.addPerson(name: "Alex")
         var draft = LiveTranscriptDraft(meetingID: id, locale: "en")

@@ -3,6 +3,7 @@ import SwiftUI
 /// Saved transcript actions stay outside the text viewport. Old live checkpoints
 /// remain readable, and the first edit adopts them through the same safe store API.
 struct MeetingTranscriptView: View {
+    @Environment(\.transcriptLayoutService) private var layoutService
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @ObservedObject private var localModels = LocalModelManager.shared
@@ -16,6 +17,7 @@ struct MeetingTranscriptView: View {
     @ViewState private var labelChoices: [TranscriptRevision] = []
     @ViewState private var failure: String?
     @ViewState private var displayRows: [TranscriptDisplayRow] = []
+    @ViewState private var sourceRowIDs: Set<UUID> = []
     @ViewState private var visibleRows: [TranscriptDisplayRow] = []
     @ViewState private var displayGeneration = 0
     @ViewState private var displayedMeetingID: UUID?
@@ -119,10 +121,11 @@ struct MeetingTranscriptView: View {
                 }
                 else {
                     NativeTranscriptView(
-                        rows: visibleRows, generation: displayGeneration, showsSpeakers: showsSpeakers,
+                        rows: visibleRows, layoutService: layoutService, generation: displayGeneration,
+                        showsSpeakers: showsSpeakers,
                         editable: store.libraryWritable && (!usesCheckpoint || canRestore), canPlay: canSeek,
                         playback: playback, meetingID: meetingID,
-                        transcriptSourceID: meeting.transcriptSource?.id,
+                        transcriptSourceID: meeting.transcriptSource?.id, sourceRowIDs: sourceRowIDs,
                         initialRowID: initialRowID,
                         play: { seek($0, meeting: meeting) },
                         save: { id, text in
@@ -318,6 +321,7 @@ struct MeetingTranscriptView: View {
         displayedMeetingID = meetingID
         guard let meeting else {
             displayRows = []
+            sourceRowIDs = []
             visibleRows = []
             displayGeneration += 1
             return
@@ -360,6 +364,7 @@ struct MeetingTranscriptView: View {
                 speakerColorKey: colorKey(segment),
                 isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false)
         }
+        sourceRowIDs = Set(displayRows.map(\.id))
         refreshVisibleRows()
     }
 

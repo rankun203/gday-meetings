@@ -65,7 +65,9 @@ extension MeetingStore {
     /// already saved segments. Explicit replacement preserves a prior revision.
     @discardableResult
     func adoptLiveTranscript(_ draft: LiveTranscriptDraft, replacing: Bool = false) async -> Bool {
+        await voiceLibrary.awaitLoaded()
         guard await ensureMeetingLoaded(id: draft.meetingID) else { return false }
+        guard await flushCanonicalWrites() else { return false }
         guard libraryWritable, draft.hasUsableText,
             var meeting = self.meeting(id: draft.meetingID),
             meeting.transcriptionAttempt == nil,

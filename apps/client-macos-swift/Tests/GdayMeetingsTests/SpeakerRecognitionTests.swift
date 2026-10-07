@@ -53,7 +53,7 @@ import Testing
     @Test func assigningReassigningAndRemovingPersistWithoutDuplicatingSamples() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let first = await store.addPerson(name: "Alex")
         let second = await store.addPerson(name: "Sam")
         var meeting = Meeting(title: "Speaker assignment")
@@ -69,7 +69,7 @@ import Testing
         await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: second)
         #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
         #expect(store.people.first { $0.id == second }?.voiceSamples.count == 1)
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
@@ -112,7 +112,7 @@ import Testing
     @Test func existingAutomaticMatchLoadsAsAssignedWithoutLearningItsVoice() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let personID = await store.addPerson(name: "Alex")
         var meeting = Meeting(title: "Automatic match")
         let speaker = MeetingSpeaker(
@@ -123,7 +123,7 @@ import Testing
         meeting.speakers = [speaker]
         meeting.transcript = [.init(speaker: speaker.label, text: "Hello", speakerID: speaker.id)]
         try await store.insertImportedMeeting(meeting)
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
         let saved = try #require(reopened.meetings.first)
@@ -142,7 +142,7 @@ import Testing
     @Test func assigningWhileTranscribingPreservesSavedResultForExplicitReplacement() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let speaker = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod")
@@ -161,7 +161,7 @@ import Testing
             try await store.saveTranscriptionResult(replacement.segments, attempt: attempt, meetingID: meeting.id)
         }
         #expect(store.meetings[0].transcript[0].text == "Original")
-        let reopened = MeetingStore(dataDirectory: root)
+        let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
         await reopened.applySavedTranscriptionResult(meetingID: meeting.id)
@@ -177,7 +177,7 @@ import Testing
     @Test func exportsResolveNamesAndExcludeVoiceDataAndPersonDeletionClearsLinks() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let speaker = MeetingSpeaker(
@@ -205,7 +205,7 @@ import Testing
     @Test func importingTextRestoresLabelsAndNeverReusesForeignPersonLinks() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let person = await store.addPerson(name: "Local Person")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
@@ -234,7 +234,7 @@ import Testing
     @Test func failedAssignmentSaveRollsBackVoiceSampleAndPersonLinkTogether() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let person = await store.addPerson(name: "Alex")
         let speaker = MeetingSpeaker(
             label: "SPEAKER_00", track: "system", providerName: "RunPod",
@@ -251,13 +251,13 @@ import Testing
         #expect(store.meetings[0].speakers[0].personID == nil)
         #expect(store.meetings[0].personIDs.isEmpty)
         #expect(store.voiceLibrary.decisions.isEmpty)
-        #expect(VoiceLibraryStore(directory: root).decisions.isEmpty)
+        #expect(VoiceLibraryStore(loading: .immediate, directory: root).decisions.isEmpty)
     }
 
     @Test func oldSavedResultRestoresSpeakerIdentitiesOnBothApplyPaths() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let result = [TranscriptSegment(speaker: "Legacy Speaker", text: "Retained result")]
         for explicit in [false, true] {
             var meeting = Meeting(title: "Old pending result")
@@ -284,7 +284,7 @@ import Testing
     @Test func removingAssignmentRemovesSpeakerPersonAssociation() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = MeetingStore(dataDirectory: root)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         let person = await store.addPerson(name: "Alex")
         var meeting = Meeting()
         let match = MeetingSpeaker(label: "A", track: "system", providerName: "RunPod", personID: person)

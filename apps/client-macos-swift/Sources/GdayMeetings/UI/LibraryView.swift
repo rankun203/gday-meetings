@@ -43,6 +43,7 @@ struct LibraryView: View {
     @StateObject private var searchSession = LibrarySearchSession()
     @ViewState private var searchPreparationTask: Task<Void, Never>?
     @ViewState private var searchRequestID = UUID()
+    @StateObject private var transcriptLayout = TranscriptLayoutService()
     @StateObject private var workspace = LibraryWorkspaceState()
     @ViewState private var showsSearchResults = false
     @ViewState private var openedSearchResult: SearchDisplayResult?
@@ -476,6 +477,7 @@ struct LibraryView: View {
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: store.showsTaskQueueStatus)
             }
         }
+        .environment(\.transcriptLayoutService, transcriptLayout)
         .toolbarBackgroundVisibility(.automatic, for: .windowToolbar)
         .sheet(isPresented: $store.presentsRecordingSetup) {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
@@ -575,8 +577,9 @@ struct LibraryView: View {
             Button("Move to Trash", role: .destructive) {
                 deleting = nil
                 Task {
-                    if await store.deleteMeeting(id: meeting.id), selectedMeeting == meeting.id {
-                        selectedMeeting = nil
+                    if await store.deleteMeeting(id: meeting.id) {
+                        transcriptLayout.remove(meetingID: meeting.id)
+                        if selectedMeeting == meeting.id { selectedMeeting = nil }
                     }
                 }
             }

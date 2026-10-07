@@ -10,7 +10,7 @@ struct VoiceLibraryTests {
         normalization: "unitL2")
 
     private func seededLegacyLibrary(directory: URL, person: Person) -> VoiceLibraryStore {
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let samples = person.voiceSamples.map { sample in
             VoiceExample(
                 meetingID: sample.meetingID, speakerID: sample.speakerID, source: "unknown",
@@ -47,7 +47,7 @@ struct VoiceLibraryTests {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let person = Person(name: "Alex")
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let first = try example(root: directory)
         #expect(library.upsert([first]))
         #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
@@ -87,10 +87,10 @@ struct VoiceLibraryTests {
         var rejected = try example(root: directory)
         rejected.suggestedPersonID = personID
         rejected.review = .suggested
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(library.upsert([rejected]))
         #expect(library.reject(ids: [rejected.id], personID: personID))
-        let reopened = VoiceLibraryStore(directory: directory)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
         let candidate = try example(root: directory)
         #expect(reopened.upsert([candidate]))
         #expect(reopened.suggest(exampleID: candidate.id, personID: personID))
@@ -101,7 +101,7 @@ struct VoiceLibraryTests {
     @Test func clearStaysClearedAndStalePreparationCannotOverwriteReview() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         #expect(library.upsert([sample]))
         #expect(library.confirm(ids: [sample.id], personID: UUID()))
@@ -120,13 +120,13 @@ struct VoiceLibraryTests {
     @Test func reopenedMetadataAndReviewDoNotReadOrRewriteRepresentations() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let initial = VoiceLibraryStore(directory: directory)
+        let initial = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         #expect(initial.upsert([sample]))
         let representationURL = directory.appendingPathComponent(
             "voice-library/representations/\(sample.id.uuidString).json")
         let original = try Data(contentsOf: representationURL)
-        let reopened = VoiceLibraryStore(directory: directory)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(reopened.examples.count == 1 && reopened.examples[0].embeddings.isEmpty)
         #expect(reopened.confirm(ids: [sample.id], personID: UUID()))
         #expect(try Data(contentsOf: representationURL) == original)
@@ -139,6 +139,7 @@ struct VoiceLibraryTests {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(
+            loading: .immediate,
             directory: directory,
             write: { data, url in
                 if url.deletingLastPathComponent().lastPathComponent == "examples" {
@@ -150,7 +151,7 @@ struct VoiceLibraryTests {
         #expect(library.upsert([sample]))
         #expect(library.examples.contains { $0.id == sample.id })
         #expect(library.errorMessage?.contains("saved") == true)
-        let reopened = VoiceLibraryStore(directory: directory)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(reopened.hydratedExample(id: sample.id) == sample)
     }
 
@@ -159,6 +160,7 @@ struct VoiceLibraryTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let fails = VoiceWriteFailureFlag()
         let library = VoiceLibraryStore(
+            loading: .immediate,
             directory: directory,
             write: { data, url in
                 if fails.value { throw ServiceError("Synthetic write failure") }
@@ -170,13 +172,13 @@ struct VoiceLibraryTests {
         #expect(!library.confirm(ids: [sample.id], personID: UUID()))
         #expect(library.examples[0].review == .unassigned)
         #expect(!library.canUndo && library.errorMessage != nil)
-        #expect(VoiceLibraryStore(directory: directory).hydratedExample(id: sample.id) == sample)
+        #expect(VoiceLibraryStore(loading: .immediate, directory: directory).hydratedExample(id: sample.id) == sample)
     }
 
     @Test func newLiveSampleKeepsSuggestionUnlessReviewedEvidenceRejectsIt() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let personID = UUID()
         let range = try #require(sample.range)
@@ -199,7 +201,7 @@ struct VoiceLibraryTests {
     @Test func ingestKeepsCompatibleRunPodVectorWithoutAudioAndDoesNotInventConfirmation() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let person = Person(name: "Alex")
         var meeting = Meeting()
         let speaker = MeetingSpeaker(
@@ -223,7 +225,7 @@ struct VoiceLibraryTests {
     @Test func attachingAudioRevisionPreservesExistingModelRepresentations() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         var sample = try example(root: directory)
         sample.audioRevision = nil
         #expect(library.upsert([sample]))
@@ -235,13 +237,15 @@ struct VoiceLibraryTests {
         #expect(library.ingest(meeting: meeting, directory: folder))
         let saved = try #require(library.hydratedExample(id: sample.id))
         #expect(saved.audioRevision != nil && saved.embeddings == sample.embeddings)
-        #expect(VoiceLibraryStore(directory: directory).hydratedExample(id: sample.id)?.embeddings == sample.embeddings)
+        #expect(
+            VoiceLibraryStore(loading: .immediate, directory: directory).hydratedExample(id: sample.id)?.embeddings
+                == sample.embeddings)
     }
 
     @Test func replacedAudioPreventsExtractionButPreservesConfirmedVectors() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let person = Person(name: "Alex")
         #expect(library.upsert([sample]))
@@ -257,7 +261,7 @@ struct VoiceLibraryTests {
     @Test func savedProjectionColorsRemainIdempotentAcrossColdLibraryReads() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let first = try example(root: directory, start: 0, end: 4)
         let second = try example(
             root: directory, meetingID: first.meetingID, speakerID: first.speakerID, start: 5, end: 9)
@@ -278,18 +282,18 @@ struct VoiceLibraryTests {
         #expect(library.applyingDecisions(to: saved) == saved)
         #expect(library.applyingDecisions(to: saved) == saved)
         let decoded = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(saved))
-        let reopened = VoiceLibraryStore(directory: directory)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(reopened.applyingDecisions(to: decoded) == decoded)
         try MeetingFolderStorage.write(saved, directory: directory)
         let folderDecoded = try MeetingFolderStorage.read(id: saved.id, directory: directory)
-        let coldFolderLibrary = VoiceLibraryStore(directory: directory)
+        let coldFolderLibrary = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(coldFolderLibrary.applyingDecisions(to: folderDecoded) == folderDecoded)
     }
 
     @Test func exactReviewProjectionIsIdempotentAndUndoRestoresSpeaker() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory, start: 2, end: 6)
         let personID = UUID()
         var meeting = Meeting(id: sample.meetingID, audioFiles: ["system.wav"])
@@ -318,7 +322,7 @@ struct VoiceLibraryTests {
     @Test func conflictingReviewsStayAnonymousAndExcludeAloneKeepsAttribution() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let first = try example(root: directory)
         var second = first
         second.id = UUID()
@@ -365,7 +369,7 @@ struct VoiceLibraryTests {
         let url = directory.appendingPathComponent("voice-library.json")
         let original = try JSONEncoder().encode(future)
         try original.write(to: url)
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(!library.upsert([try example(root: directory)]))
         #expect(library.errorMessage != nil)
         #expect(try Data(contentsOf: url) == original)
@@ -374,7 +378,7 @@ struct VoiceLibraryTests {
     @Test func ingestIgnoresOtherTracksButRejectsOverlapOnTheSameTrack() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
         try Data("microphone fixture".utf8).write(to: folder.appendingPathComponent("microphone.wav"))
@@ -391,7 +395,7 @@ struct VoiceLibraryTests {
         #expect(library.examples.allSatisfy { $0.embeddings.isEmpty })
         let secondDirectory = try root()
         defer { try? FileManager.default.removeItem(at: secondDirectory) }
-        let second = VoiceLibraryStore(directory: secondDirectory)
+        let second = VoiceLibraryStore(loading: .immediate, directory: secondDirectory)
         meeting.speakers[1].track = "system"
         #expect(second.ingest(meeting: meeting, directory: folder))
         #expect(second.examples.isEmpty)
@@ -400,7 +404,7 @@ struct VoiceLibraryTests {
     @Test func changingProjectedSpeakerUpdatesOnlyItsReviewedExample() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let firstPerson = UUID()
         let secondPerson = UUID()
@@ -426,7 +430,7 @@ struct VoiceLibraryTests {
     @Test func undoNotifiesOnlyChangedMeetingsIncludingDecisionsWithoutExamples() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let unrelated = try example(root: directory)
         #expect(library.upsert([unrelated]))
         let meetingID = UUID()
@@ -441,7 +445,7 @@ struct VoiceLibraryTests {
     @Test func repeatedRecoveryDoesNotAttachSavedVectorToKnownReplacementAudio() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
         var meeting = Meeting(id: sample.meetingID, audioFiles: ["system.wav"])
@@ -464,7 +468,7 @@ struct VoiceLibraryTests {
     @Test func ingestNeverReattachesSavedVectorToReplacedAudio() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(root: directory)
         let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
         var meeting = Meeting(id: sample.meetingID, audioFiles: ["system.wav"])

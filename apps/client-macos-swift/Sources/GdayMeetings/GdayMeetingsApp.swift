@@ -194,6 +194,16 @@ final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     weak var store: MeetingStore?
     weak var providerDrafts: ProviderDraftCoordinator?
     let mainWindowLifecycle = MainWindowLifecycle()
+    private var voiceLibraryPreparationScheduled = false
+
+    func applicationDidUpdate(_ notification: Notification) {
+        guard !voiceLibraryPreparationScheduled, let store,
+            NSApp.windows.contains(where: { MainWindowLifecycle.isUserFacing($0) && $0.isVisible })
+        else { return }
+        voiceLibraryPreparationScheduled = true
+        // Begin storage loading after AppKit updates the first visible window.
+        Task { await store.prepareVoiceLibraryAfterLaunch() }
+    }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         mainWindowLifecycle.requestRestoration()

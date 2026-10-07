@@ -9,7 +9,7 @@ struct VoiceLegacyResolutionTests {
         modelID: "synthetic", revision: "v1", compatibilityVersion: "v1", dimension: 2, normalization: "unitL2")
 
     private func seededLegacyLibrary(directory: URL, person: Person) -> VoiceLibraryStore {
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let samples = person.voiceSamples.map { sample in
             VoiceExample(
                 meetingID: sample.meetingID, speakerID: sample.speakerID, source: "unknown",
@@ -72,7 +72,7 @@ struct VoiceLegacyResolutionTests {
     @Test func confirmationUsesAllCompatibleRepresentationsWithoutSourceAudio() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let person = Person(name: "Alex")
         let vector = TypedVoiceEmbedding(type: type, values: [1, 0])
         let sample = VoiceExample(
@@ -97,7 +97,7 @@ struct VoiceLegacyResolutionTests {
         let url = directory.appendingPathComponent("voice-library.json")
         let data = try JSONEncoder().encode(document)
         try data.write(to: url)
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(library.examples.isEmpty && library.errorMessage != nil)
         #expect(!library.upsert(document.examples))
         #expect(try Data(contentsOf: url) == data)

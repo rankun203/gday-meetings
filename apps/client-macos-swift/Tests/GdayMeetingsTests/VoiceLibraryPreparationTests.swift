@@ -80,7 +80,7 @@ struct VoiceLibraryPreparationTests {
     @Test func reusesCompatibleEmbeddingWithoutReadingAudio() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         var sample = try example(in: directory, embeddings: [embedding()])
         sample.audioFile = nil
         sample.audioRevision = nil
@@ -101,7 +101,7 @@ struct VoiceLibraryPreparationTests {
     @Test func failedItemsResumeWithoutRepeatingCompletedExamples() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let first = try example(in: directory, embeddings: [embedding()])
         let second = try example(in: directory)
         #expect(library.upsert([first, second]))
@@ -126,7 +126,7 @@ struct VoiceLibraryPreparationTests {
     @Test func incompatibleOutputNeverBecomesAnExampleRepresentation() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let sample = try example(in: directory)
         #expect(library.upsert([sample]))
         var incompatible = EmbeddingType.community1
@@ -145,11 +145,11 @@ struct VoiceLibraryPreparationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = try example(in: directory)
         let second = try example(in: directory)
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         var task = job([first, second])
         task.completedExampleIDs = [first.id]
         #expect(library.setJobs([task]))
-        let reopened = VoiceLibraryStore(directory: directory)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
         _ = VoiceLibraryPreparation(library: reopened, extractor: FakeVoiceExampleExtractor(result: embedding()))
         #expect(reopened.jobs.first?.state == .paused)
         #expect(reopened.jobs.first?.completedExampleIDs == [first.id])
@@ -158,7 +158,7 @@ struct VoiceLibraryPreparationTests {
     @Test func excludedExamplesNeverReachExtractor() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         var sample = try example(in: directory)
         sample.excluded = true
         #expect(library.upsert([sample]))
@@ -174,7 +174,7 @@ struct VoiceLibraryPreparationTests {
     @Test func discoveryGroupsUnknownExamplesWithoutEnrollingThemOrUndoingSplits() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         var first = try example(in: directory, embeddings: [embedding()])
         var second = try example(in: directory, embeddings: [embedding()])
         var locked = try example(in: directory, embeddings: [embedding()])
@@ -232,7 +232,7 @@ struct VoiceLibraryPreparationTests {
         speaker.voiceEmbedding = embedding()
         let discovery = FakeVoiceRecordingDiscoverer(
             result: .init(modelRevision: "synthetic-revision", ranges: [], speakers: [speaker]))
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let extractor = FakeVoiceExampleExtractor(result: embedding())
         let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, discoverer: discovery)
         var task = job([], discover: true)
@@ -263,7 +263,7 @@ struct VoiceLibraryPreparationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let sample = try example(in: directory, embeddings: [embedding()])
         let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(library.upsert([sample]))
         let discovery = FakeVoiceRecordingDiscoverer(
             result: .init(modelRevision: "synthetic", ranges: [], speakers: []))
@@ -288,7 +288,7 @@ struct VoiceLibraryPreparationTests {
     @Test func largeInventoryStartsAsDescriptorsAndCanPauseBeforeReadingAnyAudio() throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let preparation = VoiceLibraryPreparation(
             library: library, extractor: FakeVoiceExampleExtractor(result: embedding()))
         let meetings = (0..<1000).map { _ in
@@ -313,7 +313,7 @@ struct VoiceLibraryPreparationTests {
         let sample = try example(in: directory)
         let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
         let audio = folder.appendingPathComponent("system.wav")
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(library.upsert([sample]))
         let extractor = FakeVoiceExampleExtractor(
             result: embedding(),
@@ -353,7 +353,7 @@ struct VoiceLibraryPreparationTests {
         discoveredSpeaker.voiceEmbedding = embedding()
         let discovery = FakeVoiceRecordingDiscoverer(
             result: .init(modelRevision: "synthetic-revision", ranges: [], speakers: [discoveredSpeaker]))
-        let library = VoiceLibraryStore(directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         #expect(library.upsert([microphone]))
         let preparation = VoiceLibraryPreparation(
             library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)

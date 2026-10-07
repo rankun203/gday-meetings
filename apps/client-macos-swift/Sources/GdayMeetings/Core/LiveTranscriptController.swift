@@ -83,7 +83,7 @@ final class LiveTranscriptController: ObservableObject {
     private var voiceEmbeddings: [UUID: TypedVoiceEmbedding] = [:]
     private var peopleProvider: () -> [Person] = { [] }
     private var enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)?
-    private var recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) -> Void)?
+    private var recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)?
     private var modelObservation: AnyCancellable?
     private var waitingForSpeakerModel = false
     private var waitingForVoiceModel = false
@@ -159,7 +159,7 @@ final class LiveTranscriptController: ObservableObject {
         speakerLabelsEnabled: Bool = false, speakerRecognitionEnabled: Bool = false,
         people: @escaping () -> [Person] = { [] },
         enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil,
-        recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) -> Void)? = nil
+        recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)? = nil
     ) {
         transcriptionIssue = nil
         transcriptionFailures = []
@@ -428,7 +428,8 @@ final class LiveTranscriptController: ObservableObject {
                 voiceMatchingIssue = nil
                 voiceEmbeddings[sample.speakerID] = embedding
                 draft?.speakerTimeline?.retainEmbedding(embedding, for: sample.speakerID)
-                recordVoice?(sample, embedding)
+                await recordVoice?(sample, embedding)
+                guard !Task.isCancelled, voiceGeneration == voiceToken else { return }
                 checkpoint()
                 // Until voice matching is calibrated against unknown speakers,
                 // model matches are review suggestions, never transcript names.

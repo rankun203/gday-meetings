@@ -130,7 +130,7 @@ final class MeetingStore: ObservableObject {
     private var writableBeforeFolderChange = true
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
-        !isPreparingToQuit && voiceAssignmentRefreshCount == 0
+        !isPreparingToQuit && voiceLibrary.isLoaded && voiceAssignmentRefreshCount == 0
             && !LocalModelManager.shared.isBusyExceptSearch && !localSearch.isLoading && !voiceSearch.isBuilding
             && !isChangingLibrary
             && recordingID == nil && !isStartingRecording
@@ -146,9 +146,12 @@ final class MeetingStore: ObservableObject {
     @Published private var voiceAssignmentRefreshCount = 0
     lazy var voiceLibrary: VoiceLibraryStore = {
         let library = VoiceLibraryStore(
-            directory: dataDirectory,
+            loading: voiceLibraryLoading, directory: dataDirectory,
             canWrite: { [weak self] in self?.libraryWritable == true })
         library.didChange = { [weak self] ids in self?.scheduleVoiceAssignmentRefresh(meetingIDs: ids) }
+        voiceReadinessObservation = library.$isLoaded.dropFirst().sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
             guard let self else { return }
             self.objectWillChange.send()
@@ -168,6 +171,13 @@ final class MeetingStore: ObservableObject {
         return library
     }()
     private var voiceJobObservation: AnyCancellable?
+    private var voiceReadinessObservation: AnyCancellable?
+    private struct VoiceEnrollmentKey: Hashable {
+        var meetingID: UUID
+        var speakerID: UUID
+    }
+    private var voiceEnrollmentRequests: [VoiceEnrollmentKey: UUID] = [:]
+    private let voiceLibraryLoading: VoiceLibraryStore.Loading
     lazy var voicePreparation = VoiceLibraryPreparation(
         library: voiceLibrary, people: { [weak self] in self?.people ?? [] })
     private var recorder: AudioCapture?
@@ -192,7 +202,8 @@ final class MeetingStore: ObservableObject {
             && !captureTransition && canSave
     }
 
-    init(dataDirectory: URL? = nil) {
+    init(voiceLibraryLoading: VoiceLibraryStore.Loading = .deferred, dataDirectory: URL? = nil) {
+        self.voiceLibraryLoading = voiceLibraryLoading
         let dataDirectory =
             dataDirectory
             ?? ProcessInfo.processInfo.environment["GDAY_SWIFT_DATA_DIR"].map {
@@ -273,8 +284,11 @@ final class MeetingStore: ObservableObject {
             resetMeetingPages()
             refreshDirectoryIndex(rebuild: true)
             startLibraryMonitoring()
-            Task { [weak self] in await self?.recoverUnadoptedLiveTranscripts() }
             refreshArchiveStatuses()
+            if voiceLibraryLoading == .immediate {
+                _ = voicePreparation
+                Task { [weak self] in await self?.recoverUnadoptedLiveTranscripts() }
+            }
             if usesKeychain {
                 for index in settings.serviceProviders.indices {
                     let account = ProviderCredentialPersistence.account(for: settings.serviceProviders[index])
@@ -289,7 +303,6 @@ final class MeetingStore: ObservableObject {
                     }
                 }
             }
-            _ = voicePreparation
             if FileManager.default.fileExists(atPath: self.dataDirectory.appendingPathComponent("tasks.jsonl").path) {
                 managedTasksLoading = true
                 managedTaskPreparation = Task { [weak self] in await self?.prepareManagedTasks() }
@@ -305,6 +318,18 @@ final class MeetingStore: ObservableObject {
             errorMessage =
                 "Could not open the local library. Existing files have been preserved. \(error.localizedDescription)"
         }
+    }
+    /// Called after the main window's initial update. Loading publishes saved
+    /// jobs and decisions together without constructing a processing provider.
+    func prepareVoiceLibraryAfterLaunch() async {
+        await voiceLibrary.awaitLoaded()
+        guard !isChangingLibrary, !isPreparingToQuit else { return }
+        for id in meetings.map(\.id) where id != recordingID {
+            guard let meeting = meeting(id: id) else { continue }
+            let resolved = voiceLibrary.applyingDecisions(to: meeting)
+            if resolved != meeting { _ = await updateMeeting(resolved) }
+        }
+        await recoverUnadoptedLiveTranscripts()
     }
     func changeLibraryFolder(to target: URL, copyCurrent: Bool) async {
         guard canChangeLibraryFolder else { return }
@@ -757,6 +782,7 @@ final class MeetingStore: ObservableObject {
         return await save()
     }
     @discardableResult func deleteMeeting(id: UUID) async -> Bool {
+        await voiceLibrary.awaitLoaded()
         guard canSave else { return false }
         guard !voiceSearch.isBuilding || voiceSearch.buildingMeetingID != id else {
             errorMessage = "Stop voice indexing before deleting this meeting."
@@ -857,6 +883,10 @@ final class MeetingStore: ObservableObject {
 
     @discardableResult
     func mergePeople(ids: Set<UUID>, into targetID: UUID) async -> Bool {
+        guard await voiceLibrary.awaitReady() else {
+            errorMessage = voiceLibrary.errorMessage
+            return false
+        }
         guard canMergePeople else {
             errorMessage = "Wait for recording, processing, and indexing to finish before merging people."
             return false
@@ -892,6 +922,10 @@ final class MeetingStore: ObservableObject {
     }
 
     func deletePerson(id: UUID) async {
+        guard await voiceLibrary.awaitReady() else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
         guard await flushCanonicalWrites() else { return }
         guard canSave, await removeRelationships(personID: id) else { return }
         guard voiceLibrary.removePerson(id: id, staged: true) else {
@@ -1088,7 +1122,7 @@ final class MeetingStore: ObservableObject {
                     }
                 },
                 recordVoice: { [weak self] sample, embedding in
-                    self?.recordVoiceExample(meetingID: meeting.id, sample: sample, embedding: embedding)
+                    await self?.recordVoiceExample(meetingID: meeting.id, sample: sample, embedding: embedding)
                 })
             captureHealth = [
                 microphone
@@ -1196,7 +1230,7 @@ final class MeetingStore: ObservableObject {
             Task { await transcribe(id: id) }
         }
         else if !stopFailed {
-            scheduleAutomaticSpeakerLabeling(id: id)
+            await scheduleAutomaticSpeakerLabeling(id: id)
         }
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {
@@ -1459,16 +1493,32 @@ final class MeetingStore: ObservableObject {
     }
 }
 extension MeetingStore {
+    func invalidatePendingLiveVoiceEnrollment(meetingID: UUID, speakerID: UUID) {
+        voiceEnrollmentRequests.removeValue(forKey: VoiceEnrollmentKey(meetingID: meetingID, speakerID: speakerID))
+    }
+
     /// Only an explicit live assignment enrolls a clean, typed voice sample.
     /// Refresh this speaker's contribution without removing other model types.
     func enrollLiveVoice(meetingID: UUID, personID: UUID?, speakerID: UUID, embedding: TypedVoiceEmbedding?) async {
         guard libraryWritable, recordingID == meetingID,
             personID == nil || people.contains(where: { $0.id == personID })
         else { return }
+        let key = VoiceEnrollmentKey(meetingID: meetingID, speakerID: speakerID)
+        let request = UUID()
+        voiceEnrollmentRequests[key] = request
+        defer {
+            if voiceEnrollmentRequests[key] == request { voiceEnrollmentRequests.removeValue(forKey: key) }
+        }
+        guard await voiceLibrary.awaitReady() else {
+            errorMessage = voiceLibrary.errorMessage
+            return
+        }
+        guard !Task.isCancelled, voiceEnrollmentRequests[key] == request else { return }
         _ = await enqueueCanonical { [self] in
-            guard meeting(id: meetingID) != nil,
+            guard !Task.isCancelled, libraryWritable, voiceEnrollmentRequests[key] == request,
+                meeting(id: meetingID) != nil,
                 personID == nil || people.contains(where: { $0.id == personID })
-            else { return false }
+            else { return true }
             guard voiceLibrary.assign(meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true)
             else {
                 errorMessage = voiceLibrary.errorMessage
@@ -1492,8 +1542,11 @@ extension MeetingStore {
         }
     }
 
-    func recordVoiceExample(meetingID: UUID, sample: LiveSpeakerAudioSample, embedding: TypedVoiceEmbedding) {
-        guard libraryWritable, let meeting = meeting(id: meetingID) else { return }
+    func recordVoiceExample(meetingID: UUID, sample: LiveSpeakerAudioSample, embedding: TypedVoiceEmbedding) async {
+        guard await voiceLibrary.awaitReady() else { return }
+        guard !Task.isCancelled, libraryWritable, recordingID == meetingID,
+            let meeting = meeting(id: meetingID)
+        else { return }
         guard
             voiceLibrary.examples.filter({
                 $0.meetingID == meetingID && $0.speakerID == sample.speakerID && $0.isPlayable
@@ -1516,6 +1569,7 @@ extension MeetingStore {
     }
 
     func refreshVoiceAssignments(meetingIDs: Set<UUID>) async {
+        guard await voiceLibrary.awaitReady() else { return }
         for id in meetingIDs where id != recordingID {
             guard await ensureMeetingLoaded(id: id) else { continue }
             guard let meeting = meeting(id: id) else { continue }

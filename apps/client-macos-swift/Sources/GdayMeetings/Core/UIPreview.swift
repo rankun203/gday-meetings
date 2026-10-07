@@ -41,7 +41,7 @@ enum UIPreview {
             return store
         }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Gday-UI-Preview-\(UUID())")
-        let store = MeetingStore(dataDirectory: directory)
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
         store.previewPreparation = Task { await prepare(store, directory: directory) }
         return store
     }

@@ -212,7 +212,8 @@ enum LocalDiarizationAssignment {
 }
 
 extension MeetingStore {
-    func scheduleAutomaticSpeakerLabeling(id: UUID) {
+    func scheduleAutomaticSpeakerLabeling(id: UUID) async {
+        await voiceLibrary.awaitLoaded()
         if settings.recognizeSpeakers,
             settings.serviceProviders.contains(where: {
                 $0.id == settings.speakerRecognitionProviderID && $0.supports(.speakerRecognition)
@@ -238,6 +239,7 @@ extension MeetingStore {
     }
 
     func performLocalDiarization(id: UUID, providerID: UUID?) async throws {
+        await voiceLibrary.awaitLoaded()
         guard libraryWritable, recordingID != id, let meeting = meeting(id: id),
             meeting.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(id)),
             let provider = settings.serviceProviders.first(where: { $0.id == providerID }),
