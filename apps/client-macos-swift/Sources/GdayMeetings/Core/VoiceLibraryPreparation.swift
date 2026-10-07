@@ -104,7 +104,7 @@ final class VoiceLibraryPreparation: ObservableObject {
         }
         switch provider.kind {
         case .speakerLabeling:
-            return .init(type: .community1, unavailableReason: nil)
+            return .init(type: CommunityVoiceEmbeddingExtractor.embeddingType, unavailableReason: nil)
         default:
             return .init(type: nil, unavailableReason: "This provider has no compatible voice extraction adapter.")
         }
@@ -397,6 +397,9 @@ final class VoiceLibraryPreparation: ObservableObject {
                 }
                 let result = try await discoverer.discover(files: files)
                 try Task.checkCancellation()
+                guard result.speakers.compactMap(\.voiceEmbedding).allSatisfy({ $0.type == job.type }) else {
+                    throw ServiceError("The provider returned an incompatible voice representation.")
+                }
                 guard
                     zip(input.audioFiles, files).allSatisfy({
                         input.audioRevisions[$0.0] == VoiceLibraryStore.revision(url: $0.1)

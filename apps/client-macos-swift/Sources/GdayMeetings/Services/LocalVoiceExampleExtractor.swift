@@ -12,7 +12,9 @@ actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
     }
 
     func extract(example: VoiceExample, directory: URL, type: EmbeddingType) async throws -> TypedVoiceEmbedding {
-        guard type == .community1 else { throw ServiceError("This voice model is not supported on this Mac.") }
+        guard LocalModelRegistry.descriptor(.community1).supportedEmbeddingTypes.contains(type) else {
+            throw ServiceError("This voice model is not supported on this Mac.")
+        }
         guard let file = example.audioFile, let start = example.start, let end = example.end,
             start.isFinite, end.isFinite, start >= 0, end - start >= 2
         else { throw ServiceError("This example needs at least two seconds of saved speech.") }

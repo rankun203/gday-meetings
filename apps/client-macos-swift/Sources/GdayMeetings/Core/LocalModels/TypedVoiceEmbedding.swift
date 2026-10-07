@@ -13,6 +13,13 @@ struct EmbeddingType: Codable, Hashable, Sendable {
         revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232",
         compatibilityVersion: "gday-span-mask-v1", dimension: 256, normalization: "unitL2")
 
+    /// Short speech with feature centering over real frames, excluding padded audio.
+    /// Existing v1 and worker vectors remain in their original compatibility space.
+    static let community1SpeechSpan = EmbeddingType(
+        modelID: "FluidInference/community1-wespeaker-resnet34",
+        revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232",
+        compatibilityVersion: "gday-span-feature-center-v2", dimension: 256, normalization: "unitL2")
+
     static func unknownLegacy(dimension: Int) -> EmbeddingType {
         .init(
             modelID: "unknown", revision: "unknown", compatibilityVersion: "unknown",

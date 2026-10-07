@@ -47,7 +47,7 @@ actor LiveVoiceEmbeddingWorker {
         await releaseIfCancelled()
         guard !cancelled, !Task.isCancelled else { throw CancellationError() }
         return TypedVoiceEmbedding.normalizing(
-            type: .community1, values: values,
+            type: CommunityVoiceEmbeddingExtractor.embeddingType, values: values,
             provenance: "live-clean-single-speaker-span")
     }
 

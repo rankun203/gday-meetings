@@ -5,6 +5,7 @@ import Foundation
 /// This uses the same pinned FBANK/WeSpeaker assets as Community-1, but does not
 /// run segmentation or clustering. Keep its model lease alive while using it.
 actor CommunityVoiceEmbeddingExtractor {
+    static let embeddingType = EmbeddingType.community1SpeechSpan
     private let fbank: MLModel
     private let embedding: MLModel
     private let audioConstraint: MLMultiArrayConstraint
@@ -14,8 +15,10 @@ actor CommunityVoiceEmbeddingExtractor {
         guard let fbank = models["FBank"], let embedding = models["Embedding"],
             let audio = fbank.modelDescription.inputDescriptionsByName["audio"]?.multiArrayConstraint,
             let weights = embedding.modelDescription.inputDescriptionsByName["weights"]?.multiArrayConstraint,
-            Self.validShape(audio.shape, maximum: 160_000),
-            Self.validShape(weights.shape, maximum: 10_000),
+            audio.shape.map(\.intValue) == [1, 1, 160_000], audio.dataType == .float32,
+            weights.shape.map(\.intValue) == [1, 589], weights.dataType == .float32,
+            let features = embedding.modelDescription.inputDescriptionsByName["fbank_features"]?.multiArrayConstraint,
+            features.shape.map(\.intValue) == [1, 1, 80, 998], features.dataType == .float32,
             fbank.modelDescription.outputDescriptionsByName["fbank_features"] != nil,
             embedding.modelDescription.outputDescriptionsByName["embedding"] != nil
         else { throw ServiceError("The voice model has an unsupported input format.") }
@@ -40,20 +43,30 @@ actor CommunityVoiceEmbeddingExtractor {
         let features = try fbank.prediction(
             from: MLDictionaryFeatureProvider(dictionary: ["audio": MLFeatureValue(multiArray: audio)]))
         try Task.checkCancellation()
-        guard let fbankValues = features.featureValue(for: "fbank_features")?.multiArrayValue else {
+        guard let fbankValues = features.featureValue(for: "fbank_features")?.multiArrayValue,
+            fbankValues.shape.map(\.intValue) == [1, 1, 80, 998], fbankValues.dataType == .float32
+        else {
             throw ServiceError("The voice model returned no speech features.")
         }
+        // FBANK centers over all ten seconds, including zero-padded audio. Remove
+        // that offset using only real STFT frames before the convolutional encoder.
+        let centered = try SpeechSpanFeaturePolicy.centered(
+            (0..<fbankValues.count).map { fbankValues[$0].doubleValue }, sampleCount: samples.count)
+        let correctedFeatures = try MLMultiArray(shape: fbankValues.shape, dataType: fbankValues.dataType)
+        for index in centered.indices { correctedFeatures[index] = NSNumber(value: centered[index]) }
         let weights = try MLMultiArray(shape: weightConstraint.shape, dataType: weightConstraint.dataType)
         let active = max(
             1, min(weights.count, Int((Double(samples.count) / Double(audioCount) * Double(weights.count)).rounded())))
         for index in 0..<weights.count { weights[index] = NSNumber(value: index < active ? 1 : 0) }
         let output = try embedding.prediction(
             from: MLDictionaryFeatureProvider(dictionary: [
-                "fbank_features": MLFeatureValue(multiArray: fbankValues),
+                "fbank_features": MLFeatureValue(multiArray: correctedFeatures),
                 "weights": MLFeatureValue(multiArray: weights),
             ]))
         try Task.checkCancellation()
-        guard let vector = output.featureValue(for: "embedding")?.multiArrayValue, vector.count == 256 else {
+        guard let vector = output.featureValue(for: "embedding")?.multiArrayValue,
+            vector.shape.map(\.intValue) == [1, 256]
+        else {
             throw ServiceError("The voice model returned an invalid embedding.")
         }
         let values = (0..<vector.count).map { vector[$0].doubleValue }
@@ -63,13 +76,34 @@ actor CommunityVoiceEmbeddingExtractor {
         return values
     }
 
-    private static func validShape(_ shape: [NSNumber], maximum: Int) -> Bool {
-        var count = 1
-        for value in shape {
-            let dimension = value.intValue
-            guard dimension > 0, dimension <= maximum / count else { return false }
-            count *= dimension
+}
+
+/// Geometry is fixed by the pinned FBANK graph: 400-sample frames, 160-sample
+/// hop, no edge padding, 80 mel bins. The 589-frame mask is resampled by the
+/// embedding graph; keep its existing duration mapping independently of centering.
+enum SpeechSpanFeaturePolicy {
+    static func activeFrameCount(sampleCount: Int) throws -> Int {
+        guard (32_000...160_000).contains(sampleCount) else {
+            throw ServiceError("Voice recognition needs between two and ten seconds of clear speech.")
         }
-        return !shape.isEmpty && count <= maximum
+        return (sampleCount - 400) / 160 + 1
+    }
+
+    static func centered(_ features: [Double], sampleCount: Int) throws -> [Double] {
+        let active = try activeFrameCount(sampleCount: sampleCount)
+        let frames = 998
+        guard features.count == 80 * frames, features.allSatisfy(\.isFinite) else {
+            throw ServiceError("The voice model returned invalid speech features.")
+        }
+        var result = [Double](repeating: 0, count: features.count)
+        for bin in 0..<80 {
+            let start = bin * frames
+            let mean = features[start..<(start + active)].reduce(0, +) / Double(active)
+            for frame in 0..<active { result[start + frame] = features[start + frame] - mean }
+        }
+        guard result.allSatisfy(\.isFinite) else {
+            throw ServiceError("The voice model returned invalid speech features.")
+        }
+        return result
     }
 }

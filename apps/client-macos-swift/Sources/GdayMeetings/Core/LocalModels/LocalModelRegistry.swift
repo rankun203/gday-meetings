@@ -35,6 +35,9 @@ struct LocalModelDescriptor: Sendable {
     var modelNames: [String]
     var inputBufferSeconds: Double? = nil
     var speakerCapacity: Int? = nil
+    /// Embedding contracts the current extraction adapter can generate. Stored
+    /// representations from earlier adapters keep their original type.
+    var supportedEmbeddingTypes: [EmbeddingType] = []
     var downloadBytes: Int64 { assets.reduce(0) { $0 + $1.bytes } }
 }
 
@@ -253,7 +256,7 @@ enum LocalModelRegistry {
                 assets: communityAssets.filter { asset in
                     names.contains { asset.path.hasPrefix($0 + ".mlmodelc/") }
                         || asset.path == "plda-parameters.json"
-                }, modelNames: names)
+                }, modelNames: names, supportedEmbeddingTypes: [.community1SpeechSpan])
         }
     }
 

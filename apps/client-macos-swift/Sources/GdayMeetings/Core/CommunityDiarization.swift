@@ -143,7 +143,8 @@ actor CommunityDiarizationWorker {
                     }
                     if let vector = try? await extractor.extract(samples: samples) {
                         speaker.voiceEmbedding = TypedVoiceEmbedding.normalizing(
-                            type: .community1, values: vector, provenance: "Community-1 selected speech")
+                            type: CommunityVoiceEmbeddingExtractor.embeddingType, values: vector,
+                            provenance: "Community-1 selected speech")
                         speaker.voiceSampleRange = .init(
                             audioFile: file.lastPathComponent, source: sourceName,
                             start: Double(offset) / 16000, end: Double(offset + count) / 16000)

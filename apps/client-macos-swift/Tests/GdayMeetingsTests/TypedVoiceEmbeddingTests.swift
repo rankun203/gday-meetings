@@ -42,6 +42,29 @@ struct TypedVoiceEmbeddingTests {
         #expect(decoded.type == .community1 && decoded.isValid)
     }
 
+    @Test func centeredSpeechEmbeddingsNeverRetagOrMatchLegacyVectors() throws {
+        let values = [1.0] + Array(repeating: 0.0, count: 255)
+        let legacy = TypedVoiceEmbedding(
+            type: .community1, values: values, provenance: "live-clean-single-speaker-span")
+        let current = TypedVoiceEmbedding(type: .community1SpeechSpan, values: values)
+        let decoded = try JSONDecoder().decode(TypedVoiceEmbedding.self, from: JSONEncoder().encode(legacy))
+        #expect(decoded == legacy)
+        #expect(decoded.type.compatibilityVersion == "gday-span-mask-v1")
+        #expect(current.isValid)
+        #expect(current.type != decoded.type)
+        let person = Person(
+            name: "Synthetic person",
+            voiceSamples: [
+                .init(meetingID: UUID(), speakerID: UUID(), voiceEmbedding: legacy)
+            ])
+        #expect(SpeakerRecognition.match(embedding: current, people: [person]) == nil)
+        #expect(SpeakerRecognition.match(embedding: decoded, people: [person])?.personID == person.id)
+        let descriptor = LocalModelRegistry.descriptor(.community1)
+        #expect(descriptor.supportedEmbeddingTypes == [.community1SpeechSpan])
+        #expect(descriptor.supportedEmbeddingTypes.contains(CommunityVoiceEmbeddingExtractor.embeddingType))
+        #expect(descriptor.modelNames.contains("FBank") && descriptor.modelNames.contains("Embedding"))
+    }
+
     @Test func unknownLegacySamplesRoundTripButCannotMatch() throws {
         let sample = PersonVoiceSample(
             meetingID: UUID(), speakerID: UUID(), scope: "synthetic:endpoint", embedding: [1, 0])

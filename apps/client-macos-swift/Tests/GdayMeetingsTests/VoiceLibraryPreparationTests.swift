@@ -105,7 +105,9 @@ struct VoiceLibraryPreparationTests {
     }
 
     @Test func providersShareRepresentationWithoutTrustingEndpointOrDimensions() {
-        #expect(VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .speakerLabeling)).type == .community1)
+        #expect(
+            VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .speakerLabeling)).type
+                == .community1SpeechSpan)
         #expect(!VoiceLibraryPreparation.capability(for: ServiceProvider(kind: .runpod)).isAvailable)
         var disabled = ServiceProvider(kind: .speakerLabeling)
         disabled.isEnabled = false
@@ -251,6 +253,39 @@ struct VoiceLibraryPreparationTests {
         #expect(throws: (any Error).self) {
             try LocalVoiceExampleExtractor.readSamples(url: url, start: 14, end: 18)
         }
+    }
+
+    @Test func earlierPreparationRejectsNewExtractionContractWithoutRetaggingSavedVectors() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let old = embedding(type: .community1)
+        let sample = try example(in: directory, embeddings: [old])
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        let range = try #require(sample.range)
+        var speaker = MeetingSpeaker(label: "sys_01", track: "system", providerName: "Synthetic")
+        speaker.voiceSampleRange = range
+        speaker.voiceEmbedding = embedding(type: .community1SpeechSpan)
+        let discoverer = FakeVoiceRecordingDiscoverer(
+            result: .init(
+                modelRevision: "synthetic",
+                ranges: [], speakers: [speaker]))
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([sample]))
+        let preparation = VoiceLibraryPreparation(
+            library: library,
+            extractor: FakeVoiceExampleExtractor(result: old), discoverer: discoverer)
+        var task = job([], discover: true)
+        task.discoveryInputs = [
+            .init(
+                meetingID: sample.meetingID, audioFiles: [range.audioFile],
+                audioRevisions: [range.audioFile: try #require(sample.audioRevision)])
+        ]
+        #expect(library.setJobs([task]))
+        await preparation.run(jobID: task.id, directory: { _ in folder })
+        #expect(library.jobs.first?.state == .failed)
+        #expect(library.jobs.first?.fullyAnalyzedRecordingIDs?.isEmpty != false)
+        #expect(library.hydratedExample(id: sample.id)?.voiceEmbeddings == [old])
+        #expect(library.examples.count == 1)
     }
 
     @Test func unlabeledDiscoveryIsResumableAndKeepsSavedTranscriptUntouched() async throws {
