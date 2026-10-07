@@ -296,8 +296,7 @@ extension MeetingStore {
     }
     func meeting(id: UUID) -> Meeting? { meetings.first { $0.id == id } }
     func resetMeetingPages(evictLoaded: Bool = false) {
-        meetingPrefetch.reset()
-        isLoadingMeetingPage = false
+        resetMeetingPrefetch()
         if evictLoaded { clearLoadedMeetingCache() }
         meetingCatalog = []
         visibleMeetingIDs = []
@@ -375,7 +374,18 @@ extension MeetingStore {
         resetMeetingPages()
     }
     func refreshMeetingPagesAfterSave(previousIDs: Set<UUID>) async {
-        meetingPrefetch.reset()
+        let viewport = meetingPrefetch.viewport
+        resetMeetingPrefetch()
+        let pageGeneration = meetingPrefetch.generation
+        isLoadingMeetingPage = true
+        defer {
+            if pageGeneration == meetingPrefetch.generation {
+                isLoadingMeetingPage = false
+                // Refresh may leave the viewport unchanged, so no scroll callback
+                // is guaranteed to arrive to restart interrupted read-ahead.
+                if !Task.isCancelled, let latest = meetingPrefetch.viewport ?? viewport { prefetchMeetings(latest) }
+            }
+        }
         let generation = meetingSearchGeneration
         let rootGeneration = externalReloadGeneration
         let originalIDs = visibleMeetingIDs
@@ -396,13 +406,20 @@ extension MeetingStore {
                 }
                 return try index?.page(limit: count, query: query, excludingTagIDs: excluded) ?? []
             }.value
-            guard generation == meetingSearchGeneration, rootGeneration == externalReloadGeneration,
+            guard !Task.isCancelled, pageGeneration == meetingPrefetch.generation,
+                generation == meetingSearchGeneration, rootGeneration == externalReloadGeneration,
                 originalIDs == visibleMeetingIDs, query == meetingSearch, excluded == excludedTagIDs
             else { return }
             meetingCatalog = entries
             visibleMeetingIDs = entries.map(\.id)
             meetingPageHasMore = entries.count == count
         }
-        catch { if generation == meetingSearchGeneration { meetingPageError = error.localizedDescription } }
+        catch {
+            if !Task.isCancelled, pageGeneration == meetingPrefetch.generation,
+                generation == meetingSearchGeneration, rootGeneration == externalReloadGeneration
+            {
+                meetingPageError = error.localizedDescription
+            }
+        }
     }
 }

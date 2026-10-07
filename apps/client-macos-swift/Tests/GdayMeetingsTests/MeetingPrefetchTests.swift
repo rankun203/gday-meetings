@@ -196,12 +196,56 @@ struct MeetingPrefetchTests {
         #expect(store.meetingPrefetch.task == nil)
     }
 
+    @Test func saveRefreshCancelsPrefetchAndStillReachesTheEnd() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let index = try LibraryIndex(directory: root)
+        let values = (0..<366).map { number in
+            MeetingListEntry(
+                Meeting(
+                    title: "Paging fixture \(number)", createdAt: Date(timeIntervalSince1970: Double(1000 - number))))
+        }
+        for entry in values { try index.upsert(entry) }
+        try JSONEncoder().encode(UInt64.max).write(to: root.appendingPathComponent(".index-events.json"))
+        let store = MeetingStore(dataDirectory: root)
+        store.libraryMonitor = nil
+        store.libraryIndex = index
+        store.resetMeetingPages()
+        let viewport = MeetingViewport(
+            firstID: values[12].id, lastID: values[19].id, visibleCount: 8, rowsPerSecond: 0)
+        store.prefetchMeetings(viewport)
+        #expect(store.isLoadingMeetingPage)
+        let cancelled = try #require(store.meetingPrefetch.task)
+        // No actor suspension before refresh: cancellation reliably interrupts the initial request.
+        await store.refreshMeetingPagesAfterSave(previousIDs: Set(store.visibleMeetingIDs))
+        await cancelled.value
+        try await wait(store)
+        let stillLoading = store.isLoadingMeetingPage
+        try #require(!stillLoading)
+        #expect(store.meetingCatalog.count > 20)
+        for _ in 0..<20 where store.hasMoreMeetings {
+            let rows = store.meetingCatalog
+            store.prefetchMeetings(
+                .init(
+                    firstID: rows[max(0, rows.count - 8)].id, lastID: rows.last!.id,
+                    visibleCount: 8, rowsPerSecond: 100))
+            try await wait(store)
+        }
+        #expect(store.meetingCatalog.map(\.id) == values.map(\.id))
+        #expect(!store.hasMoreMeetings)
+        #expect(!store.isLoadingMeetingPage)
+        #expect(store.meetingPrefetch.task == nil)
+        #expect(store.meetings.isEmpty)
+    }
+
     private func wait(_ store: MeetingStore) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while store.isLoadingMeetingPage && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(!store.isLoadingMeetingPage)
+        let loading = store.isLoadingMeetingPage
+        #expect(!loading)
     }
     private func anchor(table: NSTableView, scroll: NSScrollView, rows: [MeetingListEntry]) -> (UUID?, CGFloat) {
         let row = table.rows(in: scroll.contentView.bounds).location

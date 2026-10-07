@@ -228,6 +228,11 @@ enum UIPreview {
                 }
                 await store.updateMeeting(meeting)
             }
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks")
+                || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
+            {
+                await seedTasks(store)
+            }
             if UIPreviewPerformanceFixtures.librarySize == nil,
                 UIPreviewPerformanceFixtures.flag("--synthetic-pagination", infoKey: "GdaySyntheticPagination")
             {
@@ -245,11 +250,6 @@ enum UIPreview {
             }
             if UIPreviewPerformanceFixtures.flag("--synthetic-directories", infoKey: "GdaySyntheticDirectories") {
                 DirectoryPreview.populate(store: store)
-            }
-            if ProcessInfo.processInfo.arguments.contains("--synthetic-tasks")
-                || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
-            {
-                await seedTasks(store)
             }
             try await seedPagedTasks(store)
             if UIPreviewPerformanceFixtures.flag(
@@ -469,20 +469,25 @@ enum UIPreview {
             store.voiceLibrary.hydratedExample(id: example.id)?.embeddings.isEmpty == false ? example.id : nil
         }
         let unavailableIDs = store.voiceLibrary.examples.filter { !$0.isPlayable }.map(\.id)
+        let pagedFailures = UIPreviewPerformanceFixtures.flag(
+            "--synthetic-task-failures", infoKey: "GdaySyntheticTaskFailures")
+        let failureIDs = pagedFailures ? (0..<41).map { _ in UUID() } : unavailableIDs
+        let failures = Dictionary(
+            uniqueKeysWithValues: failureIDs.enumerated().map { index, id in
+                (
+                    id.uuidString,
+                    pagedFailures
+                        ? "Couldn’t prepare synthetic voice example \(index + 1)."
+                        : "The saved example has no audio range. Find a playable example in its recording."
+                )
+            })
         store.voiceLibrary.setJobs([
             VoicePreparationJob(
                 providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
                 discover: false, exampleIDs: preparedIDs, state: .paused, createdAt: now.addingTimeInterval(-150)),
             VoicePreparationJob(
                 providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
-                discover: false, exampleIDs: unavailableIDs,
-                failures: Dictionary(
-                    uniqueKeysWithValues: unavailableIDs.map {
-                        (
-                            $0.uuidString,
-                            "The saved example has no audio range. Find a playable example in its recording."
-                        )
-                    }),
+                discover: false, exampleIDs: failureIDs, failures: failures,
                 state: .failed, createdAt: now.addingTimeInterval(-120)),
             VoicePreparationJob(
                 providerID: providerID, providerName: "Synthetic Community-1", type: .community1,

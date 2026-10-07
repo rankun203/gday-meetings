@@ -19,8 +19,6 @@ extension UIPreview {
                 finishedAt: date.addingTimeInterval(-Double(index * 60) + 30), recovery: .none)
             try store.managedTaskJournal.upsert(row)
         }
-        let previews = store.managedTasks.filter(\.isPreview)
         try await store.restoreManagedTasks()
-        store.managedTasks += previews
     }
 }

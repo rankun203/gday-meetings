@@ -58,10 +58,6 @@ struct TaskQueueView: View {
         get { session.failureOffset }
         nonmutating set { session.failureOffset = newValue }
     }
-    private var selectedFailures: [String] {
-        get { session.selectedFailures }
-        nonmutating set { session.selectedFailures = newValue }
-    }
     private var ignoresNextScopeChange: Bool {
         get { session.ignoresNextScopeChange }
         nonmutating set { session.ignoresNextScopeChange = newValue }
@@ -76,214 +72,235 @@ struct TaskQueueView: View {
     }
 
     var body: some View {
+        confirmationContent
+            .sheet(isPresented: $reviewingVoices) {
+                VoiceLibraryView(library: store.voiceLibrary).environmentObject(store)
+            }
+    }
+
+    private var queueLayout: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Menu {
-                        Picker("Show Tasks", selection: $session.scope) {
-                            ForEach(TaskHistoryScope.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                    } label: {
-                        Label(scope.rawValue, systemImage: "line.3.horizontal.decrease")
-                    }
-                    .menuStyle(.borderlessButton).fixedSize()
-                    Spacer()
-                    if scope == .attention {
-                        Button("Dismiss All Alerts") { Task { await store.dismissAllTaskAlerts() } }
-                            .disabled(store.taskAttentionCount == 0)
-                    }
-                }.padding(16)
-                Divider()
-                NativeTaskList(
-                    rows: rows, selection: $session.selection,
-                    recordingActive: store.recordingID != nil || store.isStartingRecording
-                        || store.isFinalizingRecording, revealID: session.revealID,
-                    revealToken: session.revealToken,
-                    retainedViewport: session.viewport,
-                    totalCount: !hasOlder && !loadingPage && !store.managedTasksLoading
-                        && store.managedTaskJournalError == nil && !rows.isEmpty
-                        ? store.taskHistoryCount(scope: scope) : nil
-                ) { first, last, newer in
-                    visibleFirst = first
-                    visibleLast = last
-                    guard !loadingPage else { return }
-                    if newer, hasNewer, let index = rows.firstIndex(where: { $0.id == first }), index < 12 {
-                        advance(newer: true)
-                    }
-                    else if !newer, hasOlder, let index = rows.firstIndex(where: { $0.id == last }),
-                        index >= rows.count - 12
-                    {
-                        advance(newer: false)
-                    }
-                }
-                .overlay {
-                    if rows.isEmpty {
-                        if store.managedTasksLoading || loadingPage {
-                            ProgressView("Loading Tasks…")
-                        }
-                        else {
-                            Text("No tasks in this view").foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Divider()
-                Text(store.taskQueueSummary).font(.caption).foregroundStyle(.secondary).padding(12)
-            }.frame(width: 340)
+            taskListPane
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let error = store.managedTaskJournalError {
-                        AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
-                    }
-                    if let selectedRow {
-                        switch selectedRow {
-                        case .managed(let saved): taskRow(store.managedTasks.first { $0.id == saved.id } ?? saved)
-                        case .voice(let saved):
-                            voiceTaskRow(store.voiceLibrary.jobs.first { $0.id == saved.id } ?? saved)
-                        }
-                    }
-                    else {
-                        ContentUnavailableView(
-                            "Select a Task", systemImage: "list.bullet.rectangle",
-                            description: Text("Review progress, results, and available actions.")
-                        )
-                        .frame(maxWidth: .infinity, minHeight: 220)
-                    }
-                    ForEach(store.taskQueueOtherJobs) { job in
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text(store.progressText(for: job))
-                            if let id = job.meetingID { Button("Open Meeting") { showMeeting(id) } }
-                        }
-                    }
-                }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            taskDetailPane
         }
-        .onAppear { if focusedTaskID == nil { refreshRows() } }
-        .onDisappear {
-            pendingRevisionRefresh?.cancel()
-            pendingRevisionRefresh = nil
-            generation = UUID()
-            loadingPage = false
-            ignoresNextScopeChange = false
-            session.handledFocusID = nil
-        }
-        .onChange(of: scope) { _, _ in
-            if ignoresNextScopeChange {
+    }
+
+    private var lifecycleContent: some View {
+        queueLayout
+            .onAppear { if focusedTaskID == nil { refreshRows() } }
+            .onDisappear {
+                pendingRevisionRefresh?.cancel()
+                pendingRevisionRefresh = nil
+                session.cancelPageLoad()
                 ignoresNextScopeChange = false
+                session.handledFocusID = nil
             }
-            else {
-                resetRows()
+            .onChange(of: scope) { _, _ in
+                if ignoresNextScopeChange {
+                    ignoresNextScopeChange = false
+                }
+                else {
+                    resetRows()
+                }
             }
-        }
-        .onReceive(store.$managedTasks) { cached in
-            let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-            let updated = rows.map { row -> TaskHistoryRow in
-                if case .managed(let task) = row, let replacement = current[task.id] { return .managed(replacement) }
-                return row
+            .onReceive(store.$managedTasks) { cached in
+                let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+                let updated = rows.map { row -> TaskHistoryRow in
+                    if case .managed(let task) = row, let replacement = current[task.id] {
+                        return .managed(replacement)
+                    }
+                    return row
+                }
+                if rows != updated { rows = updated }
             }
-            if rows != updated { rows = updated }
-        }
-        .onReceive(store.voiceLibrary.$jobs) { cached in
-            let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
-            let updated = rows.map { row -> TaskHistoryRow in
-                if case .voice(let job) = row, let replacement = current[job.id] { return .voice(replacement) }
-                return row
+            .onReceive(store.voiceLibrary.$jobs) { cached in
+                let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+                let updated = rows.map { row -> TaskHistoryRow in
+                    if case .voice(let job) = row, let replacement = current[job.id] { return .voice(replacement) }
+                    return row
+                }
+                if rows != updated { rows = updated }
             }
-            if rows != updated { rows = updated }
-        }
-        .onChange(of: store.managedTaskRevision) { _, _ in scheduleRevisionRefresh() }
-        .onChange(of: store.settings.serviceProviders) { _, _ in refreshSelectedActions() }
-        .onChange(of: store.meetingIndexRevision) { _, _ in refreshSelectedActions() }
-        .onChange(of: store.recordingID) { _, _ in refreshSelectedActions() }
-        .onChange(of: store.backgroundJobs.map(\.key)) { _, _ in refreshSelectedActions() }
-        .onChange(
-            of: store.voiceLibrary.jobs.map {
-                $0.id.uuidString + ":" + $0.state.rawValue + ":" + String($0.needsAttention)
-            }
-        ) { _, _ in
-            refreshRows()
-        }
-        .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
-        .task(id: focusedTaskID) {
-            guard let id = focusedTaskID, session.handledFocusID != id,
-                let record = await store.loadManagedTask(id: id), !Task.isCancelled, focusedTaskID == id
-            else {
-                return
-            }
-            if scope != .all {
-                ignoresNextScopeChange = true
-                scope = .all
-            }
-            let token = UUID()
-            generation = token
-            loadingPage = true
-            select(.managed(record))
-            selection = id
-            let before = await store.taskHistoryPage(
-                scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), newer: true, limit: 25)
-            guard !Task.isCancelled, generation == token else { return }
-            let after = await store.taskHistoryPage(
-                scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), limit: 25)
-            guard !Task.isCancelled, generation == token else { return }
-            session.handledFocusID = id
-            rows = before + [.managed(record)] + after
-            session.revealID = id
-            session.revealToken = UUID()
-            hasNewer = before.count == 25
-            hasOlder = after.count == 25
-            loadingPage = false
-        }
-        .confirmationDialog(
-            "Discard Task?",
-            isPresented: Binding(
-                get: { discardedTask != nil }, set: { if !$0 { discardedTask = nil } }
-            ), presenting: discardedTask
-        ) { record in
-            Button("Discard Task", role: .destructive) {
-                Task { await store.removeManagedTask(id: record.id) }
-                discardedTask = nil
-            }
-            Button("Keep Task", role: .cancel) { discardedTask = nil }
-        } message: { record in
-            let consequence =
-                record.attemptKey != nil || record.remoteJobID != nil
-                ? " The provider may continue processing its request." : " Recordings and results are kept."
-            Text(
-                "Remove the saved " + record.operationTitle.lowercased() + " task for “" + record.meetingTitle
-                    + "”?" + consequence)
-        }
-        .confirmationDialog(
-            "Discard Task?",
-            isPresented: Binding(
-                get: { discardedVoiceJob != nil }, set: { if !$0 { discardedVoiceJob = nil } }
-            ), presenting: discardedVoiceJob
-        ) { job in
-            Button("Discard Task", role: .destructive) {
-                store.voicePreparation.discard(jobID: job.id)
-                discardedVoiceJob = nil
+    }
+
+    private var observedContent: some View {
+        lifecycleContent
+            .onChange(of: store.managedTaskRevision) { _, _ in scheduleRevisionRefresh() }
+            .onChange(of: store.settings.serviceProviders) { _, _ in refreshSelectedActions() }
+            .onChange(of: store.meetingIndexRevision) { _, _ in refreshSelectedActions() }
+            .onChange(of: store.recordingID) { _, _ in refreshSelectedActions() }
+            .onChange(of: store.backgroundJobs.map(\.key)) { _, _ in refreshSelectedActions() }
+            .onChange(
+                of: store.voiceLibrary.jobs.map {
+                    $0.id.uuidString + ":" + $0.state.rawValue + ":" + String($0.needsAttention)
+                }
+            ) { _, _ in
                 refreshRows()
             }
-            Button("Keep Task", role: .cancel) { discardedVoiceJob = nil }
-        } message: { _ in
-            Text("Remove this saved task? Recordings and prepared voice examples are kept.")
+            .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
+    }
+
+    private var focusedContent: some View {
+        observedContent
+            .task(id: focusedTaskID) { await revealFocusedTask() }
+    }
+
+    private var confirmationContent: some View {
+        focusedContent
+            .confirmationDialog(
+                "Discard Task?",
+                isPresented: Binding(
+                    get: { discardedTask != nil }, set: { if !$0 { discardedTask = nil } }
+                ), presenting: discardedTask
+            ) { record in
+                Button("Discard Task", role: .destructive) {
+                    Task { await store.removeManagedTask(id: record.id) }
+                    discardedTask = nil
+                }
+                Button("Keep Task", role: .cancel) { discardedTask = nil }
+            } message: { record in
+                let consequence =
+                    record.attemptKey != nil || record.remoteJobID != nil
+                    ? " The provider may continue processing its request." : " Recordings and results are kept."
+                Text(
+                    "Remove the saved " + record.operationTitle.lowercased() + " task for “" + record.meetingTitle
+                        + "”?" + consequence)
+            }
+            .confirmationDialog(
+                "Discard Task?",
+                isPresented: Binding(
+                    get: { discardedVoiceJob != nil }, set: { if !$0 { discardedVoiceJob = nil } }
+                ), presenting: discardedVoiceJob
+            ) { job in
+                Button("Discard Task", role: .destructive) {
+                    store.voicePreparation.discard(jobID: job.id)
+                    discardedVoiceJob = nil
+                    refreshRows()
+                }
+                Button("Keep Task", role: .cancel) { discardedVoiceJob = nil }
+            } message: { _ in
+                Text("Remove this saved task? Recordings and prepared voice examples are kept.")
+            }
+    }
+
+    private var taskListPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Menu {
+                    Picker("Show Tasks", selection: $session.scope) {
+                        ForEach(TaskHistoryScope.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                } label: {
+                    Label(scope.rawValue, systemImage: "line.3.horizontal.decrease")
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                Spacer()
+                if scope == .attention {
+                    Button("Dismiss All Alerts") { Task { await store.dismissAllTaskAlerts() } }
+                        .disabled(store.taskAttentionCount == 0)
+                }
+            }.padding(16)
+            Divider()
+            NativeTaskList(
+                rows: rows, selection: $session.selection,
+                recordingActive: store.recordingID != nil || store.isStartingRecording
+                    || store.isFinalizingRecording, revealID: session.revealID,
+                revealToken: session.revealToken,
+                retainedViewport: session.viewport,
+                totalCount: !hasOlder && !loadingPage && !store.managedTasksLoading
+                    && store.managedTaskJournalError == nil && !rows.isEmpty
+                    ? store.taskHistoryCount(scope: scope) : nil
+            ) { first, last, newer in
+                visibleFirst = first
+                visibleLast = last
+                guard !loadingPage else { return }
+                if newer, hasNewer, let index = rows.firstIndex(where: { $0.id == first }), index < 12 {
+                    advance(newer: true)
+                }
+                else if !newer, hasOlder, let index = rows.firstIndex(where: { $0.id == last }),
+                    index >= rows.count - 12
+                {
+                    advance(newer: false)
+                }
+            }
+            .overlay {
+                if rows.isEmpty {
+                    if store.managedTasksLoading || loadingPage {
+                        ProgressView("Loading Tasks…")
+                    }
+                    else {
+                        Text("No tasks in this view").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Divider()
+            Text(store.taskQueueSummary).font(.caption).foregroundStyle(.secondary).padding(12)
+        }.frame(width: 340)
+    }
+
+    private var taskDetailPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let error = store.managedTaskJournalError {
+                    AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red)
+                }
+                if let selectedRow {
+                    switch selectedRow {
+                    case .managed(let saved): taskRow(store.managedTasks.first { $0.id == saved.id } ?? saved)
+                    case .voice(let saved):
+                        voiceTaskRow(store.voiceLibrary.jobs.first { $0.id == saved.id } ?? saved)
+                    }
+                }
+                else {
+                    ContentUnavailableView(
+                        "Select a Task", systemImage: "list.bullet.rectangle",
+                        description: Text("Review progress, results, and available actions.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 220)
+                }
+                ForEach(store.taskQueueOtherJobs) { job in
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text(store.progressText(for: job))
+                        if let id = job.meetingID { Button("Open Meeting") { showMeeting(id) } }
+                    }
+                }
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func revealFocusedTask() async {
+        guard let id = focusedTaskID, session.handledFocusID != id else { return }
+        let token = session.beginFocusLoad(id)
+        defer {
+            if session.finishFocusLoad(token), !Task.isCancelled { refreshRows() }
         }
-        .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary).environmentObject(store) }
+        guard let record = await store.loadManagedTask(id: id), !Task.isCancelled,
+            focusedTaskID == id, generation == token
+        else { return }
+        if scope != .all {
+            ignoresNextScopeChange = true
+            scope = .all
+        }
+        select(.managed(record))
+        let before = await store.taskHistoryPage(
+            scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), newer: true, limit: 25)
+        guard !Task.isCancelled, generation == token else { return }
+        let after = await store.taskHistoryPage(
+            scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), limit: 25)
+        guard !Task.isCancelled, generation == token else { return }
+        session.handledFocusID = id
+        session.applyPage(before + [.managed(record)] + after, token: token)
+        refreshSelectedActions()
+        session.revealID = id
+        session.revealToken = UUID()
+        hasNewer = before.count == 25
+        hasOlder = after.count == 25
     }
 
     private func select(_ row: TaskHistoryRow) {
-        if case .voice(let job) = row {
-            let previousFailures: [String: String]?
-            if case .voice(let previous) = selectedRow {
-                previousFailures = previous.failures
-            }
-            else {
-                previousFailures = nil
-            }
-            if previousFailures != job.failures { selectedFailures = job.failures.values.sorted() }
-        }
-        if selectedRow?.id != row.id { failureOffset = 0 }
-        selectedRow = row
+        session.select(row)
         refreshSelectedActions()
     }
     private func refreshSelectedActions() {
@@ -292,25 +309,27 @@ struct TaskQueueView: View {
             canRestart = store.canRestartManagedTask(record)
             canOpen = store.containsMeeting(id: record.meetingID)
         }
+        else {
+            canRetry = false
+            canRestart = false
+            canOpen = false
+        }
     }
     private func resetRows() {
         session.viewport.reset()
         session.revealID = nil
-        rows = []
-        let token = UUID()
-        generation = token
-        loadingPage = true
-        Task { @MainActor in
-            let page = await store.taskHistoryPage(scope: scope)
-            guard token == generation else { return }
-            rows = page
-            if !page.contains(where: { $0.id == selection }), let first = page.first {
-                selection = first.id
-                select(first)
-            }
+        session.resetPagePresentation()
+        refreshSelectedActions()
+        let requestedScope = scope
+        let token = session.beginPageLoad()
+        session.pageLoadTask = Task { @MainActor in
+            defer { session.finishPageLoad(token) }
+            let page = await store.taskHistoryPage(scope: requestedScope)
+            guard !Task.isCancelled, token == generation else { return }
+            session.applyPage(page, token: token)
+            refreshSelectedActions()
             hasOlder = page.count == 50
             hasNewer = false
-            loadingPage = false
         }
     }
     private func scheduleRevisionRefresh() {
@@ -324,63 +343,35 @@ struct TaskQueueView: View {
     }
 
     private func refreshRows() {
-        if let selectedRow {
-            switch selectedRow {
-            case .managed(let previous):
-                Task {
-                    let record = await store.loadManagedTask(id: previous.id)
-                    guard self.selectedRow?.id == previous.id else { return }
-                    if let record {
-                        select(.managed(record))
-                    }
-                    else {
-                        self.selectedRow = nil
-                    }
-                }
-            case .voice(let previous):
-                if let job = store.voiceLibrary.jobs.first(where: { $0.id == previous.id }) {
-                    select(.voice(job))
-                }
-                else {
-                    self.selectedRow = nil
-                }
-            }
-        }
+        guard !session.deferRefreshUntilFocusCompletes() else { return }
         guard let first = rows.first else {
             resetRows()
             return
         }
-        let token = UUID()
-        generation = token
-        loadingPage = true
+        let requestedScope = scope
+        let token = session.beginPageLoad()
         let count = max(50, rows.count)
-        Task { @MainActor in
-            let before = await store.taskHistoryPage(scope: scope, cursor: first.cursor, newer: true, limit: 1)
-            let page = await store.taskHistoryPage(scope: scope, cursor: before.last?.cursor, limit: count)
-            guard token == generation else { return }
+        session.pageLoadTask = Task { @MainActor in
+            defer { session.finishPageLoad(token) }
+            let before = await store.taskHistoryPage(scope: requestedScope, cursor: first.cursor, newer: true, limit: 1)
+            guard !Task.isCancelled, token == generation else { return }
+            let page = await store.taskHistoryPage(scope: requestedScope, cursor: before.last?.cursor, limit: count)
+            guard !Task.isCancelled, token == generation else { return }
             let previousPosition = rows.firstIndex { $0.id == selection } ?? 0
-            rows = page
-            if !page.contains(where: { $0.id == selection }) {
-                if let next = page.isEmpty ? nil : page[min(previousPosition, page.count - 1)] {
-                    selection = next.id
-                    select(next)
-                }
-                else {
-                    selection = nil
-                    selectedRow = nil
-                }
-            }
+            session.applyPage(page, token: token, preferredPosition: previousPosition)
+            refreshSelectedActions()
             hasOlder = page.count == count
-            loadingPage = false
+            hasNewer = !before.isEmpty
         }
     }
     private func advance(newer: Bool) {
         guard !loadingPage, let edge = newer ? rows.first : rows.last else { return }
-        loadingPage = true
-        let token = generation
-        Task { @MainActor in
-            let next = await store.taskHistoryPage(scope: scope, cursor: edge.cursor, newer: newer)
-            guard token == generation else { return }
+        let requestedScope = scope
+        let token = session.beginPageLoad()
+        session.pageLoadTask = Task { @MainActor in
+            defer { session.finishPageLoad(token) }
+            let next = await store.taskHistoryPage(scope: requestedScope, cursor: edge.cursor, newer: newer)
+            guard !Task.isCancelled, token == generation else { return }
             let overflow = max(0, rows.count + next.count - 150)
             if overflow > 0 {
                 let removingVisible =
@@ -388,10 +379,7 @@ struct TaskQueueView: View {
                     ? visibleLast.flatMap { id in rows.firstIndex { $0.id == id } }.map { $0 >= rows.count - overflow }
                         == true
                     : visibleFirst.flatMap { id in rows.firstIndex { $0.id == id } }.map { $0 < overflow } == true
-                if removingVisible {
-                    loadingPage = false
-                    return
-                }
+                if removingVisible { return }
             }
             if newer {
                 rows = next + rows
@@ -411,12 +399,12 @@ struct TaskQueueView: View {
                     hasNewer = true
                 }
             }
-            loadingPage = false
         }
     }
 
     private func voiceTaskRow(_ job: VoicePreparationJob) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let failures = TaskFailurePage(failures: job.failures, offset: failureOffset)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 if job.state == .running { ProgressView().controlSize(.small) }
                 Text(job.discover ? "Find Voices" : "Prepare Voice Library").font(.headline)
@@ -428,7 +416,7 @@ struct TaskQueueView: View {
             if job.state == .paused, let reason = job.timeline?.last?.reason {
                 Text(reason).font(.callout).foregroundStyle(.secondary)
             }
-            ForEach(Array(voiceFailures(job).dropFirst(failureOffset).prefix(20))) { failure in
+            ForEach(voiceFailures(failures)) { failure in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(failure.title).font(.subheadline.weight(.semibold))
                     AppInlineMessage(text: failure.message, systemImage: "exclamationmark.circle", tint: .orange)
@@ -440,12 +428,12 @@ struct TaskQueueView: View {
             if let timeline = job.timeline {
                 TaskAttemptHistory(events: timeline)
             }
-            if selectedFailures.count > 20 {
+            if failures.count > TaskFailurePage.size {
                 HStack {
-                    Button("Previous Errors") { failureOffset = max(0, failureOffset - 20) }
-                        .disabled(failureOffset == 0)
-                    Button("Next Errors") { failureOffset += 20 }
-                        .disabled(failureOffset + 20 >= selectedFailures.count)
+                    Button("Previous Errors") { failureOffset = failures.offset - TaskFailurePage.size }
+                        .disabled(!failures.hasPrevious)
+                    Button("Next Errors") { failureOffset = failures.offset + TaskFailurePage.size }
+                        .disabled(!failures.hasNext)
                 }
             }
             ViewThatFits(in: .horizontal) {
@@ -462,8 +450,8 @@ struct TaskQueueView: View {
         let message: String
     }
 
-    private func voiceFailures(_ job: VoicePreparationJob) -> [VoiceFailure] {
-        job.failures.sorted { $0.key < $1.key }.map { key, message in
+    private func voiceFailures(_ page: TaskFailurePage) -> [VoiceFailure] {
+        page.resolve { key, message in
             let recordingID = key.hasPrefix("recording-") ? UUID(uuidString: String(key.dropFirst(10))) : nil
             let exampleID = UUID(uuidString: key)
             let meetingID = recordingID ?? store.voiceLibrary.examples.first { $0.id == exampleID }?.meetingID

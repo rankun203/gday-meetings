@@ -11,7 +11,7 @@ struct MeetingViewport {
     var task: Task<Void, Never>?
     var generation = UUID()
     var viewport: MeetingViewport?
-    func reset() {
+    fileprivate func reset() {
         task?.cancel()
         task = nil
         generation = UUID()
@@ -21,6 +21,13 @@ struct MeetingViewport {
 
 extension MeetingStore {
     static let meetingWindowLimit = 800
+
+    /// Invalidate the request and its presentation state together. An obsolete
+    /// completion must never clear the loading state of its replacement.
+    func resetMeetingPrefetch() {
+        meetingPrefetch.reset()
+        isLoadingMeetingPage = false
+    }
 
     /// Read ahead from real viewport movement, never from synthetic list rows.
     func prefetchMeetings(_ viewport: MeetingViewport) {
@@ -56,6 +63,17 @@ extension MeetingStore {
         let pageSize = Self.meetingPageSize
         isLoadingMeetingPage = true
         meetingPrefetch.task = Task { [weak self] in
+            defer {
+                if let self, self.meetingPrefetch.generation == generation {
+                    self.isLoadingMeetingPage = false
+                    self.meetingPrefetch.task = nil
+                    if !Task.isCancelled, self.meetingPageError == nil,
+                        let latest = self.meetingPrefetch.viewport
+                    {
+                        self.prefetchMeetings(latest)
+                    }
+                }
+            }
             let operation = Task.detached(priority: .userInitiated) { () throws -> ([MeetingListEntry], Bool) in
                 var fetched: [MeetingListEntry] = []
                 var cursor = edge
@@ -106,14 +124,9 @@ extension MeetingStore {
                     self.trimMeetingWindow(backwards: backwards)
                     self.visibleMeetingIDs = self.meetingCatalog.map(\.id)
                 }
-                self.isLoadingMeetingPage = false
-                self.meetingPrefetch.task = nil
-                if let latest = self.meetingPrefetch.viewport { self.prefetchMeetings(latest) }
             }
             catch {
                 guard let self, self.meetingPrefetch.generation == generation else { return }
-                self.isLoadingMeetingPage = false
-                self.meetingPrefetch.task = nil
                 if !Task.isCancelled { self.meetingPageError = error.localizedDescription }
             }
         }

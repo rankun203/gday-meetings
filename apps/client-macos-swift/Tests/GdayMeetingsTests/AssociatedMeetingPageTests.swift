@@ -4,6 +4,45 @@ import Testing
 @testable import GdayMeetings
 
 struct AssociatedMeetingPageTests {
+    @Test @MainActor func cancelledRefreshReleasesLoadingAndReplacementTraversesPages() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let index = try LibraryIndex(directory: root)
+        let person = UUID()
+        for offset in 0..<45 {
+            var meeting = Meeting(
+                title: "Associated fixture \(offset)", createdAt: Date(timeIntervalSince1970: Double(100 - offset)))
+            meeting.personIDs = [person]
+            try index.upsert(MeetingListEntry(meeting))
+        }
+        let loader = AssociatedMeetingLoader()
+        let obsolete = Task { await loader.refresh(index: index, personID: person, tagID: nil) }
+        let started = try await waitForMainActorTestCondition(timeout: .seconds(5)) { loader.loading }
+        try #require(started)
+        obsolete.cancel()
+        // A replacement can begin before the cancelled refresh finishes its cleanup.
+        await loader.refresh(index: index, personID: person, tagID: nil)
+        await obsolete.value
+        #expect(!loader.loading)
+        #expect(loader.window.page.entries.count == 20)
+        for _ in 0..<3 where loader.window.page.hasOlder {
+            let oldCount = loader.window.page.entries.count
+            let entries = loader.window.page.entries
+            loader.observe(
+                .init(
+                    firstID: entries[entries.count - 8].id, lastID: entries.last!.id,
+                    visibleCount: 8, rowsPerSecond: 100), index: index, personID: person, tagID: nil)
+            let advanced = try await waitForMainActorTestCondition(timeout: .seconds(5)) {
+                !loader.loading && loader.window.page.entries.count > oldCount
+            }
+            try #require(advanced)
+        }
+        #expect(loader.window.page.entries.count == 45)
+        #expect(loader.window.page.total == 45)
+        #expect(!loader.window.page.hasOlder)
+        #expect(loader.error == nil)
+    }
+
     @Test func tagAndPersonPagesReachOlderMeetingsAndReturnWithoutAccumulation() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

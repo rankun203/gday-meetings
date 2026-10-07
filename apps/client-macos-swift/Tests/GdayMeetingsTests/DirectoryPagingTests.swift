@@ -13,6 +13,36 @@ import Testing
         try index.reconcile(paths: [], rebuild: true)
         return (root, index, people)
     }
+    @Test(arguments: [DirectoryKind.people, .tags])
+    func unavailableIndexCancelsLoadingAndCanRecover(kind: DirectoryKind) async throws {
+        let (root, index, _) = try fixture(count: 125)
+        defer { try? FileManager.default.removeItem(at: root) }
+        if kind == .tags {
+            try FileEntityStorage.save(
+                (0..<125).map { MeetingTag(name: "Tag \($0)") }, previous: [], kind: "tags", directory: root)
+            try index.reconcile(paths: [], rebuild: true)
+        }
+        let page = DirectoryPaging()
+        page.configure(index: index, kind: kind, query: "", showExcluded: false)
+        #expect(page.loading)
+        page.configure(index: nil, kind: kind, query: "", showExcluded: false)
+        #expect(!page.loading)
+        #expect(page.error != nil)
+        #expect(page.entries.isEmpty)
+        page.configure(index: index, kind: kind, query: "", showExcluded: false)
+        let loaded = try await waitForMainActorTestCondition(timeout: .seconds(5)) { !page.loading }
+        #expect(loaded)
+        for _ in 0..<4 where page.footerTotal == nil {
+            page.viewport(
+                first: try #require(page.entries.suffix(8).first?.id), last: try #require(page.entries.last?.id))
+            let advanced = try await waitForMainActorTestCondition(timeout: .seconds(5)) { !page.loading }
+            #expect(advanced)
+        }
+        #expect(page.entries.count == 125)
+        #expect(page.footerTotal == 125)
+        #expect(page.error == nil)
+    }
+
     @Test func cursorPagesAreNaturalOrderedAndDoNotReadFiles() throws {
         let (root, index, people) = try fixture(count: 125)
         defer { try? FileManager.default.removeItem(at: root) }

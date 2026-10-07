@@ -60,7 +60,9 @@ extension MeetingStore {
         if let pendingReveal, pendingReveal.query != query { self.pendingReveal = nil }
         let same = self.index === index && self.kind == kind && self.query == query && self.showExcluded == showExcluded
         task?.cancel()
+        task = nil
         generation = UUID()
+        loading = false
         self.index = index
         self.kind = kind
         self.query = query
