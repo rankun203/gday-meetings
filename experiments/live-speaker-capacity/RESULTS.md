@@ -32,6 +32,18 @@ Utterances are selected by deterministic hash order from recordings at least eig
 
 Scenario names express their construction, not a guarantee of observed model behavior. Internal pauses can prevent three continuous seconds of model activity even in a four-second crop. The saturated scenario only establishes a saturated model bootstrap if the measured channels confirm it; do not infer that condition from the schedule.
 
+| Prepared scenario | Recordings | Seconds per recording | Distinct owners per recording |
+| --- | ---: | ---: | ---: |
+| Arrivals and returns | 2 | 170.0 | 12 |
+| Short turns | 2 | 99.6 | 12 |
+| Saturation and rearming | 2 | 158.2 | 12 |
+| Six-speaker overlap control | 2 | 141.0 | 6 |
+
+The selection receipt SHA256 is `a31e897ac3e36f993ed7403e5338d439f606abc35b98a9da61a775df9b18b65c`. It was written before rendering and any model execution. Preparation completed with the verified official archive and source license/README retained locally. No transcript content was copied into the repository.
+
+The independent reconstruction pass verified all eight recordings against archive bytes, source crop bounds, speaker IDs, output placements, and manifest hashes. Every injected gap is digital zero. Maximum reconstruction error is `0.000028992`, below one PCM16 quantization step (`1 / 32768`). Each overlap control contains 36 seconds of simultaneous source placement. The validation environment used NumPy 2.5.3, SoundFile 0.14.0, and libsndfile 1.2.2. The manifest SHA256 is `e5ca6337d00ac5bc246ed6bdc091aa12db61f709ccf5e43c6f8fc1ac69969838`.
+
+
 ## Metrics
 
 **Conditional identity confusion** scores only time with exactly one source owner and exactly one predicted label. One maximum-weight, one-to-one label-to-owner mapping is fitted across the entire recording on this same support. Confusion is the fraction of paired time whose mapped label is a different owner. This includes fragmentation penalties from one-to-one mapping, but excludes predicted overlap and absent output. It is not DER.
@@ -74,7 +86,20 @@ The candidate credits runs of at least 300 ms until each channel accumulates thr
 
 Reject this counter as a standalone production change. It recovers more activity and improves merge precision, but creates enough identity fragmentation to worsen every above-capacity scenario. In short turns, the second window begins at 39.94 seconds with a bootstrap capacity timestamp of 34.44 seconds; it has no trusted continuation before the next handoff at 80.26 seconds. Reconnecting that entire window by assumption would bypass the stated capacity policy.
 
-The next diagnostic asks whether explicitly retained bootstrap context can connect trustworthy old and new local identities at handoff. Temporal correspondence over shared audio is a separate capability probe; it is not yet a fresh-embedding association policy. Short-turn sampling and saturated bootstrap remain unresolved design constraints. No validation outcome has informed this next step.
+## Bootstrap correspondence probe
+
+The [bootstrap experiment](BOOTSTRAP_CONTEXT.md) retains context separately from published activity. It compares the old and new local labels on the same replayed audio, using only callbacks already available at the first positive-duration publication. The preregistered rule requires three seconds of exclusive matching support, 80% agreement, and a 20% margin. It never inherits channel numbers. This is temporal correspondence, not fresh voice fingerprint confirmation.
+
+Eight additional development replays completed without gaps or extraction failures. Sources, binary, and 26 model assets remained stable throughout each run. The isolated Swift bundle passed ten focused tests; the Python suite passed 24 checks, including twelve correspondence and baseline checks. Parser-only hardening preceded outcome inspection; the capacity-safe baseline was added afterward to separate naming-policy penalties from matching effects. Neither change altered the matching rule.
+
+| Development scenario | Raw local confusion | Capacity-safe local confusion | Context publication / snapshot confusion | Ownership coverage | Admitted aliases |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Arrivals and returns | 38.93% | 38.93% | 38.93% / 38.93% | 87.03% | 9 |
+| Short turns | 31.97% | 38.38% | 38.38% / 38.38% | 83.96% | 0 |
+| Saturation and rearming | 41.75% | 47.57% | 25.59% / 25.59% | 89.96% | 27 |
+| Six-speaker overlap control | 0.20% | 0.20% | 0.20% / 0.20% | 95.39% | 0 |
+
+All columns use the experimental credible-run counter. The capacity-safe baseline assigns separate unresolved identities beyond each capacity cutoff; raw local labels do not. Context preserves every published speaker-second and cannot increase activity coverage. Saturation improves substantially against both baselines, but arrivals remain poor and short turns provide no admissible bridge through their saturated bootstrap. Returning voices outside the retained context still need fingerprints. These outcomes do not justify promoting either the counter or temporal matching into production. Fresh embedding availability, bootstrap headroom, and unknown-voice rejection remain necessary design work. Validation remains untouched.
 
 ## Replay provenance
 
@@ -82,16 +107,6 @@ The initial diagnostic receipts bind replay source, binary, policy, inputs, and 
 
 A smoke run correctly detected that the app rewrites its validation cache during model acquisition. That attempt remains marked invalid and is excluded from measurements. After separating operational cache files from model inputs, a fresh public control completed with 26 bound asset files and stable provenance. Validation requires these complete runtime bindings and a matching development method for each rollover mode. Four wrapper checks cover changed executables, mixed implementations, absent asset provenance, and unstable inputs.
 
-| Prepared scenario | Recordings | Seconds per recording | Distinct owners per recording |
-| --- | ---: | ---: | ---: |
-| Arrivals and returns | 2 | 170.0 | 12 |
-| Short turns | 2 | 99.6 | 12 |
-| Saturation and rearming | 2 | 158.2 | 12 |
-| Six-speaker overlap control | 2 | 141.0 | 6 |
-
-The selection receipt SHA256 is `a31e897ac3e36f993ed7403e5338d439f606abc35b98a9da61a775df9b18b65c`. It was written before rendering and any model execution. Preparation completed with the verified official archive and source license/README retained locally. No transcript content was copied into the repository.
-
-The independent reconstruction pass verified all eight recordings against archive bytes, source crop bounds, speaker IDs, output placements, and manifest hashes. Every injected gap is digital zero. Maximum reconstruction error is `0.000028992`, below one PCM16 quantization step (`1 / 32768`). Each overlap control contains 36 seconds of simultaneous source placement. The validation environment used NumPy 2.5.3, SoundFile 0.14.0, and libsndfile 1.2.2. The manifest SHA256 is `e5ca6337d00ac5bc246ed6bdc091aa12db61f709ccf5e43c6f8fc1ac69969838`.
 
 ## Limitations and technical debt
 
