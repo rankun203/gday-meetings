@@ -105,6 +105,25 @@ Final direct replay includes corrected extraction and real window metadata:
 
 These durations sum speaker-time, so overlapping voices can exceed wall time. Every final replay completed with zero capture gaps, adapter/window-provenance failures, and extraction failures. Debug replay timing and optimized standalone clustering timing are identified separately. Concurrent inference and build work prevent isolated performance claims.
 
+## Causal live association follow-up
+
+The production controller retains embeddings and review suggestions but does not yet connect local labels across windows during recording. The following experiment tests that missing behavior without changing the app. J and D are diagnostic recordings here because their earlier outcomes informed the design. B, G, and C provide lower-capacity controls; this follow-up does not restore their independence as new validation.
+
+Fresh J/D replays retain ordered activity-publication and embedding-ready callbacks. Their submitted-audio clock has one-second block resolution and is not elapsed inference latency. J contains 1,666 callbacks and 82 samples; observed embedding-ready bounds follow acoustic sample ends by 0.49–1.99 seconds. Both fresh runs complete without capture gaps, provenance errors, or extraction failures. The script verifies that callbacks reconstruct the retained activity, windows, and sample references exactly.
+
+The candidate averages only available trusted samples within each channel and compares them with earlier completed-window units at the existing 0.72 threshold. Known overlap prevents conflicting matches. A sticky match retains the first accepted association. Pending samples cannot participate until published window evidence confirms their trusted range. This follows the requested stable association policy; continuously changing a match on later threshold crossings is a separate rejected comparison.
+
+| Diagnostic human review | Live / capacity-safe local DER | Sticky candidate at publication callbacks | Final current-state alias snapshot |
+| --- | ---: | ---: | ---: |
+| J targeted | 47.15% | 44.50% | 43.01% |
+| D random | 117.64% | 121.28% | 114.25% |
+
+The publication column uses decisions from strictly earlier callbacks and never revises an already published interval. D regresses because delayed matching splits a local voice's earlier and later speech. The snapshot column instead applies the association to that label's earlier published speech when the decision becomes available. It measures a later transcript state, not earlier recognition. J random review and the B/G/C controls remain unchanged; controls use estimated availability because they lack fresh callback traces.
+
+Against saved worker annotations, J disagreement changes from 57.99% to 53.91% at publication and 52.58% in the final snapshot; D changes from 67.24% to 52.51% and 47.46%. The capacity-safe local baseline is unchanged on these measured views. Saturated activity remains scored in a distinct unresolved namespace. An earlier diagnostic incorrectly reused a canonical local identity for that fallback; its 52.19% / 47.35% snapshot disagreement values are superseded and are not extra improvements.
+
+Fifteen synthetic checks cover chronological evidence, observed continuity, callback reconstruction, delayed finish callbacks, sticky assignments, overlap conflicts, preserved activity, incompatible vectors, unresolved saturation, and failed-replay rejection. The candidate is not promoted: immutable publication regresses D, and snapshot association still needs independent unknown-voice validation and integration with manual corrections. The original B calibration plateau does not calibrate live rejection of new voices. A separate [public-speaker capacity stress dataset](../live-speaker-capacity/RESULTS.md) now exposes delayed capacity establishment and additional association regressions on development. Its validation cohort remains untouched. Real concurrent capture coverage remains unmeasured.
+
 ## Rejected sample-level grouping: human-reviewed accuracy
 
 | Sample and review | Saved worker DER | Live without rollover | Live with rollover | Consolidated, 0.72, rollover on | Original, frozen 0.55, rollover on | Corrected, frozen 0.20, rollover on |

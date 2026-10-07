@@ -84,7 +84,26 @@ The evaluator retains the initial threshold result alongside the calibrated resu
 
 Replay uses chronological 16 kHz blocks and the production sampling, activity filtering, rollover, and embedding code. It awaits every offered sample's extraction and bypasses the capture queue. This measures ideal retained-sample coverage and offline replay cost. It does not measure concurrent transcription, the live controller's busy-skip behavior, capture backlog, thermal endurance, or energy. The experiment must not claim those properties from accelerated replay.
 
+New replays also write `availability.json`. Its ordered entries retain every published speaker event and completed embedding sample ID, with the upper bound of audio submitted at that callback. The one-second input blocks bound this clock's resolution. An embedding's acoustic end time is not its availability time. Event ordinals preserve callbacks sharing the same submitted-audio timestamp. Final stream-flush callbacks retain the final audio endpoint. The trace measures sequential replay availability, not concurrent recording latency. Run receipts bind the trace and replay test source by SHA-256. New runs also hash the test binary, production sources, and model assets before and after execution; changed inputs invalidate the attempt. Mutable validation caches and Finder metadata are excluded from model inputs.
+
 Unresolved consolidated activity retains an anonymous local label during scoring. It is not removed to make the error smaller. Unresolved duration is reported separately. The scorer's fallback naming must be checked against final app publication behavior before interpreting its scores as transcript behavior.
+
+## Evaluate causal live association
+
+`online_associate.py` is an experimental chronological association policy, not production app behavior. It compares a changing match with a sticky first match at the frozen 0.72 threshold. Each trusted channel accumulates only previously available samples. Candidate identities come from earlier completed windows; known same-source overlap prevents a merge. Reference annotations enter only after decisions are complete.
+
+```sh
+UV_CACHE_DIR=/private/tmp/uv-speaker-consolidation uv run --no-project \
+  experiments/speaker-consolidation/online_associate.py \
+  --manifest "$TRACE_OUTPUT/manifest.json" --output "$ONLINE_OUTPUT" \
+  --availability --samples sample-J sample-D
+UV_CACHE_DIR=/private/tmp/uv-speaker-consolidation uv run --no-project \
+  experiments/speaker-consolidation/test_online_associate.py
+```
+
+With `--availability`, the script verifies trace hashes, exact activity/window reconstruction, and sample references. Samples wait until a published continuity event confirms their trusted range. Candidate labels at publication use decisions from strictly earlier callback ordinals. Current-state snapshots separately apply an available alias to that local label's earlier published speech. They do not claim the identity was known when that speech first appeared. Activity after capacity remains in a distinct unresolved namespace; a capacity-safe local baseline separates that change from association gains.
+
+Without a trace, the script uses sample end plus a declared delay. Those results are algorithmic sensitivity checks, not observed publication behavior. Extra-delay trace variants retain the original evidence-confirmation callback and do not simulate a concurrent scheduler. Use the zero-additional-delay trace variant for the observed callback-order comparison. Neither mode measures controller busy skips or wall-clock latency.
 
 ## Inspect short-span preprocessing
 

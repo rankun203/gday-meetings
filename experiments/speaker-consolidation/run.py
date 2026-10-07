@@ -11,6 +11,28 @@ import time
 from score import sha, private_output
 
 
+def source_snapshot(package, bundle, model_data):
+    production = package / "Sources/GdayMeetings"
+    model_root = model_data / "LocalModels"
+    assets = {}
+    # LocalModelManager rewrites its validation cache during model acquisition.
+    # These operational receipts and Finder metadata are not model inputs.
+    operational_files = {".gday-validation.json", ".gday-prepared", ".DS_Store"}
+    for model in ("community1", "nemotronLow"):
+        files = sorted(path for path in (model_root / model).rglob("*")
+                       if path.is_file() and path.name not in operational_files)
+        if not files:
+            raise ValueError("Missing replay model assets: " + model)
+        assets.update({str(path.relative_to(model_root)): sha(path) for path in files})
+    return dict(
+        productionSHA256={name: sha(production / name) for name in (
+            "Services/LocalLiveDiarization.swift", "Core/CommunityVoiceEmbeddingExtractor.swift",
+            "Core/SpeakerConsolidation.swift", "Core/SpeakerEvidence.swift", "Core/VoiceEmbeddingMath.swift",
+            "Core/LocalModels/TypedVoiceEmbedding.swift", "Core/VoiceProfileSelection.swift", "Core/LiveSpeakerCapacity.swift")},
+        replaySourceSHA256=sha(package / "Tests/GdayMeetingsTests/SpeakerConsolidationReplayTests.swift"),
+        testBundleSHA256=sha(bundle), driverSourceSHA256=sha(__file__), modelAssetsSHA256=assets)
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -51,6 +73,9 @@ def main():
         executable = args.test_bundle.resolve() / "Contents/MacOS/GdayMeetingsTests"
         command = [str(helper), "--test-bundle-path", str(executable), "--testing-library", "swift-testing",
                    "--filter", "SpeakerConsolidationReplayTests"]
+    bundle = (args.test_bundle / "Contents/MacOS/GdayMeetingsTests" if args.test_bundle else
+              args.package_path / f".build/out/Products/{args.configuration.capitalize()}/GdayMeetingsTests.xctest/Contents/MacOS/GdayMeetingsTests")
+    before = source_snapshot(args.package_path, bundle, Path(manifest["dataDirectory"]))
     log = out.with_suffix(".log")
     started = time.monotonic()
     interruption = None
@@ -75,15 +100,11 @@ def main():
     metadata["status"] = "interrupted" if interruption else "completed" if returncode == 0 else "failed"
     if interruption:
         metadata["interruption"] = type(interruption).__name__
-    production = args.package_path / "Sources/GdayMeetings"
-    metadata["productionSHA256"] = {name: sha(production / name) for name in (
-        "Services/LocalLiveDiarization.swift", "Core/CommunityVoiceEmbeddingExtractor.swift",
-        "Core/SpeakerConsolidation.swift", "Core/SpeakerEvidence.swift", "Core/VoiceEmbeddingMath.swift",
-        "Core/LocalModels/TypedVoiceEmbedding.swift", "Core/VoiceProfileSelection.swift", "Core/LiveSpeakerCapacity.swift")}
-    bundle = (args.test_bundle / "Contents/MacOS/GdayMeetingsTests" if args.test_bundle else
-              args.package_path / f".build/out/Products/{args.configuration.capitalize()}/GdayMeetingsTests.xctest/Contents/MacOS/GdayMeetingsTests")
-    if bundle.exists():
-        metadata["testBundleSHA256"] = sha(bundle)
+    metadata.update(before)
+    metadata["provenanceStable"] = before == source_snapshot(
+        args.package_path, bundle, Path(manifest["dataDirectory"]))
+    if not metadata["provenanceStable"]:
+        metadata["status"] = "invalid-provenance"
     out.with_suffix(".run.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(dict(sample=args.sample, rollover=args.rollover, returncode=returncode,
                          wallSeconds=metadata["wallSeconds"])))
@@ -91,6 +112,8 @@ def main():
         raise interruption
     if returncode:
         raise SystemExit(returncode)
+    if not metadata["provenanceStable"]:
+        raise SystemExit("Replay source or binary changed during execution.")
     assert (out / "receipt.json").exists(), "Replay test did not run."
 
 
