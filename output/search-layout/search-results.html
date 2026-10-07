@@ -1,7 +1,7 @@
 <!--
 ---
 title: Search results layout proposal
-date: 2026-10-07
+date: 2026-10-08
 status: prototype
 scope: design-preview
 ---
@@ -28,8 +28,11 @@ scope: design-preview
 #search-layout .badge {display:inline-flex;gap:5px;align-items:center;padding:3px 7px;border-radius:4px;background:light-dark(#e5eef9,#25384d);color:light-dark(#20558b,#a6caff);font-size:11px;font-weight:500;}
 #search-layout .badge.meeting {background:light-dark(#ece8f4,#383043);color:light-dark(#695187,#c7b4e2);}
 #search-layout .match-range {margin-bottom:10px;color:light-dark(#496785,#a6bdd5);font-size:11px;font-variant-numeric:tabular-nums;}
-#search-layout .range-labels {display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;}
-#search-layout .range-line {height:3px;background:light-dark(#8cafd2,#587da2);border-radius:2px;}
+#search-layout .range-labels {position:relative;height:20px;}
+#search-layout .range-start {position:absolute;left:var(--match-start);transform:translateX(-100%);padding-right:4px;white-space:nowrap;}
+#search-layout .range-end {position:absolute;left:var(--match-end);padding-left:4px;white-space:nowrap;}
+#search-layout .range-line {position:relative;height:2px;background:light-dark(#d0d0d0,#575757);border-radius:1px;}
+#search-layout .range-segment {position:absolute;left:var(--match-start);width:var(--match-width);top:-1px;height:4px;background:light-dark(#2875bd,#78b4f0);border-radius:1px;}
 #search-layout .excerpt {margin:0;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 #search-layout mark {background:light-dark(#dce9fb,#344d6b);color:inherit;border-radius:2px;}
 #search-layout .score {font-size:11px;color:light-dark(#777,#aaa);margin-top:13px;font-variant-numeric:tabular-nums;}
@@ -56,16 +59,22 @@ scope: design-preview
 (() => {
 const root=document.getElementById('search-layout');
 const data=[
-{title:'Retrieval architecture and evaluation planning',summary:'Index design, query routing, and evaluation',type:'Transcript',date:'7 Oct 2026 · 2:30 pm',time:'12:40',end:'13:10',duration:'30 sec',score:'0.9336',text:'The retrieval architecture should combine keyword lookup with semantic search. We can compare both approaches using the same evaluation questions before choosing the default.'},
+{title:'Retrieval architecture and evaluation planning',summary:'Index design, query routing, and evaluation',type:'Transcript',date:'7 Oct 2026 · 2:30 pm',total:'40:00',time:'12:40',end:'13:10',duration:'30 sec',score:'0.9336',text:'The retrieval architecture should combine keyword lookup with semantic search. We can compare both approaches using the same evaluation questions before choosing the default.'},
 {title:'Search planning',summary:'Retrieval architecture review',type:'Meeting',date:'6 Oct 2026 · 10:00 am',time:null,score:'0.9218',text:'Title match'},
-{title:'Platform discussion: search performance and storage choices',summary:'Reducing the time from query to useful results',type:'Transcript',date:'5 Oct 2026 · 11:15 am',time:'28:15',end:'28:45',duration:'30 sec',score:'0.9072',text:'Keep the retrieval index close to the application. That gives us a simpler architecture and lets us measure the time spent loading candidates separately from ranking them.'},
-{title:'Search evaluation',summary:'Comparing retrieval methods',type:'Transcript',date:'2 Oct 2026 · 9:00 am',time:'08:32',end:'08:54',duration:'22 sec',score:'0.8851',text:'For each query, collect the most useful passage and keep the surrounding context available. A matching title is helpful, but the passage explains why the result matters.'}
+{title:'Platform discussion: search performance and storage choices',summary:'Reducing the time from query to useful results',type:'Transcript',date:'5 Oct 2026 · 11:15 am',total:'45:00',time:'28:15',end:'28:45',duration:'30 sec',score:'0.9072',text:'Keep the retrieval index close to the application. That gives us a simpler architecture and lets us measure the time spent loading candidates separately from ranking them.'},
+{title:'Search evaluation',summary:'Comparing retrieval methods',type:'Transcript',date:'2 Oct 2026 · 9:00 am',total:'30:00',time:'08:32',end:'08:54',duration:'22 sec',score:'0.8851',text:'For each query, collect the most useful passage and keep the surrounding context available. A matching title is helpful, but the passage explains why the result matters.'}
 ];
 let timer,active=0,playing=-1,lastFocus;
 const rows=root.querySelector('.rows');
+const seconds=time=>time.split(':').reduce((value,part)=>value*60+Number(part),0);
+function matchRange(d){
+ if(!d.time)return '';
+ const total=seconds(d.total),start=seconds(d.time)/total*100,end=seconds(d.end)/total*100;
+ return `<div class="match-range" role="img" aria-label="Matching passage from ${d.time} to ${d.end}, ${d.duration}, within a ${d.total} recording" style="--match-start:${start}%;--match-end:${end}%;--match-width:${end-start}%"><div class="range-labels" aria-hidden="true"><span class="range-start">${d.time}</span><span class="range-end">${d.end}</span></div><div class="range-line" aria-hidden="true"><span class="range-segment"></span></div></div>`;
+}
 data.forEach((d,i)=>{
  const row=document.createElement('article');row.className='result';
- row.innerHTML=`<div class="rail"><span class="rank">${i+1}</span><button class="play cursor-interaction" aria-label="Play ${d.time?'from '+d.time:'meeting from beginning'}">▶</button></div><div><button class="title cursor-interaction" aria-label="Preview ${d.title}">${d.title}</button><p class="summary">${d.summary}</p><div class="columns"><div class="meta"><span class="badge ${d.type==='Meeting'?'meeting':''}">${d.type==='Meeting'?'▣':'≋'} ${d.type}</span><span>${d.date}</span>${d.time?'':'<span>From beginning</span>'}</div><div>${d.time?`<div class="match-range" role="img" aria-label="Matching passage from ${d.time} to ${d.end}, ${d.duration}"><div class="range-labels" aria-hidden="true"><span>${d.time}</span><span>${d.duration}</span><span>${d.end}</span></div><div class="range-line" aria-hidden="true"></div></div>`:''}<p class="excerpt">${d.text}</p></div></div><div class="score">Content ${d.score} · Speakers 0/0 · Bonus 0.0000 · Score ${d.score}</div></div>`;
+ row.innerHTML=`<div class="rail"><span class="rank">${i+1}</span><button class="play cursor-interaction" aria-label="Play ${d.time?'from '+d.time:'meeting from beginning'}">▶</button></div><div><button class="title cursor-interaction" aria-label="Preview ${d.title}">${d.title}</button><p class="summary">${d.summary}</p><div class="columns"><div class="meta"><span class="badge ${d.type==='Meeting'?'meeting':''}">${d.type==='Meeting'?'▣':'≋'} ${d.type}</span><span>${d.date}</span>${d.time?'':'<span>From beginning</span>'}</div><div>${matchRange(d)}<p class="excerpt">${d.text}</p></div></div><div class="score">Content ${d.score} · Speakers 0/0 · Bonus 0.0000 · Score ${d.score}</div></div>`;
  const play=row.querySelector('.play');play.onclick=e=>{e.stopPropagation();togglePlay(i);};play.ondblclick=e=>e.stopPropagation();
  row.onclick=e=>{if(e.target.closest('.play'))return;if(e.detail===0){preview(i);return;}clearTimeout(timer);timer=setTimeout(()=>preview(i),280);};
  row.ondblclick=e=>{if(e.target.closest('.play'))return;clearTimeout(timer);navigate(i);};rows.append(row);

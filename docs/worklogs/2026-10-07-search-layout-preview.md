@@ -1,6 +1,6 @@
 ---
 title: Search result passage range preview
-date: 2026-10-07
+date: 2026-10-08
 status: complete
 scope: html-design-preview
 ---
@@ -11,11 +11,11 @@ The search layout preview placed passage timestamps in the metadata column, away
 
 ## Implemented solution
 
-Updated `output/search-layout/search-results.html`, the 750px synthetic design preview, with a static range above each transcript excerpt. Start and end times label its endpoints; duration appears between them. Title matches omit the range. Preview dialogs also show the passage's start and end times. The commit includes the previously untracked preview.
+Updated `output/search-layout/search-results.html`, the 750px synthetic design preview, with a static whole-recording line above each transcript excerpt. A colored segment shows the matching interval at its proportional position and width. Start and end timestamps sit just outside the segment endpoints so short intervals retain readable labels. Title matches omit the range. Preview dialogs also show the passage's start and end times. The commit includes the previously untracked preview.
 
 ## Reasoning
 
-The supplied annotated screenshot establishes the intended location above the passage. A plain line indicates the passage interval without suggesting a moving playhead or seek control. Rank and Play remain in the left rail; title and summary keep their full width; scores remain below. Each line spans its own labeled interval, not the entire recording or a shared duration scale.
+The supplied annotated screenshot establishes the intended location above the passage. A plain line indicates the passage interval without suggesting a moving playhead or seek control. Rank and Play remain in the left rail; title and summary keep their full width; scores remain below. Each neutral line spans the entire recording. The colored segment uses the passage start, end, and recording duration; it has no playhead or seek behavior. Removed the centered duration label to keep the line plain.
 
 ## Technical debt
 
@@ -23,4 +23,4 @@ None added to the application. This is a design prototype with synthetic timesta
 
 ## Notes
 
-Inspected the supplied before screenshot and captured the changed 750px preview in Chrome. Confirmed endpoint labels, duration, omission on title matches, and accessible range descriptions. Activated Play and confirmed the range remained static while the separate playback status changed. Earlier preview validation covered dialog and double-click navigation. Reviewed wording against `docs/writing.md`; `git diff --check` passed. Narrow-width rendering was not revalidated in this update. No Swift files changed, so no macOS release build was required.
+Inspected the supplied before screenshot and captured the changed 750px preview in Chrome. Confirmed the neutral line, proportional colored segment, endpoint labels, omission on title matches, and accessible range descriptions including total recording duration. Activated Play and confirmed the range remained static while the separate playback status changed. Earlier preview validation covered dialog and double-click navigation. Reviewed wording against `docs/writing.md`; `git diff --check` passed. Narrow-width rendering and labels at the extreme recording boundaries were not revalidated in this update; the synthetic examples place matches inside the recording. No Swift files changed, so no macOS release build was required.
