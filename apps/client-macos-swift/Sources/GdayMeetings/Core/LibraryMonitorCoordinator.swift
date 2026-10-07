@@ -75,6 +75,27 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         }
     }
 
+    func reconcileMissingMeeting(id: UUID) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                guard !stopped else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                do {
+                    let index = try LibraryIndex(directory: root, indexDirectory: indexDirectory)
+                    let removed = try index.reconcileMissingMeeting(id: id)
+                    if removed {
+                        refreshCounts()
+                        changed(false)
+                    }
+                    continuation.resume(returning: removed)
+                }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
     func rebuild() { process(.init(paths: [], requiresScan: true, eventID: 0)) }
 
     func process(_ batch: LibraryFileMonitor.Batch) {

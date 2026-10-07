@@ -23,6 +23,77 @@ import Testing
         #expect(try Data(contentsOf: metadata) == bytes)
     }
 
+    @Test func missingMetadataRemovesOnlyTheDisposableIndexRecord() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Synthetic meeting")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: root)
+        let audio = folder.appendingPathComponent("recording.opus")
+        let bytes = Data([1, 2, 3])
+        try bytes.write(to: audio)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("metadata.json"))
+        #expect(try index.reconcileMissingMeeting(id: meeting.id))
+        #expect(try index.entry(id: meeting.id) == nil)
+        #expect(try Data(contentsOf: audio) == bytes)
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("content.json").path))
+    }
+
+    @Test func missingFolderLoadSchedulesIndexCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let meeting = Meeting(title: "Synthetic meeting")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try LibraryIndex(directory: root).rebuild()
+        let store = MeetingStore(dataDirectory: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: root)
+        try FileManager.default.removeItem(at: folder)
+        #expect(await !store.ensureMeetingLoaded(id: meeting.id))
+        for _ in 0..<200 {
+            if !store.isJobRunning(.libraryIndex, .meeting(meeting.id)) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(try store.libraryIndex?.entry(id: meeting.id) == nil)
+        #expect(!store.meetingCatalog.contains { $0.id == meeting.id })
+        #expect(store.meetingPageError == nil)
+        await store.libraryMonitor?.stop()
+    }
+
+    @Test func reconciliationPreservesRenamedMeetingsAndUnavailableLibraries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Synthetic meeting")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        let folder = try MeetingFolderLocation.resolve(id: meeting.id, directory: root)
+        let renamed = root.appendingPathComponent("meetings").appendingPathComponent(MeetingIdentity.string(meeting.id))
+        try FileManager.default.moveItem(at: folder, to: renamed)
+        #expect(try !index.reconcileMissingMeeting(id: meeting.id))
+        #expect(try index.entry(id: meeting.id) != nil)
+        let unavailable = root.appendingPathComponent("unavailable")
+        try FileManager.default.moveItem(at: root.appendingPathComponent("meetings"), to: unavailable)
+        #expect(throws: (any Error).self) { try index.reconcileMissingMeeting(id: meeting.id) }
+        #expect(try index.entry(id: meeting.id) != nil)
+    }
+
+    @Test func reconciliationWaitsForCanonicalTransactions() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Synthetic meeting")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        let metadata = try MeetingFolderLocation.resolve(id: meeting.id, directory: root).appendingPathComponent(
+            "metadata.json")
+        try FileManager.default.removeItem(at: metadata)
+        try Data().write(to: root.appendingPathComponent(".document-transaction"))
+        #expect(try !index.reconcileMissingMeeting(id: meeting.id))
+        #expect(try index.entry(id: meeting.id) != nil)
+    }
+
     private func fixture() throws -> (URL, [Meeting]) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

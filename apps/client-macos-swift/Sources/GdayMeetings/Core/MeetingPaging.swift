@@ -170,7 +170,43 @@ extension MeetingStore {
         catch {
             guard generation == externalReloadGeneration, meetingLoadRequests[id] == request, !isChangingLibrary
             else { return .superseded }
-            meetingPageError = "Couldn’t load this meeting. \(error.localizedDescription)"
+            let failure = error as NSError
+            CaptureLog.library.error(
+                "Meeting load failed: domain=\(failure.domain, privacy: .public) code=\(failure.code) meeting=\(id.uuidString, privacy: .private)"
+            )
+            if let missing = error as? CocoaError,
+                missing.code == .fileReadNoSuchFile || missing.code == .fileNoSuchFile,
+                let monitor = libraryMonitor,
+                beginJob(.libraryIndex, .meeting(id), progress: "Updating Index")
+            {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { endJob(.libraryIndex, .meeting(id)) }
+                    do {
+                        let removed = try await monitor.reconcileMissingMeeting(id: id)
+                        guard generation == externalReloadGeneration, !isChangingLibrary else { return }
+                        if removed {
+                            CaptureLog.library.notice("Removed an index record whose meeting metadata is missing.")
+                            meetingPageError = nil
+                            resetMeetingPages()
+                        }
+                        else {
+                            meetingPageError = "Couldn’t load this meeting. \(error.localizedDescription)"
+                        }
+                    }
+                    catch {
+                        guard generation == externalReloadGeneration, !isChangingLibrary else { return }
+                        let failure = error as NSError
+                        CaptureLog.library.error(
+                            "Index reconciliation failed: domain=\(failure.domain, privacy: .public) code=\(failure.code)"
+                        )
+                        libraryDataStatus.error = "Couldn’t update the index. \(error.localizedDescription)"
+                    }
+                }
+            }
+            else {
+                meetingPageError = "Couldn’t load this meeting. \(error.localizedDescription)"
+            }
             return .failed
         }
     }

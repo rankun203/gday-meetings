@@ -11,6 +11,7 @@ struct BackgroundJob: Identifiable, Equatable {
         static let transcription = Self(rawValue: "transcription")
         static let diarization = Self(rawValue: "diarization")
         static let summary = Self(rawValue: "summary")
+        static let libraryIndex = Self(rawValue: "libraryIndex")
         static let searchIndex = Self(rawValue: "searchIndex")
         static let chat = Self(rawValue: "chat")
         static let archive = Self(rawValue: "archive")

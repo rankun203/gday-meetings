@@ -44,6 +44,8 @@ Index metadata and relationship tables with `(created_at DESC, id ASC)` ordering
 
 Index updates follow durable file writes. A crash after a file update but before indexing is repaired by reconciliation. A rebuild uses a separate connection to the same WAL database. When an index already contains records, a transaction retains its previous committed view for readers until the rebuilt view commits. An initially empty index commits every 500 records so the first page can appear while indexing continues. A completion marker distinguishes a complete index from an interrupted initial build. Filesystem events queued during rebuilding are reconciled afterward. Corrupt index recovery must never rewrite source documents.
 
+A missing-file meeting load requests a separate **Updating Index** background task. Recheck the resolved folder and library availability before removing a stale row; preserve source files, renamed meetings, and unavailable or transaction-protected libraries. Refresh the catalog after removal instead of leaving a persistent missing-meeting error.
+
 An index is not a backup. File backups preserve authoritative documents and assets. Malformed source JSON is reported without replacing it with defaults. Entity deletions, multi-file publication, and concurrent agent/app edits need explicit revision checks and atomic file replacement; stale app state must not silently overwrite external edits.
 
 # Monitoring and folder discovery

@@ -526,6 +526,27 @@ final class LibraryIndex: @unchecked Sendable {
             throw error
         }
     }
+    /// A missing authoritative document invalidates its disposable catalog row.
+    /// Recheck the location on disk so a renamed folder is not mistaken for deletion.
+    func reconcileMissingMeeting(id: UUID) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try directory.resourceValues(forKeys: [.isDirectoryKey])
+        _ = try directory.appendingPathComponent("meetings").resourceValues(forKeys: [.isDirectoryKey])
+        guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent(".document-transaction").path)
+        else { return false }
+        let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
+        let metadata = folder.appendingPathComponent("metadata.json")
+        do {
+            _ = try metadata.resourceValues(forKeys: [.isRegularFileKey])
+            return false
+        }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            try remove(id: id)
+            return true
+        }
+    }
+
     func reconcile(paths: [URL]) throws {
         lock.lock()
         defer { lock.unlock() }

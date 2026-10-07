@@ -9,6 +9,8 @@ enum CaptureLog {
     static let subsystem = Bundle.main.bundleIdentifier ?? "com.gdaymeetings.macos"
     /// Source setup, device binding, formats, voice processing, and triggers.
     static let capture = Logger(subsystem: subsystem, category: "capture")
+    /// Library reads and disposable index reconciliation.
+    static let library = Logger(subsystem: subsystem, category: "library")
     /// Rebuild scheduling, attempts, backoff, and the loop guard.
     static let recovery = Logger(subsystem: subsystem, category: "recovery")
 
