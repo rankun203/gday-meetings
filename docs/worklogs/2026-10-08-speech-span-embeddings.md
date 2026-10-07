@@ -1,7 +1,7 @@
 ---
 title: Correct normalization of short voice samples
 date: 2026-10-08
-status: active
+status: completed
 scope: swift-speaker-association
 ---
 

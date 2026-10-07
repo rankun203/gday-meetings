@@ -1,7 +1,7 @@
 ---
 title: Retain live voice evidence and consolidate meeting speakers
 date: 2026-10-08
-status: in-progress
+status: completed
 scope: swift-app-and-diarization-evaluation
 ---
 
@@ -105,4 +105,8 @@ No temporary publication transaction, automatic enrollment shortcut, or inferred
 - Existing provider/model and search work from the other two sessions is integrated. Both sessions finished, and both earlier commits passed the macOS 26 and 27 release matrix. The whole-app suite above includes their changes.
 - The short-span preprocessing correction was committed separately as `80fcb00`. Private progress and raw evaluation artifacts remain ignored under `tmp/`; only source, synthetic fixtures, and aggregate findings are committed. About 46 GB of verified unused temporary builds were removed while preserving current builds, evaluation inputs, and other running apps.
 
-Final `make build-macos` passed in the isolated checkout: macOS 26.0 minimum, SDK 27.0. Code signing verification and a fresh release-bundle consolidation smoke test passed. The build snapshot exactly matches the final source and tests. Formatting, lint, complete staged review, and independent code/evaluation review passed. The pushed commit’s CI results will be recorded before delivery. Local Command Line Tools emit linker warnings for missing `Developer/usr/lib` and `Developer/Library/Frameworks` search paths; no deprecation warnings were observed. These toolchain warnings are retained explicitly rather than described as a warning-free build. Real microphone/system-capture concurrency, energy, long-running backlog, and broad multi-source accuracy remain outside this synthetic UI and accelerated replay validation.
+Final `make build-macos` passed in the isolated checkout: macOS 26.0 minimum, SDK 27.0. Code signing verification and a fresh release-bundle consolidation smoke test passed. The build snapshot exactly matches the final source and tests. Formatting, lint, complete staged review, and independent code/evaluation review passed. The additional release-mode performance checks passed all six tests in three suites, covering streaming growth, notes capacity, and summary performance.
+
+The implementation was pushed as `1bdb677`. Its [release CI matrix](https://github.com/rankun203/gday-meetings/actions/runs/37643897135) passed on macOS 26 and macOS 27 (runner preview). Both runners were available and completed successfully. The final documentation checkpoint does not change the validated source.
+
+Local Command Line Tools emit linker warnings for missing `Developer/usr/lib` and `Developer/Library/Frameworks` search paths; no deprecation warnings were observed. These toolchain warnings are retained explicitly rather than described as a warning-free build. Real microphone/system-capture concurrency, energy, long-running backlog, and broad multi-source accuracy remain outside this synthetic UI and accelerated replay validation.
