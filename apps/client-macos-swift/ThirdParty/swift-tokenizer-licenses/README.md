@@ -7,7 +7,7 @@ scope: macos-app-binary-distribution
 
 # Swift tokenizer dependency notices
 
-These unmodified license and notice files accompany the Swift Tokenizers dependency graph pinned in `Package.resolved`. They apply to the app binary and tokenizer resource bundle, separately from the downloaded CLSP model distribution. Keep the original files when redistributing the app.
+These unmodified license and notice files accompany the Swift Tokenizers dependency graph pinned in `Package.resolved`. They apply to the app binary and tokenizer resource bundle, separately from downloaded model assets. Keep the original files when redistributing the app.
 
 | Component | Revision | License |
 | --- | --- | --- |

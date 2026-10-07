@@ -64,8 +64,6 @@ See [search dependencies](search-licenses/README.md) for versions, native dispat
 build details, and license packaging. Normal Make entry points build both audio
 and search dependencies automatically.
 
-## CLSP native inference
+## Tokenizers
 
-The native voice-search integration uses Swift Tokenizers and a Kaldi-compatible Swift audio frontend. Their notices and the separately downloaded model's inherited licenses are recorded in [CLSP attribution](clsp-licenses/NOTICE.md). Release packaging copies `clsp-licenses/` into `Contents/Resources/ThirdPartyLicenses/CLSP`. Model weights are not checked in or bundled with the app; the prepared Core ML distribution includes its own copy of these notices.
-
-The app also bundles the [Swift tokenizer dependency notices](swift-tokenizer-licenses/README.md) in `Contents/Resources/ThirdPartyLicenses/SwiftTokenizers`. These app dependencies are separate from the downloaded model assets.
+The app bundles the [Swift tokenizer dependency notices](swift-tokenizer-licenses/README.md) in `Contents/Resources/ThirdPartyLicenses/SwiftTokenizers`. These dependencies support semantic text search.

@@ -198,7 +198,12 @@ private final class BackgroundResponseGate: @unchecked Sendable {
         #expect(store.meetings.first?.transcriptionAttempt == nil)
         #expect(await store.deleteMeeting(id: id))
         #expect(store.meetings.isEmpty)
-        #expect(!store.containsMeeting(id: id))
+        let retained = store.containsMeeting(id: id)
+        let indexed = try store.libraryIndex?.entry(id: id)
+        #expect(
+            !retained,
+            "Loaded \(store.meetings.contains { $0.id == id }), index \(String(describing: indexed)), metadata \(FileManager.default.fileExists(atPath: store.directory(for: id).appendingPathComponent("metadata.json").path)), index error \(String(describing: store.libraryDataStatus.error))"
+        )
         #expect(store.meetingPageError == nil)
     }
 }

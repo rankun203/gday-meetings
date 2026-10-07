@@ -102,8 +102,6 @@ def main():
     parser.add_argument("dataset", type=Path)
     parser.add_argument("runs", type=Path)
     parser.add_argument("--judgments", type=Path)
-    parser.add_argument("--clsp-run", type=Path, help="Verify an expanded CLSP run against the dataset fingerprint.")
-    parser.add_argument("--skip-clsp", action="store_true", help="Prepare a partial comparison before the CLSP run completes.")
     parser.add_argument("--text-run", action="append", default=[], metavar="NAME=PATH",
                         help="Include a completed text-only encoding run.")
     parser.add_argument("--output", type=Path, help="Write comparisons separately from the original run.")
@@ -140,15 +138,6 @@ def main():
             scores[name] = (vectorizer.transform(texts) @ d.T).toarray()
         timings[name] = time.perf_counter() - start
         lexical.add(name)
-    if not args.skip_clsp:
-        scores["clsp-audio"] = np.load(args.dataset / "reference-similarities.npy")
-    if args.clsp_run:
-        signature = json.loads((args.clsp_run / "manifest.json").read_text())
-        completed = json.loads((args.clsp_run / "complete.json").read_text())
-        if signature["inputs_sha256"] != digest.hexdigest() or completed["queries"] != len(qs) or completed["windows"] != len(cs):
-            raise ValueError("CLSP run does not cover these exact inputs.")
-    if not args.skip_clsp and scores["clsp-audio"].shape != (len(qs), len(cs)):
-        raise ValueError("CLSP matrix dimensions differ from the input corpus.")
     for model in ["e5", "jina", "clap"]:
         folder = args.runs / model
         if not (folder / "complete.json").exists():

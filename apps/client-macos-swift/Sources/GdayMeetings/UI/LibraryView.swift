@@ -466,6 +466,9 @@ struct LibraryView: View {
                 VStack(spacing: 0) {
                     if store.showsTaskQueueStatus {
                         TaskQueueStatusButton {
+                            workspace.tasks.scope = store.taskAttentionCount > 0 ? .attention : .active
+                            workspace.tasks.selection = nil
+                            workspace.tasks.selectedRow = nil
                             focusedTaskID = nil
                             showsSearchResults = false
                             openedSearchResult = nil
@@ -518,6 +521,11 @@ struct LibraryView: View {
         }
         .onDisappear { sidebarControl?.disconnect() }
         .onChange(of: search) { _, query in
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                let provider = store.selectedSearchProvider
+            {
+                store.localSearch.typingBegan(provider)
+            }
             if query.isEmpty, showsSearchResults { showsSearchResults = false }
         }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
@@ -715,7 +723,6 @@ struct LibraryView: View {
             let health = await manager.health(for: model.localID)
             guard store.selectedSearchProvider == provider else { return }
             if health.isReady {
-                store.localSearch.preload(provider)
                 return
             }
             guard ![.downloading, .verifying, .preparing].contains(manager.state(for: model.localID).phase) else {

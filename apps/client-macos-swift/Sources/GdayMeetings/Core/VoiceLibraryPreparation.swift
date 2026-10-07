@@ -9,7 +9,7 @@ struct VoicePreparationCapability: Equatable {
 }
 
 enum VoicePreparationState: String, Codable {
-    case queued, running, paused, completed, failed
+    case queued, running, paused, completed, failed, cancelled
 }
 
 struct VoiceDiscoveryInput: Codable, Equatable {
@@ -35,6 +35,8 @@ struct VoicePreparationJob: Identifiable, Codable, Equatable {
     var failures: [String: String] = [:]
     var state: VoicePreparationState = .queued
     var createdAt = Date()
+    var attentionAcknowledged: Bool?
+    var timeline: [TaskAttemptEvent]?
     var progress: String {
         let examples = "\(completedExampleIDs.count) of \(exampleIDs.count) voice examples prepared"
         guard !discoveryInputs.isEmpty else { return examples }
@@ -43,27 +45,35 @@ struct VoicePreparationJob: Identifiable, Codable, Equatable {
 }
 
 protocol VoiceExampleEmbeddingExtracting: Sendable {
+    func finish() async
     func extract(example: VoiceExample, directory: URL, type: EmbeddingType) async throws -> TypedVoiceEmbedding
 }
 
 protocol VoiceRecordingDiscovering: Sendable {
+    func finish() async
     func discover(files: [URL]) async throws -> LocalDiarizationResult
 }
+
+extension VoiceExampleEmbeddingExtracting { func finish() async {} }
+extension VoiceRecordingDiscovering { func finish() async {} }
 
 @MainActor
 final class VoiceLibraryPreparation: ObservableObject {
     private let library: VoiceLibraryStore
-    private let extractor: any VoiceExampleEmbeddingExtracting
-    private let discoverer: any VoiceRecordingDiscovering
+    private let extractor: (any VoiceExampleEmbeddingExtracting)?
+    private let discoverer: (any VoiceRecordingDiscovering)?
     private let inventoryReader = VoiceDiscoverySourceReader()
     private let people: () -> [Person]
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var retiringRuns: [UUID: Task<Void, Never>] = [:]
+    var pendingRunCount: Int { tasks.count + retiringRuns.count }
+    private var recordingPausedJobs: [UUID] = []
     private var runTokens: [UUID: UUID] = [:]
     @Published private(set) var errorMessage: String?
 
     init(
-        library: VoiceLibraryStore, extractor: any VoiceExampleEmbeddingExtracting = LocalVoiceExampleExtractor(),
-        discoverer: any VoiceRecordingDiscovering = LocalVoiceRecordingDiscoverer(),
+        library: VoiceLibraryStore, extractor: (any VoiceExampleEmbeddingExtracting)? = nil,
+        discoverer: (any VoiceRecordingDiscovering)? = nil,
         people: @escaping () -> [Person] = { [] }
     ) {
         self.library = library
@@ -73,7 +83,12 @@ final class VoiceLibraryPreparation: ObservableObject {
         // A process exit cannot leave a task appearing to run after reopening.
         var recovered = library.jobs
         for index in recovered.indices where recovered[index].state == .running || recovered[index].state == .queued {
+            let previous = recovered[index]
             recovered[index].state = .paused
+            recovered[index].recordTransition(from: previous)
+            if let last = recovered[index].timeline?.indices.last {
+                recovered[index].timeline?[last].reason = "Paused after interruption"
+            }
         }
         if recovered != library.jobs { _ = library.setJobs(recovered) }
     }
@@ -151,18 +166,70 @@ final class VoiceLibraryPreparation: ObservableObject {
                 guard !meeting.audioFiles.isEmpty else { return nil }
                 return .init(meetingID: meeting.id, audioFiles: meeting.audioFiles, audioRevisions: [:])
             } : []
-        let job = VoicePreparationJob(
+        var job = VoicePreparationJob(
             providerID: provider.id, providerName: provider.name, type: type, discover: discover,
             exampleIDs: examples.map(\.id), discoveryInputs: inputs)
+        job.timeline = [.init(kind: .queued, date: job.createdAt, reason: nil)]
         guard library.setJobs(library.jobs + [job]) else { return nil }
         resume(jobID: job.id, directory: directory)
         return job.id
     }
 
-    func pause(jobID: UUID) {
-        runTokens.removeValue(forKey: jobID)
-        tasks.removeValue(forKey: jobID)?.cancel()
+    func discard(jobID: UUID) {
+        guard let job = library.jobs.first(where: { $0.id == jobID }), job.state != .queued && job.state != .running
+        else { return }
+        recordingPausedJobs.removeAll { $0 == jobID }
+        _ = library.setJobs(library.jobs.filter { $0.id != jobID })
+    }
+
+    func dismissAlert(jobID: UUID) {
+        update(jobID) { $0.attentionAcknowledged = true }
+    }
+
+    func pause(jobID: UUID, reason: String? = nil) {
+        if reason == nil { recordingPausedJobs.removeAll { $0 == jobID } }
+        let token = runTokens.removeValue(forKey: jobID)
+        if let task = tasks.removeValue(forKey: jobID) {
+            task.cancel()
+            if let token { retiringRuns[token] = task }
+        }
         update(jobID) { $0.state = .paused }
+        if let reason {
+            update(jobID) { job in
+                if let last = job.timeline?.indices.last { job.timeline?[last].reason = reason }
+            }
+        }
+    }
+
+    func cancel(jobID: UUID) {
+        recordingPausedJobs.removeAll { $0 == jobID }
+        let token = runTokens.removeValue(forKey: jobID)
+        if let task = tasks.removeValue(forKey: jobID) {
+            task.cancel()
+            if let token { retiringRuns[token] = task }
+        }
+        update(jobID) { $0.state = .cancelled }
+    }
+
+    func shutdown() async {
+        recordingPausedJobs = []
+        let pending = Array(tasks.values) + Array(retiringRuns.values)
+        for id in Array(tasks.keys) { pause(jobID: id) }
+        for task in pending { await task.value }
+    }
+
+    func suspendForRecording() {
+        let running = library.jobs.filter { $0.state == .running && tasks[$0.id] != nil }.map(\.id)
+        recordingPausedJobs = running
+        for id in running { pause(jobID: id, reason: "Paused for recording") }
+    }
+
+    func resumeAfterRecording(directory: @escaping (UUID) -> URL) {
+        let paused = recordingPausedJobs
+        recordingPausedJobs = []
+        for id in paused where library.jobs.first(where: { $0.id == id })?.state == .paused {
+            resume(jobID: id, directory: directory)
+        }
     }
 
     func resume(jobID: UUID, directory: @escaping (UUID) -> URL) {
@@ -172,13 +239,19 @@ final class VoiceLibraryPreparation: ObservableObject {
         guard update(jobID, { $0.state = .running }) else { return }
         let token = UUID()
         runTokens[jobID] = token
+        let retiring = Array(retiringRuns.values)
         tasks[jobID] = Task { [weak self] in
             guard let self else { return }
-            await run(jobID: jobID, directory: directory)
-            if runTokens[jobID] == token {
-                tasks.removeValue(forKey: jobID)
-                runTokens.removeValue(forKey: jobID)
+            defer {
+                retiringRuns.removeValue(forKey: token)
+                if runTokens[jobID] == token {
+                    tasks.removeValue(forKey: jobID)
+                    runTokens.removeValue(forKey: jobID)
+                }
             }
+            for previous in retiring { await previous.value }
+            guard !Task.isCancelled, runTokens[jobID] == token else { return }
+            await run(jobID: jobID, directory: directory)
         }
     }
 
@@ -188,7 +261,20 @@ final class VoiceLibraryPreparation: ObservableObject {
             errorMessage = library.errorMessage
             return
         }
-        await discoverRecordings(jobID: jobID, directory: directory)
+        // A run owns its sessions. Pause/resume cannot hand an old cancelled worker
+        // to the replacement run, and cleanup completes before a run releases its owner.
+        let extractor = extractor ?? LocalVoiceExampleExtractor()
+        let discoverer = discoverer ?? LocalVoiceRecordingDiscoverer()
+        await process(jobID: jobID, directory: directory, extractor: extractor, discoverer: discoverer)
+        await extractor.finish()
+        await discoverer.finish()
+    }
+
+    private func process(
+        jobID: UUID, directory: (UUID) -> URL,
+        extractor: any VoiceExampleEmbeddingExtracting, discoverer: any VoiceRecordingDiscovering
+    ) async {
+        await discoverRecordings(jobID: jobID, directory: directory, discoverer: discoverer)
         guard let job = library.jobs.first(where: { $0.id == jobID }), job.state == .running else { return }
         for exampleID in job.exampleIDs {
             guard !Task.isCancelled,
@@ -250,7 +336,9 @@ final class VoiceLibraryPreparation: ObservableObject {
         update(jobID) { $0.state = $0.failures.isEmpty ? .completed : .failed }
     }
 
-    private func discoverRecordings(jobID: UUID, directory: (UUID) -> URL) async {
+    private func discoverRecordings(jobID: UUID, directory: (UUID) -> URL, discoverer: any VoiceRecordingDiscovering)
+        async
+    {
         guard let job = library.jobs.first(where: { $0.id == jobID }), job.discover else { return }
         for var input in job.discoveryInputs {
             await Task.yield()
@@ -388,7 +476,9 @@ final class VoiceLibraryPreparation: ObservableObject {
     private func update(_ jobID: UUID, _ change: (inout VoicePreparationJob) -> Void) -> Bool {
         var jobs = library.jobs
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return false }
+        let previous = jobs[index]
         change(&jobs[index])
+        jobs[index].recordTransition(from: previous)
         return library.setJobs(jobs)
     }
 

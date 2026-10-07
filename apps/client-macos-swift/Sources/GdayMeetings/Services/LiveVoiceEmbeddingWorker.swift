@@ -7,8 +7,8 @@ actor LiveVoiceEmbeddingWorker {
     private var cancelled = false
     private var activeExtractions = 0
 
-    func prepare() async throws {
-        let acquired = try await LocalModelManager.shared.acquire(.voiceEmbedding)
+    func prepare(priority: ProcessingCoordinator.Priority = .capture) async throws {
+        let acquired = try await LocalModelManager.shared.acquire(.voiceEmbedding, priority: priority)
         guard !cancelled, !Task.isCancelled else {
             await LocalModelManager.shared.release(acquired)
             throw CancellationError()
@@ -24,11 +24,17 @@ actor LiveVoiceEmbeddingWorker {
         }
     }
 
-    func extract(_ sample: LiveSpeakerAudioSample) async throws -> TypedVoiceEmbedding? {
+    func extract(_ sample: LiveSpeakerAudioSample, priority: ProcessingCoordinator.Priority = .capture) async throws
+        -> TypedVoiceEmbedding?
+    {
         guard let extractor, !cancelled, !Task.isCancelled else { throw CancellationError() }
         activeExtractions += 1
         let values: [Double]
-        do { values = try await extractor.extract(samples: sample.samples) }
+        do {
+            values = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: priority) {
+                try await extractor.extract(samples: sample.samples)
+            }
+        }
         catch {
             activeExtractions -= 1
             await releaseIfCancelled()

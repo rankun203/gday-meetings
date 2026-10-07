@@ -1,4 +1,5 @@
 import CSQLite
+import CryptoKit
 import Foundation
 
 /// Disposable locations into the authoritative journal. No task payload is duplicated here.
@@ -32,13 +33,13 @@ final class ManagedTaskIndex {
     }
     func clear() throws {
         try execute(
-            "DROP TABLE IF EXISTS temp.previous_offsets; CREATE TEMP TABLE previous_offsets AS SELECT id,offset,digest FROM task_offsets; CREATE INDEX previous_task_id ON previous_offsets(id)"
+            "DROP TABLE IF EXISTS temp.previous_offsets; CREATE TEMP TABLE previous_offsets AS SELECT id,intent_digest FROM task_offsets; CREATE INDEX previous_task_id ON previous_offsets(id)"
         )
         try connection.beginStaging(.tasks, preservingRows: false)
     }
     func changedSinceRebuild(_ id: UUID) throws -> Bool {
         let query = try statement(
-            "SELECT count(*) FROM task_offsets current LEFT JOIN previous_offsets previous ON current.id=previous.id WHERE current.id=\(Self.literal(id.uuidString)) AND (previous.id IS NULL OR current.offset!=previous.offset OR current.digest!=previous.digest)"
+            "SELECT count(*) FROM task_offsets current LEFT JOIN previous_offsets previous ON current.id=previous.id WHERE current.id=\(Self.literal(id.uuidString)) AND (previous.id IS NULL OR current.intent_digest!=previous.intent_digest)"
         )
         defer { sqlite3_finalize(query) }
         guard sqlite3_step(query) == SQLITE_ROW else { throw failure() }
@@ -46,7 +47,7 @@ final class ManagedTaskIndex {
     }
     func remove(_ id: UUID) throws { try execute("DELETE FROM task_offsets WHERE id=\(Self.literal(id.uuidString))") }
     func upsert(_ record: ManagedTaskRecord, offset: UInt64, length: Int, digest: String) throws {
-        let query = try statement("INSERT OR REPLACE INTO task_offsets VALUES(?,?,?,?,?,?,?,?,?)")
+        let query = try statement("INSERT OR REPLACE INTO task_offsets VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
         defer { sqlite3_finalize(query) }
         for (position, value) in [
             (1, record.id.uuidString), (3, record.state.rawValue), (4, record.kind.rawValue),
@@ -59,6 +60,12 @@ final class ManagedTaskIndex {
         sqlite3_bind_int64(query, 7, Int64(offset))
         sqlite3_bind_int64(query, 8, Int64(length))
         sqlite3_bind_text(query, 9, digest, -1, transient)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let contentDigest = SHA256.hash(data: try encoder.encode(ManagedTaskExecutionIntent(record))).description
+        sqlite3_bind_text(query, 10, contentDigest, -1, transient)
+        sqlite3_bind_int(query, 11, record.needsAttention ? 1 : 0)
+        sqlite3_bind_int(query, 12, record.isAutomatic ? 1 : 0)
         guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
     }
     func locations(where predicate: String = "1", order: String = "created DESC,id DESC", limit: Int) throws

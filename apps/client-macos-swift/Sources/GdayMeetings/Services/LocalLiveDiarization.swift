@@ -74,7 +74,7 @@ actor LocalLiveDiarization {
         else {
             manager = await LocalModelManager.shared
         }
-        let acquired = try await manager.acquire(model)
+        let acquired = try await manager.acquire(model, priority: .capture)
         guard !cancelled, !Task.isCancelled else {
             await manager.release(acquired)
             throw CancellationError()
@@ -111,6 +111,18 @@ actor LocalLiveDiarization {
         catch {
             await releaseLease()
             throw error
+        }
+    }
+
+    private func processBlock(_ block: [Float], source: LiveAudioSource, generation: UUID) throws
+        -> [Nemotron3ChunkResult]
+    {
+        guard !cancelled, !Task.isCancelled,
+            let session = sessions.first(where: { $0.source == source && $0.generation == generation })
+        else { throw CancellationError() }
+        return try autoreleasepool {
+            session.diarizer.appendAudio(block)
+            return try session.diarizer.processBufferedAudio()
         }
     }
 
@@ -180,9 +192,12 @@ actor LocalLiveDiarization {
                             session.history.removeFirst(excess)
                             session.historyStart += excess
                         }
-                        let results = try autoreleasepool {
-                            session.diarizer.appendAudio(block)
-                            return try session.diarizer.processBufferedAudio()
+                        let source = session.source
+                        let generation = session.generation
+                        let results = try await ProcessingCoordinator.shared.withPermit(
+                            for: .inference, priority: .capture
+                        ) {
+                            try await self.processBlock(block, source: source, generation: generation)
                         }
                         try await consume(results, session: session)
                     }

@@ -4,6 +4,10 @@ import Foundation
 
 @MainActor
 final class MeetingStore: ObservableObject {
+    deinit {
+        let owner = processingRecordingOwner
+        Task { await ProcessingCoordinator.shared.releaseOwner(owner) }
+    }
     @Published var contextualChats: [String: [ChatMessage]] = [:] {
         didSet { if oldValue != contextualChats { chatsMutationRevision = UUID() } }
     }
@@ -41,7 +45,8 @@ final class MeetingStore: ObservableObject {
     private var externalAncestorRevision = UUID()
     var externalReloadGeneration = UUID()
     var meetingLoadRequests: [UUID: UUID] = [:]
-    var meetingLoadOperations: [UUID: (id: UUID, task: Task<MeetingLoadResult, Never>)] = [:]
+    var meetingLoadOperations: [UUID: MeetingLoadOperation] = [:]
+    let meetingLoadQueue = MeetingLoadQueue()
     var meetingLoadReader: @Sendable (UUID, URL) throws -> Meeting = { id, directory in
         try MeetingFolderStorage.read(id: id, directory: directory)
     }
@@ -72,9 +77,15 @@ final class MeetingStore: ObservableObject {
     /// block recording. Progress is transient: outcomes appear in the content
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
+    var pendingJobProgress: [BackgroundJob.Key: String] = [:]
+    var jobProgressUpdatedAt: [BackgroundJob.Key: ContinuousClock.Instant] = [:]
+    var jobProgressFlush: Task<Void, Never>?
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskRevision = 0
     @Published var managedTasksLoading = false
+    @Published var managedTaskAttentionCount = 0
+    @Published var managedMaintenanceStateCounts: [ManagedTaskState: Int] = [:]
+    @Published var managedTaskScopeCounts: [TaskHistoryScope: Int] = [:]
     @Published var managedTaskStateCounts: [ManagedTaskState: Int] = [:]
     @Published var managedTaskJournalError: String?
     var managedTaskIO = ManagedTaskIO()
@@ -83,12 +94,15 @@ final class MeetingStore: ObservableObject {
     var managedTaskActiveCounts: [BackgroundJob.Key: Int] = [:]
     @Published var managedTaskReservations = Set<BackgroundJob.Key>()
     var managedTaskStopRequests = Set<UUID>()
+    var managedMaintenancePauseRequests = Set<UUID>()
     @Published var isPreparingToQuit = false
     var managedTaskShutdownError: String?
     lazy var managedTaskJournal = ManagedTaskJournal(
         url: dataDirectory.appendingPathComponent("tasks.jsonl"),
         indexURL: indexDirectory.appendingPathComponent("index.db"))
     private var managedTaskWakeObserver: ManagedTaskWakeObserver?
+    var processingRecordingGeneration: UInt64 = 0
+    let processingRecordingOwner = UUID()
     var isSchedulingManagedTasks = false
     var managedTaskOperations: [UUID: Task<Void, Never>] = [:]
     var managedTaskWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -111,15 +125,9 @@ final class MeetingStore: ObservableObject {
     var recordingLevels: RecordingLevels { recordingMeter.levels }
     let dataDirectory: URL
     let indexDirectory: URL
+    private var retiredVoiceSearchMigration: Task<Void, Never>?
     lazy var localSearch = LocalSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
-    lazy var voiceSearch: VoiceSearchController = {
-        let controller = VoiceSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
-        voiceSearchJobObservation = controller.$isBuilding.dropFirst().sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
-        return controller
-    }()
-    private var voiceSearchJobObservation: AnyCancellable?
+
     @Published var isCopyingLibrary = false
     @Published var copiedLibraryFiles = 0
     @Published var pendingLibraryFolder: URL?
@@ -131,7 +139,7 @@ final class MeetingStore: ObservableObject {
     var isChangingLibrary: Bool { isCopyingLibrary || pendingLibraryFolder != nil }
     var canChangeLibraryFolder: Bool {
         !isPreparingToQuit && voiceLibrary.isLoaded && voiceAssignmentRefreshCount == 0
-            && !LocalModelManager.shared.isBusyExceptSearch && !localSearch.isLoading && !voiceSearch.isBuilding
+            && !LocalModelManager.shared.isBusyExceptSearch && !localSearch.isLoading
             && !isChangingLibrary
             && recordingID == nil && !isStartingRecording
             && !isFinalizingRecording
@@ -322,6 +330,25 @@ final class MeetingStore: ObservableObject {
     /// Called after the main window's initial update. Loading publishes saved
     /// jobs and decisions together without constructing a processing provider.
     func prepareVoiceLibraryAfterLaunch() async {
+        if libraryWritable, retiredVoiceSearchMigration == nil, !isChangingLibrary, !isPreparingToQuit {
+            let directory = dataDirectory
+            let cache = indexDirectory
+            retiredVoiceSearchMigration = Task.detached(priority: .background) { [weak self] in
+                guard let self else { return }
+                do {
+                    try await LocalModelManager.shared.retireLegacyModels()
+                    try RetiredVoiceSearchMigration.removeIndexNamespace(indexDirectory: cache)
+                    try RetiredVoiceSearchMigration.removeArtifacts(directory: directory, indexDirectory: cache)
+                }
+                catch is CancellationError {}
+                catch {
+                    await MainActor.run {
+                        self.errorMessage = "Couldn’t remove retired voice search data. \(error.localizedDescription)"
+                    }
+                }
+                await MainActor.run { self.retiredVoiceSearchMigration = nil }
+            }
+        }
         await voiceLibrary.awaitLoaded()
         guard !isChangingLibrary, !isPreparingToQuit else { return }
         for id in meetings.map(\.id) where id != recordingID {
@@ -345,6 +372,9 @@ final class MeetingStore: ObservableObject {
             guard !copyCurrent || libraryWritable else {
                 throw MeetingError.message("The current data folder is unavailable. Choose an existing library.")
             }
+            retiredVoiceSearchMigration?.cancel()
+            await retiredVoiceSearchMigration?.value
+            if voiceLibrary.isLoaded { await voicePreparation.shutdown() }
             await localSearch.shutdown()
             try LocalModelManager.shared.suspendForLibraryChange()
             writableBeforeFolderChange = canSave
@@ -784,10 +814,6 @@ final class MeetingStore: ObservableObject {
     @discardableResult func deleteMeeting(id: UUID) async -> Bool {
         await voiceLibrary.awaitLoaded()
         guard canSave else { return false }
-        guard !voiceSearch.isBuilding || voiceSearch.buildingMeetingID != id else {
-            errorMessage = "Stop voice indexing before deleting this meeting."
-            return false
-        }
         guard
             !voiceLibrary.jobs.contains(where: { job in
                 (job.state == .running || job.state == .queued)
@@ -834,7 +860,6 @@ final class MeetingStore: ObservableObject {
                 self.lastSavedLibrary.meetings.removeAll { $0.id == id }
                 self.meetingCatalog.removeAll { $0.id == id }
                 self.visibleMeetingIDs.removeAll { $0 == id }
-                self.voiceSearch.invalidateDeletedMeeting(id)
                 await self.localSearch.removeMeeting(id)
                 do { try await self.notesStorage.discard(id) }
                 catch {
@@ -1034,13 +1059,20 @@ final class MeetingStore: ObservableObject {
             return
         }
         guard canStartRecording else { return }
-        // Stop the existing build before a new, growing recording can enter
-        // a later page of its saved-library scan.
-        voiceSearch.cancel()
         let microphone = microphoneEnabled ?? settings.captureMicrophone
         let systemAudio = systemEnabled ?? settings.captureSystemAudio
         isStartingRecording = true
-        defer { isStartingRecording = false }
+        defer {
+            isStartingRecording = false
+            if recordingID == nil {
+                resumeSearchIndexingAfterRecording()
+                if voiceLibrary.isLoaded, !isPreparingToQuit, !isChangingLibrary {
+                    voicePreparation.resumeAfterRecording(directory: directory(for:))
+                }
+            }
+        }
+        await suspendSearchIndexingForRecording()
+        if voiceLibrary.isLoaded { voicePreparation.suspendForRecording() }
         recordingMeter.reset(
             RecordingLevels(
                 microphone: RecordingSourceLevel(enabled: microphone),
@@ -1221,6 +1253,12 @@ final class MeetingStore: ObservableObject {
         recordingMeter.reset()
         captureTransition = false
         isFinalizingRecording = false
+        localSearch.deferredRecordingChanges = false
+        scheduleSearchIndexing()
+        resumeSearchIndexingAfterRecording()
+        if voiceLibrary.isLoaded, !isPreparingToQuit, !isChangingLibrary {
+            voicePreparation.resumeAfterRecording(directory: directory(for:))
+        }
         if adoptedLive { scheduleAutomaticSummary(id: id) }
         // A separate task, so callers awaiting the stop return once audio is saved.
         if !stopFailed && transcribeAfter
@@ -1282,8 +1320,10 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func finalizeForQuit() async -> Bool {
         isPreparingToQuit = true
+        if voiceLibrary.isLoaded { await voicePreparation.shutdown() }
+        retiredVoiceSearchMigration?.cancel()
+        await retiredVoiceSearchMigration?.value
         await localSearch.shutdown()
-        await voiceSearch.shutdown()
         libraryCopyTask?.cancel()
         await libraryCopyTask?.value
         RecordingPermissions.cancelPendingStart()

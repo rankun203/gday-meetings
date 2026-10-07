@@ -14,8 +14,7 @@ struct ProviderDraftCoordinatorTests {
         edited.apiKey = "synthetic-secret"
         if kind == .localSearch {
             edited.localSearch = .init(
-                executableURL: URL(fileURLWithPath: "/synthetic/worker"),
-                modelCacheURL: URL(fileURLWithPath: "/synthetic/models"))
+                semanticModel: .granite311M, speakerMatchBoost: 0.15)
         }
         coordinator.update(edited)
         #expect(coordinator.hasChanges(in: [saved]))

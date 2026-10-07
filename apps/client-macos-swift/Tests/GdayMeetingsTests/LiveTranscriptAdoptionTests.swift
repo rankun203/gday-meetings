@@ -134,6 +134,7 @@ import Testing
         second.name = "Second"
         second.endpoint = "https://second.example"
         store.settings.serviceProviders = [first, second]
+        store.settings.thisMacCapabilities = []
         store.settings.transcriptionProviderID = first.id
         let id = await store.createMeeting(title: "Manual choice")
         var meeting = try #require(store.meetings.first)

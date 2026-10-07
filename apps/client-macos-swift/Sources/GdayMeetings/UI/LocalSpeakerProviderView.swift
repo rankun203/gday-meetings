@@ -58,7 +58,7 @@ struct LocalSpeakerProviderView: View {
             }
             Section("Readiness") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
-                    let result = health.state(providerID: draft.id, capability: capability)
+                    let result = health.validationState(providerID: draft.id, capability: capability)
                     ProviderHealthSummary(title: capability.title, health: result)
                 }
             }

@@ -210,7 +210,9 @@ import Testing
         #expect(await provider.health(for: .speakerRecognition, settings: AppSettings(), models: manager) == .ready)
         #expect(!(await provider.health(for: .liveDiarization, settings: AppSettings(), models: manager)).isReady)
         try Data("oops".utf8).write(to: directory.appendingPathComponent("data"))
-        #expect(!(await provider.health(for: .speakerRecognition, settings: AppSettings(), models: manager)).isReady)
+        // Availability checks file identity and size; acquisition performs content validation.
+        #expect(await provider.health(for: .speakerRecognition, settings: AppSettings(), models: manager) == .ready)
+        await #expect(throws: LocalModelError.self) { _ = try await manager.acquire(.voiceEmbedding) }
     }
 
     @Test func existingNemotronProvidersGainAssociationButExplicitDisableSurvivesReload() throws {

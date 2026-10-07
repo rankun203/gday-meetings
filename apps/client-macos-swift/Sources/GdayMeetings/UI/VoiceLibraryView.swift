@@ -576,8 +576,8 @@ private struct VoicePreparationControls: View {
                         if job.state == .running || job.state == .queued {
                             Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
                         }
-                        else if job.state == .paused || job.state == .failed {
-                            Button(job.state == .failed ? "Retry" : "Resume") {
+                        else if job.state == .paused || job.state == .failed || job.state == .cancelled {
+                            Button(job.state == .paused ? "Resume" : "Retry") {
                                 store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
                             }.disabled(active || !store.libraryWritable || store.recordingID != nil)
                         }
@@ -601,8 +601,9 @@ private struct VoicePreparationControls: View {
         case .queued: return "Queued"
         case .running: return "Preparing"
         case .paused: return "Paused"
-        case .completed: return "Complete"
-        case .failed: return "Needs Attention"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
         }
     }
     private func start(discover: Bool) {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Labels are scoped to one result and track. Names never replace provider IDs.
-struct MeetingSpeaker: Codable, Identifiable, Equatable {
+struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     var label: String
     var track: String

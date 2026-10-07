@@ -4,6 +4,13 @@ import Synchronization
 
 /// Extracts the reviewed source range; never runs transcription or changes speaker labels.
 actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
+    private var worker: LiveVoiceEmbeddingWorker?
+    func finish() async {
+        let held = worker
+        worker = nil
+        await held?.cancel()
+    }
+
     func extract(example: VoiceExample, directory: URL, type: EmbeddingType) async throws -> TypedVoiceEmbedding {
         guard type == .community1 else { throw ServiceError("This voice model is not supported on this Mac.") }
         guard let file = example.audioFile, let start = example.start, let end = example.end,
@@ -17,24 +24,31 @@ actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
         try Task.checkCancellation()
         let samples = try Self.readSamples(url: url, start: start, end: end)
         try Task.checkCancellation()
-        let worker = LiveVoiceEmbeddingWorker()
-        do {
-            try await worker.prepare()
-            let result = try await worker.extract(
-                .init(
-                    speakerID: example.speakerID, source: example.source == "microphone" ? .microphone : .system,
-                    generation: UUID(), start: start, end: start + Double(samples.count) / 16000, samples: samples))
-            await worker.cancel()
-            guard var result, result.type == type else {
-                throw ServiceError("The speech did not produce a usable voice example.")
+        let session: LiveVoiceEmbeddingWorker
+        if let worker {
+            session = worker
+        }
+        else {
+            let created = LiveVoiceEmbeddingWorker()
+            do { try await created.prepare(priority: .processing) }
+            catch {
+                await created.cancel()
+                throw error
             }
-            result.provenance = "saved-example-speech-span"
-            return result
+            worker = created
+            session = created
         }
-        catch {
-            await worker.cancel()
-            throw error
+        let result = try await session.extract(
+            .init(
+                speakerID: example.speakerID,
+                source: example.source == "microphone" ? .microphone : .system,
+                generation: UUID(), start: start, end: start + Double(samples.count) / 16000, samples: samples),
+            priority: .processing)
+        guard var result, result.type == type else {
+            throw ServiceError("The speech did not produce a usable voice example.")
         }
+        result.provenance = "saved-example-speech-span"
+        return result
     }
 
     /// Read and convert only the bounded excerpt, including for long Opus recordings.

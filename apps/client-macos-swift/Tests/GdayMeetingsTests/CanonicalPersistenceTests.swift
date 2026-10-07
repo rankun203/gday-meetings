@@ -4,6 +4,105 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct CanonicalPersistenceTests {
+    @Test func rapidNavigationSkipsAbandonedQueuedReads() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        var ids: [UUID] = []
+        for index in 0..<20 { ids.append(await store.createMeeting(title: "Synthetic page \(index)")) }
+        store.clearLoadedMeetingCache()
+        let gate = CanonicalWriteGate()
+        defer { gate.release() }
+        store.meetingLoadReader = { id, directory in
+            try gate.enter()
+            return try MeetingFolderStorage.read(id: id, directory: directory)
+        }
+        var pages: [Task<Bool, Never>] = []
+        pages.append(Task { await store.ensureMeetingLoaded(id: ids[0]) })
+        try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
+        for id in ids.dropFirst() {
+            pages.last?.cancel()
+            pages.append(Task { await store.ensureMeetingLoaded(id: id) })
+            await Task.yield()
+        }
+        try #require(
+            try await waitForMainActorTestCondition(timeout: .seconds(3)) {
+                store.meetingLoadQueue.pendingCount == 1 && store.meetingLoadOperations.count == 2
+            })
+        #expect(gate.callCount == 1)
+        for page in pages.dropFirst().dropLast() { #expect(await page.value == false) }
+        gate.release()
+        for page in pages.dropLast() { #expect(await page.value == false) }
+        #expect(await pages.last!.value)
+        #expect(gate.callCount == 2)
+        #expect(store.meeting(id: ids.last!) != nil)
+        #expect(ids.dropLast().allSatisfy { store.meeting(id: $0) == nil })
+        #expect(store.meetingLoadOperations.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func queuedReadHonorsDeletionAndLibraryChanges(_ changingLibrary: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let first = await store.createMeeting(title: "Synthetic held page")
+        let second = await store.createMeeting(title: "Synthetic queued page")
+        store.clearLoadedMeetingCache()
+        let gate = CanonicalWriteGate()
+        defer { gate.release() }
+        store.meetingLoadReader = { id, directory in
+            try gate.enter()
+            return try MeetingFolderStorage.read(id: id, directory: directory)
+        }
+        let held = Task { await store.ensureMeetingLoaded(id: first) }
+        try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
+        let queued = Task { await store.ensureMeetingLoaded(id: second) }
+        try #require(
+            try await waitForMainActorTestCondition(timeout: .seconds(3)) {
+                store.meetingLoadQueue.pendingCount == 1
+            })
+        if changingLibrary {
+            store.externalReloadGeneration = UUID()
+        }
+        else {
+            store.deletingMeetingIDs.formUnion([first, second])
+        }
+        gate.release()
+        #expect(await held.value == false)
+        #expect(await queued.value == false)
+        #expect(gate.callCount == 1)
+        #expect(store.meeting(id: first) == nil)
+        #expect(store.meeting(id: second) == nil)
+        #expect(store.meetingLoadQueue.pendingCount == 0)
+        #expect(store.meetingLoadOperations.isEmpty)
+    }
+
+    @Test func independentReviewCancelledPageDoesNotPublishAbandonedMeeting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let id = await store.createMeeting(title: "Synthetic abandoned page")
+        store.clearLoadedMeetingCache()
+        let gate = CanonicalWriteGate()
+        defer { gate.release() }
+        store.meetingLoadReader = { id, directory in
+            try gate.enter()
+            return try MeetingFolderStorage.read(id: id, directory: directory)
+        }
+        let page = Task { await store.ensureMeetingLoaded(id: id) }
+        try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
+        page.cancel()
+        gate.release()
+        #expect(await page.value == false)
+        #expect(store.meeting(id: id) == nil, "An abandoned page with no remaining consumers must not publish its load")
+    }
+
     @Test(arguments: [false, true])
     func delayedSavePreservesNewerEditsAndOrdersFollowingCommit(_ failFirst: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

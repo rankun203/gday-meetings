@@ -83,7 +83,6 @@ class ComparisonTests(unittest.TestCase):
             (dataset / "queries.jsonl").write_text(json.dumps(query) + "\n")
             (dataset / "corpus.jsonl").write_text("".join(json.dumps(row) + "\n" for row in documents))
             (dataset / "private-manifest.json").write_text(json.dumps({"s1": {"language": "en"}}))
-            np.save(dataset / "reference-similarities.npy", [[0.1, 0.9]])
             digest = hashlib.sha256()
             for filename in ["queries.jsonl", "corpus.jsonl"]:
                 digest.update((dataset / filename).read_bytes())

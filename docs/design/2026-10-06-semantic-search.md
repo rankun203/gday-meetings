@@ -17,13 +17,13 @@ All search providers implement preparation, create/update index, indexing progre
 
 Index identity includes provider/model revision, tokenizer and preprocessing revision, window policy, and source revision. A model selection change schedules a rebuild in the managed task queue; incompatible vectors are never searched together. New meetings, saved transcript changes, and deletions update the selected index in the background. Model selection does not authorize downloading a missing model silently; queue work as waiting for the selected model until installation completes.
 
-Use bounded transcript windows with track, segment, time, and source-version references. Confirmed live text can be indexed incrementally. Coalesce updates, replace changed windows, retain boundary context, and finalize the remaining tail when recording finishes. Partial hypotheses are not searchable durable evidence. Prioritize capture and query responsiveness over indexing throughput.
+Use bounded transcript windows with track, segment, time, and source-version references. During live capture, retain changed-content intent and defer automatic indexing until recording finishes. Then coalesce saved changes, replace changed windows and retain boundary context. Partial hypotheses are not searchable durable evidence. Prioritize capture and query responsiveness over indexing throughput.
 
 Preserve reusable embeddings in meeting folders and project them into namespaced tables in the shared disposable database. Publish coherent generations and invalidate changed/deleted sources immediately. The Data panel presents Library Index (renamed from Index) and Search Index separately, with model, coverage, current task progress, failure recovery, and Rebuild.
 
 # Loading and search field
 
-General includes “Automatically Load Search” (on by default). When on, prepare the selected model and index in the background after startup. When off, prepare them when the search field is activated. Index maintenance and query preparation are separate operations; neither blocks the main actor.
+The first nonempty search edit prepares the index, tokenizer, query model and warmup. Subsequent edits reuse that operation, and Enter awaits it before searching the submitted query. General has no startup-preparation switch. Query and indexing resources have separate lifetimes and generations; indexing independently requests passage resources and defers automatic work during recording. Configuration changes, library changes and shutdown release old resources. General availability checks inspect configuration and file identity, while provider settings perform stronger temporary validation. Heavy preparation and prediction run outside the main actor.
 
 On first Search activation for an unavailable model, show “Download a Search Model” with the selected model name, “Open Local Search Settings”, and “Cancel”. Open the selected provider directly. Do not repeat the prompt for the same model in that window session, interrupt an active download or verification, or show it in Text mode.
 
@@ -53,4 +53,4 @@ Ranking fixtures cover two-person discussions, mentions, missing labels, repeate
 
 # Technical debt
 
-The first implementation scans exact cosine scores one meeting at a time. Measure large-library latency before choosing an approximate vector index; preserve the same provider interface and final speaker scoring when changing the projection. Legacy CLSP adapters are retained for experiment compatibility; the app no longer offers voice or fusion retrieval.
+The first implementation scans exact cosine scores one meeting at a time. Measure large-library latency before choosing an approximate vector index; preserve the same provider interface and final speaker scoring when changing the projection.

@@ -399,8 +399,8 @@ enum UIPreview {
             ManagedTaskRecord(
                 kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Synthetic Community-1", state: .failed,
-                progress: "Needs attention", errorMessage: "The audio file was unavailable. The transcript was kept.",
-                createdAt: now.addingTimeInterval(-400), isPreview: true),
+                progress: "Failed", errorMessage: "The audio file was unavailable. The transcript was kept.",
+                createdAt: now.addingTimeInterval(-400), isPreview: true, recovery: .manual),
             ManagedTaskRecord(
                 kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Synthetic Community-1", state: .running,
@@ -421,9 +421,9 @@ enum UIPreview {
                 progress: "Waiting for a transcription slot", createdAt: now.addingTimeInterval(-180), isPreview: true),
             ManagedTaskRecord(
                 kind: .summary, meetingID: failedID, meetingTitle: "Synthetic summary retry",
-                providerName: "Preview Language Model", state: .failed, progress: "Needs attention",
+                providerName: "Preview Language Model", state: .failed, progress: "Failed",
                 errorMessage: "The provider connection was interrupted. Retry to generate the summary.",
-                createdAt: now.addingTimeInterval(-120), isPreview: true
+                createdAt: now.addingTimeInterval(-120), isPreview: true, recovery: .manual
             ),
             ManagedTaskRecord(
                 kind: .summary, meetingID: conversation.id, meetingTitle: conversation.title,
@@ -431,11 +431,36 @@ enum UIPreview {
                 createdAt: now.addingTimeInterval(-360), finishedAt: now, isPreview: true),
             ManagedTaskRecord(
                 kind: .transcription, meetingID: expiredID, meetingTitle: "Synthetic expired transcription",
-                providerName: "Preview RunPod", state: .failed, progress: "Needs attention",
+                providerName: "Preview RunPod", state: .failed, progress: "Failed",
                 errorMessage: MissingTranscriptionJob().localizedDescription,
                 createdAt: now.addingTimeInterval(-60), isPreview: true, recovery: .restartRequired,
                 attemptKey: "preview-expired-request", remoteJobID: "preview-expired-job"),
+            ManagedTaskRecord(
+                kind: .searchIndex, meetingID: single.id, meetingTitle: single.title,
+                providerName: "This Mac", state: .queued, progress: "Waiting for local processing",
+                createdAt: now.addingTimeInterval(-40), isPreview: true, isAutomatic: true),
+            ManagedTaskRecord(
+                kind: .searchIndex, meetingID: conversation.id, meetingTitle: conversation.title,
+                providerName: "This Mac", state: .completed, progress: "Completed",
+                createdAt: now.addingTimeInterval(-600), finishedAt: now.addingTimeInterval(-550),
+                isPreview: true, isAutomatic: true),
         ]
+        for index in store.managedTasks.indices {
+            var task = store.managedTasks[index]
+            task.timeline = [
+                .init(kind: .queued, date: task.createdAt, reason: nil),
+                .init(kind: .started, date: task.createdAt.addingTimeInterval(5), reason: nil),
+            ]
+            if [.transcription, .summary].contains(task.kind), task.state != .queued {
+                task.timeline?.append(
+                    .init(kind: .waitingForProvider, date: task.createdAt.addingTimeInterval(5), reason: nil))
+            }
+            if task.state == .failed || task.state == .completed {
+                task.timeline?.append(.init(kind: .ended, date: task.finishedAt ?? now, reason: task.errorMessage))
+            }
+            if task.state == .queued { task.timeline = [.init(kind: .queued, date: task.createdAt, reason: nil)] }
+            store.managedTasks[index] = task
+        }
         for task in store.managedTasks where task.state.isActive {
             store.backgroundJobs.append(BackgroundJob(key: task.key, progress: task.progress))
         }

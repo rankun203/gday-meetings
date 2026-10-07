@@ -4,6 +4,7 @@ import SwiftUI
 struct NativeTaskList: NSViewRepresentable {
     let rows: [TaskHistoryRow]
     @Binding var selection: UUID?
+    var recordingActive = false
     var revealID: UUID?
     var revealToken: UUID? = nil
     var retainedViewport: NativeListViewport? = nil
@@ -19,7 +20,7 @@ struct NativeTaskList: NSViewRepresentable {
         table.headerView = nil
         table.style = .inset
         table.backgroundColor = .clear
-        table.rowHeight = 64
+        table.rowHeight = 84
         table.intercellSpacing = NSSize(width: 0, height: 1)
         table.autoresizingMask = [.width]
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -67,11 +68,33 @@ struct NativeTaskList: NSViewRepresentable {
                 ? scroll.contentView.bounds.minY - table.rect(ofRow: first).minY
                 : value.retainedViewport?.anchor?.offset ?? 0
             updating = true
-            let changed = rows != value.rows || parent.totalCount != value.totalCount
+            let sameIDs = rows.map(\.id) == value.rows.map(\.id)
+            let sameCount = parent.totalCount == value.totalCount
+            let sameFooter = (parent.totalCount == nil) == (value.totalCount == nil)
+            let recordingChanged = parent.recordingActive != value.recordingActive
+            let changed = rows != value.rows || parent.totalCount != value.totalCount || recordingChanged
+            var changedIndices = IndexSet(
+                rows.indices.filter { index in
+                    guard value.rows.indices.contains(index) else { return false }
+                    if rows[index] != value.rows[index] { return true }
+                    guard recordingChanged else { return false }
+                    if case .managed(let task) = rows[index] {
+                        return [.searchIndex, .diarization].contains(task.kind) && task.state == .queued
+                    }
+                    return false
+                })
+            if !sameCount, sameFooter, value.totalCount != nil { changedIndices.insert(value.rows.count) }
             parent = value
             if changed {
                 rows = value.rows
-                table.reloadData()
+                if sameIDs && sameFooter {
+                    table.reloadData(
+                        forRowIndexes: changedIndices,
+                        columnIndexes: IndexSet(integer: 0))
+                }
+                else {
+                    table.reloadData()
+                }
                 table.layoutSubtreeIfNeeded()
                 if let anchor, let position = rows.firstIndex(where: { $0.id == anchor }) {
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: position).minY + delta))
@@ -131,7 +154,7 @@ struct NativeTaskList: NSViewRepresentable {
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count + (parent.totalCount == nil ? 0 : 1) }
         func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            rows.indices.contains(row) ? 64 : 40
+            rows.indices.contains(row) ? 84 : 40
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             rows.indices.contains(row) ? MeetingSelectionRow() : NSTableRowView()
@@ -149,7 +172,7 @@ struct NativeTaskList: NSViewRepresentable {
             let identifier = NSUserInterfaceItemIdentifier("task-cell")
             let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? TaskCell ?? TaskCell()
             cell.identifier = identifier
-            cell.configure(rows[row])
+            cell.configure(rows[row], recordingActive: parent.recordingActive)
             return cell
         }
     }
@@ -158,12 +181,15 @@ struct NativeTaskList: NSViewRepresentable {
 private final class TaskCell: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
+    private let detail = NSTextField(labelWithString: "")
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         title.font = .systemFont(ofSize: 13, weight: .medium)
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
-        for label in [title, subtitle] {
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .secondaryLabelColor
+        for label in [title, subtitle, detail] {
             label.lineBreakMode = .byTruncatingTail
             label.maximumNumberOfLines = 1
             label.translatesAutoresizingMaskIntoConstraints = false
@@ -176,19 +202,19 @@ private final class TaskCell: NSTableCellView {
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 5),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 5),
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func configure(_ row: TaskHistoryRow) {
-        switch row {
-        case .managed(let task):
-            title.stringValue = task.meetingTitle
-            let kind = task.kind == .diarization ? "Speaker Labeling" : task.kind.rawValue.capitalized
-            subtitle.stringValue = kind + " · " + task.state.rawValue.capitalized
-        case .voice(let job):
-            title.stringValue = job.discover ? "Find Voices" : "Prepare Voice Library"
-            subtitle.stringValue = job.providerName + " · " + job.state.rawValue.capitalized
-        }
-        setAccessibilityLabel(title.stringValue + ", " + subtitle.stringValue)
+    func configure(_ row: TaskHistoryRow, recordingActive: Bool) {
+        let description = TaskDescription(row, recordingActive: recordingActive)
+        title.stringValue = description.operation + " · " + description.affectedItem
+        subtitle.stringValue = description.progress
+        subtitle.textColor = description.attention ? .labelColor : .secondaryLabelColor
+        detail.stringValue =
+            description.state + " · " + description.date.formatted(date: .abbreviated, time: .shortened)
+        setAccessibilityLabel(title.stringValue + ", " + subtitle.stringValue + ", " + detail.stringValue)
     }
 }

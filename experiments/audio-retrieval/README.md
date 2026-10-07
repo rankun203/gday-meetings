@@ -11,13 +11,12 @@ Compare text queries against the same audio windows using direct audio embedding
 
 Results and the comparison matrix are in [RESULTS.md](RESULTS.md). The active evaluation uses 102 queries and 1,677 windows from 49 meetings. Follow the [expanded procedure](expanded/README.md) to build the frozen corpus, run every encoder, grade the shared pool and compare transcription conditions. The component commands below also support historical runs; their artifacts must not be mixed across input fingerprints.
 
-Inputs and model outputs belong in ignored temporary storage. Never commit private queries, transcripts, recordings, source paths, or library identifiers. The scripts accept the prior evaluation's `queries.jsonl`, `corpus.jsonl`, and `private-manifest.json` formats. The expanded CLSP runner regenerates `reference-similarities.npy`; pass `--clsp-run` so comparison verifies its fingerprint and coverage. A historical saved matrix is valid only for its original corpus and query ordering.
+Inputs and model outputs belong in ignored temporary storage. Never commit private queries, transcripts, recordings, source paths, or library identifiers. The scripts accept the prior evaluation's `queries.jsonl`, `corpus.jsonl`, and `private-manifest.json` formats. Every encoder manifest binds its results to the corpus and query ordering.
 
 The repository ignores `private/`, `models/`, `artifacts/`, `runs/`, and `.cache/` inside every experiment folder, as well as root `tmp/`. Use these locations for local inputs and generated output; keep scripts, synthetic fixtures, and aggregate reports outside them.
 
 # Retrieval methods
 
-- CLSP: full-window audio embeddings, regenerated for the expanded corpus.
 - [CLAP HTSAT unfused](https://huggingface.co/laion/clap-htsat-unfused): encode consecutive chunks of at most 10 seconds across each window. Compare maximum chunk similarity and normalized mean chunk embeddings. These are separate, declared methods; no random crop discards part of the evidence.
 - [Jina v5 omni nano retrieval](https://huggingface.co/jinaai/jina-embeddings-v5-omni-nano-retrieval): full-window audio and transcript embeddings, with query/document prefixes, real-frame audio masks, and the published last-token pooling. The checkpoint has noncommercial terms; this is a research comparison, not a distribution decision.
 - [Multilingual E5 small](https://huggingface.co/intfloat/multilingual-e5-small): existing transcript text, query/passage prefixes, masked mean pooling.
@@ -61,7 +60,7 @@ uv run --no-project --with numpy --with scikit-learn \
   python -m unittest discover -s experiments/audio-retrieval -p 'test_*.py'
 ```
 
-Use `--device mps` for GPU inference on supported Macs. The manifest binds resumption to input, script, checkpoint, device, and package hashes/versions. Compare latency only under matching hardware and execution conditions; model download time and prior CLSP app measurements are not interchangeable with warm inference time.
+Use `--device mps` for GPU inference on supported Macs. The manifest binds resumption to input, script, checkpoint, device, and package hashes/versions. Compare latency only under matching hardware and execution conditions; model download time is not interchangeable with warm inference time.
 
 # Transcript model extension
 

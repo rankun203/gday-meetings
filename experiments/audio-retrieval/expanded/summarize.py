@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from summarize import clustered_interval
 
 METHODS = [
-    ("clsp-audio", "Audio", "CLSP"),
     ("clap-audio-max", "Audio", "CLAP · maximum"),
     ("clap-audio-mean", "Audio", "CLAP · mean"),
     ("jina-audio", "Audio", "Jina"),
@@ -79,7 +78,6 @@ def main():
         "e5",
         "jina",
         "clap",
-        "clsp",
     ]:
         folder = args.runs / name
         info = json.loads((folder / "complete.json").read_text())

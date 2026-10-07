@@ -6,22 +6,32 @@ struct VoiceDiscoveryUnavailable: LocalizedError {
     }
 }
 
-/// Discovery owns an isolated result. It never applies labels to the saved transcript.
+/// One job owns this session. Recordings remain isolated results and process sequentially.
 actor LocalVoiceRecordingDiscoverer: VoiceRecordingDiscovering {
+    private var lease: LocalModelLease?
+    private var leaseOwner: LocalModelManager?
+    private let worker = CommunityDiarizationWorker()
     func discover(files: [URL]) async throws -> LocalDiarizationResult {
         let manager = await LocalModelManager.shared
-        let lease: LocalModelLease
-        do { lease = try await manager.acquire(.community1) }
-        catch is CancellationError { throw CancellationError() }
-        catch { throw VoiceDiscoveryUnavailable() }
-        do {
-            let result = try await CommunityDiarizationWorker().run(files: files, lease: lease, recognize: true)
-            await manager.release(lease)
-            return result
+        if lease == nil {
+            do {
+                lease = try await manager.acquire(.community1)
+                leaseOwner = manager
+            }
+            catch LocalModelError.unavailable { throw VoiceDiscoveryUnavailable() }
         }
-        catch {
-            await manager.release(lease)
-            throw error
+        guard let lease else { throw VoiceDiscoveryUnavailable() }
+        try Task.checkCancellation()
+        let worker = worker
+        return try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
+            try await worker.run(files: files, lease: lease, recognize: true)
         }
+    }
+    func finish() async {
+        guard let lease else { return }
+        self.lease = nil
+        let owner = leaseOwner
+        leaseOwner = nil
+        await owner?.release(lease)
     }
 }

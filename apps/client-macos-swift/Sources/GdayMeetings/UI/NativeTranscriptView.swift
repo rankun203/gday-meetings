@@ -212,6 +212,12 @@ struct NativeTranscriptView: NSViewRepresentable {
                 if followChanged || navigationChanged { scheduleLayout() }
                 return
             }
+            // Capture old geometry before replacing rows or consulting cached heights.
+            let scroll = table.enclosingScrollView
+            let readingRow = scroll.map { table.row(at: NSPoint(x: 0, y: $0.contentView.bounds.minY)) } ?? -1
+            let readingID = rows.indices.contains(readingRow) ? rows[readingRow].id : nil
+            let readingOffset =
+                readingRow >= 0 ? (scroll?.contentView.bounds.minY ?? 0) - table.rect(ofRow: readingRow).minY : 0
             cancelFollow()
             if sourceChanged {
                 deferredLiveUpdate = nil
@@ -320,6 +326,15 @@ struct NativeTranscriptView: NSViewRepresentable {
                         table.noteHeightOfRows(withIndexesChanged: update.changed)
                     }
                 }
+            }
+            if !sourceChanged, !navigationChanged, let scroll, let readingID,
+                let index = rowIndices[readingID], !(parent.followsLive == true && !liveFollowPaused)
+            {
+                let y = min(
+                    max(0, table.rect(ofRow: index).minY + readingOffset),
+                    max(0, table.bounds.height - scroll.contentView.bounds.height))
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
             }
             observePlayback()
             refreshPlayback()
@@ -487,7 +502,11 @@ struct NativeTranscriptView: NSViewRepresentable {
             return height
         }
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-            let view = TranscriptNativeRowView()
+            let identifier = NSUserInterfaceItemIdentifier("transcript-row")
+            let view =
+                tableView.makeView(withIdentifier: identifier, owner: nil) as? TranscriptNativeRowView
+                ?? TranscriptNativeRowView()
+            view.identifier = identifier
             view.isPlaybackRow = activeRows.contains(row)
             view.isReviewTarget = rows[row].id == parent.initialRowID
             return view

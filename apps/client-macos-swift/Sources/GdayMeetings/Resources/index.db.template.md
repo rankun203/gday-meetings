@@ -19,6 +19,8 @@ One database contains independently versioned modules. Trusted in-app provider a
 
 Task rows contain offsets and digests into `tasks.jsonl`, not copied task payloads. Full-text search contains derived, readable passages from titles, notes, summaries, and transcripts. Treat this database as private meeting data even though it can be rebuilt.
 
+Runtime observations are optional key/value measurements in `runtime_observations`. Search preparation stores its last successful duration in seconds, keyed by model space. Missing, invalid, or inaccessible measurements use a one-second estimate. Rebuilding the database may discard these observations; they are measured again after a successful load.
+
 # Installed modules
 
 {{MODULES}}

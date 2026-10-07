@@ -109,7 +109,7 @@ struct LibraryFolderChoiceTests {
         let target = root.appendingPathComponent("other")
         try FileManager.default.createDirectory(
             at: target.appendingPathComponent("meetings"), withIntermediateDirectories: true)
-        let store = MeetingStore(dataDirectory: root.appendingPathComponent("current"))
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root.appendingPathComponent("current"))
         let standardBefore = UserDefaults.standard.data(forKey: LibraryFolderPreference.key)
         await store.changeLibraryFolder(to: target, copyCurrent: false)
         #expect(store.pendingLibraryFolder == target)

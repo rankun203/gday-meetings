@@ -9,7 +9,7 @@ struct LocalSpeakerRange: Codable, Equatable, Sendable {
     var end: Double
 }
 
-struct LocalDiarizationResult: Codable {
+struct LocalDiarizationResult: Codable, Sendable {
     var version = 1
     var id = UUID()
     var generatedAt = Date()
@@ -281,11 +281,13 @@ extension MeetingStore {
             catch { self.errorMessage = "Couldn’t save the speaker processing data event." }
         }
         setJobProgress(.diarization, .meeting(id), "Labeling speakers…")
-        let result = try await CommunityDiarizationWorker().run(
-            files: files, lease: lease, recognize: recognize,
-            progress: { [weak self] progress in
-                await self?.setJobProgress(.diarization, .meeting(id), progress)
-            })
+        let report: @Sendable (String) async -> Void = { [weak self] progress in
+            await self?.setJobProgress(.diarization, .meeting(id), progress)
+        }
+        let result = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
+            try await CommunityDiarizationWorker().run(
+                files: files, lease: lease, recognize: recognize, progress: report)
+        }
         try Task.checkCancellation()
         guard !result.ranges.isEmpty else {
             throw ServiceError("No speech was found for speaker labeling. The current transcript was kept.")

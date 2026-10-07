@@ -4,33 +4,50 @@ enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
     case all = "All"
     case active = "Active"
     case attention = "Needs Attention"
+    case paused = "Paused"
+    case failed = "Failed"
     case history = "History"
+    case maintenance = "Search Index Maintenance"
     var id: String { rawValue }
     var predicate: String {
         switch self {
-        case .all: "1"
-        case .active: "state IN ('queued','running')"
-        case .attention: "state='failed'"
-        case .history: "state IN ('completed','cancelled')"
+        case .all: "(kind!='searchIndex' OR automatic=0 OR attention=1)"
+        case .active: "state IN ('queued','running') AND (kind!='searchIndex' OR automatic=0)"
+        case .attention: "attention=1"
+        case .history: "state IN ('completed','cancelled') AND (kind!='searchIndex' OR automatic=0)"
+        case .paused: "state='paused'"
+        case .failed: "state='failed'"
+        case .maintenance: "kind='searchIndex' AND automatic=1"
         }
     }
     func includes(_ task: ManagedTaskRecord) -> Bool {
-        includes(task.state)
+        if self == .maintenance { return task.isMaintenance }
+        if self == .attention { return task.needsAttention }
+        if task.isMaintenance && [.all, .active, .history].contains(self) {
+            return self == .all && task.needsAttention
+        }
+        return includes(task.state)
     }
     func includes(_ state: ManagedTaskState) -> Bool {
         switch self {
         case .all: true
         case .active: state.isActive
-        case .attention: state == .failed
+        case .attention: false
+        case .paused: state == .paused
+        case .failed: state == .failed
         case .history: state == .completed || state == .cancelled
+        case .maintenance: false
         }
     }
     func includes(_ job: VoicePreparationJob) -> Bool {
         switch self {
         case .all: true
         case .active: job.state == .queued || job.state == .running
-        case .attention: job.state == .failed || job.state == .paused
-        case .history: job.state == .completed
+        case .attention: job.needsAttention
+        case .paused: job.state == .paused
+        case .failed: job.state == .failed
+        case .history: job.state == .completed || job.state == .cancelled
+        case .maintenance: false
         }
     }
 }
@@ -59,7 +76,7 @@ enum TaskHistoryRow: Identifiable, Equatable, @unchecked Sendable {
 extension MeetingStore {
     /// Use the complete indexed state counts, not the retained task page window.
     func taskHistoryCount(scope: TaskHistoryScope) -> Int {
-        managedTaskStateCounts.reduce(0) { $0 + (scope.includes($1.key) ? $1.value : 0) }
+        managedTaskScopeCounts[scope, default: 0]
             + managedTasks.filter { $0.isPreview && scope.includes($0) }.count
             + voiceLibrary.jobs.filter(scope.includes).count
     }

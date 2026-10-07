@@ -10,8 +10,12 @@ struct ManagedTaskPagingTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         store.managedTaskStateCounts = [.queued: 2, .running: 3, .completed: 900, .failed: 4, .cancelled: 5]
+        store.managedTaskAttentionCount = 4
+        store.managedTaskScopeCounts = [.all: 914, .active: 5, .attention: 4, .history: 905]
         store.managedTasks = [
-            .init(kind: .summary, meetingID: UUID(), meetingTitle: "Preview task", state: .failed, isPreview: true),
+            .init(
+                kind: .summary, meetingID: UUID(), meetingTitle: "Preview task", state: .failed, isPreview: true,
+                recovery: .manual),
             .init(kind: .summary, meetingID: UUID(), meetingTitle: "Retained task", state: .completed),
         ]
         #expect(store.taskHistoryCount(scope: .all) == 915)
@@ -117,7 +121,7 @@ struct ManagedTaskPagingTests {
         #expect(try journal.changedSinceRebuild(changed.id))
         for row in old.dropLast() { #expect(try !journal.changedSinceRebuild(row.id)) }
     }
-    @Test func samePositionExternalEditChangesDigest() async throws {
+    @Test func presentationOnlyExternalEditDoesNotPauseIntent() async throws {
         let (url, _) = try fixture(tasks: 3)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let journal = ManagedTaskJournal(url: url)
@@ -127,7 +131,7 @@ struct ManagedTaskPagingTests {
         let content = try String(contentsOf: url, encoding: .utf8)
         try Data(content.replacingOccurrences(of: "Task 1", with: "Work 1").utf8).write(to: url, options: .atomic)
         try journal.prepare()
-        #expect(try journal.changedSinceRebuild(target.id))
+        #expect(try !journal.changedSinceRebuild(target.id))
         for row in original where row.id != target.id { #expect(try !journal.changedSinceRebuild(row.id)) }
         #expect(journal.record(id: target.id)?.meetingTitle == "Work 1")
     }

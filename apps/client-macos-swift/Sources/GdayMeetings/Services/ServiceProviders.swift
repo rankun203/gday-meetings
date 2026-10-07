@@ -129,6 +129,20 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
             name = "Local Search"
         }
         isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
+        // Retired worker configurations cannot silently activate semantic search.
+        if kind == .localSearch {
+            let legacy = try values.decodeIfPresent(RetiredSearchConfiguration.self, forKey: .localSearch)
+            if localSearch?.semanticModel == nil,
+                model.lowercased().contains("clsp") || legacy?.executableURL != nil || legacy?.modelCacheURL != nil
+            {
+                isEnabled = false
+                model = ""
+                localSearch = .init()
+            }
+            else if model.lowercased().contains("clsp") {
+                model = ""
+            }
+        }
         enabledCapabilities = try values.decode(Set<ProviderCapability>.self, forKey: .enabledCapabilities)
         uploadProviderID = try values.decodeIfPresent(UUID.self, forKey: .uploadProviderID)
         summarizationPrompt = try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
@@ -136,6 +150,11 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         if kind == .nemotron, (try values.decodeIfPresent(Int.self, forKey: .capabilityVersion) ?? 1) < 2 {
             enabledCapabilities.insert(.speakerRecognition)
         }
+    }
+
+    private struct RetiredSearchConfiguration: Decodable {
+        let executableURL: URL?
+        let modelCacheURL: URL?
     }
 
     func supports(_ capability: ProviderCapability) -> Bool {

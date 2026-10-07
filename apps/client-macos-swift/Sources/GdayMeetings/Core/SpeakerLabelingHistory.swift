@@ -110,6 +110,7 @@ struct SpeakerLabelingHistory: Sendable {
         switch state {
         case .queued: "Queued"
         case .running: "Running"
+        case .paused: "Paused"
         case .completed: "Completed"
         case .failed: "Failed"
         case .cancelled: "Cancelled"

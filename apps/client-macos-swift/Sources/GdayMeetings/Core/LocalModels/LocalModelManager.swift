@@ -1,6 +1,7 @@
 import Combine
 import CoreML
 import CryptoKit
+import Darwin
 import Foundation
 
 enum LocalModelPhase: String, Sendable {
@@ -21,6 +22,14 @@ struct LocalModelState: Sendable {
     var progress: Double? { totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil }
     // Download progress and leases do not change model readiness.
     var healthIdentity: HealthIdentity { .init(phase: phase, message: message) }
+}
+
+struct LocalModelLifecycleMetrics: Sendable {
+    var verificationPasses = 0
+    var hashedBytes: Int64 = 0
+    var preparationCount = 0
+    var loadedModelCount = 0
+    var preparationSeconds: Double = 0
 }
 
 struct LocalModelLease: @unchecked Sendable {
@@ -90,6 +99,7 @@ final class LocalModelManager: ObservableObject {
         storageOperations += 1
         defer { storageOperations -= 1 }
         try await worker.importLegacyStorage(from: legacyRoot)
+        try await worker.retireLegacyModels()
     }
 
     func openableDirectory(for id: LocalModelID) async throws -> URL {
@@ -105,23 +115,29 @@ final class LocalModelManager: ObservableObject {
     private var tasks: [LocalModelID: Task<Void, Never>] = [:]
     private var operations: [LocalModelID: UUID] = [:]
     private var leases: [UUID: LocalModelID] = [:]
+    private var removing: Set<LocalModelID> = []
 
     init(
         root: URL,
         storageAvailable: Bool = true,
         legacyRoot: URL? = nil,
         descriptor: @escaping (LocalModelID) -> LocalModelDescriptor = LocalModelRegistry.descriptor,
-        preparer: LocalModelFiles.Preparer? = nil
+        preparer: LocalModelFiles.Preparer? = nil,
+        remover: LocalModelFiles.Remover? = nil
     ) {
         self.descriptor = descriptor
         self.root = root
         self.storageAvailable = storageAvailable
         self.legacyRoot = legacyRoot
-        worker = LocalModelFiles(root: self.root, preparer: preparer)
+        worker = LocalModelFiles(root: self.root, preparer: preparer, remover: remover)
         for id in LocalModelID.allCases {
             states[id] = .init(totalBytes: descriptor(id).downloadBytes)
         }
     }
+
+    func retireLegacyModels() async throws { try await worker.retireLegacyModels() }
+
+    func lifecycleMetrics() async -> LocalModelLifecycleMetrics { await worker.metrics }
 
     func state(for id: LocalModelID) -> LocalModelState { states[id] ?? .init() }
 
@@ -133,12 +149,21 @@ final class LocalModelManager: ObservableObject {
     /// Inspect receipt and file metadata without hashing files or loading Core ML.
     func health(for id: LocalModelID) async -> ProviderHealth {
         guard storageAvailable, !storageSuspended else { return .notReady("The data folder is unavailable.") }
-        let state = state(for: id)
-        if [.downloading, .verifying, .preparing].contains(state.phase) {
-            return .notReady(state.phase.settingsTitle)
+        let result = await worker.health(descriptor(id), directory: modelDirectory(for: id))
+        if id == .voiceEmbedding, !result.isReady {
+            return await worker.health(descriptor(id), directory: modelDirectory(for: .community1))
         }
-        if state.phase == .failed { return .notReady(state.message ?? "Model setup failed.") }
-        return await worker.health(descriptor(id), directory: modelDirectory(for: id))
+        return result
+    }
+
+    private func materializeEmbeddingIfNeeded(_ id: LocalModelID) async throws {
+        guard id == .voiceEmbedding,
+            !(await worker.health(descriptor(id), directory: modelDirectory(for: id))).isReady,
+            await worker.health(descriptor(id), directory: modelDirectory(for: .community1)).isReady
+        else { return }
+        try await worker.materializeSubset(
+            descriptor(id), sourceDescriptor: descriptor(.community1),
+            source: modelDirectory(for: .community1), destination: modelDirectory(for: id))
     }
 
     func refresh(_ ids: Set<LocalModelID> = Set(LocalModelID.allCases)) async {
@@ -152,24 +177,32 @@ final class LocalModelManager: ObservableObject {
             }
             return
         }
-        for id in ids where tasks[id] == nil && state(for: id).inUse == 0 {
-            // Ready means this process verified and prepared the exact pinned assets.
-            // An externally copied folder is never a readiness receipt.
-            let directory = modelDirectory(for: id)
-            if state(for: id).phase == .ready {
-                do {
-                    try await worker.verify(descriptor(id), directory: directory)
-                    continue
-                }
-                catch { states[id]?.message = error.localizedDescription }
+        for id in ids {
+            if !FileManager.default.fileExists(atPath: modelDirectory(for: id).path) {
+                states[id]?.phase = .missing
+                states[id]?.message = nil
+                continue
             }
-            let exists = FileManager.default.fileExists(atPath: directory.path)
-            states[id]?.phase = exists ? .unverified : .missing
-            if exists {
-                // Discovery verifies copied files automatically; presence never bypasses hashes or preparation.
-                verify(id)
-            }
+            if tasks[id] == nil, state(for: id).inUse == 0 { verify(id) }
+            await tasks[id]?.value
         }
+    }
+
+    /// Explicit provider validation temporarily opens resources, then releases them.
+    /// Concurrent requests share the same check, including its runtime preparation.
+    func validate(_ id: LocalModelID) async -> ProviderHealth {
+        guard storageAvailable, !storageSuspended else { return .notReady("The data folder is unavailable.") }
+        let availability = await health(for: id)
+        guard availability.isReady else { return availability }
+        if await worker.hasPreparationReceipt(descriptor(id), directory: modelDirectory(for: id)) {
+            return .ready
+        }
+        if tasks[id] == nil, state(for: id).inUse == 0 { verify(id) }
+        await tasks[id]?.value
+        guard state(for: id).phase == .ready else {
+            return .notReady(state(for: id).message ?? "Model validation did not complete. Try Refresh.")
+        }
+        return await health(for: id)
     }
 
     func download(_ id: LocalModelID) { start(id, download: true) }
@@ -188,6 +221,7 @@ final class LocalModelManager: ObservableObject {
             guard let self else { return }
             do {
                 try await prepareStorage()
+                if !download { try await materializeEmbeddingIfNeeded(id) }
                 if download {
                     try await worker.install(descriptor, directory: directory) { [weak self] count in
                         Task { @MainActor in
@@ -200,11 +234,15 @@ final class LocalModelManager: ObservableObject {
                 }
                 try Task.checkCancellation()
                 states[id]?.phase = .verifying
-                try await worker.verify(descriptor, directory: directory)
-                try Task.checkCancellation()
-                states[id]?.phase = .preparing
-                _ = try await worker.prepare(descriptor, directory: directory)
-                try Task.checkCancellation()
+                let worker = worker
+                try await ProcessingCoordinator.shared.withPermit(for: .modelPreparation, priority: .interactive) {
+                    try await worker.verify(descriptor, directory: directory)
+                    if !(await worker.hasPreparationReceipt(descriptor, directory: directory)) {
+                        _ = try await worker.prepare(descriptor, directory: directory)
+                    }
+                    try Task.checkCancellation()
+                    try await worker.assertUnchanged(descriptor, directory: directory)
+                }
                 do { try await worker.recordPreparation(descriptor, directory: directory) }
                 catch {
                     states[id]?.message =
@@ -216,7 +254,8 @@ final class LocalModelManager: ObservableObject {
                     // The embedding graph and preprocessing were just prepared as part of Community-1.
                     // Materialize the identical verified files without another network request.
                     do {
-                        try await worker.materializeSubset(subset, source: directory, destination: subsetDirectory)
+                        try await worker.materializeSubset(
+                            subset, sourceDescriptor: descriptor, source: directory, destination: subsetDirectory)
                         try? await worker.recordPreparation(subset, directory: subsetDirectory)
                         states[.voiceEmbedding] = .init(
                             phase: .ready, completedBytes: subset.downloadBytes, totalBytes: subset.downloadBytes)
@@ -240,47 +279,73 @@ final class LocalModelManager: ObservableObject {
         }
     }
 
-    func acquireInstalled(id: LocalModelID) async throws -> LocalModelLease { try await acquire(id) }
+    /// The owning query lease keeps the assets resident while its additional execution plan loads.
+    func prepareSemanticPassage(for lease: LocalModelLease) async throws -> MLModel {
+        guard leases[lease.token] == lease.id else { throw LocalModelError.unavailable }
+        let descriptor = descriptor(lease.id)
+        let worker = worker
+        return try await ProcessingCoordinator.shared.withPermit(for: .modelPreparation, priority: .interactive) {
+            try await worker.verify(descriptor, directory: lease.directory)
+            let models = try await worker.prepare(
+                descriptor, directory: lease.directory, semanticFunction: "passage512")
+            try Task.checkCancellation()
+            try await worker.assertUnchanged(descriptor, directory: lease.directory)
+            guard let model = models["SemanticEncoder"] else { throw LocalModelError.unavailable }
+            return model
+        }
+    }
 
-    func acquire(_ id: LocalModelID) async throws -> LocalModelLease {
+    func acquireInstalled(
+        id: LocalModelID, semanticFunction: String? = nil, priority: ProcessingCoordinator.Priority = .processing
+    ) async throws -> LocalModelLease {
+        try await acquire(id, semanticFunction: semanticFunction, priority: priority)
+    }
+
+    func acquire(
+        _ id: LocalModelID, semanticFunction: String? = nil, priority: ProcessingCoordinator.Priority = .processing
+    ) async throws -> LocalModelLease {
         storageOperations += 1
         defer { storageOperations -= 1 }
         try await prepareStorage()
-        if state(for: id).phase != .ready {
-            if tasks[id] == nil,
-                await worker.health(descriptor(id), directory: modelDirectory(for: id)).isReady
-            {
-                verify(id)
-            }
-            else if id == .voiceEmbedding, tasks[id] == nil,
-                await worker.hasPreparationReceipt(descriptor(.community1), directory: modelDirectory(for: .community1))
-            {
-                if tasks[.community1] == nil { verify(.community1) }
-                await tasks[.community1]?.value
-            }
-            if [.verifying, .preparing].contains(state(for: id).phase) { await tasks[id]?.value }
-            try Task.checkCancellation()
-        }
-        guard state(for: id).phase == .ready, tasks[id] == nil else { throw LocalModelError.unavailable }
+        guard !removing.contains(id) else { throw LocalModelError.busy }
+        // A processing request verifies as needed and retains the instances it opens.
+        // It never invokes a separate temporary validation/preparation first.
+        if let task = tasks[id] { await task.value }
+        try Task.checkCancellation()
+        try await materializeEmbeddingIfNeeded(id)
+        guard tasks[id] == nil, !removing.contains(id) else { throw LocalModelError.busy }
         let token = UUID()
         leases[token] = id
         states[id]?.inUse += 1
         let descriptor = descriptor(id)
         let directory = modelDirectory(for: id)
         do {
-            // Recheck external modifications before opening any model.
-            try await worker.verify(descriptor, directory: directory)
-            // Synchronous Core ML prediction must be serialized per instance.
-            // Each lease has its own models so independent workers cannot race them.
-            let models = try await worker.prepare(descriptor, directory: directory)
-            try Task.checkCancellation()
-            return .init(id: id, token: token, directory: directory, revision: descriptor.revision, models: models)
+            let worker = worker
+            let loaded = try await ProcessingCoordinator.shared.withPermit(for: .modelPreparation, priority: priority) {
+                try await worker.verify(descriptor, directory: directory)
+                let models = try await worker.prepare(
+                    descriptor, directory: directory, semanticFunction: semanticFunction)
+                try Task.checkCancellation()
+                try await worker.assertUnchanged(descriptor, directory: directory)
+                if semanticFunction == nil { try? await worker.recordPreparation(descriptor, directory: directory) }
+                return LocalModelLease(
+                    id: id, token: token, directory: directory, revision: descriptor.revision, models: models)
+            }
+            states[id]?.phase = .ready
+            states[id]?.message = nil
+            return loaded
         }
         catch {
             leases.removeValue(forKey: token)
             states[id]?.inUse -= 1
-            states[id]?.phase = .failed
-            states[id]?.message = error.localizedDescription
+            if error is CancellationError {
+                states[id]?.phase = state(for: id).inUse > 0 ? .ready : .cancelled
+                states[id]?.message = nil
+            }
+            else {
+                states[id]?.phase = .failed
+                states[id]?.message = error.localizedDescription
+            }
             throw error
         }
     }
@@ -296,7 +361,8 @@ final class LocalModelManager: ObservableObject {
         try await prepareStorage()
         guard state(for: id).inUse == 0 else { throw LocalModelError.inUse }
         guard tasks[id] == nil else { throw LocalModelError.busy }
-        // Mark unavailable before yielding so a concurrent acquire cannot race removal.
+        guard removing.insert(id).inserted else { throw LocalModelError.busy }
+        defer { removing.remove(id) }
         states[id]?.phase = .missing
         do {
             try await worker.remove(directory: modelDirectory(for: id))
@@ -419,13 +485,66 @@ final class LocalModelDownload: NSObject, URLSessionDownloadDelegate, @unchecked
 /// File and Core ML work stays off the main actor. Shared immutable files are hard-linked
 /// into each installation; removing one installation cannot remove another's links.
 actor LocalModelFiles {
+    typealias Remover = @Sendable (URL) async throws -> Void
+    private let remover: Remover?
     typealias Preparer = @Sendable (LocalModelDescriptor, URL) async throws -> [String: MLModel]
     let root: URL
     private let preparer: Preparer?
-    init(root: URL, preparer: Preparer? = nil) {
+    private(set) var metrics = LocalModelLifecycleMetrics()
+    private struct FileIdentity: Codable, Equatable, Sendable {
+        let path: String
+        let digest: String
+        let bytes: Int64
+        let inode: UInt64
+        let device: UInt64
+        let modified: Date
+        let created: Date
+        var changed: Date
+    }
+    private struct ValidationReceipt: Codable, Equatable, Sendable {
+        let revision: String
+        let files: [FileIdentity]
+        var runtimeValidated: Bool
+    }
+    private var verified: [URL: ValidationReceipt] = [:]
+    private var rejected: [URL: (ValidationReceipt, String)] = [:]
+    private var verifiedDescriptors: [URL: LocalModelDescriptor] = [:]
+
+    private func identity(_ descriptor: LocalModelDescriptor, directory: URL) throws -> ValidationReceipt {
+        let files = try descriptor.assets.map { asset -> FileIdentity in
+            let url = try safeURL(asset, directory: directory)
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            var info = stat()
+            guard attrs[.type] as? FileAttributeType == .typeRegular,
+                (attrs[.size] as? NSNumber)?.int64Value == asset.bytes,
+                lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+                let modified = attrs[.modificationDate] as? Date,
+                let created = attrs[.creationDate] as? Date
+            else { throw LocalModelError.invalidFile(asset.path) }
+            let changed = Date(
+                timeIntervalSince1970:
+                    Double(info.st_ctimespec.tv_sec) + Double(info.st_ctimespec.tv_nsec) / 1_000_000_000)
+            return .init(
+                path: asset.path, digest: asset.digest, bytes: asset.bytes,
+                inode: UInt64(info.st_ino), device: UInt64(info.st_dev),
+                modified: modified, created: created, changed: changed)
+        }
+        return .init(revision: descriptor.revision, files: files, runtimeValidated: false)
+    }
+
+    private func receipt(directory: URL) -> ValidationReceipt? {
+        guard let bytes = try? Data(contentsOf: directory.appendingPathComponent(".gday-validation.json")),
+            bytes.count <= 4_194_304
+        else { return nil }
+        return try? JSONDecoder().decode(ValidationReceipt.self, from: bytes)
+    }
+    init(root: URL, preparer: Preparer? = nil, remover: Remover? = nil) {
         self.root = root
         self.preparer = preparer
+        self.remover = remover
     }
+
+    func retireLegacyModels() throws { try RetiredVoiceSearchMigration.removeModels(root: root) }
 
     /// Publish a complete copy only when this library has no model folder yet.
     /// Existing library installations and the legacy source are never overwritten.
@@ -452,12 +571,38 @@ actor LocalModelFiles {
     }
 
     func verify(_ descriptor: LocalModelDescriptor, directory: URL) throws {
+        let before = try identity(descriptor, directory: directory)
+        verifiedDescriptors[directory] = descriptor
+        if let (identity, reason) = rejected[directory], identity == before {
+            throw LocalModelError.invalidFile(reason)
+        }
+        rejected.removeValue(forKey: directory)
+        if let cached = verified[directory] ?? receipt(directory: directory),
+            cached.revision == before.revision, cached.files == before.files
+        {
+            verified[directory] = cached
+            return
+        }
+        metrics.verificationPasses += 1
         for asset in descriptor.assets {
             try Task.checkCancellation()
             guard try matches(asset, at: safeURL(asset, directory: directory)) else {
+                rejected[directory] = (before, asset.path)
                 throw LocalModelError.invalidFile(asset.path)
             }
         }
+        guard try identity(descriptor, directory: directory) == before else {
+            throw LocalModelError.invalidFile("Changed during verification")
+        }
+        verified[directory] = before
+        try JSONEncoder().encode(before).write(
+            to: directory.appendingPathComponent(".gday-validation.json"), options: .atomic)
+    }
+
+    func assertUnchanged(_ descriptor: LocalModelDescriptor, directory: URL) throws {
+        let current = try identity(descriptor, directory: directory)
+        guard let cached = verified[directory], cached.revision == current.revision, cached.files == current.files
+        else { throw LocalModelError.invalidFile("Changed during preparation") }
     }
 
     func matches(_ asset: LocalModelAsset, at url: URL) throws -> Bool {
@@ -473,6 +618,7 @@ actor LocalModelFiles {
         if asset.digest.count == 40 { sha1.update(data: Data("blob \(asset.bytes)\0".utf8)) }
         while let data = try file.read(upToCount: 1_048_576), !data.isEmpty {
             try Task.checkCancellation()
+            metrics.hashedBytes += Int64(data.count)
             if asset.digest.count == 40 {
                 sha1.update(data: data)
             }
@@ -529,23 +675,77 @@ actor LocalModelFiles {
             completed += asset.bytes
             progress(completed)
         }
+        try refreshLinkReceipts()
     }
 
-    func prepare(_ descriptor: LocalModelDescriptor, directory: URL) async throws -> [String: MLModel] {
+    func prepare(_ descriptor: LocalModelDescriptor, directory: URL, semanticFunction: String? = nil) async throws
+        -> [String: MLModel]
+    {
+        metrics.preparationCount += 1
+        let started = ProcessInfo.processInfo.systemUptime
+        defer { metrics.preparationSeconds += ProcessInfo.processInfo.systemUptime - started }
         if let preparer { return try await preparer(descriptor, directory) }
         var result: [String: MLModel] = [:]
         for name in descriptor.modelNames {
             try Task.checkCancellation()
             let config = MLModelConfiguration()
             config.computeUnits = name == "FBank" ? .cpuOnly : .all
+            if name == "SemanticEncoder" { config.functionName = semanticFunction }
             result[name] = try await MLModel.load(
                 contentsOf: directory.appendingPathComponent(name + ".mlmodelc"), configuration: config)
+            metrics.loadedModelCount += 1
         }
         return result
     }
 
-    func materializeSubset(_ descriptor: LocalModelDescriptor, source: URL, destination: URL) throws {
-        try verify(descriptor, directory: source)
+    /// Trusted link changes do not change file contents. Preserve validation while updating only ctime.
+    private func refreshLinkReceipts() throws {
+        for (directory, descriptor) in verifiedDescriptors {
+            guard var cached = verified[directory], var current = try? identity(descriptor, directory: directory),
+                cached.revision == current.revision, cached.files.count == current.files.count
+            else { continue }
+            var comparable = current.files
+            for index in comparable.indices { comparable[index].changed = cached.files[index].changed }
+            guard comparable == cached.files else { continue }
+            current.runtimeValidated = cached.runtimeValidated
+            cached = current
+            verified[directory] = cached
+            try JSONEncoder().encode(cached).write(
+                to: directory.appendingPathComponent(".gday-validation.json"), options: .atomic)
+        }
+    }
+
+    func materializeSubset(
+        _ descriptor: LocalModelDescriptor, sourceDescriptor: LocalModelDescriptor, source: URL, destination: URL
+    ) throws {
+        if let fullIdentity = try? identity(sourceDescriptor, directory: source),
+            let cached = verified[source] ?? receipt(directory: source),
+            cached.files == fullIdentity.files, cached.revision == fullIdentity.revision
+        {
+            verified[source] = cached
+            verifiedDescriptors[source] = sourceDescriptor
+        }
+        let sourceIdentity = try identity(descriptor, directory: source)
+        if let destinationIdentity = try? identity(descriptor, directory: destination),
+            let cached = verified[destination] ?? receipt(directory: destination),
+            destinationIdentity.files == cached.files, destinationIdentity.revision == cached.revision
+        {
+            return
+        }
+        // A subset must never replace the full source manifest or runtime receipt.
+        let sourceReceipt = verified[source] ?? receipt(directory: source)
+        if sourceReceipt?.revision != sourceIdentity.revision
+            || !sourceIdentity.files.allSatisfy({ sourceReceipt?.files.contains($0) == true })
+        {
+            metrics.verificationPasses += 1
+            for asset in descriptor.assets {
+                try Task.checkCancellation()
+                guard try matches(asset, at: safeURL(asset, directory: source)) else {
+                    rejected[source] = (sourceIdentity, asset.path)
+                    throw LocalModelError.invalidFile(asset.path)
+                }
+            }
+        }
         let fm = FileManager.default
         let objects = root.appendingPathComponent("objects", isDirectory: true)
         try fm.createDirectory(at: objects, withIntermediateDirectories: true)
@@ -562,41 +762,52 @@ actor LocalModelFiles {
             if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
             try fm.linkItem(at: object, to: target)
         }
+        try refreshLinkReceipts()
+        var destinationReceipt = try identity(descriptor, directory: destination)
+        destinationReceipt.runtimeValidated = verified[source]?.runtimeValidated == true
+        verified[destination] = destinationReceipt
+        verifiedDescriptors[destination] = descriptor
+        try JSONEncoder().encode(destinationReceipt).write(
+            to: destination.appendingPathComponent(".gday-validation.json"), options: .atomic)
     }
 
+    /// Presence is an estimate. Neither hashing nor runtime preparation belongs here.
     func health(_ descriptor: LocalModelDescriptor, directory: URL) -> ProviderHealth {
-        guard FileManager.default.fileExists(atPath: directory.path) else {
-            return .notReady("Required model files are missing.")
+        do {
+            let current = try identity(descriptor, directory: directory)
+            if let (identity, _) = rejected[directory], identity == current {
+                return .notReady("Required model files failed verification. Replace or download the model.")
+            }
+            return .ready
         }
-        for asset in descriptor.assets {
-            guard let url = try? safeURL(asset, directory: directory),
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-                attributes[.type] as? FileAttributeType == .typeRegular,
-                (attributes[.size] as? NSNumber)?.int64Value == asset.bytes
-            else { return .notReady("Required model files are missing or incomplete.") }
-        }
-        if !hasPreparationReceipt(descriptor, directory: directory) {
-            // Check discovered files without loading Core ML. Acquisition still prepares
-            // verified assets before use; opening provider settings does so automatically.
-            do { try verify(descriptor, directory: directory) }
-            catch { return .notReady(error.localizedDescription) }
-        }
-        return .ready
+        catch { return .notReady("Required model files are missing or incomplete.") }
     }
 
     func hasPreparationReceipt(_ descriptor: LocalModelDescriptor, directory: URL) -> Bool {
-        (try? String(contentsOf: directory.appendingPathComponent(".gday-prepared"), encoding: .utf8))
-            == descriptor.revision
+        guard let current = try? identity(descriptor, directory: directory),
+            let cached = verified[directory] ?? receipt(directory: directory)
+        else { return false }
+        return cached.runtimeValidated && cached.revision == current.revision && cached.files == current.files
     }
 
     func recordPreparation(_ descriptor: LocalModelDescriptor, directory: URL) throws {
-        try Data(descriptor.revision.utf8).write(
-            to: directory.appendingPathComponent(".gday-prepared"), options: .atomic)
+        var current = try identity(descriptor, directory: directory)
+        guard let cached = verified[directory], cached.revision == current.revision, cached.files == current.files
+        else { throw LocalModelError.invalidFile("Changed during preparation") }
+        current.runtimeValidated = true
+        verified[directory] = current
+        try JSONEncoder().encode(current).write(
+            to: directory.appendingPathComponent(".gday-validation.json"), options: .atomic)
     }
 
-    func remove(directory: URL) throws {
+    func remove(directory: URL) async throws {
+        try await remover?(directory)
+        verified.removeValue(forKey: directory)
+        rejected.removeValue(forKey: directory)
+        verifiedDescriptors.removeValue(forKey: directory)
         let fm = FileManager.default
         if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
+        try refreshLinkReceipts()
         // Object cache supports retries and sharing; reclaim only objects with no installation links.
         let objects = root.appendingPathComponent("objects", isDirectory: true)
         for url in (try? fm.contentsOfDirectory(at: objects, includingPropertiesForKeys: nil)) ?? [] {

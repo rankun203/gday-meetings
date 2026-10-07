@@ -64,7 +64,7 @@ struct VoiceSpeakerDecision: Codable, Hashable, Sendable {
     var personID: UUID?
 }
 
-struct VoiceProjectionOrigin: Codable, Equatable {
+struct VoiceProjectionOrigin: Codable, Equatable, Sendable {
     var speakerID: UUID
     var personID: UUID?
     var manuallyAssigned: Bool?

@@ -11,7 +11,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("dataset", type=Path)
     ap.add_argument("output", type=Path)
-    ap.add_argument("--clsp-cache", type=Path, required=True)
     ap.add_argument("--model-cache", type=Path, required=True)
     ap.add_argument("--e5-model", type=Path, required=True)
     a = ap.parse_args()
@@ -68,31 +67,6 @@ def main():
         if name == "e5":
             command += ["--local-model", str(a.e5_model)]
         jobs.append((name, command, env))
-    clsp = ["uv", "run", "--no-project", "--python", "3.12"]
-    for package in [
-        "torch==2.8.0",
-        "torchaudio==2.8.0",
-        "transformers==4.57.3",
-        "numpy",
-        "soundfile",
-        "einops",
-        "timm",
-    ]:
-        clsp += ["--with", package]
-    jobs.append(
-        (
-            "clsp",
-            clsp
-            + [
-                str(root / "encode_clsp.py"),
-                str(a.dataset),
-                str(a.output / "clsp"),
-                "--device",
-                "mps",
-            ],
-            dict(env, HF_HOME=str(a.clsp_cache)),
-        )
-    )
     failures = []
     for name, command, variables in jobs:
         if (a.output / name / "complete.json").exists():

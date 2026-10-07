@@ -45,12 +45,12 @@ extension IndexDatabase.Module {
         initialValues: "INSERT OR IGNORE INTO state VALUES(1,0)")
 
     static let tasks = Self(
-        namespace: "core_tasks", version: 2,
+        namespace: "core_tasks", version: 4,
         tables: [
             .init(
                 name: "task_offsets",
                 definition:
-                    "(id TEXT PRIMARY KEY,created REAL NOT NULL,state TEXT NOT NULL,kind TEXT NOT NULL,meeting TEXT NOT NULL,priority INTEGER NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL,digest TEXT NOT NULL)"
+                    "(id TEXT PRIMARY KEY,created REAL NOT NULL,state TEXT NOT NULL,kind TEXT NOT NULL,meeting TEXT NOT NULL,priority INTEGER NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL,digest TEXT NOT NULL,intent_digest TEXT NOT NULL,attention INTEGER NOT NULL,automatic INTEGER NOT NULL)"
             ),
             .init(name: "journal_revision", definition: "(id INTEGER PRIMARY KEY,revision TEXT,committed INTEGER)"),
         ],

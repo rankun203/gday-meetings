@@ -51,8 +51,7 @@ let package = Package(
                 .copy("Resources/wordfreq-NOTICE.md"),
             ], linkerSettings: [.unsafeFlags([searchRoot + "/lib/libsemanticsearch.a"]), .linkedLibrary("c++")]),
         .testTarget(
-            name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"],
-            resources: [.copy("Fixtures/CLSP")]),
+            name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"]),
     ],
     swiftLanguageModes: [.v5]
 )

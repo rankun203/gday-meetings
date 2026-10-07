@@ -95,11 +95,6 @@ struct GeneralSettingsView: View {
                             Text("Extracts to-dos from completed summaries.").font(.caption).foregroundStyle(.secondary)
                         }
                         group("General") {
-                            switchRow("Automatically Load Search", enabled: setting(\.automaticallyLoadSearch))
-                            Text(
-                                "Loads the search index and model when the app opens. When off, they load when you activate Search."
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
                             Picker("Appearance", selection: $appearance.selection) {
                                 ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
                             }

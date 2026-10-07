@@ -10,7 +10,7 @@ struct LocalSearchProviderView: View {
     @ViewState private var failure: String?
 
     private var changed: Bool { store.settings.serviceProviders.first { $0.id == draft.id } != draft }
-    private var readiness: ProviderHealth { health.state(providerID: draft.id, capability: .search) }
+    private var readiness: ProviderHealth { health.validationState(providerID: draft.id, capability: .search) }
 
     var body: some View {
         Form {

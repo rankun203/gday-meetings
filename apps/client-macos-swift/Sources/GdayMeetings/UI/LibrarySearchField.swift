@@ -14,9 +14,18 @@ struct LibrarySearchField: View {
         NativeLibrarySearchField(
             text: $text, focused: $focused,
             loading: controller.isLoading, stage: controller.loadingStage,
+            startedAt: controller.loadingStartedAt, duration: controller.loadingDuration, ready: controller.isReady,
             reduceMotion: reduceMotion, activate: activate, submit: submit
         )
         .frame(minWidth: 180, idealWidth: 280, maxWidth: 360).frame(height: 28)
+        .task {
+            if UIPreview.enabled,
+                ProcessInfo.processInfo.arguments.contains("--synthetic-search-loading")
+                    || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticSearchLoading") as? Bool == true
+            {
+                await controller.previewLoading()
+            }
+        }
     }
 }
 
@@ -25,6 +34,9 @@ private struct NativeLibrarySearchField: NSViewRepresentable {
     @Binding var focused: Bool
     let loading: Bool
     let stage: String
+    let startedAt: TimeInterval
+    let duration: TimeInterval
+    let ready: Bool
     let reduceMotion: Bool
     let activate: () -> Void
     let submit: () -> Void
@@ -50,7 +62,7 @@ private struct NativeLibrarySearchField: NSViewRepresentable {
         let focusChanged = context.coordinator.requestedFocus != focused
         context.coordinator.requestedFocus = focused
         if field.stringValue != text { field.stringValue = text }
-        field.updateLoading(loading, reduceMotion: reduceMotion)
+        field.updateLoading(loading, startedAt: startedAt, duration: duration, ready: ready, reduceMotion: reduceMotion)
         field.setAccessibilityHelp(loading ? stage : "Search meeting content")
         let isEditing = field.currentEditor() != nil
         if focused, !isEditing {
@@ -93,46 +105,100 @@ private final class LoadingSearchField: NSSearchField {
         if accepted { DispatchQueue.main.async { [weak self] in self?.onActivate?() } }
         return accepted
     }
-    private let strip = CALayer()
-    private let wave = CAGradientLayer()
+    private let strip = CAShapeLayer()
     private var loading = false
     private var reducedMotion = false
+    private var startedAt: TimeInterval = 0
+    private var duration: TimeInterval = 1
+    private var progressUpdates: Task<Void, Never>?
+    deinit { progressUpdates?.cancel() }
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        strip.masksToBounds = true
-        strip.cornerRadius = 1
-        strip.isHidden = true
+        strip.opacity = 0
+        strip.lineWidth = 2
+        strip.lineCap = .round
+        strip.fillColor = nil
+        strip.strokeEnd = 0
         layer?.addSublayer(strip)
-        wave.startPoint = CGPoint(x: 0, y: 0.5)
-        wave.endPoint = CGPoint(x: 1, y: 0.5)
-        strip.addSublayer(wave)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsLayout = true
+    }
     override func layout() {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        strip.frame = CGRect(x: 10, y: isFlipped ? bounds.height - 4 : 2, width: max(0, bounds.width - 20), height: 2)
-        wave.frame = strip.bounds
+        strip.frame = bounds
+        let y = isFlipped ? bounds.height - 3 : 3
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 10, y: y))
+        path.addLine(to: CGPoint(x: max(10, bounds.width - 10), y: y))
+        strip.path = path
+        strip.strokeColor = NSColor.controlAccentColor.cgColor
         CATransaction.commit()
     }
-    func updateLoading(_ value: Bool, reduceMotion: Bool) {
-        guard loading != value || reducedMotion != reduceMotion else { return }
+    func updateLoading(_ value: Bool, startedAt: TimeInterval, duration: TimeInterval, ready: Bool, reduceMotion: Bool)
+    {
+        guard
+            loading != value || reducedMotion != reduceMotion
+                || (value && (self.startedAt != startedAt || self.duration != duration))
+        else { return }
+        let newLoad = value && (!loading || self.startedAt != startedAt)
+        let previous = newLoad ? 0 : (strip.presentation()?.strokeEnd ?? strip.strokeEnd)
+        let opacity = strip.presentation()?.opacity ?? strip.opacity
         loading = value
         reducedMotion = reduceMotion
-        strip.isHidden = !value
-        wave.removeAllAnimations()
-        let color = NSColor.controlAccentColor
-        wave.colors = [color.withAlphaComponent(0.2).cgColor, color.cgColor, color.withAlphaComponent(0.2).cgColor]
-        wave.locations = [0, 0.5, 1]
-        if value, !reduceMotion {
-            let animation = CABasicAnimation(keyPath: "locations")
-            animation.fromValue = [-1, -0.5, 0]
-            animation.toValue = [1, 1.5, 2]
-            animation.duration = 1.6
-            animation.repeatCount = .infinity
-            wave.add(animation, forKey: "loading")
+        self.startedAt = startedAt
+        self.duration = duration
+        progressUpdates?.cancel()
+        strip.removeAllAnimations()
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+        let fraction = min(0.95, elapsed / max(0.001, duration))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        strip.strokeEnd = value ? (reduceMotion ? fraction : 0.95) : (ready ? 1 : previous)
+        strip.opacity = value ? 1 : 0
+        CATransaction.commit()
+        if value {
+            if reduceMotion {
+                progressUpdates = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .milliseconds(250)) }
+                        catch { return }
+                        guard let self else { return }
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
+                        self.strip.strokeEnd = min(
+                            0.95, max(0, ProcessInfo.processInfo.systemUptime - startedAt) / max(0.001, duration))
+                        CATransaction.commit()
+                    }
+                }
+                return
+            }
+            animate("opacity", from: Double(opacity), to: 1, duration: 0.18)
+            animate(
+                "strokeEnd", from: newLoad ? fraction : previous, to: 0.95,
+                duration: max(0.1, duration * 0.95 - elapsed))
         }
+        else if !reduceMotion {
+            if ready { animate("strokeEnd", from: previous, to: 1, duration: 0.16) }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = opacity
+            fade.toValue = 0
+            fade.duration = 0.2
+            fade.beginTime = strip.convertTime(CACurrentMediaTime(), from: nil) + (ready ? 0.16 : 0)
+            fade.fillMode = .backwards
+            strip.add(fade, forKey: "opacity")
+        }
+    }
+    private func animate(_ key: String, from: Double, to: Double, duration: TimeInterval) {
+        let animation = CABasicAnimation(keyPath: key)
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = duration
+        strip.add(animation, forKey: key)
     }
 }

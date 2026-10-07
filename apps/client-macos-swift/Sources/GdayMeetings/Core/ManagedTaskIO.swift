@@ -50,6 +50,9 @@ final class ManagedTaskIO: @unchecked Sendable {
 
 struct ManagedTaskSnapshot: Sendable {
     var recent: [ManagedTaskRecord]
+    var maintenanceCounts: [ManagedTaskState: Int]
+    var scopeCounts: [TaskHistoryScope: Int]
+    var attentionCount: Int
     var counts: [ManagedTaskState: Int]
     var activeCounts: [BackgroundJob.Key: Int]
     var activeIDs: Set<UUID>
@@ -75,6 +78,20 @@ struct ManagedTaskSnapshot: Sendable {
             guard page.count == 50, let last = page.last else { break }
             cursor = .init(createdAt: last.createdAt, id: last.id)
         }
-        return Self(recent: recent, counts: counts, activeCounts: activeCounts, activeIDs: activeIDs)
+        return Self(
+            recent: recent,
+            maintenanceCounts: Dictionary(
+                uniqueKeysWithValues: [ManagedTaskState.queued, .running, .paused].map {
+                    (
+                        $0,
+                        journal.count(
+                            where: "kind='searchIndex' AND automatic=1 AND state="
+                                + ManagedTaskIndex.literal($0.rawValue))
+                    )
+                }),
+            scopeCounts: Dictionary(
+                uniqueKeysWithValues: TaskHistoryScope.allCases.map { ($0, journal.count(where: $0.predicate)) }),
+            attentionCount: journal.count(where: "attention=1"), counts: counts,
+            activeCounts: activeCounts, activeIDs: activeIDs)
     }
 }

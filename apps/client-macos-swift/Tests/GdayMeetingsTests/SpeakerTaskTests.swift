@@ -150,6 +150,7 @@ private final class SpeakerBindingGate: @unchecked Sendable {
         #expect(store.taskQueueActivitySummary == "1 running")
         #expect(store.taskQueueOtherJobs.isEmpty)
         job.state = .failed
+        job.failures["recording-" + UUID().uuidString] = "The synthetic recording is unavailable."
         _ = store.voiceLibrary.setJobs([job])
         #expect(store.taskAttentionCount == 1)
         #expect(store.showsTaskQueueStatus)

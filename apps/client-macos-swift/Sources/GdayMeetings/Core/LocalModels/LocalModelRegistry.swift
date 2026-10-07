@@ -3,7 +3,7 @@ import Foundation
 
 enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
     case nemotronLow, nemotronFast, nemotronFast32, nemotronFast128, nemotronOffline, nemotronFast32SplitW8A8,
-        nemotronC128SplitW8A8, community1, voiceEmbedding, clsp, granite97M, granite311M
+        nemotronC128SplitW8A8, community1, voiceEmbedding, granite97M, granite311M
     var id: String { rawValue }
     var nemotronPreset: String? {
         switch self {
@@ -14,7 +14,7 @@ enum LocalModelID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .nemotronOffline: return "offline"
         case .nemotronFast32SplitW8A8: return "fast32-split-w8a8"
         case .nemotronC128SplitW8A8: return "c128-split-w8a8"
-        case .community1, .voiceEmbedding, .clsp, .granite97M, .granite311M: return nil
+        case .community1, .voiceEmbedding, .granite97M, .granite311M: return nil
         }
     }
 }
@@ -230,10 +230,6 @@ enum LocalModelRegistry {
         switch id {
         case .granite97M, .granite311M:
             return semanticDescriptor(id)
-        case .clsp:
-            return .init(
-                id: id, title: "CLSP", repository: "rankun203/yfyeung-clsp-coreml", revision: "v1",
-                assets: clspAssets, modelNames: ["CLSPAudio", "CLSPText"])
         case .nemotronLow, .nemotronFast, .nemotronFast32, .nemotronFast128, .nemotronOffline, .nemotronFast32SplitW8A8,
             .nemotronC128SplitW8A8:
             let preset = id.nemotronPreset!
@@ -261,66 +257,4 @@ enum LocalModelRegistry {
         }
     }
 
-    // SHA-256 pins the prepared v1 release; the Hugging Face repository is not published yet.
-    private static let clspAssets: [LocalModelAsset] = [
-        .init(
-            path: "CLSPAudio.mlmodelc/analytics/coremldata.bin",
-            remotePath: "CLSPAudio.mlmodelc/analytics/coremldata.bin",
-            bytes: 243, digest: "386b92947b405efe9104485a217c1564a0c754398798b780febf7751f581de05"),
-        .init(
-            path: "CLSPAudio.mlmodelc/coremldata.bin", remotePath: "CLSPAudio.mlmodelc/coremldata.bin",
-            bytes: 699, digest: "2534291fb2aba09fca4bb0ffb2ea469a2b59f1a1adf8679cce5943286cf28d80"),
-        .init(
-            path: "CLSPAudio.mlmodelc/metadata.json", remotePath: "CLSPAudio.mlmodelc/metadata.json",
-            bytes: 3238, digest: "ebf5f7e11d7767b437482f3624a7789d02cb08661aa5f673bd4e9d3f71f7f526"),
-        .init(
-            path: "CLSPAudio.mlmodelc/model.mil", remotePath: "CLSPAudio.mlmodelc/model.mil",
-            bytes: 847975, digest: "aadd30be2b86d20ac6191d3486e92b0907cf57bd24d6d88f96ef4a45ea8ede07"),
-        .init(
-            path: "CLSPAudio.mlmodelc/weights/weight.bin", remotePath: "CLSPAudio.mlmodelc/weights/weight.bin",
-            bytes: 2_394_255_104, digest: "ff8595d45d9b8a74096fbd1f84f1d5d7b92545e338d88fced9793a692324fc14"),
-        .init(
-            path: "CLSPText.mlmodelc/analytics/coremldata.bin",
-            remotePath: "CLSPText.mlmodelc/analytics/coremldata.bin",
-            bytes: 243, digest: "a48a94e1a3c6e6f00ab4e9eb6123c773b551b2570d4af8da520465056eddf7cc"),
-        .init(
-            path: "CLSPText.mlmodelc/coremldata.bin", remotePath: "CLSPText.mlmodelc/coremldata.bin",
-            bytes: 712, digest: "79cc8b48d7b9da7140549ecb257db7f68d9861598e50820ee6cfbad6016f4f49"),
-        .init(
-            path: "CLSPText.mlmodelc/metadata.json", remotePath: "CLSPText.mlmodelc/metadata.json",
-            bytes: 3089, digest: "71011e2fdff470adbcce31c71f4c2eb078552c52abe999c28abb5307142d98da"),
-        .init(
-            path: "CLSPText.mlmodelc/model.mil", remotePath: "CLSPText.mlmodelc/model.mil",
-            bytes: 151849, digest: "fe6e2dec9dc9438598e3d7e8d39e20f27b7a1b0e2f077d4dfd442f565c18dded"),
-        .init(
-            path: "CLSPText.mlmodelc/weights/weight.bin", remotePath: "CLSPText.mlmodelc/weights/weight.bin",
-            bytes: 503_324_800, digest: "f5866eac85fd426549425b35bf96e219db304877d62810d7357096731165e1b0"),
-        .init(
-            path: "config.json", remotePath: "config.json",
-            bytes: 481, digest: "ef0185e2aae6e06c5f105a285006952c340e20c7dbf43c86ec82601b13fc45e9"),
-        .init(
-            path: "licenses/Apache-2.0.txt", remotePath: "licenses/Apache-2.0.txt",
-            bytes: 11358, digest: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"),
-        .init(
-            path: "licenses/NOTICE.md", remotePath: "licenses/NOTICE.md",
-            bytes: 4149, digest: "61f297fc6189344649e4d2c91e09f2595933409bddbcfdb09a3d9aa9e963bea2"),
-        .init(
-            path: "licenses/RoBERTa-MIT.txt", remotePath: "licenses/RoBERTa-MIT.txt",
-            bytes: 1086, digest: "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85"),
-        .init(
-            path: "licenses/Torchaudio-BSD-2-Clause.txt", remotePath: "licenses/Torchaudio-BSD-2-Clause.txt",
-            bytes: 1338, digest: "93a58861a858cc108e6b6b833e08e76e8b2a66339e4a8007c8a5a8c1ff9c40d6"),
-        .init(
-            path: "merges.txt", remotePath: "merges.txt",
-            bytes: 456318, digest: "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5"),
-        .init(
-            path: "tokenizer.json", remotePath: "tokenizer.json",
-            bytes: 1_355_863, digest: "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e"),
-        .init(
-            path: "tokenizer_config.json", remotePath: "tokenizer_config.json",
-            bytes: 25, digest: "994f46754c5bf4014f1aa92d34b1374319c3a6b3f702105cd5b742beaecd18ce"),
-        .init(
-            path: "vocab.json", remotePath: "vocab.json",
-            bytes: 898823, digest: "9e7f63c2d15d666b52e21d250d2e513b87c9b713cfa6987a82ed89e5e6e50655"),
-    ]
 }

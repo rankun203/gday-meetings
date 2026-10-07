@@ -11,11 +11,11 @@ Compare pinned Granite 97M and 311M Core ML conversions for interactive search. 
 
 # Run
 
-Use the locked `apps/worker-search/coreml` environment. Select full Xcode for the Core ML compiler without changing the machine-wide developer directory:
+Use the locked `tools/semantic-model-conversion` environment. Select full Xcode for the Core ML compiler without changing the machine-wide developer directory:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer UV_CACHE_DIR=/private/tmp/gday-semantic-uv \
-uv run --project apps/worker-search/coreml python experiments/embedding-optimization/convert.py \
+uv run --project tools/semantic-model-conversion python experiments/embedding-optimization/convert.py \
 97m OUTPUT --cache MODEL_CACHE --precision selective --tokens 512
 
 swiftc -O experiments/embedding-optimization/benchmark.swift -o BENCHMARK
@@ -31,11 +31,11 @@ Use `--from-package SELECTIVE_MODEL.mlpackage --precision selective --palette 6`
 Prepare private evaluation inputs and compare native outputs with:
 
 ```sh
-uv run --project apps/worker-search/coreml python experiments/embedding-optimization/prepare.py \
+uv run --project tools/semantic-model-conversion python experiments/embedding-optimization/prepare.py \
   TOKENIZER_FOLDER DATASET INPUT_DIRECTORY
 BENCHMARK BASELINE.mlmodelc INPUT_DIRECTORY/full-512.json all BASELINE.json
 BENCHMARK CANDIDATE.mlmodelc INPUT_DIRECTORY/full-512.json all CANDIDATE.json
-uv run --project apps/worker-search/coreml python experiments/embedding-optimization/compare.py \
+uv run --project tools/semantic-model-conversion python experiments/embedding-optimization/compare.py \
   DATASET BASELINE.json CANDIDATE.json COMPARISON.json
 ```
 
@@ -49,7 +49,7 @@ Combine validated conservative selective-FP16 packages after both function shape
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer UV_CACHE_DIR=/private/tmp/gday-semantic-uv \
-uv run --project apps/worker-search/coreml python apps/worker-search/scripts/package_granite_coreml.py \
+uv run --project tools/semantic-model-conversion python tools/semantic-model-conversion/scripts/package_granite_coreml.py \
   QUERY_128.mlpackage PASSAGE_512.mlpackage TOKENIZER_FOLDER OUTPUT_DIRECTORY
 BENCHMARK OUTPUT_DIRECTORY/SemanticEncoder.mlmodelc INPUT_DIRECTORY/queries-128.json all QUERY_OUTPUT.json query128
 BENCHMARK OUTPUT_DIRECTORY/SemanticEncoder.mlmodelc INPUT_DIRECTORY/full-512.json all PASSAGE_OUTPUT.json passage512

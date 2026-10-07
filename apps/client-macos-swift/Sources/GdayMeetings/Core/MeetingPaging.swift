@@ -2,6 +2,62 @@ import Foundation
 
 enum MeetingLoadResult { case loaded, superseded, failed }
 
+/// Cancellation is recorded synchronously, before a completed read can publish on the main actor.
+final class MeetingLoadConsumer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    func cancel() { lock.withLock { cancelled = true } }
+    var isActive: Bool { lock.withLock { !cancelled } }
+}
+
+@MainActor final class MeetingLoadOperation {
+    let id = UUID()
+    var consumers: [MeetingLoadConsumer] = []
+    var task: Task<MeetingLoadResult, Never>!
+    var isNeeded: Bool { consumers.contains { $0.isActive } }
+}
+
+/// One physical read at a time. Cancelled queued demand releases its continuation
+/// immediately; a synchronous read already underway keeps its slot until it exits.
+@MainActor final class MeetingLoadQueue {
+    private var occupied = false
+    private var waiters: [(UUID, CheckedContinuation<Bool, Never>)] = []
+    var pendingCount: Int { waiters.count }
+
+    func acquire() async -> Bool {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                if !occupied {
+                    occupied = true
+                    continuation.resume(returning: true)
+                }
+                else {
+                    waiters.append((id, continuation))
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let index = self.waiters.firstIndex(where: { $0.0 == id }) else { return }
+                self.waiters.remove(at: index).1.resume(returning: false)
+            }
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            occupied = false
+        }
+        else {
+            waiters.removeFirst().1.resume(returning: true)
+        }
+    }
+}
+
 /// Small catalog records are safe to keep in memory; content stays in each meeting folder.
 struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
@@ -107,17 +163,36 @@ extension MeetingStore {
         (try? libraryIndex?.pendingTranscriptions()) ?? []
     }
     @discardableResult func ensureMeetingLoaded(id: UUID) async -> Bool {
+        let consumer = MeetingLoadConsumer()
+        return await withTaskCancellationHandler {
+            await loadMeeting(id: id, consumer: consumer)
+        } onCancel: {
+            consumer.cancel()
+            Task { @MainActor [weak self] in
+                guard let operation = self?.meetingLoadOperations[id], !operation.isNeeded else { return }
+                operation.task.cancel()
+            }
+        }
+    }
+
+    private func loadMeeting(id: UUID, consumer: MeetingLoadConsumer) async -> Bool {
+        defer { consumer.cancel() }
         let generation = externalReloadGeneration
         while !Task.isCancelled, generation == externalReloadGeneration,
             !deletingMeetingIDs.contains(id), !isChangingLibrary
         {
             if meetings.contains(where: { $0.id == id }) { return true }
             let task: Task<MeetingLoadResult, Never>
-            if let operation = meetingLoadOperations[id], meetingLoadRequests[id] == operation.id {
+            if let operation = meetingLoadOperations[id], meetingLoadRequests[id] == operation.id, operation.isNeeded {
+                operation.consumers.removeAll { !$0.isActive }
+                operation.consumers.append(consumer)
                 task = operation.task
             }
             else {
-                let request = UUID()
+                if let obsolete = meetingLoadOperations[id], !obsolete.isNeeded { obsolete.task.cancel() }
+                let operation = MeetingLoadOperation()
+                operation.consumers.append(consumer)
+                let request = operation.id
                 meetingLoadRequests[id] = request
                 let root = dataDirectory
                 task = Task { @MainActor [weak self] in
@@ -126,9 +201,13 @@ extension MeetingStore {
                         if meetingLoadOperations[id]?.id == request { meetingLoadOperations.removeValue(forKey: id) }
                         if meetingLoadRequests[id] == request { meetingLoadRequests.removeValue(forKey: id) }
                     }
-                    return await loadMeetingSnapshot(id: id, request: request, root: root, generation: generation)
+                    guard await meetingLoadQueue.acquire() else { return .superseded }
+                    defer { meetingLoadQueue.release() }
+                    guard operation.isNeeded, !Task.isCancelled else { return .superseded }
+                    return await loadMeetingSnapshot(id: id, operation: operation, root: root, generation: generation)
                 }
-                meetingLoadOperations[id] = (request, task)
+                operation.task = task
+                meetingLoadOperations[id] = operation
             }
             switch await task.value {
             case .loaded: return !Task.isCancelled
@@ -139,18 +218,22 @@ extension MeetingStore {
         return false
     }
 
-    private func loadMeetingSnapshot(id: UUID, request: UUID, root: URL, generation: UUID) async -> MeetingLoadResult {
+    private func loadMeetingSnapshot(id: UUID, operation: MeetingLoadOperation, root: URL, generation: UUID) async
+        -> MeetingLoadResult
+    {
+        let request = operation.id
         let reader = meetingLoadReader
         do {
             // A selected cold meeting must not observe a partially committed local transaction.
             _ = await flushCanonicalWrites()
-            guard meetingLoadRequests[id] == request, generation == externalReloadGeneration,
+            guard operation.isNeeded, meetingLoadRequests[id] == request, generation == externalReloadGeneration,
                 !deletingMeetingIDs.contains(id), !isChangingLibrary
             else { return .superseded }
             let value = try await Task.detached(priority: .utility) {
                 try reader(id, root)
             }.value
-            guard !Task.isCancelled, generation == externalReloadGeneration, meetingLoadRequests[id] == request,
+            guard operation.isNeeded, !Task.isCancelled, generation == externalReloadGeneration,
+                meetingLoadRequests[id] == request,
                 !deletingMeetingIDs.contains(id), !isChangingLibrary
             else { return .superseded }
             if meetings.contains(where: { $0.id == id }) { return .loaded }
@@ -168,7 +251,8 @@ extension MeetingStore {
             return .loaded
         }
         catch {
-            guard generation == externalReloadGeneration, meetingLoadRequests[id] == request, !isChangingLibrary
+            guard operation.isNeeded, generation == externalReloadGeneration, meetingLoadRequests[id] == request,
+                !deletingMeetingIDs.contains(id), !isChangingLibrary
             else { return .superseded }
             let failure = error as NSError
             CaptureLog.library.error(

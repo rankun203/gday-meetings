@@ -19,12 +19,12 @@ Keep a private JSON configuration containing `base` (the original corpus directo
 uv run --no-project experiments/audio-retrieval/expanded/build.py PRIVATE_CONFIG NEW_DATASET
 
 uv run --no-project experiments/audio-retrieval/expanded/run.py DATASET RUNS \
-  --clsp-cache CLSP_CACHE --model-cache MODEL_CACHE --e5-model E5_SNAPSHOT
+  --model-cache MODEL_CACHE --e5-model E5_SNAPSHOT
 ```
 
-Set `UV_CACHE_DIR` to writable temporary storage. Model caches must contain the pinned snapshots. The runner uses offline model loading and executes encoders sequentially with Metal. CLSP requires its own Torch 2.8.0 / Transformers 4.57.3 environment; the other encoders use the experiment requirements. The CLSP runner preserves CPU filterbank extraction and uses Metal for the encoders. Its three-query/three-audio probe was checked against the prior CPU reference before the full run. Logs preserve compatibility warnings rather than hiding them.
+Set `UV_CACHE_DIR` to writable temporary storage. Model caches must contain the pinned snapshots. The runner uses offline model loading and executes encoders sequentially with Metal. The encoders use the experiment requirements. Logs preserve compatibility warnings rather than hiding them.
 
-After completion, run `compare.py DATASET RUNS --clsp-run RUNS/clsp --output COMPARISON`, adding one `--text-run NAME=RUNS/NAME` for each of the six `encode_text.py` names. The comparison emits raw evidence metrics and a method-blinded pooled relevance file. It validates input fingerprints before combining results. Empty recognized windows remain candidates. Every method searches the complete gallery.
+After completion, run `compare.py DATASET RUNS --output COMPARISON`, adding one `--text-run NAME=RUNS/NAME` for each of the six `encode_text.py` names. The comparison emits raw evidence metrics and a method-blinded pooled relevance file. It validates input fingerprints before combining results. Empty recognized windows remain candidates. Every method searches the complete gallery.
 
 For automated graded review, run `expanded/judge.py COMPARISON/blind-pool.jsonl PRIVATE_JUDGMENT_DIRECTORY --env-file SCRIPT_ENV` with `uv run --no-project --with httpx==0.28.1 --with python-dotenv==1.2.4`. It sends the private query–passage pool and fixed reference evidence, not audio, to the configured reference-review service, requests no storage, and records every response and request fingerprint. Method names, scores and positive window IDs are withheld. The rubric distinguishes useful discussion from full support for the requested reference-backed facts. Each batch requires a fixed set of short output keys, mapped locally to immutable review IDs; incomplete or mismatched responses are rejected. Pass the resulting judgments to `compare.py --judgments` only when the complete pool validates. Earlier query-only review was superseded because it could credit a general rule without the requested revised detail. These are reference-conditioned model judgments, not listening verification; inspect the leading models' disagreements separately.
 

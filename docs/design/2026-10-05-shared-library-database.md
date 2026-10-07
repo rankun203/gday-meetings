@@ -35,25 +35,12 @@ The process-wide owner registry permits corruption quarantine only before the fi
 
 `index.db.md` lives beside the actual database. A bundled Markdown template supplies the source-authority and placement contract; installed module versions and SQL declarations fill its schema sections. Registration compares generated content and writes only changed guides. It preserves an existing unmarked document or symbolic link. No model calls or source-content scans generate this guide.
 
-# Local voice artifacts and retrieval
-
-Local voice embeddings live inside each meeting folder at `providers/<provider-id>/embeddings/<source-id>/<clip-id>.json`. They move to Trash and restore with the meeting. An explicit removal of a meeting's voice embeddings moves only that owned embedding folder to Trash. The corresponding `provider_clsp` tables are disposable projections in the same `index.db`.
-
-After the app removes a meeting from its library index, background invalidation deletes that meeting's derived vector rows without touching the artifacts in Trash. Restoring the folder and rebuilding imports them again. External folder deletion makes results unavailable immediately through source and meeting checks; an explicit rebuild removes any remaining orphan rows. SQLite row deletion is not a secure-erasure guarantee.
-
-Each bounded artifact records the meeting, audio filename, SHA-256 source revision, clip range, model revision, preprocessing version, vector dimension, normalization, and vector. The current adapter accepts only the pinned CLSP model space. Artifact filenames derive from those identities. Reads reject mismatched identities, nonfinite vectors, unsupported model spaces, and symbolic links.
-
-Building is explicit and runs off the main actor. Audio is hashed once per source, split into ranges of at most 30 seconds, and committed one artifact at a time. A tail shorter than the model's quarter-second minimum uses an overlapping final range. A repeated or resumed build reuses a valid artifact before requesting another embedding. Rebuilding the projection imports artifacts without running the model and hashes each audio source once. Opening the app or registering the module does neither.
-
-Voice queries scan derived vectors with exact cosine similarity, retaining the best clip for each meeting in connection-local TEMP scores. Paging and tag exclusions apply to distinct meetings. The scan decodes one vector at a time; it does not retain the corpus in a Swift array. Current source associations and local file fingerprints reject stale audio or altered artifacts without rehashing audio on every query. Portable artifacts contain no local inode or absolute path; those freshness stamps belong only to the disposable database.
-
 # Technical debt
 
 - Atomic publication copies staged rows into the shared database. Its write transaction grows with module size; it is not a constant-time generation switch. Measure practical fixtures before claiming startup or write-latency targets. If measured publication stalls are material, replace the copy with generation-based publication while preserving FTS row identities and cursor contracts.
 - Obsolete directory and task database files remain on disk so migration never deletes a file another app version might have open. A later explicit, stopped-app cache cleanup may remove them.
 - The existing people/tag working catalogs and some pickers still load full authoritative catalogs. Consolidating their disposable indexes does not make those consumers bounded.
 - Concurrent same-module writes cause a staged rebuild to fail with a retry message. Automatic bounded retry is a future refinement; rejecting stale publication preserves newer indexed state.
-- Exact voice retrieval scans every eligible vector and checks artifact freshness. Large-corpus latency has not yet been measured; bounded memory does not imply bounded query time. Measure representative corpora before considering an approximate index. Old source revisions remain as durable artifacts inside the meeting folder, but stale revisions are excluded from retrieval. A future explicit cleanup can retire these revisions without affecting active embeddings.
 
 # Validation
 

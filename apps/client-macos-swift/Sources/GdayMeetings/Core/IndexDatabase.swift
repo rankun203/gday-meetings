@@ -63,6 +63,7 @@ final class IndexDatabase: @unchecked Sendable {
             let handle = try Self.openHandle(url)
             defer { sqlite3_close(handle) }
             try Self.execute("SELECT name FROM sqlite_schema LIMIT 1", on: handle)
+
         }
         catch let error as DatabaseError where error.code == SQLITE_CORRUPT || error.code == SQLITE_NOTADB {
             // The registry is locked and no connection owns this file. Never replace a live database.
@@ -83,6 +84,32 @@ final class IndexDatabase: @unchecked Sendable {
         let code: Int32
         let message: String
         var errorDescription: String? { "Couldn’t access the library index. \(message)" }
+    }
+
+    private static func hasRetiredNamespace(_ table: String, on handle: OpaquePointer) throws -> Bool {
+        guard try tableExists(table, on: handle) else { return false }
+        var query: OpaquePointer?
+        guard
+            sqlite3_prepare_v2(
+                handle, "SELECT 1 FROM \(table) WHERE namespace='provider_clsp' LIMIT 1", -1, &query, nil) == SQLITE_OK,
+            let query
+        else { throw failure(handle) }
+        defer { sqlite3_finalize(query) }
+        let result = sqlite3_step(query)
+        guard result == SQLITE_ROW || result == SQLITE_DONE else { throw failure(handle) }
+        return result == SQLITE_ROW
+    }
+
+    private static func tableExists(_ name: String, on handle: OpaquePointer) throws -> Bool {
+        var query: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "SELECT 1 FROM sqlite_schema WHERE name=?", -1, &query, nil) == SQLITE_OK,
+            let query
+        else { throw failure(handle) }
+        defer { sqlite3_finalize(query) }
+        sqlite3_bind_text(query, 1, name, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        let result = sqlite3_step(query)
+        guard result == SQLITE_ROW || result == SQLITE_DONE else { throw failure(handle) }
+        return result == SQLITE_ROW
     }
 
     private static func failure(_ handle: OpaquePointer?) -> DatabaseError {
@@ -149,6 +176,46 @@ final class IndexDatabase: @unchecked Sendable {
             invalidateStatements()
             sqlite3_close(handle)
         }
+        /// Run on a serialized background connection after the first frame.
+        func retireVoiceSearchNamespace() throws {
+            owner.schemaLock.lock()
+            defer { owner.schemaLock.unlock() }
+            // Retire only the rebuildable CLSP namespace. Source documents remain authoritative.
+            let retiredTables = ["provider_clsp_clips", "provider_clsp_sources", "provider_clsp_state"]
+            let hasRetiredTables = try retiredTables.contains { try IndexDatabase.tableExists($0, on: handle) }
+            let hasRetiredRegistration = try ["index_modules", "index_module_tables"].contains {
+                try IndexDatabase.hasRetiredNamespace($0, on: handle)
+            }
+            if hasRetiredTables || hasRetiredRegistration {
+                try IndexDatabase.execute("BEGIN IMMEDIATE", on: handle)
+                do {
+                    try IndexDatabase.execute(
+                        "DROP TABLE IF EXISTS provider_clsp_clips; DROP TABLE IF EXISTS provider_clsp_sources; DROP TABLE IF EXISTS provider_clsp_state",
+                        on: handle)
+                    let query = try IndexDatabase.tableExists("index_modules", on: handle)
+                    if query {
+                        try IndexDatabase.execute(
+                            "DELETE FROM index_modules WHERE namespace='provider_clsp'", on: handle)
+                    }
+                    if try IndexDatabase.tableExists("index_module_tables", on: handle) {
+                        try IndexDatabase.execute(
+                            "DELETE FROM index_module_tables WHERE namespace='provider_clsp'", on: handle)
+                    }
+                    try IndexDatabase.execute("COMMIT", on: handle)
+                }
+                catch {
+                    try? IndexDatabase.execute("ROLLBACK", on: handle)
+                    throw error
+                }
+            }
+            if hasRetiredTables || hasRetiredRegistration,
+                FileManager.default.fileExists(
+                    atPath: url.deletingLastPathComponent().appendingPathComponent("index.db.md").path)
+            {
+                try updateGuide()
+            }
+        }
+
         func failure() -> Error {
             let error = IndexDatabase.failure(handle)
             recordCorruption(error)

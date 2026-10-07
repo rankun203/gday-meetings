@@ -22,8 +22,7 @@ struct LocalSearchConfigurationTests {
         #expect(legacy.defaultSearchMode == .semantic)
         var provider = ServiceProvider(kind: .localSearch)
         provider.localSearch = .init(
-            executableURL: URL(fileURLWithPath: "/synthetic/worker"),
-            modelCacheURL: URL(fileURLWithPath: "/synthetic/models"))
+            semanticModel: .granite311M, speakerMatchBoost: 0.15)
         var settings = legacy
         settings.serviceProviders = [provider]
         settings.selectProvider(provider.id, for: .search)
@@ -64,7 +63,7 @@ struct LocalSearchConfigurationTests {
                     path: "data", remotePath: "data", bytes: Int64(bytes.count),
                     digest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
             ],
-            modelNames: ["CLSPAudio", "CLSPText"])
+            modelNames: ["SemanticEncoder"])
         let manager = LocalModelManager(
             root: root, descriptor: { _ in descriptor },
             preparer: { _, _ in
@@ -79,49 +78,10 @@ struct LocalSearchConfigurationTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try bytes.write(to: directory.appendingPathComponent("data"))
         #expect(await provider.health(for: .search, settings: AppSettings(), models: manager) == .ready)
-        provider.localSearch = .init(
-            executableURL: URL(fileURLWithPath: "/nonexistent/legacy-worker"),
-            modelCacheURL: URL(fileURLWithPath: "/nonexistent/legacy-cache"))
+        provider.localSearch = .init(semanticModel: .granite97M)
         #expect(await provider.health(for: .search, settings: AppSettings(), models: manager) == .ready)
         try Data("changed".utf8).write(to: directory.appendingPathComponent("data"))
         #expect(!(await provider.health(for: .search, settings: AppSettings(), models: manager)).isReady)
     }
 
-    @Test func readinessChecksMetadataWithoutStartingWorker() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let file = root.appendingPathComponent("model.fixture")
-        try Data("fixture".utf8).write(to: file)
-        let executable = root.appendingPathComponent("worker")
-        // If validation ever launches this executable, it must fail rather than appear ready.
-        try Data("#!/bin/sh\nexit 99\n".utf8).write(to: executable)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        let date = try #require(file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-        func manifest(path: String) throws {
-            let value: [String: Any] = [
-                "version": 1, "modelID": LocalSearchConfiguration.modelID,
-                "modelRevision": LocalSearchConfiguration.modelRevision,
-                "tokenizerRevision": LocalSearchConfiguration.tokenizerRevision,
-                "files": [
-                    [
-                        "path": path, "size": 7, "modified": date.timeIntervalSince1970,
-                        "sha256": String(repeating: "a", count: 64),
-                    ]
-                ],
-            ]
-            try JSONSerialization.data(withJSONObject: value).write(
-                to: root.appendingPathComponent("gday-clsp-prepared.json"))
-        }
-        let config = LocalSearchConfiguration(executableURL: executable, modelCacheURL: root)
-        try manifest(path: "model.fixture")
-        try config.validatePreparedFiles()
-        try manifest(path: "../outside.fixture")
-        #expect(throws: (any Error).self) { try config.validatePreparedFiles() }
-        try manifest(path: "model.fixture")
-        try Data("changed fixture".utf8).write(to: file)
-        #expect(throws: (any Error).self) { try config.validatePreparedFiles() }
-        let directoryExecutable = LocalSearchConfiguration(executableURL: root, modelCacheURL: root)
-        #expect(throws: (any Error).self) { try directoryExecutable.validatePreparedFiles() }
-    }
 }

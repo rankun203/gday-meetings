@@ -55,11 +55,39 @@ extension MeetingStore {
     func setJobProgress(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
         guard let index = backgroundJobs.firstIndex(where: { $0.key == key }) else { return }
-        backgroundJobs[index].progress = progress
-        recordManagedTaskProgress(key, progress: progress)
+        if jobProgressUpdatedAt[key].map({ $0.duration(to: .now) >= .milliseconds(100) }) ?? true {
+            pendingJobProgress.removeValue(forKey: key)
+            jobProgressUpdatedAt[key] = .now
+            if backgroundJobs[index].progress != progress {
+                backgroundJobs[index].progress = progress
+                recordManagedTaskProgress(key, progress: progress)
+            }
+            return
+        }
+        pendingJobProgress[key] = progress
+        guard jobProgressFlush == nil else { return }
+        jobProgressFlush = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self else { return }
+            let pending = pendingJobProgress
+            pendingJobProgress.removeAll()
+            jobProgressFlush = nil
+            var jobs = backgroundJobs
+            for (key, progress) in pending {
+                guard let index = jobs.firstIndex(where: { $0.key == key }), jobs[index].progress != progress else {
+                    continue
+                }
+                jobs[index].progress = progress
+                jobProgressUpdatedAt[key] = .now
+                recordManagedTaskProgress(key, progress: progress)
+            }
+            if jobs != backgroundJobs { backgroundJobs = jobs }
+        }
     }
     func endJob(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
+        pendingJobProgress.removeValue(forKey: key)
+        jobProgressUpdatedAt.removeValue(forKey: key)
         backgroundJobs.removeAll { $0.key == key }
     }
     func isJobRunning(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) -> Bool {

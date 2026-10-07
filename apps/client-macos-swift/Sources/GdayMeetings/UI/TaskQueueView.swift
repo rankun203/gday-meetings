@@ -5,6 +5,9 @@ struct TaskQueueView: View {
     let showMeeting: (UUID) -> Void
     var focusedTaskID: UUID? = nil
     @ViewState private var reviewingVoices = false
+    @ViewState private var discardedTask: ManagedTaskRecord?
+    @ViewState private var discardedVoiceJob: VoicePreparationJob?
+    @ViewState private var pendingRevisionRefresh: Task<Void, Never>?
 
     @ObservedObject var session: TaskQueueSession
     private var scope: TaskHistoryScope {
@@ -85,10 +88,16 @@ struct TaskQueueView: View {
                     }
                     .menuStyle(.borderlessButton).fixedSize()
                     Spacer()
+                    if scope == .attention {
+                        Button("Dismiss All Alerts") { Task { await store.dismissAllTaskAlerts() } }
+                            .disabled(store.taskAttentionCount == 0)
+                    }
                 }.padding(16)
                 Divider()
                 NativeTaskList(
-                    rows: rows, selection: $session.selection, revealID: session.revealID,
+                    rows: rows, selection: $session.selection,
+                    recordingActive: store.recordingID != nil || store.isStartingRecording
+                        || store.isFinalizingRecording, revealID: session.revealID,
                     revealToken: session.revealToken,
                     retainedViewport: session.viewport,
                     totalCount: !hasOlder && !loadingPage && !store.managedTasksLoading
@@ -119,7 +128,7 @@ struct TaskQueueView: View {
                 }
                 Divider()
                 Text(store.taskQueueSummary).font(.caption).foregroundStyle(.secondary).padding(12)
-            }.frame(width: 290)
+            }.frame(width: 340)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -152,6 +161,8 @@ struct TaskQueueView: View {
         }
         .onAppear { if focusedTaskID == nil { refreshRows() } }
         .onDisappear {
+            pendingRevisionRefresh?.cancel()
+            pendingRevisionRefresh = nil
             generation = UUID()
             loadingPage = false
             ignoresNextScopeChange = false
@@ -165,12 +176,32 @@ struct TaskQueueView: View {
                 resetRows()
             }
         }
-        .onChange(of: store.managedTaskRevision) { _, _ in refreshRows() }
+        .onReceive(store.$managedTasks) { cached in
+            let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+            let updated = rows.map { row -> TaskHistoryRow in
+                if case .managed(let task) = row, let replacement = current[task.id] { return .managed(replacement) }
+                return row
+            }
+            if rows != updated { rows = updated }
+        }
+        .onReceive(store.voiceLibrary.$jobs) { cached in
+            let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+            let updated = rows.map { row -> TaskHistoryRow in
+                if case .voice(let job) = row, let replacement = current[job.id] { return .voice(replacement) }
+                return row
+            }
+            if rows != updated { rows = updated }
+        }
+        .onChange(of: store.managedTaskRevision) { _, _ in scheduleRevisionRefresh() }
         .onChange(of: store.settings.serviceProviders) { _, _ in refreshSelectedActions() }
         .onChange(of: store.meetingIndexRevision) { _, _ in refreshSelectedActions() }
         .onChange(of: store.recordingID) { _, _ in refreshSelectedActions() }
         .onChange(of: store.backgroundJobs.map(\.key)) { _, _ in refreshSelectedActions() }
-        .onChange(of: store.voiceLibrary.jobs.map { $0.id.uuidString + ":" + $0.state.rawValue }) { _, _ in
+        .onChange(
+            of: store.voiceLibrary.jobs.map {
+                $0.id.uuidString + ":" + $0.state.rawValue + ":" + String($0.needsAttention)
+            }
+        ) { _, _ in
             refreshRows()
         }
         .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
@@ -203,6 +234,40 @@ struct TaskQueueView: View {
             hasOlder = after.count == 25
             loadingPage = false
         }
+        .confirmationDialog(
+            "Discard Task?",
+            isPresented: Binding(
+                get: { discardedTask != nil }, set: { if !$0 { discardedTask = nil } }
+            ), presenting: discardedTask
+        ) { record in
+            Button("Discard Task", role: .destructive) {
+                Task { await store.removeManagedTask(id: record.id) }
+                discardedTask = nil
+            }
+            Button("Keep Task", role: .cancel) { discardedTask = nil }
+        } message: { record in
+            let consequence =
+                record.attemptKey != nil || record.remoteJobID != nil
+                ? " The provider may continue processing its request." : " Recordings and results are kept."
+            Text(
+                "Remove the saved " + record.operationTitle.lowercased() + " task for “" + record.meetingTitle
+                    + "”?" + consequence)
+        }
+        .confirmationDialog(
+            "Discard Task?",
+            isPresented: Binding(
+                get: { discardedVoiceJob != nil }, set: { if !$0 { discardedVoiceJob = nil } }
+            ), presenting: discardedVoiceJob
+        ) { job in
+            Button("Discard Task", role: .destructive) {
+                store.voicePreparation.discard(jobID: job.id)
+                discardedVoiceJob = nil
+                refreshRows()
+            }
+            Button("Keep Task", role: .cancel) { discardedVoiceJob = nil }
+        } message: { _ in
+            Text("Remove this saved task? Recordings and prepared voice examples are kept.")
+        }
         .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary).environmentObject(store) }
     }
 
@@ -215,7 +280,7 @@ struct TaskQueueView: View {
             else {
                 previousFailures = nil
             }
-            if previousFailures != job.failures { selectedFailures = Array(Set(job.failures.values)).sorted() }
+            if previousFailures != job.failures { selectedFailures = job.failures.values.sorted() }
         }
         if selectedRow?.id != row.id { failureOffset = 0 }
         selectedRow = row
@@ -239,7 +304,7 @@ struct TaskQueueView: View {
             let page = await store.taskHistoryPage(scope: scope)
             guard token == generation else { return }
             rows = page
-            if selection == nil, let first = page.first {
+            if !page.contains(where: { $0.id == selection }), let first = page.first {
                 selection = first.id
                 select(first)
             }
@@ -248,6 +313,16 @@ struct TaskQueueView: View {
             loadingPage = false
         }
     }
+    private func scheduleRevisionRefresh() {
+        guard pendingRevisionRefresh == nil else { return }
+        pendingRevisionRefresh = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return }
+            pendingRevisionRefresh = nil
+            refreshRows()
+        }
+    }
+
     private func refreshRows() {
         if let selectedRow {
             switch selectedRow {
@@ -283,7 +358,18 @@ struct TaskQueueView: View {
             let before = await store.taskHistoryPage(scope: scope, cursor: first.cursor, newer: true, limit: 1)
             let page = await store.taskHistoryPage(scope: scope, cursor: before.last?.cursor, limit: count)
             guard token == generation else { return }
+            let previousPosition = rows.firstIndex { $0.id == selection } ?? 0
             rows = page
+            if !page.contains(where: { $0.id == selection }) {
+                if let next = page.isEmpty ? nil : page[min(previousPosition, page.count - 1)] {
+                    selection = next.id
+                    select(next)
+                }
+                else {
+                    selection = nil
+                    selectedRow = nil
+                }
+            }
             hasOlder = page.count == count
             loadingPage = false
         }
@@ -339,8 +425,20 @@ struct TaskQueueView: View {
             }
             Text(job.providerName).font(.subheadline).foregroundStyle(.secondary)
             Text(job.progress).font(.callout)
-            ForEach(Array(selectedFailures.dropFirst(failureOffset).prefix(20)), id: \.self) { failure in
-                AppInlineMessage(text: failure, systemImage: "exclamationmark.circle", tint: .orange)
+            if job.state == .paused, let reason = job.timeline?.last?.reason {
+                Text(reason).font(.callout).foregroundStyle(.secondary)
+            }
+            ForEach(Array(voiceFailures(job).dropFirst(failureOffset).prefix(20))) { failure in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(failure.title).font(.subheadline.weight(.semibold))
+                    AppInlineMessage(text: failure.message, systemImage: "exclamationmark.circle", tint: .orange)
+                    if let meetingID = failure.meetingID {
+                        Button("Open Meeting") { showMeeting(meetingID) }
+                    }
+                }
+            }
+            if let timeline = job.timeline {
+                TaskAttemptHistory(events: timeline)
             }
             if selectedFailures.count > 20 {
                 HStack {
@@ -357,17 +455,46 @@ struct TaskQueueView: View {
         }.padding(14).taskQueueCard().id(job.id)
     }
 
+    private struct VoiceFailure: Identifiable {
+        let id: String
+        let meetingID: UUID?
+        let title: String
+        let message: String
+    }
+
+    private func voiceFailures(_ job: VoicePreparationJob) -> [VoiceFailure] {
+        job.failures.sorted { $0.key < $1.key }.map { key, message in
+            let recordingID = key.hasPrefix("recording-") ? UUID(uuidString: String(key.dropFirst(10))) : nil
+            let exampleID = UUID(uuidString: key)
+            let meetingID = recordingID ?? store.voiceLibrary.examples.first { $0.id == exampleID }?.meetingID
+            let title =
+                meetingID.flatMap { id in store.meetings.first { $0.id == id }?.title }
+                ?? (recordingID == nil ? "Voice Example" : "Recording")
+            return VoiceFailure(id: key, meetingID: meetingID, title: title, message: message)
+        }
+    }
+
     @ViewBuilder private func voiceTaskActions(_ job: VoicePreparationJob) -> some View {
         if job.state == .running || job.state == .queued {
             Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
+            Button("Cancel") { store.voicePreparation.cancel(jobID: job.id) }
         }
-        if job.state == .paused || job.state == .failed {
-            Button(job.state == .failed ? "Retry" : "Resume") {
+        if job.state == .paused || job.state == .failed || job.state == .cancelled {
+            Button(job.state == .paused ? "Resume" : "Retry") {
                 store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
             }
             .disabled(
                 !store.libraryWritable || store.recordingID != nil
                     || store.voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued })
+        }
+        if job.needsAttention {
+            Button("Dismiss Alert") {
+                store.voicePreparation.dismissAlert(jobID: job.id)
+                refreshRows()
+            }
+        }
+        if job.state != .running && job.state != .queued {
+            Button("Discard Task", role: .destructive) { discardedVoiceJob = job }
         }
         Button("Open Voice Review") { reviewingVoices = true }
     }
@@ -385,15 +512,24 @@ struct TaskQueueView: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(record.meetingTitle).font(.headline).textSelection(.enabled)
+                        Text(record.operationTitle).font(.headline).textSelection(.enabled)
                         Spacer()
-                        Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
-                            .accessibilityLabel(
-                                "Created " + record.createdAt.formatted(date: .complete, time: .shortened))
+                        Text(
+                            (record.finishedAt ?? record.timeline?.last?.date ?? record.createdAt).formatted(
+                                date: .abbreviated, time: .shortened)
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel(
+                            "Last transition "
+                                + (record.finishedAt ?? record.timeline?.last?.date ?? record.createdAt).formatted(
+                                    date: .complete, time: .shortened))
                     }
-                    Text(operation(record.kind) + providerSuffix(record)).font(.subheadline).foregroundStyle(.secondary)
-                    Text(record.progress).font(.callout)
+                    Text(record.meetingTitle + providerSuffix(record)).font(.subheadline).foregroundStyle(.secondary)
+                    Text(
+                        [.searchIndex, .diarization].contains(record.kind) && record.state == .queued
+                            && (store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording)
+                            ? "Waiting for recording to finish" : record.progress
+                    ).font(.callout)
                         .fontWeight(record.state == .failed ? .semibold : .regular)
                         .textSelection(.enabled)
                     if let error = record.errorMessage, !error.isEmpty {
@@ -404,7 +540,7 @@ struct TaskQueueView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if record.attemptKey != nil && !record.state.isActive && record.state != .completed {
-                        Text("Dismiss discards this saved request. The provider may continue processing it.")
+                        Text("Discard Task removes this saved request. The provider may continue processing it.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if record.state == .running && record.kind != .diarization && record.kind != .searchIndex {
@@ -413,6 +549,10 @@ struct TaskQueueView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let reason = record.attentionReason {
+                Label(reason.title, systemImage: "exclamationmark.circle").font(.callout)
+            }
+            if let timeline = record.timeline { TaskAttemptHistory(events: timeline) }
             ViewThatFits(in: .horizontal) {
                 HStack {
                     actions(record)
@@ -435,20 +575,20 @@ struct TaskQueueView: View {
         if canOpen {
             Button("Open Meeting") { showMeeting(record.meetingID) }
         }
-        if record.state == .queued || record.state == .running {
+        if record.state == .queued || record.state == .running || record.state == .paused {
             if record.state == .queued {
                 Button("Run Next") { Task { await store.prioritizeManagedTask(id: record.id) } }
             }
-            Button(
-                record.state == .queued
-                    ? "Remove from Queue"
-                    : [.diarization, .searchIndex].contains(record.kind) ? "Cancel" : "Stop Waiting"
-            ) {
+            Button("Cancel") {
                 Task { await store.cancelManagedTask(id: record.id) }
             }
         }
+        if record.needsAttention {
+            Button("Dismiss Alert") { Task { await store.dismissManagedTaskAlert(id: record.id) } }
+                .help("Acknowledge the alert and keep the saved task")
+        }
         if !record.state.isActive {
-            Button("Dismiss") { Task { await store.removeManagedTask(id: record.id) } }
+            Button("Discard Task", role: .destructive) { discardedTask = record }
         }
     }
 
@@ -460,23 +600,11 @@ struct TaskQueueView: View {
         return " · " + provider.name
     }
 
-    private func operation(_ kind: BackgroundJob.Kind) -> String {
-        switch kind {
-        case .transcription: "Transcription"
-        case .summary: "Summary"
-        case .searchIndex: "Search Index"
-        case .diarization: "Speaker Labeling"
-        case .chat, .contextChat: "Chat"
-        case .archive: "Archive"
-        case .importAudio: "Audio Import"
-        default: "Other Task"
-        }
-    }
-
     private func icon(_ state: ManagedTaskState) -> String {
         switch state {
         case .queued: "clock"
         case .running: "arrow.triangle.2.circlepath"
+        case .paused: "pause.circle"
         case .completed: "checkmark.circle"
         case .failed: "exclamationmark.circle.fill"
         case .cancelled: "minus.circle"
@@ -544,16 +672,16 @@ struct TaskQueueStatusButton: View {
 extension MeetingStore {
     var voiceTasksNewestFirst: [VoicePreparationJob] { voiceLibrary.jobs.sorted { $0.createdAt > $1.createdAt } }
     var taskAttentionCount: Int {
-        managedTaskStateCounts[.failed, default: 0] + managedTasks.filter { $0.isPreview && $0.state == .failed }.count
-            + voiceLibrary.jobs.filter { $0.state == .failed }.count
+        managedTaskAttentionCount + managedTasks.filter { $0.isPreview && $0.needsAttention }.count
+            + voiceLibrary.jobs.filter(\.needsAttention).count
     }
 
     var showsTaskQueueStatus: Bool {
         (managedTaskStateCounts[.queued, default: 0] + managedTaskStateCounts[.running, default: 0]
-            + managedTaskStateCounts[.failed, default: 0] > 0)
-            || managedTasks.contains { $0.isPreview && ($0.state.isActive || $0.state == .failed) }
+            + managedTaskAttentionCount > 0)
+            || managedTasks.contains { $0.isPreview && ($0.state.isActive || $0.needsAttention) }
             || !taskQueueOtherJobs.isEmpty
-            || voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued || $0.state == .failed }
+            || voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued || $0.needsAttention }
     }
 
     var taskQueueOtherJobs: [BackgroundJob] {
@@ -573,16 +701,22 @@ extension MeetingStore {
     }
 
     var taskQueueActivitySummary: String {
+        let indexQueued = managedMaintenanceStateCounts[.queued, default: 0]
+        let maintenance =
+            indexQueued + managedMaintenanceStateCounts[.running, default: 0]
+            + managedMaintenanceStateCounts[.paused, default: 0] > 0
+            || managedTasks.contains { $0.isPreview && $0.isMaintenance && ($0.state.isActive || $0.state == .paused) }
         let running =
-            managedTasks.filter { $0.state == .running }.count + taskQueueOtherJobs.count
+            managedTasks.filter { $0.state == .running && !$0.isMaintenance }.count + taskQueueOtherJobs.count
             + voiceLibrary.jobs.filter { $0.state == .running }.count
         let queued =
-            managedTaskStateCounts[.queued, default: 0]
-            + managedTasks.filter { $0.isPreview && $0.state == .queued }.count
+            max(0, managedTaskStateCounts[.queued, default: 0] - indexQueued)
+            + managedTasks.filter { $0.isPreview && $0.state == .queued && !$0.isMaintenance }.count
             + voiceLibrary.jobs.filter { $0.state == .queued }.count
         var parts: [String] = []
         if running > 0 { parts.append("\(running) running") }
         if queued > 0 { parts.append("\(queued) queued") }
+        if maintenance { parts.append("Search index maintenance") }
         return parts.joined(separator: " · ")
     }
 }
@@ -590,5 +724,34 @@ extension MeetingStore {
 extension View {
     fileprivate func taskQueueCard() -> some View {
         self.modifier(AppContentSurface())
+    }
+}
+
+private struct TaskAttemptHistory: View {
+    let events: [TaskAttemptEvent]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if events.last?.kind == .ended {
+                timing(at: .now)
+            }
+            else {
+                TimelineView(.periodic(from: .now, by: 1)) { context in timing(at: context.date) }
+            }
+            DisclosureGroup("Attempt History") {
+                ForEach(events) { event in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(event.kind.title + " · " + event.date.formatted(date: .abbreviated, time: .standard))
+                        if let reason = event.reason { Text(reason).foregroundStyle(.secondary) }
+                    }.font(.caption).padding(.vertical, 4)
+                }
+            }.disclosureGroupStyle(AppDisclosureStyle())
+        }
+    }
+    private func timing(at date: Date) -> some View {
+        let timing = TaskTiming.measure(events, now: date)
+        return Text(
+            "Local active: " + TaskTiming.text(timing.active) + " · Waiting: " + TaskTiming.text(timing.waiting)
+        )
+        .font(.caption).foregroundStyle(.secondary)
     }
 }

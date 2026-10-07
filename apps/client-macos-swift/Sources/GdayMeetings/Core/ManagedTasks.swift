@@ -1,7 +1,7 @@
 import Foundation
 
 enum ManagedTaskState: String, Codable, CaseIterable, Sendable {
-    case queued, running, completed, failed, cancelled
+    case queued, running, paused, completed, failed, cancelled
     var isActive: Bool { self == .queued || self == .running }
 }
 
@@ -38,6 +38,8 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var restartRequested = false
     /// Scheduler priority is independent of newest-first presentation.
     var queuePriority: Int64 = 0
+    var attentionAcknowledged: Bool?
+    var timeline: [TaskAttemptEvent]?
     var key: BackgroundJob.Key { .init(kind: kind, scope: .meeting(meetingID)) }
 }
 
@@ -113,6 +115,10 @@ extension MeetingStore {
     @discardableResult func queueSearchIndexCommand(id: UUID, revision: String? = nil, force: Bool = false) async
         -> UUID?
     {
+        if recordingID != nil || isStartingRecording || isFinalizingRecording {
+            localSearch.deferredRecordingChanges = true
+            guard force else { return nil }
+        }
         guard let selected = selectedSearchProvider,
             await ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id })
         else { return nil }
@@ -134,7 +140,7 @@ extension MeetingStore {
             source = (selected.localSearch ?? .init()).selectedModel.space + ":" + fingerprint
         }
         return await enqueueManagedTask(
-            kind: .searchIndex, meeting: meeting, providerID: selected.id, automatically: true,
+            kind: .searchIndex, meeting: meeting, providerID: selected.id, automatically: !force,
             searchIndexRevision: source, retryStopped: force)
     }
 
@@ -164,10 +170,11 @@ extension MeetingStore {
         // Retry/resume represents the same intent, so it updates the original row.
         // Only an explicitly new request after completion creates another row.
         var task: ManagedTaskRecord
+        var existingIntent = false
         do {
-            task =
-                try await previousManagedIntent(kind: kind, meeting: meeting)
-                ?? ManagedTaskRecord(kind: kind, meetingID: meeting.id, meetingTitle: meeting.title)
+            let previous = try await previousManagedIntent(kind: kind, meeting: meeting)
+            existingIntent = previous != nil
+            task = previous ?? ManagedTaskRecord(kind: kind, meetingID: meeting.id, meetingTitle: meeting.title)
         }
         catch {
             managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
@@ -188,11 +195,14 @@ extension MeetingStore {
             ? "This Mac" : settings.serviceProviders.first { $0.id == providerID }?.name
         task.meetingTitle = meeting.title
         task.state = .queued
-        task.progress = "Waiting to start"
+        task.progress =
+            [.searchIndex, .diarization].contains(kind)
+                && (recordingID != nil || isStartingRecording || isFinalizingRecording)
+            ? "Waiting for recording to finish" : "Waiting to start"
         task.errorMessage = nil
         task.finishedAt = nil
         task.recovery = .automatic
-        task.isAutomatic = automatically
+        task.isAutomatic = automatically && (!existingIntent || task.isAutomatic)
         task.userStopped = false
         task.interrupted = false
         if kind == .diarization { task.speakerLabelingResultID = nil }
@@ -225,20 +235,30 @@ extension MeetingStore {
     }
 
     /// Journal first: provider work must not start from an uncommitted intent.
-    @discardableResult private func saveManagedTask(_ task: ManagedTaskRecord) async -> Bool {
+    @discardableResult private func saveManagedTask(_ proposed: ManagedTaskRecord) async -> Bool {
+        var task = proposed
+        if task.isPreview { task.recordTransition(from: managedTask(id: proposed.id)) }
         do {
             guard libraryWritable else { throw ServiceError("The meeting library is read-only.") }
             if !task.isPreview {
                 let journal = managedTaskJournal
-                let previous = try await managedTaskIO.perform {
+                let result = try await managedTaskIO.perform {
                     let previous = try journal.query(
-                        where: "id=" + ManagedTaskIndex.literal(task.id.uuidString), limit: 1
+                        where: "id=" + ManagedTaskIndex.literal(proposed.id.uuidString), limit: 1
                     ).first
-                    try journal.upsert(task)
-                    return previous
+                    var transitioned = proposed
+                    transitioned.recordTransition(from: previous)
+                    try journal.upsert(transitioned)
+                    return (previous, transitioned)
                 }
-                if let previous {
+                task = result.1
+                if let previous = result.0 {
                     managedTaskStateCounts[previous.state, default: 0] -= 1
+                    if previous.needsAttention { managedTaskAttentionCount -= 1 }
+                    if previous.isMaintenance { managedMaintenanceStateCounts[previous.state, default: 0] -= 1 }
+                    for scope in TaskHistoryScope.allCases where scope.includes(previous) {
+                        managedTaskScopeCounts[scope, default: 0] -= 1
+                    }
                     if previous.state.isActive {
                         let remaining = managedTaskActiveCounts[previous.key, default: 0] - 1
                         if remaining > 0 {
@@ -250,6 +270,11 @@ extension MeetingStore {
                     }
                 }
                 managedTaskStateCounts[task.state, default: 0] += 1
+                if task.needsAttention { managedTaskAttentionCount += 1 }
+                if task.isMaintenance { managedMaintenanceStateCounts[task.state, default: 0] += 1 }
+                for scope in TaskHistoryScope.allCases where scope.includes(task) {
+                    managedTaskScopeCounts[scope, default: 0] += 1
+                }
                 if task.state.isActive { managedTaskActiveCounts[task.key, default: 0] += 1 }
             }
             cacheManagedTask(task)
@@ -266,11 +291,49 @@ extension MeetingStore {
         }
     }
 
+    func resumeSearchIndexingAfterRecording() {
+        processingRecordingGeneration &+= 1
+        let generation = processingRecordingGeneration
+        Task {
+            await ProcessingCoordinator.shared.setMaintenanceSuspended(
+                false, generation: generation, owner: processingRecordingOwner)
+            guard processingRecordingGeneration == generation, recordingID == nil,
+                !isStartingRecording, !isFinalizingRecording
+            else { return }
+            if localSearch.deferredRecordingChanges || localSearch.scanRequested {
+                localSearch.deferredRecordingChanges = false
+                scheduleSearchIndexing()
+            }
+            await recoverUnfinishedManagedTasks()
+        }
+    }
+
+    func suspendSearchIndexingForRecording() async {
+        processingRecordingGeneration &+= 1
+        await ProcessingCoordinator.shared.setMaintenanceSuspended(
+            true, generation: processingRecordingGeneration, owner: processingRecordingOwner)
+        let running = managedTasks.filter { $0.kind == .searchIndex && $0.state == .running }
+        for task in running { managedMaintenancePauseRequests.insert(task.id) }
+        let operations = running.compactMap { managedTaskOperations[$0.id] }
+        for operation in operations { operation.cancel() }
+        let generation = processingRecordingGeneration
+        Task { [weak self] in
+            for operation in operations { await operation.value }
+            guard let self, self.processingRecordingGeneration == generation else { return }
+            await self.localSearch.pauseIndexingForRecording()
+        }
+    }
+
     private func startManagedTasks() async {
         guard !isChangingLibrary, !isPreparingToQuit, !isSchedulingManagedTasks, !managedTasksLoading else { return }
         isSchedulingManagedTasks = true
         defer { isSchedulingManagedTasks = false }
         for kind in [BackgroundJob.Kind.transcription, .summary, .diarization, .searchIndex] {
+            if [.searchIndex, .diarization].contains(kind),
+                recordingID != nil || isStartingRecording || isFinalizingRecording
+            {
+                continue
+            }
             let limit =
                 kind == .transcription
                 ? Self.maximumConcurrentTranscriptions
@@ -298,6 +361,11 @@ extension MeetingStore {
                 guard !isPreparingToQuit else { return }
                 guard !candidates.isEmpty else { break }
                 for candidate in candidates {
+                    if [.searchIndex, .diarization].contains(kind),
+                        recordingID != nil || isStartingRecording || isFinalizingRecording
+                    {
+                        return
+                    }
                     let id = candidate.id
                     var task = candidate
                     cacheManagedTask(task)
@@ -323,6 +391,14 @@ extension MeetingStore {
                     if isPreparingToQuit {
                         task.state = .queued
                         task.progress = "Waiting to start"
+                        _ = await saveManagedTask(task)
+                        return
+                    }
+                    if [.searchIndex, .diarization].contains(kind),
+                        recordingID != nil || isStartingRecording || isFinalizingRecording
+                    {
+                        task.state = .queued
+                        task.progress = "Waiting for recording to finish"
                         _ = await saveManagedTask(task)
                         return
                     }
@@ -377,7 +453,15 @@ extension MeetingStore {
         }
         catch {
             if Task.isCancelled || error is CancellationError {
-                if isPreparingToQuit && !managedTaskStopRequests.contains(id) {
+                if task.kind == .searchIndex,
+                    managedMaintenancePauseRequests.contains(id),
+                    !managedTaskStopRequests.contains(id)
+                {
+                    await completeManagedTask(
+                        id, state: .paused, recovery: .automatic,
+                        message: "Waiting for recording to finish")
+                }
+                else if isPreparingToQuit && !managedTaskStopRequests.contains(id) {
                     let hasReceipt =
                         meetings.first(where: { $0.id == task.meetingID })?
                         .completedTaskIDs[task.kind.rawValue] == id
@@ -432,9 +516,12 @@ extension MeetingStore {
         guard var task = managedTask(id: id) else { return }
         task.state = state
         task.recovery = recovery
-        task.finishedAt = Date()
+        task.finishedAt = state == .paused ? nil : Date()
         task.errorMessage = message
-        task.progress = state == .completed ? "Completed" : state == .cancelled ? "Stopped" : "Needs attention"
+        task.progress =
+            state == .completed
+            ? "Completed" : state == .cancelled ? "Cancelled" : state == .paused ? message ?? "Paused" : "Failed"
+        task.attentionAcknowledged = false
         let committed = await saveManagedTask(task)
         if committed {
             managedTaskStopRequests.remove(id)
@@ -444,6 +531,16 @@ extension MeetingStore {
             if let index = managedTasks.firstIndex(where: { $0.id == id }) { managedTasks[index] = task }
         }
         managedTaskOperations.removeValue(forKey: id)
+        managedMaintenancePauseRequests.remove(id)
+        if committed, task.state == .paused, task.recovery == .automatic,
+            recordingID == nil, !isStartingRecording, !isFinalizingRecording, !isPreparingToQuit
+        {
+            var resumed = task
+            resumed.state = .queued
+            resumed.progress = "Waiting to resume"
+            resumed.errorMessage = nil
+            _ = await saveManagedTask(resumed)
+        }
         endJob(task.kind, .meeting(task.meetingID))
         for waiter in managedTaskWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         await reloadExternalManagedTasksCommand()
@@ -462,7 +559,7 @@ extension MeetingStore {
     }
 
     func cancelManagedTaskCommand(id: UUID) async {
-        guard var task = managedTask(id: id), task.state.isActive else {
+        guard var task = managedTask(id: id), task.state.isActive || task.state == .paused else {
             managedTaskStopRequests.remove(id)
             return
         }
@@ -474,7 +571,7 @@ extension MeetingStore {
             if task.state == .queued { failUncommittedTask(task) }
             return
         }
-        if task.state == .queued || task.isPreview {
+        if task.state == .queued || task.state == .paused || task.isPreview {
             await finishManagedTask(
                 id, state: .cancelled, recovery: .manual,
                 message: task.state == .queued ? "Removed before it started." : "Stopped waiting on this Mac.")
@@ -485,7 +582,7 @@ extension MeetingStore {
     }
 
     func canRetryManagedTask(_ task: ManagedTaskRecord) -> Bool {
-        guard task.state == .failed || task.state == .cancelled,
+        guard task.state == .failed || task.state == .cancelled || task.state == .paused,
             !isJobRunning(task.kind, .meeting(task.meetingID)), !task.dismissRequested, !task.restartRequested,
             task.recovery != .restartRequired && task.recovery != .blocked
         else { return false }
@@ -514,7 +611,8 @@ extension MeetingStore {
     }
 
     func managedTaskActionTitle(_ task: ManagedTaskRecord) -> String {
-        task.kind == .transcription && (task.interrupted || task.attemptKey != nil) ? "Resume" : "Retry"
+        task.state == .paused || task.kind == .transcription && (task.interrupted || task.attemptKey != nil)
+            ? "Resume" : "Retry"
     }
 
     func retryManagedTaskCommand(id: UUID) async {
@@ -597,6 +695,12 @@ extension MeetingStore {
         await startManagedTasks()
     }
 
+    func dismissManagedTaskAlertCommand(id: UUID) async {
+        guard var task = managedTask(id: id), task.needsAttention else { return }
+        task.attentionAcknowledged = true
+        _ = await saveManagedTask(task)
+    }
+
     func removeManagedTaskCommand(id: UUID) async {
         guard var task = managedTask(id: id), task.state != .running else { return }
         if task.state == .queued { await cancelManagedTaskCommand(id: id) }
@@ -621,12 +725,17 @@ extension MeetingStore {
                 let journal = managedTaskJournal
                 try await managedTaskIO.perform { try journal.delete(task.id) }
                 managedTaskStateCounts[task.state, default: 0] -= 1
+                if task.needsAttention { managedTaskAttentionCount -= 1 }
+                if task.isMaintenance { managedMaintenanceStateCounts[task.state, default: 0] -= 1 }
+                for scope in TaskHistoryScope.allCases where scope.includes(task) {
+                    managedTaskScopeCounts[scope, default: 0] -= 1
+                }
             }
             managedTasks.removeAll { $0.id == task.id }
             managedTaskStopRequests.remove(task.id)
             managedTaskRevision += 1
         }
-        catch { managedTaskJournalError = "Couldn’t dismiss this task. \(error.localizedDescription)" }
+        catch { managedTaskJournalError = "Couldn’t discard this task. \(error.localizedDescription)" }
     }
 
     /// External task edits are displayed after current operations finish. Changed active rows
@@ -666,10 +775,16 @@ extension MeetingStore {
                         record.finishedAt = record.finishedAt ?? Date()
                     }
                     else {
-                        record.state = .failed
+                        let recordID = record.id
+                        let changed = try await managedTaskIO.perform { try journal.changedSinceRebuild(recordID) }
+                        record.state = changed ? .paused : .failed
                         record.recovery = .manual
-                        record.progress = "Needs attention"
-                        record.errorMessage = "This task changed outside the app. Resume to continue."
+                        record.attentionAcknowledged = false
+                        record.progress = changed ? "Paused" : "Failed"
+                        record.errorMessage =
+                            changed
+                            ? "This task changed outside the app. Resume to continue."
+                            : "This task has no running operation. Review it before retrying."
                     }
                     guard await saveManagedTask(record) else {
                         throw ServiceError(managedTaskJournalError ?? "Couldn’t save tasks.")
@@ -692,6 +807,9 @@ extension MeetingStore {
         }
         managedTasks = snapshot.recent + pinned
         managedTaskStateCounts = snapshot.counts
+        managedTaskAttentionCount = snapshot.attentionCount
+        managedTaskScopeCounts = snapshot.scopeCounts
+        managedMaintenanceStateCounts = snapshot.maintenanceCounts
         managedTaskActiveCounts = snapshot.activeCounts
         for id in Array(managedTaskWaiters.keys)
         where !snapshot.activeIDs.contains(id) && managedTaskOperations[id] == nil {
@@ -778,7 +896,10 @@ extension MeetingStore {
                 await finishManagedTask(original.id, state: .completed, recovery: .none)
                 continue
             }
-            guard original.state.isActive || (original.state == .failed && original.recovery == .automatic) else {
+            guard
+                original.state.isActive
+                    || ([.failed, .paused].contains(original.state) && original.recovery == .automatic)
+            else {
                 continue
             }
             guard [.transcription, .summary, .diarization, .searchIndex].contains(original.kind) else {
@@ -810,7 +931,7 @@ extension MeetingStore {
                 await finishManagedTask(
                     task.id, state: .failed, recovery: .blocked,
                     message:
-                        "The saved transcription request is missing. Dismiss this task before starting another transcription."
+                        "The saved transcription request is missing. Discard this task before starting another transcription."
                 )
                 continue
             }

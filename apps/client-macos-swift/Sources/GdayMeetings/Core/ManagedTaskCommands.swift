@@ -94,6 +94,26 @@ extension MeetingStore {
         await taskCommand(id: id) { await self.prioritizeManagedTaskCommand(id: id) }
     }
 
+    func dismissAllTaskAlerts() async {
+        while true {
+            let page = await taskHistoryPage(scope: .attention)
+            guard !page.isEmpty else { return }
+            let count = taskAttentionCount
+            for row in page {
+                switch row {
+                case .managed(let task): await dismissManagedTaskAlert(id: task.id)
+                case .voice(let job): voicePreparation.dismissAlert(jobID: job.id)
+                }
+            }
+            // Stop if persistence rejected an acknowledgement.
+            guard taskAttentionCount < count else { return }
+        }
+    }
+
+    func dismissManagedTaskAlert(id: UUID) async {
+        await taskCommand(id: id) { await self.dismissManagedTaskAlertCommand(id: id) }
+    }
+
     func removeManagedTask(id: UUID) async {
         managedTaskStopRequests.insert(id)
         await taskCommand(id: id) { await self.removeManagedTaskCommand(id: id) }

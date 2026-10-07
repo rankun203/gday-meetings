@@ -12,7 +12,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location('granite_conversion', ROOT / 'apps/worker-search/scripts/convert_granite_coreml.py')
+spec = importlib.util.spec_from_file_location('granite_conversion', ROOT / 'tools/semantic-model-conversion/scripts/convert_granite_coreml.py')
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 

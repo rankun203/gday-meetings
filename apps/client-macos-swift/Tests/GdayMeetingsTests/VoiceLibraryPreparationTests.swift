@@ -6,6 +6,8 @@ import Testing
 
 private actor FakeVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
     var calls = 0
+    var finishes = 0
+    func finish() async { finishes += 1 }
     var failuresRemaining: Int
     let result: TypedVoiceEmbedding
     let onExtract: (@Sendable () async -> Void)?
@@ -34,6 +36,19 @@ private actor FakeVoiceRecordingDiscoverer: VoiceRecordingDiscovering {
         calls += 1
         lastFiles = files.map(\.lastPathComponent)
         return result
+    }
+}
+
+private actor VoiceRetirementGate {
+    var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func open() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 
@@ -66,6 +81,27 @@ struct VoiceLibraryPreparationTests {
         .init(
             providerID: UUID(), providerName: "Synthetic Provider", type: .community1, discover: discover,
             exampleIDs: examples.map(\.id), state: .running)
+    }
+
+    @Test func aJobReusesItsSessionAcrossExamplesAndFinishesAfterFailure() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let samples = try (0..<3).map { _ in try example(in: directory) }
+        #expect(library.upsert(samples))
+        let extractor = FakeVoiceExampleExtractor(result: embedding(), failures: 1)
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job(samples)
+        #expect(library.setJobs([task]))
+        await preparation.run(
+            jobID: task.id,
+            directory: { id in
+                try! MeetingFolderLocation.resolve(id: id, directory: directory)
+            })
+        #expect(await extractor.calls == 3)
+        #expect(await extractor.finishes == 1)
+        #expect(library.jobs.first?.state == .failed)
+        #expect(library.jobs.first?.completedExampleIDs.count == 2)
     }
 
     @Test func providersShareRepresentationWithoutTrustingEndpointOrDimensions() {
@@ -283,6 +319,39 @@ struct VoiceLibraryPreparationTests {
         #expect(library.jobs.first?.state == .failed)
         #expect(library.jobs.first?.completedExampleIDs == [sample.id])
         #expect(library.hydratedExample(id: sample.id)?.voiceEmbeddings == [embedding()])
+    }
+
+    @Test func cancelledReplacementRunsRetireAfterTheOldSessionFinishes() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([sample]))
+        let gate = VoiceRetirementGate()
+        let extractor = FakeVoiceExampleExtractor(result: embedding(), onExtract: { await gate.wait() })
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job([sample])
+        #expect(library.setJobs([task]))
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        while !(await gate.entered) { await Task.yield() }
+        preparation.pause(jobID: task.id)
+        for index in 0..<4 {
+            preparation.resume(jobID: task.id, directory: { _ in folder })
+            await Task.yield()
+            if index.isMultiple(of: 2) {
+                preparation.pause(jobID: task.id)
+            }
+            else {
+                preparation.cancel(jobID: task.id)
+            }
+        }
+        #expect(preparation.pendingRunCount == 5)
+        await gate.open()
+        await preparation.shutdown()
+        #expect(preparation.pendingRunCount == 0)
+        #expect(await extractor.calls == 1)
+        #expect(await extractor.finishes == 1)
     }
 
     @Test func largeInventoryStartsAsDescriptorsAndCanPauseBeforeReadingAnyAudio() throws {

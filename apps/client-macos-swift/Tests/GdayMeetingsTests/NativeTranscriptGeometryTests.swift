@@ -1,10 +1,135 @@
 import AppKit
+import Darwin
 import SwiftUI
 import Testing
 
 @testable import GdayMeetings
 
 @MainActor struct NativeTranscriptGeometryTests {
+    /// Matched work probe; callback timing is not presented-frame latency.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_TRANSCRIPT_REVISION_PERFORMANCE"] == "1"))
+    func warmRevisionPerformance() async throws {
+        let fixture = GeometryFixture()
+        defer { fixture.close() }
+        var view = fixture.view
+        let shortRows = (0..<1000).map { index in
+            TranscriptDisplayRow(
+                id: UUID(), start: Double(index), end: Double(index + 1),
+                speaker: "Speaker", speakerID: nil, text: "Synthetic short passage.")
+        }
+        view.rows = shortRows
+        fixture.column.width = 310
+        fixture.coordinator.update(view)
+        fixture.coordinator.settleLayout()
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let longRow = TranscriptDisplayRow(
+            id: shortRows[0].id, start: 0, end: 1,
+            speaker: "Speaker", speakerID: nil, text: String(repeating: "Synthetic wrapping passage. ", count: 50))
+        view.rows[0] = longRow
+        fixture.coordinator.update(view)
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let clip = fixture.scroll.contentView
+        fixture.coordinator.userScrolled()
+        clip.scroll(to: NSPoint(x: 0, y: fixture.table.rect(ofRow: 40).minY + 7))
+        fixture.scroll.reflectScrolledClipView(clip)
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let service = fixture.coordinator.heights
+        let measured = service.statistics.measurements
+        let start = PerformanceResourceSnapshot.capture()
+        var heapStart = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapStart)
+        var actions: [Double] = []
+        var gaps: [Double] = []
+        var last = ProcessInfo.processInfo.systemUptime
+        var drifted = 0
+        for index in 0..<240 {
+            try await Task.sleep(for: .milliseconds(16))
+            let now = ProcessInfo.processInfo.systemUptime
+            gaps.append(now - last)
+            last = now
+            let row = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
+            let offset = clip.bounds.minY - fixture.table.rect(ofRow: row).minY
+            view.rows[0] = index.isMultiple(of: 2) ? shortRows[0] : longRow
+            fixture.coordinator.update(view)
+            fixture.coordinator.settleLayout()
+            fixture.coordinator.requestVisibleMeasurements()
+            await service.waitUntilIdle()
+            let after = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
+            if after != row || abs(clip.bounds.minY - fixture.table.rect(ofRow: after).minY - offset) >= 1 {
+                drifted += 1
+            }
+            actions.append(ProcessInfo.processInfo.systemUptime - now)
+        }
+        let end = PerformanceResourceSnapshot.capture()
+        var heapEnd = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapEnd)
+        let report: [String: Any] = [
+            "operations": actions.count, "rows": shortRows.count, "drifted_updates": drifted,
+            "process_cpu_s": end.processCPUSeconds - start.processCPUSeconds,
+            "main_cpu_s": end.mainCPUSeconds - start.mainCPUSeconds,
+            "elapsed_s": end.monotonicSeconds - start.monotonicSeconds,
+            "action_p95_s": actions.sorted()[227], "action_max_s": actions.max() ?? 0,
+            "callback_gaps_over_100ms": gaps.filter { $0 > 0.1 }.count,
+            "heap_live_blocks_delta": Int64(heapEnd.blocks_in_use) - Int64(heapStart.blocks_in_use),
+            "heap_live_bytes_delta": Int64(heapEnd.size_in_use) - Int64(heapStart.size_in_use),
+            "heap_reserved_bytes_delta": Int64(heapEnd.size_allocated) - Int64(heapStart.size_allocated),
+            "additional_measurements": service.statistics.measurements - measured,
+            "cache_hits": service.statistics.hits, "cache_entries": service.entryCount,
+            "pending_count": service.pendingCount, "peak_pending_count": service.statistics.peakPendingCount,
+            "peak_pending_bytes": service.statistics.peakPendingBytes,
+        ]
+        print(
+            "PERF_WARM_REVISION "
+                + String(
+                    decoding:
+                        try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+        #expect(actions.count == 240)
+        #expect(service.pendingCount == 0)
+    }
+
+    @Test func independentReviewWarmRevisionAboveViewportPreservesReadingAnchor() async {
+        let fixture = GeometryFixture()
+        defer { fixture.close() }
+        var view = fixture.view
+        let initialRows = (0..<100).map { index in
+            TranscriptDisplayRow(
+                id: UUID(), start: Double(index), end: Double(index + 1),
+                speaker: "Speaker", speakerID: nil, text: "Synthetic short passage.")
+        }
+        view.rows = initialRows
+        fixture.column.width = 310
+        fixture.coordinator.update(view)
+        fixture.coordinator.settleLayout()
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        view.rows[0] = TranscriptDisplayRow(
+            id: initialRows[0].id, start: 0, end: 1,
+            speaker: "Speaker", speakerID: nil, text: String(repeating: "Synthetic wrapping passage. ", count: 50))
+        fixture.coordinator.update(view)
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let clip = fixture.scroll.contentView
+        fixture.coordinator.userScrolled()
+        clip.scroll(to: NSPoint(x: 0, y: fixture.table.rect(ofRow: 40).minY + 7))
+        fixture.scroll.reflectScrolledClipView(clip)
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let before = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
+        let offset = clip.bounds.minY - fixture.table.rect(ofRow: before).minY
+        // Restore a cached text revision above the reader's viewport.
+        view.rows[0] = initialRows[0]
+        fixture.coordinator.update(view)
+        fixture.coordinator.settleLayout()
+        fixture.coordinator.requestVisibleMeasurements()
+        await fixture.coordinator.heights.waitUntilIdle()
+        let after = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
+        #expect(view.rows[after].id == view.rows[before].id)
+        #expect(abs(clip.bounds.minY - fixture.table.rect(ofRow: after).minY - offset) < 1)
+    }
+
     @Test func columnWidthChangesInvalidateNativeRowGeometry() async throws {
         let fixture = GeometryFixture()
         defer { fixture.close() }

@@ -95,7 +95,7 @@ import Testing
         try external.upsert(record)
         #expect(store.managedTaskJournal.hasExternalChanges)
         await store.reloadExternalManagedTasks()
-        #expect(store.managedTasks.first?.state == .failed)
+        #expect(store.managedTasks.first?.state == .paused)
         #expect(store.managedTasks.first?.recovery == .manual)
         #expect(store.managedTaskOperations.isEmpty)
         #expect(!store.managedTaskJournal.hasExternalChanges)

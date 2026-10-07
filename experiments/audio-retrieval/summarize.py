@@ -29,7 +29,7 @@ def main():
     evidence = json.loads((args.runs / "per-query-evidence.json").read_text())
     relevance = json.loads((args.runs / "per-query-relevance.json").read_text())
     intervals = {}
-    for first, second in [("jina-audio", "clsp-audio"), ("jina-audio", "bm25"),
+    for first, second in [("jina-audio", "bm25"),
                           ("jina-transcript", "e5-transcript"), ("jina-transcript", "bm25"),
                           ("hybrid-jina-audio-bm25", "jina-audio"),
                           ("hybrid-jina-transcript-bm25", "jina-transcript")]:

@@ -97,6 +97,13 @@ extension ThisMacProvider {
         let capability: ProviderCapability
     }
     @Published private(set) var results: [Key: ProviderHealth] = [:]
+    @Published private(set) var validationResults: [Key: ProviderHealth] = [:]
+    private var providerValidations: [UUID: Task<[ProviderCapability: ProviderHealth], Never>] = [:]
+    private var validationRequests: [UUID: UUID] = [:]
+    func validationState(providerID: UUID, capability: ProviderCapability) -> ProviderHealth {
+        let key = Key(providerID: providerID, capability: capability)
+        return seeded.contains(key) ? (results[key] ?? .checking) : (validationResults[key] ?? .checking)
+    }
     @Published var settingsProviderID: UUID?
     private var seeded: Set<Key> = []
     func seed(providerID: UUID, capability: ProviderCapability, health: ProviderHealth) {
@@ -124,6 +131,11 @@ extension ThisMacProvider {
         guard configuration != next else { return }
         configuration = next
         requests.removeAll()
+        for task in inFlight.values { task.cancel() }
+        for task in providerValidations.values { task.cancel() }
+        providerValidations.removeAll()
+        validationRequests.removeAll()
+        validationResults.removeAll()
         inFlight.removeAll()
         fingerprints.removeAll()
         results = results.filter { seeded.contains($0.key) }
@@ -206,18 +218,60 @@ extension ThisMacProvider {
     }
 
     func checkProvider(providerID: UUID, settings: AppSettings) async -> [ProviderCapability: ProviderHealth] {
+        invalidateChangedConfiguration(settings: settings)
+        if let task = providerValidations[providerID] { return await task.value }
         let capabilities =
             providerID == ThisMacProvider.id
             ? ThisMacProvider.capabilities
             : settings.serviceProviders.first(where: { $0.id == providerID })?.kind.capabilities ?? []
-        invalidateChangedConfiguration(settings: settings)
-        var result: [ProviderCapability: ProviderHealth] = [:]
-        for capability in capabilities {
-            result[capability] = await checkDependency(
-                providerID: providerID, capability: capability, settings: settings)
+        let request = UUID()
+        validationRequests[providerID] = request
+        var checking = validationResults
+        for capability in capabilities { checking[.init(providerID: providerID, capability: capability)] = .checking }
+        validationResults = checking
+        let provider = settings.serviceProviders.first { $0.id == providerID }
+        let task = Task { @MainActor in
+            var completed: [ProviderCapability: ProviderHealth] = [:]
+            for capability in capabilities {
+                guard !Task.isCancelled else { return completed }
+                let key = Key(providerID: providerID, capability: capability)
+                if seeded.contains(key), let value = results[key] {
+                    completed[capability] = value
+                    continue
+                }
+                if let checker {
+                    completed[capability] = await checker(providerID, capability, settings)
+                }
+                else if providerID == ThisMacProvider.id {
+                    completed[capability] = await ThisMacProvider.health(for: capability, settings: settings)
+                }
+                else if let provider {
+                    let estimate = await provider.health(for: capability, settings: settings)
+                    if estimate.isReady, let id = provider.localModelID(for: capability) {
+                        completed[capability] = await LocalModelManager.shared.validate(id)
+                    }
+                    else {
+                        completed[capability] = estimate
+                    }
+                }
+                else {
+                    completed[capability] = .notReady("Provider is unavailable.")
+                }
+            }
+            return completed
         }
-        return result
+        providerValidations[providerID] = task
+        let completed = await task.value
+        guard validationRequests[providerID] == request else { return completed }
+        providerValidations[providerID] = nil
+        var published = validationResults
+        for (capability, value) in completed {
+            published[.init(providerID: providerID, capability: capability)] = value
+        }
+        validationResults = published
+        return completed
     }
+
 }
 
 extension MeetingStore {
@@ -262,5 +316,13 @@ extension MeetingStore {
         else { return }
         let ready = Set(results.filter { $0.value.isReady }.map(\.key))
         if settings.assignInitiallyHealthyProvider(providerID, capabilities: ready) { saveSettings() }
+    }
+}
+
+extension ServiceProvider {
+    func localModelID(for capability: ProviderCapability) -> LocalModelID? {
+        if kind == .localSearch, capability == .search { return (localSearch ?? .init()).selectedModel.localID }
+        guard kind.isLocalSpeaker else { return nil }
+        return capability == .speakerRecognition ? .voiceEmbedding : LocalModelID(rawValue: model)
     }
 }

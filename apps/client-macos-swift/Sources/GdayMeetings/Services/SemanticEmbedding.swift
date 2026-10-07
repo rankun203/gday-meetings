@@ -30,6 +30,8 @@ protocol SemanticEmbedding: Sendable {
 /// Core ML and tokenization run on this actor, never on the main actor.
 actor CoreMLSemanticEmbedding: SemanticEmbedding {
     nonisolated let modelID: SemanticModelID
+    enum Usage: Sendable { case query, indexing }
+    private let usage: Usage
     private let manager: LocalModelManager
     private var lease: LocalModelLease?
     private var tokenizer: (any Tokenizer)?
@@ -38,7 +40,8 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
     private var passageModel: MLModel?
     private var passagePreparation: Task<MLModel, Error>?
 
-    init(modelID: SemanticModelID, manager: LocalModelManager) {
+    init(modelID: SemanticModelID, manager: LocalModelManager, usage: Usage = .query) {
+        self.usage = usage
         self.modelID = modelID
         self.manager = manager
     }
@@ -47,16 +50,26 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
         try Task.checkCancellation()
         if lease != nil { return }
         if preparation == nil {
-            preparation = Task { [manager, modelID] in
-                let acquired = try await manager.acquireInstalled(id: modelID.localID)
+            preparation = Task { [manager, modelID, usage] in
+                let acquired = try await manager.acquireInstalled(
+                    id: modelID.localID,
+                    semanticFunction: usage == .indexing ? "passage512" : nil,
+                    priority: usage == .indexing ? .maintenance : .interactive)
                 do {
                     let tokenizer = try await AutoTokenizer.from(modelFolder: acquired.directory)
                     guard let model = acquired.models["SemanticEncoder"] else { throw LocalModelError.unavailable }
                     // Prepare the first execution plan while search reports its loading state.
-                    _ = try await model.prediction(
-                        from: Self.features(
-                            ids: tokenizer.encode(text: "Search"), tokens: modelID.queryTokens,
-                            paddingToken: modelID.paddingToken))
+                    try await ProcessingCoordinator.shared.withPermit(
+                        for: .inference,
+                        priority: usage == .indexing ? .maintenance : .interactive
+                    ) {
+                        _ = try await model.prediction(
+                            from: Self.features(
+                                ids: tokenizer.encode(text: "Search"),
+                                tokens: usage == .indexing ? modelID.maximumTokens : modelID.queryTokens,
+                                paddingToken: modelID.paddingToken))
+                    }
+                    try Task.checkCancellation()
                     return (acquired, tokenizer)
                 }
                 catch {
@@ -68,7 +81,11 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
         let request = generation
         let pending = preparation!
         do {
-            let resources = try await pending.value
+            let resources = try await withTaskCancellationHandler {
+                try await pending.value
+            } onCancel: {
+                pending.cancel()
+            }
             guard generation == request else { throw CancellationError() }
             lease = resources.0
             tokenizer = resources.1
@@ -89,20 +106,26 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
         lease = nil
         tokenizer = nil
         passageModel = nil
-        passagePreparation?.cancel()
+        let pendingPassage = passagePreparation
+        pendingPassage?.cancel()
         passagePreparation = nil
+        _ = try? await pendingPassage?.value
+        pending?.cancel()
         if let pending, let resources = try? await pending.value { await manager.release(resources.0) }
         if let held { await manager.release(held) }
     }
 
     deinit {
-        passagePreparation?.cancel()
+        let pendingPassage = passagePreparation
+        pendingPassage?.cancel()
         let held = lease
         let pending = preparation
+        pending?.cancel()
         let manager = manager
         Task {
-            if let held { await manager.release(held) }
+            _ = try? await pendingPassage?.value
             if let pending, let resources = try? await pending.value { await manager.release(resources.0) }
+            if let held { await manager.release(held) }
         }
     }
 
@@ -133,17 +156,27 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
         let tokens = modelID.inputTokens(isQuery: isQuery, tokenCount: ids.count)
         let model = try await encoder(shortQuery: tokens == modelID.queryTokens)
         try Task.checkCancellation()
-        let result = try await model.prediction(
-            from: Self.features(
-                ids: ids, tokens: tokens, paddingToken: modelID.paddingToken))
-        guard let output = result.featureValue(for: "embedding")?.multiArrayValue,
-            output.count == modelID.dimensions
-        else { throw SearchProviderError.invalidResponse }
-        let vector = (0..<output.count).map { output[$0].doubleValue }
-        let norm = sqrt(vector.reduce(0) { $0 + $1 * $1 })
-        guard vector.allSatisfy(\.isFinite), norm.isFinite, norm > 0 else { throw SearchProviderError.invalidResponse }
+        let modelID = modelID
+        let vector: [Double] = try await ProcessingCoordinator.shared.withPermit(
+            for: .inference,
+            priority: usage == .indexing ? .maintenance : .interactive
+        ) {
+            let result = try await model.prediction(
+                from: Self.features(
+                    ids: ids, tokens: tokens, paddingToken: modelID.paddingToken))
+            guard let output = result.featureValue(for: "embedding")?.multiArrayValue,
+                output.count == modelID.dimensions
+            else { throw SearchProviderError.invalidResponse }
+            let vector = (0..<output.count).map { output[$0].doubleValue }
+            let norm = sqrt(vector.reduce(0) { $0 + $1 * $1 })
+            guard vector.allSatisfy(\.isFinite), norm.isFinite, norm > 0 else {
+                throw SearchProviderError.invalidResponse
+            }
+            return vector.map { $0 / norm }
+        }
+
         try Task.checkCancellation()
-        return vector.map { $0 / norm }
+        return vector
     }
 
     nonisolated private static func features(ids: [Int], tokens: Int, paddingToken: Int) throws
@@ -162,18 +195,15 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
 
     private func encoder(shortQuery: Bool) async throws -> MLModel {
         guard let lease else { throw LocalModelError.unavailable }
-        if shortQuery {
+        if shortQuery || usage == .indexing {
             guard let model = lease.models["SemanticEncoder"] else { throw LocalModelError.unavailable }
             return model
         }
         if let passageModel { return passageModel }
         if passagePreparation == nil {
-            let url = lease.directory.appendingPathComponent("SemanticEncoder.mlmodelc")
-            passagePreparation = Task {
-                let configuration = MLModelConfiguration()
-                configuration.computeUnits = .all
-                configuration.functionName = "passage512"
-                return try await MLModel.load(contentsOf: url, configuration: configuration)
+            passagePreparation = Task { [manager] in
+                // The additional long-query plan belongs to this query worker.
+                try await manager.prepareSemanticPassage(for: lease)
             }
         }
         let request = generation

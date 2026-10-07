@@ -17,7 +17,7 @@ scope: local-retrieval-model-selection
 
 # References
 
-**Retrieving sound versus spoken content.** [Yang et al.'s CLSP paper](https://arxiv.org/abs/2601.03065) studies contrastive language–speech representations for properties such as speaking style. [Wu et al.'s CLAP paper](https://arxiv.org/abs/2211.06687) aligns general audio with textual descriptions. Contrastive training brings matched examples closer in representation space and separates mismatches. These objectives motivate audio baselines, but neither establishes that a model can recover detailed meeting facts. [Hönicke et al.'s Jina omni paper](https://arxiv.org/abs/2605.08384) connects audio and visual encoders to a shared text embedding space, motivating the paired audio/transcript comparison.
+**Retrieving sound versus spoken content.** [Wu et al.'s CLAP paper](https://arxiv.org/abs/2211.06687) aligns general audio with textual descriptions. Contrastive training brings matched examples closer in representation space and separates mismatches. These objectives motivate audio baselines, but do not establish that a model can recover detailed meeting facts. [Hönicke et al.'s Jina omni paper](https://arxiv.org/abs/2605.08384) connects audio and visual encoders to a shared text embedding space, motivating the paired audio/transcript comparison.
 
 **Multilingual transcript retrieval.** The [multilingual E5 report](https://arxiv.org/abs/2402.05672) provides a compact text baseline. The [Granite Multilingual R2 report](https://arxiv.org/abs/2605.13521), [Harrier model card](https://huggingface.co/microsoft/harrier-oss-v1-270m), and [Qwen3 Embedding report](https://arxiv.org/abs/2506.05176) motivate the English/Chinese shortlist at different model sizes. Published benchmark performance informs selection, but is not included as a measurement on this corpus.
 
@@ -65,7 +65,6 @@ An **embedding** is a numerical representation. Vectors are normalized to unit l
 
 | Encoder | Pinned checkpoint | Candidate input | Vector construction | Dimensions |
 | --- | --- | --- | --- | ---: |
-| CLSP | [yfyeung/CLSP · 30355ce](https://huggingface.co/yfyeung/CLSP/tree/30355ce67960e4cc1562e4e5fa154baf86a21430) | Audio | Whole-window encoder | 512 |
 | CLAP | [LAION HTSAT unfused · 8fa0f1c](https://huggingface.co/laion/clap-htsat-unfused/tree/8fa0f1c6d0433df6e97c127f64b2a1d6c0dcda8a) | Audio | Maximum chunk similarity or mean chunk embedding | 512 |
 | Jina | [v5 omni nano retrieval · b7287f6](https://huggingface.co/jinaai/jina-embeddings-v5-omni-nano-retrieval/tree/b7287f6b6b562e25bc4a28b939d1f936484b4137) | Audio or transcript, separately | Last valid token | 768 |
 | Multilingual E5 small | [614241f](https://huggingface.co/intfloat/multilingual-e5-small/tree/614241f622f53c4eeff9890bdc4f31cfecc418b3) | Transcript | Mean of non-padding tokens | 384 |
@@ -77,7 +76,7 @@ An **embedding** is a numerical representation. Vectors are normalized to unit l
 
 The pinned Granite, Qwen and CLAP checkpoints declare Apache 2.0; Harrier and E5 declare MIT. Jina declares CC BY-NC 4.0 and serves as a research reference. No Core ML or reduced-precision distribution artifact was created.
 
-CLSP encodes whole windows; its original CPU filterbank is retained while encoder inference uses Metal. CLAP resamples to 48 kHz and covers each window with consecutive chunks of at most ten seconds, evaluated using maximum chunk similarity and normalized mean chunk embeddings. Jina separately embeds audio and text using its published pooling, prefixes and real-frame masks. E5 uses `query:`/`passage:` prefixes and masked mean pooling. Granite uses CLS pooling without prefixes. Harrier and Qwen use last-token pooling and one fixed meeting-retrieval instruction on queries. Encoder inference uses float32 and batch size one on Metal. The main environment uses PyTorch 2.14.1 and Transformers 5.18.0; CLSP uses Torch 2.8.0 and Transformers 4.57.3 for checkpoint compatibility. E5's maximum input is 228 tokens, below its 512-token limit; the other text candidates reject overlength input rather than silently truncate.
+CLAP resamples to 48 kHz and covers each window with consecutive chunks of at most ten seconds, evaluated using maximum chunk similarity and normalized mean chunk embeddings. Jina separately embeds audio and text using its published pooling, prefixes and real-frame masks. E5 uses `query:`/`passage:` prefixes and masked mean pooling. Granite uses CLS pooling without prefixes. Harrier and Qwen use last-token pooling and one fixed meeting-retrieval instruction on queries. Encoder inference uses float32 and batch size one on Metal. The main environment uses PyTorch 2.14.1 and Transformers 5.18.0. E5's maximum input is 228 tokens, below its 512-token limit; the other text candidates reject overlength input rather than silently truncate.
 
 **Lexical retrieval** includes BM25 (`k1=1.2`, `b=0.75`), word TF-IDF and character TF-IDF. The multilingual tokenizer uses lowercased Latin words/numbers and Chinese characters plus adjacent pairs. Word TF-IDF adds adjacent term pairs; character TF-IDF uses two-to-four-character sequences. Both use sublinear term frequency and fit only candidate text. Zero-score lexical matches return no result. Ties use a fixed hash of the candidate ID.
 
@@ -101,7 +100,6 @@ All rows use the expanded 102-query, 1,677-window corpus and the same graded poo
 
 | Input | Method | Evidence @1 | @5 | @10 | MRR | Useful @1 | Full support @1 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Audio | CLSP | 0.0% | 0.0% | 0.0% | 0.004 | 0.0% | 0.0% |
 | Audio | CLAP · maximum | 0.0% | 0.0% | 0.0% | 0.002 | 0.0% | 0.0% |
 | Audio | CLAP · mean | 0.0% | 0.0% | 0.0% | 0.002 | 1.0% | 0.0% |
 | Audio | Jina | 21.6% | 34.3% | 39.2% | 0.276 | 36.3% | 22.5% |
@@ -223,7 +221,7 @@ Cells show evidence @1 / full support @1. These groups have different topics and
 
 ## Resource observations
 
-Per-item median / p95 milliseconds. Query and transcript counts are 102 and 1,677 respectively; each audio encoder covers all 1,677 windows. CLAP timing includes all chunks of a window. CLSP timing includes CPU filterbank extraction.
+Per-item median / p95 milliseconds. Query and transcript counts are 102 and 1,677 respectively; each audio encoder covers all 1,677 windows. CLAP timing includes all chunks of a window.
 
 | Encoder process | Query (ms) | Transcript (ms) | Audio window (ms) |
 | --- | --- | --- | --- |
@@ -236,7 +234,6 @@ Per-item median / p95 milliseconds. Query and transcript counts are 102 and 1,67
 | E5 small | 11.7 / 16.6 | 12.3 / 16.8 | — |
 | Jina full | 16.7 / 23.6 | 19.8 / 29.4 | 674.7 / 839.3 |
 | CLAP | 26.9 / 213.1 | — | 102.1 / 128.2 |
-| CLSP | 33.7 / 222.1 | — | 463.0 / 2322.4 |
 
 Memory sampling is available for the six text-only processes. Values use decimal MB/GB; other runners did not collect comparable peak-memory data.
 
@@ -249,11 +246,11 @@ Memory sampling is available for the six text-only processes. Values use decimal
 | Harrier 0.6B | 1192 | 2.38 | 4.59 | 2.85 | 1.35 |
 | Qwen3 0.6B | 1192 | 2.38 | 4.59 | 2.85 | 0.92 |
 
-Timing is observed Python inference on the recorded hardware, not app latency. Primary encoder processes run sequentially, but local WhisperX recognition and brief CPU parity probes overlap part of the run. The final CLSP run also overlaps the separate transcript-variant GPU runs; its timing is especially unsuitable for a controlled speed comparison. Other system activity is uncontrolled. Shape initialization, file I/O and background work affect tails. Do not treat small differences as stable deployment advantages. RSS and Metal memory overlap on unified memory and must not be added. Ten-millisecond memory sampling can miss peaks. Checkpoint size differs from loaded float32 parameter memory; Jina's downloaded checkpoint includes components omitted from text-only loading. ASR, energy, native conversion, quantization and simultaneous app recording are not included in these resource comparisons.
+Timing is observed Python inference on the recorded hardware, not app latency. Primary encoder processes run sequentially, but local WhisperX recognition and brief CPU parity probes overlap part of the run. Other system activity is uncontrolled. Shape initialization, file I/O and background work affect tails. Do not treat small differences as stable deployment advantages. RSS and Metal memory overlap on unified memory and must not be added. Ten-millisecond memory sampling can miss peaks. Checkpoint size differs from loaded float32 parameter memory; Jina's downloaded checkpoint includes components omitted from text-only loading. ASR, energy, native conversion, quantization and simultaneous app recording are not included in these resource comparisons.
 
 # Validation and limitations
 
-All ten primary encoder processes and nine paired transcript-variant processes completed on their frozen inputs. Comparison verifies corpus/audio fingerprints, dimensions, finite scores and complete judgment coverage. The 918 variant query vectors agree with their unchanged main-run counterparts within 0.000001 maximum component error. Jina's 1,779 full-model query/text vectors are bitwise identical to its text-only path. Twelve new Jina/Granite CPU–Metal query/document checks and six CLSP probe checks also agree within 0.000001; these are numerical parity checks, not native deployment validation.
+All nine retained primary encoder processes and nine paired transcript-variant processes completed on their frozen inputs. Comparison verifies corpus/audio fingerprints, dimensions, finite scores and complete judgment coverage. The 918 variant query vectors agree with their unchanged main-run counterparts within 0.000001 maximum component error. Jina's 1,779 full-model query/text vectors are bitwise identical to its text-only path. Twelve new Jina/Granite CPU–Metal query/document checks also agree within 0.000001; these are numerical parity checks, not native deployment validation.
 
 Ten retrieval metric tests, six expansion/support tests and eleven reference-review tests pass. Source annotations remain byte-identical to the saved originals. No synthetic speech contributes to these matrices. Formatting, document links and privacy checks cover the changed experiment files.
 
@@ -261,7 +258,7 @@ This corpus is intentionally enriched with difficult corrections, exact terms an
 
 The larger gallery tests more distractors, not unseen-query generalization. Automated grading depends on imperfect reference evidence and a single judge family. A useful transcript can disagree with a nonexhaustive timestamp label; a correctly retrieved timestamp can contain an incorrect recognized fact. Neither is resolved by quoting one aggregate accuracy number. Inspection also found debatable automated grades for broad queries and acoustic details such as a spoken pause. The same passage sometimes receives different support grades for bilingual paraphrases. The judged percentages are diagnostic estimates, not adjudicated accuracy or proof of model equivalence. Source decoding emitted some demux warnings; output format, duration and sample checks do not prove every input stream was intact. The source recordings and service receipts remain available for audit.
 
-The CLSP checkpoint needs a compatible older Transformers runtime and emits legacy AMP decorator warnings. WhisperX alignment emits a deprecated gradient-checkpointing configuration warning; training is disabled. Its optional TorchCodec decoder cannot load the installed FFmpeg libraries; the runner supplies predecoded arrays, so that decoder is not used. These warnings are recorded, not suppressed. Replacing those dependencies requires parity validation rather than silently altering the frozen implementations. No app, Keychain entry, meeting file or provider setting is modified by the experiment.
+WhisperX alignment emits a deprecated gradient-checkpointing configuration warning; training is disabled. Its optional TorchCodec decoder cannot load the installed FFmpeg libraries; the runner supplies predecoded arrays, so that decoder is not used. These warnings are recorded, not suppressed. Replacing those dependencies requires parity validation rather than silently altering the frozen implementations. No app, Keychain entry, meeting file or provider setting is modified by the experiment.
 
 Keep Qwen3 0.6B and Granite 311M as the deployment shortlist: Qwen for the stronger measured retrieval quality, Granite for its smaller checkpoint and lower observed inference cost. Before selecting either, evaluate unseen meetings with independently checked answers and absent-answer queries, then measure native conversion, energy and recording-time contention. The present results justify that shortlist, not production equivalence with Jina.
 
