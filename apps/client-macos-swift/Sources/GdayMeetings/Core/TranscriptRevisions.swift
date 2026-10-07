@@ -33,19 +33,33 @@ struct TranscriptRevisions: Codable {
         }
         return result
     }
-    static func preserve(_ meeting: Meeting, at directory: URL) throws {
-        guard !meeting.transcript.isEmpty else { return }
-        var value = try read(at: directory)
+    static func preserving(_ meeting: Meeting, at directory: URL) throws -> Data? {
+        try PrivateTranscriptFile.validatePath(name: "transcript-revisions.json", at: directory)
+        let url = directory.appendingPathComponent("transcript-revisions.json")
+        let previous = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        return try preserving(meeting, previous: previous)
+    }
+
+    static func preserving(_ meeting: Meeting, previous: Data?) throws -> Data? {
+        guard !meeting.transcript.isEmpty else { return nil }
+        var value = try previous.map { try JSONDecoder().decode(Self.self, from: $0) } ?? Self()
+        guard value.version == 1 else {
+            throw MeetingError.message("The saved transcript revisions use an unsupported format.")
+        }
         let revision = current(meeting)
         if let index = value.revisions.firstIndex(where: { $0.id == revision.id }) {
-            guard value.revisions[index] != revision else { return }
+            guard value.revisions[index] != revision else { return nil }
             value.revisions[index] = revision
         }
         else {
             value.revisions.append(revision)
         }
-        try PrivateTranscriptFile.write(
-            try JSONEncoder().encode(value), name: "transcript-revisions.json", at: directory)
+        return try JSONEncoder().encode(value)
+    }
+
+    static func preserve(_ meeting: Meeting, at directory: URL) throws {
+        guard let bytes = try preserving(meeting, at: directory) else { return }
+        try PrivateTranscriptFile.write(bytes, name: "transcript-revisions.json", at: directory)
     }
     static func current(_ meeting: Meeting) -> TranscriptRevision {
         TranscriptRevision(
@@ -135,7 +149,19 @@ struct TranscriptRevisions: Codable {
 }
 
 enum PrivateTranscriptFile {
-    static func write(_ data: Data, name: String, at directory: URL) throws {
+    static func validatePath(name: String, at directory: URL) throws {
+        guard !name.isEmpty, name != ".", name != "..", URL(fileURLWithPath: name).lastPathComponent == name,
+            !name.contains("/"), !name.contains("\\")
+        else { throw MeetingError.message("The private transcript filename is invalid.") }
+        for url in [directory, directory.appendingPathComponent(name)] {
+            guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil else {
+                throw MeetingError.message("Private speaker files can’t use symbolic links.")
+            }
+        }
+    }
+
+    static func write(_ data: Data, name: String, at directory: URL, recordEvent: Bool = true) throws {
+        try validatePath(name: name, at: directory)
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
@@ -157,7 +183,7 @@ enum PrivateTranscriptFile {
         else {
             try FileManager.default.moveItem(at: temporary, to: target)
         }
-        DataEventJournal.recordSavedFile(target, previous: previous, directory: directory)
+        if recordEvent { DataEventJournal.recordSavedFile(target, previous: previous, directory: directory) }
     }
 }
 

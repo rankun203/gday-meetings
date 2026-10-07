@@ -99,7 +99,9 @@ struct MeetingSpeakersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let meeting {
-                let speakers = meeting.speakers.filter { $0.canAssignPerson || $0.personID != nil }
+                let speakers = meeting.speakers.filter {
+                    $0.canReviewVoice
+                }
                 let slots = MeetingSpeakerColors.slots(for: meeting.speakers)
                 ForEach(speakers) { speaker in
                     speakerRow(speaker, slots: slots)

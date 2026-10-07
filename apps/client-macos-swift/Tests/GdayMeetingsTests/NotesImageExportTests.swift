@@ -17,6 +17,46 @@ import Testing
         return (root, Meeting(title: "Board meeting", notes: notes))
     }
 
+    @Test func exportsExcludeSpeakerEvidenceAndVoiceFingerprints() throws {
+        let (root, original) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = original
+        let person = UUID()
+        meeting.speakers = [
+            .init(
+                label: "speaker_01", track: "microphone", providerName: "Synthetic",
+                voiceScope: "private-scope", embedding: [1, 0],
+                voiceEmbedding: .init(type: .community1, values: [1] + [Double](repeating: 0, count: 255)),
+                personID: person, voiceSampleRevision: "private-revision", voiceReviewExampleID: UUID())
+        ]
+        let privateFiles = [
+            SpeakerEvidenceStore.fileName, SpeakerEvidenceInputReceipt.fileName,
+            "speaker-consolidation-synthetic.json",
+        ]
+        for name in privateFiles {
+            try Data("private-evidence-marker".utf8).write(to: root.appendingPathComponent(name))
+        }
+        let portable = MeetingVoicePrivacy.removingFingerprints(from: meeting)
+        #expect(portable.speakers.first?.personID == person)
+        #expect(portable.speakers.first?.label == "speaker_01")
+        #expect(portable.speakers.first?.voiceEmbedding == nil)
+        #expect(portable.speakers.first?.embedding == nil)
+        #expect(portable.speakers.first?.voiceReviewExampleID == nil)
+        let json = root.appendingPathComponent("portable.json")
+        try MeetingExport.write(meeting, directory: root, to: json)
+        let text = try String(contentsOf: json, encoding: .utf8)
+        #expect(!text.contains("private-scope"))
+        #expect(!text.contains("private-revision"))
+        #expect(!text.contains("voiceEmbedding"))
+        #expect(!text.contains("private-evidence-marker"))
+        let bundle = root.appendingPathComponent("portable.textbundle")
+        try MeetingExport.write(meeting, directory: root, to: bundle)
+        let paths = try FileManager.default.subpathsOfDirectory(atPath: bundle.path)
+        #expect(privateFiles.allSatisfy { !paths.contains($0) })
+        #expect(
+            paths.sorted() == ["assets", "assets/display.png", "assets/original.png", "info.json", "text.markdown"])
+    }
+
     @Test func markdownAndTextBundleIncludeOriginalAndDisplayFiles() throws {
         let (root, meeting) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

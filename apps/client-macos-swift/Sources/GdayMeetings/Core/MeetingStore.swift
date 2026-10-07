@@ -471,7 +471,10 @@ final class MeetingStore: ObservableObject {
         return await enqueueCanonical { await self.performCanonicalSave(personMerge: personMerge) }
     }
 
-    private func performCanonicalSave(personMerge: PersonMerge? = nil) async -> Bool {
+    private func performCanonicalSave(
+        personMerge: PersonMerge? = nil, artifacts: [CanonicalMeetingArtifact] = [],
+        validateInputs: (@Sendable () throws -> Void)? = nil
+    ) async -> Bool {
         guard !canonicalRecoveryRequired else { return false }
         for index in meetings.indices {
             let previous = lastSavedLibrary.meetings.first { $0.id == meetings[index].id }
@@ -500,7 +503,8 @@ final class MeetingStore: ObservableObject {
             let command = CanonicalLibraryWrite(
                 current: captured, previous: baseline, directory: dataDirectory,
                 recordingID: recordingID, personMerge: personMerge, index: libraryIndex,
-                indexIsBuilding: libraryDataStatus.isBuilding, voice: voice)
+                indexIsBuilding: libraryDataStatus.isBuilding, voice: voice,
+                artifacts: artifacts, validateInputs: validateInputs)
             let hook = canonicalWriteHook
             result = await Task.detached(priority: .utility) {
                 do { try hook?() }
@@ -811,6 +815,49 @@ final class MeetingStore: ObservableObject {
         meetings[index] = meeting
         return await save()
     }
+    func hasCommittedTaskReceipt(_ task: ManagedTaskRecord) -> Bool {
+        lastSavedLibrary.meetings.first { $0.id == task.meetingID }?
+            .completedTaskIDs[task.kind.rawValue] == task.id
+    }
+
+    /// Serialize prepared speaker publication with ordinary meeting/voice changes.
+    /// The existing canonical writer rolls back files and in-memory state together.
+    func commitSpeakerConsolidation(
+        expected: Meeting, updated: Meeting, examples: [VoiceExample], artifacts: [CanonicalMeetingArtifact],
+        validateInputs: @escaping @Sendable () throws -> Void
+    ) async -> Bool {
+        guard libraryWritable, !Task.isCancelled else { return false }
+        return await enqueueCanonical { [self] in
+            guard libraryWritable, !deletingMeetingIDs.contains(expected.id),
+                let index = meetings.firstIndex(where: { $0.id == expected.id })
+            else { return false }
+            let current = meetings[index]
+            guard current.audioFiles == expected.audioFiles, current.transcriptSource == expected.transcriptSource,
+                current.transcript == expected.transcript, current.speakers == expected.speakers
+            else {
+                errorMessage =
+                    "The meeting changed while speaker labeling was running. Run it again for the current transcript."
+                return false
+            }
+            // Review may have changed while this command waited for another save.
+            let reviewed = voiceLibrary.applyingDecisions(to: updated)
+            guard voiceLibrary.upsert(examples, staged: true) else {
+                errorMessage = voiceLibrary.errorMessage
+                return false
+            }
+            // Preserve unrelated edits made while this command waited in the queue.
+            var next = current
+            next.transcript = reviewed.transcript
+            next.replaceSpeakers(reviewed.speakers)
+            next.speakerLabelSource = updated.speakerLabelSource
+            next.completedTaskIDs[BackgroundJob.Kind.diarization.rawValue] =
+                updated.completedTaskIDs[BackgroundJob.Kind.diarization.rawValue]
+            meetings[index] = next
+            invalidateExternalMeetingReloads(ids: [expected.id])
+            return await performCanonicalSave(artifacts: artifacts, validateInputs: validateInputs)
+        }
+    }
+
     @discardableResult func deleteMeeting(id: UUID) async -> Bool {
         await voiceLibrary.awaitLoaded()
         guard canSave else { return false }
@@ -1235,6 +1282,18 @@ final class MeetingStore: ObservableObject {
                 errorMessage =
                     "Couldn’t convert the recording to \(activeRecordingFormat.rawValue.uppercased()). The original WAV audio is kept in this meeting. \(error.localizedDescription)"
                 stopFailed = true
+            }
+        }
+        if !stopFailed, liveTranscript.speakerEvidenceComplete, let saved = meeting(id: id) {
+            let folder = directory(for: id)
+            let files = audioURLs(for: saved)
+            do {
+                try await Task.detached(priority: .utility) {
+                    try SpeakerEvidenceInputReceipt.seal(directory: folder, files: files)
+                }.value
+            }
+            catch {
+                errorMessage = "Couldn’t prepare speaker consolidation. Use Label Speakers to analyze saved audio."
             }
         }
         let finalizedLive = liveTranscript.draft.flatMap { $0.meetingID == id ? $0 : nil }

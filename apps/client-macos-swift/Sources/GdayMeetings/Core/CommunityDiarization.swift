@@ -9,6 +9,12 @@ struct LocalSpeakerRange: Codable, Equatable, Sendable {
     var end: Double
 }
 
+struct UnresolvedSpeakerRange: Codable, Equatable, Sendable {
+    var track: String
+    var start: Double
+    var end: Double
+}
+
 struct LocalDiarizationResult: Codable, Sendable {
     var version = 1
     var id = UUID()
@@ -17,6 +23,9 @@ struct LocalDiarizationResult: Codable, Sendable {
     var ranges: [LocalSpeakerRange]
     var speakers: [MeetingSpeaker]
     var trackSources: [String: String] = [:]
+    var detail: String?
+    var providerName: String?
+    var unresolvedRanges: [UnresolvedSpeakerRange]?
 }
 
 enum LocalDiarizationInputPolicy {
@@ -222,6 +231,24 @@ enum LocalDiarizationAssignment {
 
 extension MeetingStore {
     func scheduleAutomaticSpeakerLabeling(id: UUID) async {
+        let folder = directory(for: id)
+        let files = meeting(id: id).map { audioURLs(for: $0) } ?? []
+        let retained: Bool
+        if settings.labelRecordedSpeakers {
+            retained = await Task.detached(priority: .utility) {
+                do {
+                    return try SpeakerEvidenceInputReceipt.hasConsolidationEvidence(directory: folder, files: files)
+                }
+                catch { return false }
+            }.value
+        }
+        else {
+            retained = false
+        }
+        if retained, settings.labelRecordedSpeakers {
+            _ = await queueSpeakerConsolidation(id: id, automatically: true)
+            return
+        }
         await voiceLibrary.awaitLoaded()
         if settings.recognizeSpeakers, let meeting = meeting(id: id) {
             _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: id))
@@ -232,7 +259,7 @@ extension MeetingStore {
                 $0.id == settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
             })
         else { return }
-        Task { await diarizeLocally(id: id) }
+        _ = await queueSpeakerLabeling(id: id, automatically: true)
     }
 
     func diarizeLocally(id: UUID) async {

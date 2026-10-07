@@ -28,9 +28,17 @@ extension MeetingStore {
         }
     }
 
-    @discardableResult func queueSpeakerLabeling(id: UUID, providerID: UUID? = nil) async -> UUID? {
+    @discardableResult func queueSpeakerLabeling(
+        id: UUID, providerID: UUID? = nil, automatically: Bool = false
+    ) async -> UUID? {
         await enqueueCommand(kind: .diarization, meetingID: id) {
-            await self.queueSpeakerLabelingCommand(id: id, providerID: providerID)
+            await self.queueSpeakerLabelingCommand(id: id, providerID: providerID, automatically: automatically)
+        }
+    }
+
+    @discardableResult func queueSpeakerConsolidation(id: UUID, automatically: Bool = false) async -> UUID? {
+        await enqueueCommand(kind: .diarization, meetingID: id) {
+            await self.queueSpeakerConsolidationCommand(id: id, automatically: automatically)
         }
     }
 

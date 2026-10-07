@@ -219,7 +219,8 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func upsert(_ incoming: [VoiceExample]) -> Bool {
+    func upsert(_ incoming: [VoiceExample], staged: Bool = false) -> Bool {
+        if staged, !admitVoiceWrite() { return false }
         for value in incoming where !value.embeddings.isEmpty {
             if document.examples.contains(where: { $0.id == value.id }), hydratedExample(id: value.id) == nil {
                 return false
@@ -239,6 +240,11 @@ final class VoiceLibraryStore: ObservableObject {
             else {
                 next.examples.append(value)
             }
+        }
+        if staged {
+            // Even an unchanged retry reserves voice writes until meeting publication finishes.
+            pendingDocument = next
+            return true
         }
         guard next.examples != document.examples else { return true }
         return commit(next)
@@ -396,13 +402,26 @@ final class VoiceLibraryStore: ObservableObject {
         defer { releaseRepresentations() }
         return people.map { person in
             var value = person
-            value.voiceSamples = examples.filter {
+            let confirmed = examples.filter {
                 $0.personID == person.id && $0.review == .confirmed && !$0.excluded
                     && !hasConflictingReview($0)
-            }.flatMap { example in
+            }
+            let evidence = confirmed.flatMap { example in
                 (hydratedExample(id: example.id)?.voiceEmbeddings ?? []).filter(\.isValid).map {
-                    PersonVoiceSample(meetingID: example.meetingID, speakerID: example.id, voiceEmbedding: $0)
+                    SpeakerEvidenceSample(
+                        id: example.id.uuidString, source: example.source,
+                        localSpeakerID: example.groupID.uuidString,
+                        start: example.start ?? 0, end: example.end ?? 0, embedding: $0)
                 }
+            }
+            let selected = Dictionary(grouping: evidence, by: \.model).values.flatMap {
+                VoiceProfileSelection.select($0, limit: 12)
+            }.sorted { $0.id < $1.id }
+            let byID = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.id.uuidString, $0) })
+            value.voiceSamples = selected.compactMap { sample in
+                guard let example = byID[sample.id] else { return nil }
+                return PersonVoiceSample(
+                    meetingID: example.meetingID, speakerID: example.id, voiceEmbedding: sample.embedding)
             }
             return value
         }
@@ -772,8 +791,15 @@ final class VoiceLibraryStore: ObservableObject {
             persistence?.adopt(state)
         }
         if committed {
+            let changedRepresentations = commit.next.examples.contains { value in
+                guard let index = exampleIndices[value.id] else { return !value.embeddings.isEmpty }
+                return commit.previous.examples[index].embeddings != value.embeddings
+            }
             document = commit.next
+            if changedRepresentations { representationsRevision += 1 }
             publish()
+            hydratedIDs.formUnion(document.examples.filter { !$0.embeddings.isEmpty }.map(\.id))
+            releaseRepresentations()
         }
     }
 
@@ -856,6 +882,12 @@ final class VoiceLibraryStore: ObservableObject {
             }
             guard let first = relevant.first else { continue }
             let people = Set(relevant.map { $0.review == .confirmed ? $0.personID : nil })
+            // Reviewing examples during a whole-label assignment confirms that
+            // same decision; it does not create a distinct voice for each passage.
+            // Conflicting or different exact-time reviews still need a projection.
+            if speaker.manuallyAssigned == true, people.count == 1, people.first! == speaker.personID {
+                continue
+            }
             var assigned = speaker
             assigned.id = VoiceProjectionOrigin.identity(exampleID: first.id, segmentID: row.id)
             // Saving allocates colors for distinct projected voices. Preserve

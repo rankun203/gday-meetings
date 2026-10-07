@@ -25,6 +25,7 @@ struct MeetingTranscriptView: View {
     @ViewState private var showsLiveText = false
     @ViewState private var labelingHistory: SpeakerLabelingHistory?
     @ViewState private var showsLabelingHistory = false
+    @ViewState private var hasSpeakerEvidence = false
 
     private var historyReadKey: TranscriptHistoryReadKey {
         .init(
@@ -153,7 +154,10 @@ struct MeetingTranscriptView: View {
                             return AnyView(Text("Speaker is unavailable."))
                         }
                     ).id(meetingID)
-                    if !usesCheckpoint && meeting.speakers.contains(where: { $0.canAssignPerson || $0.personID != nil })
+                    if !usesCheckpoint
+                        && meeting.speakers.contains(where: {
+                            $0.canReviewVoice
+                        })
                     {
                         DisclosureGroup("Speakers") {
                             ScrollView { MeetingSpeakersView(meetingID: meetingID) }.frame(maxHeight: 240)
@@ -162,7 +166,10 @@ struct MeetingTranscriptView: View {
                     }
                 }
             }
-            .task(id: historyReadKey) { await loadHistory() }
+            .task(id: historyReadKey) {
+                await loadHistory()
+                await loadSpeakerEvidenceAvailability()
+            }
             .task(id: labelingHistoryKey) { await loadLabelingHistory() }
             .onChange(of: meeting.transcript) { _, _ in
                 refreshHistoryChoices()
@@ -181,6 +188,30 @@ struct MeetingTranscriptView: View {
             Button("Cancel Speaker Labeling") { Task { await store.cancelLocalDiarization(id: meetingID) } }
                 .help(labelingHistoryHelp)
         }
+        else if hasSpeakerEvidence {
+            Menu("Label Speakers") {
+                Button("Consolidate Speakers") {
+                    Task {
+                        if usesCheckpoint, let draft, !(await store.adoptLiveTranscript(draft)) { return }
+                        _ = await store.queueSpeakerConsolidation(id: meetingID)
+                    }
+                }
+                Button("Analyze Recording") {
+                    Task {
+                        if usesCheckpoint, let draft, !(await store.adoptLiveTranscript(draft)) { return }
+                        await store.diarizeLocally(id: meetingID)
+                    }
+                }
+                .disabled(
+                    localModels.state(for: .community1).phase != .ready
+                        || !store.settings.serviceProviders.contains(where: {
+                            $0.id == store.settings.diarizationProviderID
+                                && $0.kind == .speakerLabeling && $0.supports(.diarization)
+                        }))
+            }
+            .disabled(!canRestore || displayRows.isEmpty)
+            .help("Consolidate recorded voice samples, or analyze the recording again.")
+        }
         else if store.settings.serviceProviders.contains(where: {
             $0.id == store.settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
         }) {
@@ -197,6 +228,21 @@ struct MeetingTranscriptView: View {
             )
             .help(labelingHistoryHelp)
         }
+    }
+
+    private func loadSpeakerEvidenceAvailability() async {
+        hasSpeakerEvidence = false
+        guard let meeting else { return }
+        let folder = store.directory(for: meetingID)
+        let files = store.audioURLs(for: meeting)
+        let available = await Task.detached(priority: .utility) {
+            do {
+                return try SpeakerEvidenceInputReceipt.hasConsolidationEvidence(directory: folder, files: files)
+            }
+            catch { return false }
+        }.value
+        guard !Task.isCancelled else { return }
+        hasSpeakerEvidence = available
     }
 
     private var labelingHistoryButton: some View {

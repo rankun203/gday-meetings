@@ -67,7 +67,9 @@ extension ManagedTaskRecord {
         }
     }
     var needsAttention: Bool { attentionReason != nil }
-    var operationTitle: String { TaskDescription.operation(kind) }
+    var operationTitle: String {
+        consolidatesRetainedVoiceEvidence == true ? "Speaker Consolidation" : TaskDescription.operation(kind)
+    }
     var isMaintenance: Bool { kind == .searchIndex && isAutomatic }
     mutating func recordTransition(from previous: Self?, now: Date = Date()) {
         if let previous { timeline = previous.timeline ?? timeline }

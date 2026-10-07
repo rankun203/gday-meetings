@@ -290,6 +290,44 @@ struct VoiceLibraryTests {
         #expect(coldFolderLibrary.applyingDecisions(to: folderDecoded) == folderDecoded)
     }
 
+    @Test(arguments: [false, true])
+    func matchingExcerptReviewsPreserveWholeLabelIdentity(cleared: Bool) throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let first = try example(root: directory, start: 0, end: 3)
+        let second = try example(
+            root: directory, meetingID: first.meetingID,
+            speakerID: first.speakerID, start: 4, end: 7)
+        let person: UUID? = cleared ? nil : UUID()
+        var meeting = Meeting(id: first.meetingID, audioFiles: ["system.wav"])
+        let speaker = MeetingSpeaker(
+            id: first.speakerID, label: "Speaker 1", track: "system", providerName: "Synthetic")
+        meeting.speakers = [speaker]
+        meeting.transcript = [
+            .init(start: 0, end: 3, speaker: speaker.label, text: "First synthetic passage.", speakerID: speaker.id),
+            .init(start: 4, end: 7, speaker: speaker.label, text: "Second synthetic passage.", speakerID: speaker.id),
+        ]
+        #expect(library.upsert([first, second]))
+        #expect(library.assign(meetingID: meeting.id, speakerID: speaker.id, personID: person))
+        let projected = library.applyingDecisions(to: meeting)
+        #expect(projected.speakers.count == 1)
+        #expect(projected.speakers[0].id == speaker.id)
+        #expect(projected.speakers[0].personID == person)
+        #expect(projected.speakers[0].voiceReviewOrigin == nil)
+        #expect(projected.transcript.allSatisfy { $0.speakerID == speaker.id })
+        #expect(library.applyingDecisions(to: projected) == projected)
+        // An explicit conflicting excerpt remains narrower than the whole label.
+        let other = UUID()
+        #expect(library.confirm(ids: [second.id], personID: other))
+        let conflicted = library.applyingDecisions(to: projected)
+        #expect(conflicted.transcript[0].speakerID == speaker.id)
+        let exactID = try #require(conflicted.transcript[1].speakerID)
+        #expect(exactID != speaker.id)
+        #expect(conflicted.speakers.first { $0.id == exactID }?.personID == other)
+        #expect(conflicted.speakers.count == 2)
+    }
+
     @Test func exactReviewProjectionIsIdempotentAndUndoRestoresSpeaker() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }

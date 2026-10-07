@@ -14,6 +14,16 @@ private actor SpeakerEventCollector {
 }
 
 struct LocalLiveDiarizationTests {
+    @Test func cancelledRuntimeRejectsReplayAndFinishesWithoutModels() async {
+        let runtime = LocalLiveDiarization()
+        await runtime.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await runtime.replay(samples: [Float](repeating: 0, count: 320), source: .microphone, start: 0)
+        }
+        #expect(!(await runtime.finish()))
+        await runtime.cancel()
+    }
+
     /// Explicit local models and synthetic speech only. Never downloads assets.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_NEMOTRON_LIVE_TEST"] == "1"))
     @MainActor func pacedSyntheticTwoSourceRuntime() async throws {

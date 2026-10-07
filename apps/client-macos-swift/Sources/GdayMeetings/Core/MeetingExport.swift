@@ -37,6 +37,23 @@ extension MeetingStore {
     }
 }
 
+/// Portable meeting content includes speaker labels, not reusable voice fingerprints.
+enum MeetingVoicePrivacy {
+    static func removingFingerprints(from meeting: Meeting) -> Meeting {
+        var result = meeting
+        for index in result.speakers.indices {
+            result.speakers[index].embedding = nil
+            result.speakers[index].voiceEmbedding = nil
+            result.speakers[index].voiceScope = nil
+            result.speakers[index].voiceSampleRange = nil
+            result.speakers[index].voiceSampleRevision = nil
+            result.speakers[index].voiceReviewOrigin = nil
+            result.speakers[index].voiceReviewExampleID = nil
+        }
+        return result
+    }
+}
+
 enum MeetingExport {
     static func markdown(_ meeting: Meeting, notes: String) -> String {
         let transcript = meeting.transcript.map {
@@ -49,6 +66,7 @@ enum MeetingExport {
     }
 
     static func write(_ meeting: Meeting, directory: URL, to url: URL) throws {
+        let meeting = MeetingVoicePrivacy.removingFingerprints(from: meeting)
         let started = Date()
         let replacing = FileManager.default.fileExists(atPath: url.path)
         try NotesImageStore.ensurePreviews(in: meeting.notes, directory: directory)

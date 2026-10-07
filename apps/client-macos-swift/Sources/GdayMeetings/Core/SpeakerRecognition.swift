@@ -26,6 +26,7 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     var colorSlot: Int?
 
     var canAssignPerson: Bool { sourcePlaceholder == nil }
+    var canReviewVoice: Bool { canAssignPerson && resolvedVoiceEmbedding?.isValid == true }
     var displayLabel: String {
         label.isEmpty ? "" : sourcePlaceholder?.shortLabel ?? SpeakerLabelPresentation.display(label)
     }
@@ -77,15 +78,16 @@ enum SpeakerRecognition {
             (-1...1).contains(threshold), minimumMargin >= 0
         else { return nil }
         let scores: [(UUID, Double)] = people.compactMap { person in
-            let samples = person.voiceSamples.map(\.resolvedVoiceEmbedding).filter {
-                $0.type == embedding.type && $0.isValid
+            let candidates = person.voiceSamples.compactMap { sample -> SpeakerEvidenceSample? in
+                let value = sample.resolvedVoiceEmbedding
+                guard value.type == embedding.type, value.isValid else { return nil }
+                return .init(
+                    id: sample.meetingID.uuidString + ":" + sample.speakerID.uuidString,
+                    source: "reviewed", localSpeakerID: sample.speakerID.uuidString,
+                    start: 0, end: 0, embedding: value)
             }
-            guard !samples.isEmpty else { return nil }
-            var centroid = Array(repeating: 0.0, count: embedding.values.count)
-            for sample in samples {
-                for i in centroid.indices { centroid[i] += sample.values[i] / Double(samples.count) }
-            }
-            guard let score = similarity(embedding.values, centroid) else { return nil }
+            let samples = candidates.count > 12 ? VoiceProfileSelection.select(candidates, limit: 12) : candidates
+            guard let score = samples.compactMap({ similarity(embedding.values, $0.vector) }).max() else { return nil }
             return (person.id, score)
         }.sorted { $0.1 == $1.1 ? $0.0.uuidString < $1.0.uuidString : $0.1 > $1.1 }
         guard let best = scores.first else { return nil }
@@ -124,18 +126,15 @@ enum SpeakerRecognition {
             if $0.speaker != $1.speaker { return $0.speaker < $1.speaker }
             return $0.person.uuidString < $1.person.uuidString
         }
-        var claimed: [String: Set<UUID>] = [:]
         var assigned = Set<Int>()
         for match in scores {
-            let track = speakers[match.speaker].track
-            guard !assigned.contains(match.speaker), !(claimed[track]?.contains(match.person) ?? false) else {
+            guard !assigned.contains(match.speaker) else {
                 continue
             }
             speakers[match.speaker].personID = match.person
             speakers[match.speaker].confidence = match.score
             speakers[match.speaker].confirmed = true
             assigned.insert(match.speaker)
-            claimed[track, default: []].insert(match.person)
         }
     }
 

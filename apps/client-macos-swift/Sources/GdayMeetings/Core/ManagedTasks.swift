@@ -30,6 +30,7 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var attemptKey: String?
     var remoteJobID: String?
     var speakerLabelingResultID: UUID?
+    var consolidatesRetainedVoiceEvidence: Bool?
     var submissionUncertain = false
     var hasSavedResult = false
     var providerFailed = false
@@ -97,7 +98,9 @@ extension MeetingStore {
             automatically: automatically, summaryInstructions: instructions)
     }
 
-    @discardableResult func queueSpeakerLabelingCommand(id: UUID, providerID: UUID? = nil) async -> UUID? {
+    @discardableResult func queueSpeakerLabelingCommand(
+        id: UUID, providerID: UUID? = nil, automatically: Bool = false
+    ) async -> UUID? {
         let selectedID = settings.resolvedSpeakerProviderID(providerID ?? settings.diarizationProviderID)
         guard libraryWritable, await ensureMeetingLoaded(id: id), recordingID != id,
             !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
@@ -109,7 +112,18 @@ extension MeetingStore {
             errorMessage = "Choose the Speaker Labeling provider in Settings before labeling a saved transcript."
             return nil
         }
-        return await enqueueManagedTask(kind: .diarization, meeting: meeting, providerID: selectedID)
+        return await enqueueManagedTask(
+            kind: .diarization, meeting: meeting, providerID: selectedID, automatically: automatically)
+    }
+
+    @discardableResult func queueSpeakerConsolidationCommand(id: UUID, automatically: Bool = false) async -> UUID? {
+        guard libraryWritable, await ensureMeetingLoaded(id: id), recordingID != id,
+            !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
+            let meeting = meeting(id: id), meeting.transcriptionAttempt == nil
+        else { return nil }
+        return await enqueueManagedTask(
+            kind: .diarization, meeting: meeting, providerID: ThisMacProvider.id,
+            automatically: automatically, consolidatesRetainedVoiceEvidence: true)
     }
 
     @discardableResult func queueSearchIndexCommand(id: UUID, revision: String? = nil, force: Bool = false) async
@@ -146,7 +160,8 @@ extension MeetingStore {
 
     private func enqueueManagedTask(
         kind: BackgroundJob.Kind, meeting: Meeting, providerID: UUID?, automatically: Bool = false,
-        summaryInstructions: String? = nil, searchIndexRevision: String? = nil, retryStopped: Bool = false
+        summaryInstructions: String? = nil, searchIndexRevision: String? = nil, retryStopped: Bool = false,
+        consolidatesRetainedVoiceEvidence: Bool = false
     ) async -> UUID? {
         let key = BackgroundJob.Key(kind: kind, scope: .meeting(meeting.id))
         guard !isChangingLibrary, !isPreparingToQuit, !managedTasksLoading,
@@ -181,11 +196,13 @@ extension MeetingStore {
             return nil
         }
         if task.recovery == .restartRequired || task.restartRequested { return nil }
+        if kind == .diarization, automatically, task.userStopped { return nil }
         if kind == .searchIndex {
             if task.userStopped, task.searchIndexRevision == searchIndexRevision, !retryStopped { return nil }
             task.searchIndexRevision = searchIndexRevision
         }
         task.providerID = providerID
+        task.consolidatesRetainedVoiceEvidence = consolidatesRetainedVoiceEvidence ? true : nil
         if kind == .summary {
             let instructions = summaryInstructions?.trimmingCharacters(in: .whitespacesAndNewlines)
             task.summaryInstructions = instructions?.isEmpty == false ? instructions : nil
@@ -371,6 +388,7 @@ extension MeetingStore {
                     cacheManagedTask(task)
                     if managedTaskStopRequests.contains(id)
                         || (task.kind == .summary && task.isAutomatic && !settings.autoSummarize)
+                        || (task.kind == .diarization && task.isAutomatic && !settings.labelRecordedSpeakers)
                     {
                         await cancelManagedTaskCommand(id: id)
                         // A rejected durable transition must not retry the same head forever.
@@ -443,7 +461,12 @@ extension MeetingStore {
             case .searchIndex:
                 try await performSearchIndex(id: task.meetingID, providerID: task.providerID)
             case .diarization:
-                try await performLocalDiarization(id: task.meetingID, providerID: task.providerID)
+                if task.consolidatesRetainedVoiceEvidence == true {
+                    try await performSpeakerConsolidation(id: task.meetingID)
+                }
+                else {
+                    try await performLocalDiarization(id: task.meetingID, providerID: task.providerID)
+                }
             default: throw ServiceError("This task type cannot run from Tasks yet.")
             }
             try Task.checkCancellation()
@@ -453,7 +476,12 @@ extension MeetingStore {
         }
         catch {
             if Task.isCancelled || error is CancellationError {
-                if task.kind == .searchIndex,
+                let hasReceipt = hasCommittedTaskReceipt(task)
+                if hasReceipt {
+                    // Cancellation cannot undo a result already committed with its receipt.
+                    await completeManagedTask(id, state: .completed, recovery: .none)
+                }
+                else if task.kind == .searchIndex,
                     managedMaintenancePauseRequests.contains(id),
                     !managedTaskStopRequests.contains(id)
                 {
@@ -462,13 +490,10 @@ extension MeetingStore {
                         message: "Waiting for recording to finish")
                 }
                 else if isPreparingToQuit && !managedTaskStopRequests.contains(id) {
-                    let hasReceipt =
-                        meetings.first(where: { $0.id == task.meetingID })?
-                        .completedTaskIDs[task.kind.rawValue] == id
                     await completeManagedTask(
-                        id, state: hasReceipt ? .completed : .failed,
-                        recovery: hasReceipt ? .none : task.kind == .transcription ? .automatic : .manual,
-                        message: hasReceipt ? nil : "Interrupted when the app closed.")
+                        id, state: .failed,
+                        recovery: task.kind == .transcription ? .automatic : .manual,
+                        message: "Interrupted when the app closed.")
                 }
                 else {
                     await completeManagedTask(
@@ -591,10 +616,11 @@ extension MeetingStore {
         if task.kind == .diarization {
             return recordingID != task.meetingID && !isJobRunning(.transcription, .meeting(task.meetingID))
                 && !isJobRunning(.importAudio, .meeting(task.meetingID))
-                && settings.serviceProviders.contains {
-                    $0.id == settings.resolvedSpeakerProviderID(task.providerID) && $0.kind == .speakerLabeling
-                        && $0.supports(.diarization)
-                }
+                && (task.consolidatesRetainedVoiceEvidence == true
+                    || settings.serviceProviders.contains {
+                        $0.id == settings.resolvedSpeakerProviderID(task.providerID) && $0.kind == .speakerLabeling
+                            && $0.supports(.diarization)
+                    })
         }
         if let current = meetings.first(where: { $0.id == task.meetingID })?.transcriptionAttempt {
             guard current.idempotencyKey == task.attemptKey, current.failure == nil, current.result == nil,
@@ -630,7 +656,12 @@ extension MeetingStore {
             _ = await queueSearchIndexCommand(id: task.meetingID, force: true)
         }
         else if task.kind == .diarization {
-            _ = await queueSpeakerLabelingCommand(id: task.meetingID, providerID: task.providerID)
+            if task.consolidatesRetainedVoiceEvidence == true {
+                _ = await queueSpeakerConsolidationCommand(id: task.meetingID)
+            }
+            else {
+                _ = await queueSpeakerLabelingCommand(id: task.meetingID, providerID: task.providerID)
+            }
         }
         else {
             _ = await queueSummaryCommand(
@@ -916,7 +947,7 @@ extension MeetingStore {
                     task.id, state: .cancelled, recovery: .manual, message: "Stopped waiting on this Mac.")
                 continue
             }
-            if task.kind == .diarization {
+            if task.kind == .diarization, task.state != .queued {
                 await finishManagedTask(
                     task.id, state: .failed, recovery: .manual,
                     message: "Speaker labeling was interrupted. Retry starts analysis again.")

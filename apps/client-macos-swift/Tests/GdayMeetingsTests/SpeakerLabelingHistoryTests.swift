@@ -28,6 +28,27 @@ struct SpeakerLabelingHistoryTests {
         #expect(history.warning == nil)
     }
 
+    @Test func completedHistoryShowsResultCoverageInsteadOfStaleProgress() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var result = LocalDiarizationResult(modelRevision: "synthetic", ranges: [], speakers: [])
+        result.detail = "2 voice groups. 3 seconds of speaker activity need review."
+        try JSONEncoder().encode(result).write(
+            to: directory.appendingPathComponent("speaker-labels-\(result.id).json"))
+        var task = ManagedTaskRecord(kind: .diarization, meetingID: UUID(), meetingTitle: "Synthetic meeting")
+        task.state = .completed
+        task.progress = "Consolidating speakers…"
+        let unbound = await SpeakerLabelingHistory.load(directory: directory, tasks: [task])
+        #expect(unbound.entries.first(where: { $0.taskID == task.id })?.detail == nil)
+        task.speakerLabelingResultID = result.id
+        let current = await SpeakerLabelingHistory.load(
+            directory: directory, tasks: [task], currentLabelingResultID: result.id)
+        #expect(current.entries.count == 1)
+        #expect(current.entries.first?.status == "Current labels")
+        #expect(current.entries.first?.detail == result.detail)
+    }
+
     @Test func ambiguousOldTaskAndSavedAnalysisRemainSeparate() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

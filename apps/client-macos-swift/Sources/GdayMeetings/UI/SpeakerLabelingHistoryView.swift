@@ -61,9 +61,7 @@ struct SpeakerLabelingHistoryView: View {
                                     }
                                     Text(providerDescription(entry))
                                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                                    if ["Failed", "Cancelled", "Running"].contains(entry.status),
-                                        let detail = entry.detail, !detail.isEmpty
-                                    {
+                                    if let detail = entry.detail, !detail.isEmpty {
                                         Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                     }
                                 }.frame(maxWidth: .infinity, alignment: .leading)

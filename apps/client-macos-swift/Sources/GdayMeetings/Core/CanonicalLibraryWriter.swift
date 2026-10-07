@@ -1,5 +1,13 @@
 import Foundation
 
+struct CanonicalMeetingArtifact: Sendable {
+    var meetingID: UUID
+    var name: String
+    var data: Data
+    /// Exact prior bytes, including absence, protect externally edited history.
+    var previous: Data?
+}
+
 /// Immutable command; only the background worker owns its transaction and voice persistence instance.
 struct CanonicalLibraryWrite: Sendable {
     var current: LibrarySnapshot
@@ -10,6 +18,8 @@ struct CanonicalLibraryWrite: Sendable {
     var index: LibraryIndex?
     var indexIsBuilding: Bool
     var voice: VoiceLibraryStore.CanonicalCommit?
+    var artifacts: [CanonicalMeetingArtifact] = []
+    var validateInputs: (@Sendable () throws -> Void)? = nil
 }
 
 struct CanonicalLibraryResult: Sendable {
@@ -43,6 +53,20 @@ enum CanonicalLibraryWriter {
         var transaction = LibraryFileTransaction(root: dataDirectory)
         var mergedEntries: [MeetingListEntry] = []
         do {
+            try input.validateInputs?()
+            for artifact in input.artifacts {
+                guard meetings.contains(where: { $0.id == artifact.meetingID }) else {
+                    throw MeetingError.message("The artifact’s meeting is unavailable.")
+                }
+                let folder = directory(for: artifact.meetingID)
+                try PrivateTranscriptFile.validatePath(name: artifact.name, at: folder)
+                let target = folder.appendingPathComponent(artifact.name)
+                let previous = FileManager.default.fileExists(atPath: target.path) ? try Data(contentsOf: target) : nil
+                guard previous == artifact.previous else {
+                    throw MeetingError.message("Speaker history changed on disk. Reload the meeting before saving.")
+                }
+                try transaction.remember(target)
+            }
             if let voice = input.voice {
                 let worker = try VoiceLibraryPersistence(directory: dataDirectory, write: voice.persistence.write)
                 worker.adopt(voice.persistence)
@@ -62,6 +86,7 @@ enum CanonicalLibraryWriter {
             func documentNames(for meeting: Meeting) -> [String] {
                 var names = ["metadata.json", "content.json", "summary.md"]
                 if writesTranscript(meeting) { names.append(TranscriptStorage.filename) }
+                names += input.artifacts.filter { $0.meetingID == meeting.id }.map(\.name)
                 return names
             }
             let dataEventBaselines = Dictionary(
@@ -147,6 +172,14 @@ enum CanonicalLibraryWriter {
                     cursor = page.last
                 }
             }
+            // Artifacts and review examples become durable with the same meeting
+            // completion receipt. A crash before commit restores all of them.
+            for artifact in input.artifacts {
+                try PrivateTranscriptFile.write(
+                    artifact.data, name: artifact.name,
+                    at: directory(for: artifact.meetingID), recordEvent: false)
+            }
+            try input.validateInputs?()
             try transaction.commit()
             do { try voiceWorker?.reloadRevision(committed: true) }
             catch {

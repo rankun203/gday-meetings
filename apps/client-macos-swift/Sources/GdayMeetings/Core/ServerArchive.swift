@@ -90,15 +90,10 @@ extension MeetingStore {
                 }
             }
             else {
-                var archivedMeeting = meeting
+                var archivedMeeting = MeetingVoicePrivacy.removingFingerprints(from: meeting)
                 archivedMeeting.transcriptionAttempt = nil
-                // Voice vectors train local recognition; archives retain labels and
-                // assignments without sending those vectors to the website.
-                for index in archivedMeeting.speakers.indices {
-                    archivedMeeting.speakers[index].embedding = nil
-                    archivedMeeting.speakers[index].voiceEmbedding = nil
-                    archivedMeeting.speakers[index].voiceScope = nil
-                }
+                // The artifact whitelist excludes local evidence, source receipts,
+                // consolidation receipts, and transcript revision files.
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
                 encoder.dateEncodingStrategy = .iso8601

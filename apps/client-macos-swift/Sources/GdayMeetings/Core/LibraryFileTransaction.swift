@@ -32,7 +32,12 @@ struct LibraryFileTransaction {
             }
             let destination = root.appendingPathComponent(entry.path)
             if let backup = entry.backup {
-                try Data(contentsOf: journal.appendingPathComponent(backup)).write(to: destination, options: .atomic)
+                let saved = journal.appendingPathComponent(backup)
+                try Data(contentsOf: saved).write(to: destination, options: .atomic)
+                if let permissions = try FileManager.default.attributesOfItem(atPath: saved.path)[.posixPermissions] {
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: permissions], ofItemAtPath: destination.path)
+                }
             }
             else if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)

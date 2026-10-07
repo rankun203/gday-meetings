@@ -79,8 +79,12 @@ final class LiveTranscriptController: ObservableObject {
     private var voiceWorker: LiveVoiceEmbeddingWorker?
     private var voiceStartup: Task<Void, Never>?
     private var voiceWork: Task<Void, Never>?
+    private var pendingVoiceWork: [UUID: Task<Void, Never>] = [:]
     private var voiceGeneration = UUID()
     private var voiceEmbeddings: [UUID: TypedVoiceEmbedding] = [:]
+    private var speakerEvidence: SpeakerEvidenceStore?
+    private(set) var speakerEvidenceComplete = false
+    private var speakerEvidenceFailed = false
     private var peopleProvider: () -> [Person] = { [] }
     private var enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)?
     private var recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)?
@@ -198,11 +202,15 @@ final class LiveTranscriptController: ObservableObject {
             }
         }
         voiceEmbeddings = [:]
+        pendingVoiceWork = [:]
         pendingFinalizations = [:]
         finalizationFailed = false
         boundaries = [:]
         self.enabled = false
         self.directory = directory
+        speakerEvidence = SpeakerEvidenceStore(directory: directory)
+        speakerEvidenceComplete = false
+        speakerEvidenceFailed = false
         self.sources = sources
         self.sink = sink
         draft = LiveTranscriptDraft(meetingID: meetingID, locale: language)
@@ -280,6 +288,7 @@ final class LiveTranscriptController: ObservableObject {
                 await runtime.cancel()
                 guard token == speakerGeneration, !Task.isCancelled else { return }
                 speakerProvider = nil
+                speakerEvidenceFailed = true
                 acceptedSpeakerGenerations.remove(token)
                 speakerAnalysisReady = false
                 refreshVoiceReadyStatus()
@@ -302,7 +311,20 @@ final class LiveTranscriptController: ObservableObject {
         speakerProvider = nil
         pendingSpeakerFinalizations[token] = Task {
             let completed = await LiveFinishRace.run(seconds: 5) { await runtime.finish() }
-            if !completed { Task { await runtime.cancel() } }
+            if !completed {
+                speakerEvidenceFailed = true
+                Task { await runtime.cancel() }
+            }
+            if let work = voiceWork {
+                let drained = await LiveFinishRace.run(seconds: 5) {
+                    await work.value
+                    return true
+                }
+                if !drained {
+                    speakerEvidenceFailed = true
+                    work.cancel()
+                }
+            }
             acceptedSpeakerGenerations.remove(token)
             closeDataEvent(token)
             pendingSpeakerFinalizations.removeValue(forKey: token)
@@ -310,10 +332,25 @@ final class LiveTranscriptController: ObservableObject {
         }
     }
 
-    private func receiveSpeakerEvent(_ event: LiveSpeakerEvent, token: UUID) {
+    private func receiveSpeakerEvent(_ event: LiveSpeakerEvent, token: UUID) async {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
         guard draft?.speakerTimeline?.accept(event) == true else { return }
+        do {
+            try await speakerEvidence?.append(
+                event.intervals.map {
+                    SpeakerEvidenceActivity(
+                        source: event.source.rawValue, localSpeakerID: $0.speakerID.uuidString,
+                        start: $0.start, end: $0.end)
+                }, window: event.continuity)
+        }
+        catch {
+            guard acceptedSpeakerGenerations.contains(token) else { return }
+            speakerEvidenceFailed = true
+            speakerAnalysisIssue = "Couldn’t save speaker evidence. Live labels remain available."
+        }
+        // A timed-out finalization may retire this generation while journal I/O yields.
+        guard acceptedSpeakerGenerations.contains(token) else { return }
         stream.accept(event)
         publishStream()
         draft?.speakerTimeline?.intervals.removeAll { $0.end < event.end - LiveTranscriptStream.maximumLabelWait }
@@ -323,16 +360,27 @@ final class LiveTranscriptController: ObservableObject {
         }
     }
 
-    private func receiveSpeakerGap(_ gap: LiveTranscriptGap, token: UUID) {
+    private func receiveSpeakerGap(_ gap: LiveTranscriptGap, token: UUID) async {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
         draft?.speakerTimeline?.gaps.append(gap)
+        do {
+            try await speakerEvidence?.appendGap(
+                source: gap.source.rawValue, start: gap.start, end: gap.end, reason: gap.reason)
+        }
+        catch {
+            guard acceptedSpeakerGenerations.contains(token) else { return }
+            speakerEvidenceFailed = true
+            speakerAnalysisIssue = "Couldn’t save speaker evidence. Live labels remain available."
+        }
+        guard acceptedSpeakerGenerations.contains(token) else { return }
         stream.accept(gap)
         publishStream()
         checkpoint()
     }
 
     private func speakerFailure(_ message: String, token: UUID) {
+        if acceptedSpeakerGenerations.contains(token) { speakerEvidenceFailed = true }
         guard token == speakerGeneration else { return }
         speakerAnalysisReady = false
         speakerLabelStatus = message
@@ -422,11 +470,29 @@ final class LiveTranscriptController: ObservableObject {
             let worker = voiceWorker, voiceWork == nil
         else { return }
         let voiceToken = voiceGeneration
+        let evidence = speakerEvidence
+        let evidenceMeetingID = draft?.meetingID
+        let workID = UUID()
         voiceWork = Task {
-            defer { if voiceGeneration == voiceToken { voiceWork = nil } }
+            defer {
+                pendingVoiceWork.removeValue(forKey: workID)
+                if voiceGeneration == voiceToken { voiceWork = nil }
+            }
             do {
-                guard let embedding = try await worker.extract(sample), !Task.isCancelled,
-                    voiceGeneration == voiceToken, acceptedSpeakerGenerations.contains(token)
+                guard let embedding = try await worker.extract(sample) else { return }
+                do {
+                    try await evidence?.append(
+                        SpeakerEvidenceSample(
+                            id: UUID().uuidString, source: sample.source.rawValue,
+                            localSpeakerID: sample.speakerID.uuidString, start: sample.start, end: sample.end,
+                            embedding: embedding, quality: 1))
+                }
+                catch {
+                    if draft?.meetingID == evidenceMeetingID { speakerEvidenceFailed = true }
+                    throw error
+                }
+                guard !Task.isCancelled, voiceGeneration == voiceToken,
+                    acceptedSpeakerGenerations.contains(token)
                 else { return }
                 voiceMatchingIssue = nil
                 voiceEmbeddings[sample.speakerID] = embedding
@@ -444,6 +510,7 @@ final class LiveTranscriptController: ObservableObject {
                 voiceMatchingIssue = speakerRecognitionStatus
             }
         }
+        if let voiceWork { pendingVoiceWork[workID] = voiceWork }
     }
 
     func seedPreview(meetingID: UUID, directory: URL, previouslyAssignedPersonID: UUID? = nil) {
@@ -605,12 +672,32 @@ final class LiveTranscriptController: ObservableObject {
         for task in Array(pendingFinalizations.values) {
             if !(await task.value) { finalizationFailed = true }
         }
+        var labelsComplete = !speakerFinishes.isEmpty
+        for task in speakerFinishes {
+            if !(await task.value) { labelsComplete = false }
+        }
         if speakerLabelsEnabled || draft?.speakerTimeline != nil {
-            var labelsComplete = !speakerFinishes.isEmpty
-            for task in speakerFinishes {
-                if !(await task.value) { labelsComplete = false }
-            }
             draft?.speakerLabelsComplete = labelsComplete && (draft?.speakerTimeline?.gaps.isEmpty ?? false)
+        }
+        // Capture has drained. Include cancelled, detached extraction tasks from
+        // earlier switches before sealing the journal or retiring the final token.
+        let remainingVoiceWork = Array(pendingVoiceWork.values)
+        let voiceDrained = await LiveFinishRace.run(seconds: 5) {
+            for work in remainingVoiceWork { await work.value }
+            return true
+        }
+        if !voiceDrained {
+            speakerEvidenceFailed = true
+            for work in remainingVoiceWork { work.cancel() }
+        }
+        do {
+            let complete = !speakerEvidenceFailed
+            try await speakerEvidence?.finish(complete: complete)
+            speakerEvidenceComplete = complete
+        }
+        catch {
+            speakerEvidenceFailed = true
+            speakerAnalysisIssue = "Couldn’t finish saving speaker evidence. Review speaker labels after recording."
         }
         acceptedSpeakerGenerations = []
         closeDataEvent(voiceGeneration)

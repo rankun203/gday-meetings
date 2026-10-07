@@ -30,6 +30,7 @@ struct LiveSpeakerEvent: Codable, Sendable {
     var start: Double
     var end: Double
     var final = false
+    var continuity: SpeakerEvidenceWindow?
 }
 
 struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
@@ -63,6 +64,13 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
             return false
         }
         let ids = Set(event.speakers.map(\.id))
+        if let continuity = event.continuity {
+            guard continuity.isValid, continuity.source == event.source.rawValue,
+                continuity.generation == event.generation.uuidString,
+                Set(continuity.localSpeakerIDs) == Set(ids.map(\.uuidString)),
+                continuity.publicationStart <= event.start, continuity.observedEnd == event.end
+            else { return false }
+        }
         guard event.speakers.allSatisfy({ $0.source == event.source && $0.generation == event.generation }),
             event.intervals.allSatisfy({
                 ids.contains($0.speakerID) && $0.start.isFinite && $0.end.isFinite

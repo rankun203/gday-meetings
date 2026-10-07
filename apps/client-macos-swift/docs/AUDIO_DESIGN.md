@@ -128,6 +128,26 @@ Server upload checkpoints preserve the exact uploaded inputs and attempt key, so
 
 ## Validation
 
+### Retained speaker evidence
+
+Live Speaker Labeling keeps each source's compact activity intervals and every successfully generated timed voice embedding in a private `speaker-evidence.jsonl` journal. Embeddings are selected from clean speech spans, not transcript lines; busy inference may skip a candidate. The journal is independent of the three playable examples shown for a speaker. It contains no audio samples. Audio remains in the recording's source tracks.
+
+Nemotron identities belong to one source and streaming generation. Three continuous seconds of accepted activity establish a channel. Eight established channels request a reset at a nearby boundary, with a five-second maximum wait. The same loaded model replays at most 45 seconds of recent audio into a fresh state. A single timestamp separates old and new published activity. A saturated replay cannot repeatedly reset until a previously recent channel leaves that horizon. Recording and transcription continue throughout this handoff.
+
+Each activity event carries explicit window provenance: source, generation, local identities, publication start, observed end, capacity time, and policy revision. Consolidation trusts continuity only before the first capacity timestamp. The capacity-to-handoff tail remains unresolved, and a saturated bootstrap cannot establish a trusted interval. Missing or unknown-policy metadata does not imply continuity.
+
+Stop drains evidence producers and binds the completed journal to finalized source-file revisions. With **Automatically Label Speakers** enabled, eligible retained evidence can drive a local **Speaker Consolidation** task. The final method treats each trusted channel as one unit, averages its corrected Community-1 v2 embeddings, and performs complete-link clustering across units. Same-source overlapping channels cannot merge. All activity inside a sampled trusted unit receives its group identity; sample gaps do not impose a fixed propagation horizon. Directly sampled, channel-inferred, and unresolved activity are reported separately. Clustering changes identity grouping, not the model's detected speech boundaries.
+
+Consolidation preserves words, times, manual decisions, and labeling history. A row must meet conservative coverage and ambiguity thresholds and must not touch unresolved activity before its identity changes. Without word timings, a row crossing the trusted boundary remains unchanged. Changed groups receive stable membership-derived identities. An unchanged one-to-one group preserves its original local UUID and label only when all its activity is resolved. People may own several groups, while routine matching selects at most twelve representative vectors per person and compatible model. The Speakers panel shows only labels with usable voice embeddings.
+
+Review examples, meeting assignments, prior transcript history, result files, and completion receipt publish through the existing canonical transaction. Version 2 consolidation receipts include the exact input receipt, configuration, and direct/inferred/unresolved audit. Input revision and history checks reject stale work; rollback and crash recovery restore the previous state. Cancellation before admission stops publication; a late cancellation cannot undo a committed result. Evidence journals and voice fingerprints remain private and are excluded from exports and website archives.
+
+**Analyze Recording** runs the existing complete saved-audio labeling pipeline when retained evidence is missing or insufficient. Old journals without explicit trusted provenance remain readable but cannot acquire that provenance from channel numbers. Automatic targeted re-analysis is not implemented. The trusted-window assumption excludes continuous live identity re-verification below capacity and does not establish that every local channel is error-free.
+
+See the [consolidation experiment](../../../experiments/speaker-consolidation/RESULTS.md) for measured reconstruction coverage, speaker errors, and limitations. Accelerated replay does not validate live capture contention or hardware routes.
+
+### Capture checks
+
 Automated checks use synthetic audio and temporary libraries. They can establish correct file formats, sample values, channels, timeline arithmetic, persistence, and HTTP contracts. They cannot establish acoustic echo cancellation quality, microphone permissions, Bluetooth behavior, or real speakerphone performance.
 
 Before claiming a route is validated, exercise the following on physical hardware:

@@ -24,7 +24,8 @@ struct SpeakerLabelingHistory: Sendable {
         let rows = tasks.filter { $0.kind == .diarization }.map { task in
             Entry(
                 id: "task-\(task.id)", date: task.createdAt, providerName: task.providerName,
-                modelRevision: nil, status: status(task.state), detail: task.errorMessage ?? task.progress,
+                modelRevision: nil, status: status(task.state),
+                detail: [.failed, .cancelled, .running].contains(task.state) ? task.errorMessage ?? task.progress : nil,
                 taskID: task.id, resultID: task.speakerLabelingResultID)
         }
         return await Task.detached(priority: .utility) {
@@ -37,6 +38,8 @@ struct SpeakerLabelingHistory: Sendable {
         var id: UUID
         var generatedAt: Date
         var modelRevision: String
+        var detail: String?
+        var providerName: String?
     }
 
     private static func read(directory: URL, rows: [Entry], currentSourceID: UUID?) -> Self {
@@ -86,16 +89,18 @@ struct SpeakerLabelingHistory: Sendable {
                 if let index = entries.firstIndex(where: { $0.resultID == receipt.id }) {
                     entries[index].resultID = receipt.id
                     entries[index].modelRevision = receipt.modelRevision
+                    if let providerName = receipt.providerName { entries[index].providerName = providerName }
+                    if let detail = receipt.detail { entries[index].detail = detail }
                     if receipt.id == currentSourceID { entries[index].status = "Current labels" }
                     continue
                 }
                 entries.append(
                     Entry(
-                        id: "result-\(receipt.id)", date: receipt.generatedAt, providerName: "Community-1",
+                        id: "result-\(receipt.id)", date: receipt.generatedAt,
+                        providerName: receipt.providerName ?? "Community-1",
                         modelRevision: receipt.modelRevision,
                         status: receipt.id == currentSourceID ? "Current labels" : "Saved analysis",
-                        detail: receipt.id == currentSourceID
-                            ? nil : "This result was saved. Its application status wasn’t recorded.",
+                        detail: receipt.detail,
                         taskID: nil, resultID: receipt.id))
             }
             catch { incomplete = true }

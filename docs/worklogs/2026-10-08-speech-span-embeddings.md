@@ -25,7 +25,7 @@ Normalization must describe real speech, not the amount of padding required by a
 - Additional tests cover preparation capability selection, old-vector round trips, incompatible matching, and older discovery jobs returning a new representation.
 - The actual corrected extractor compiled and processed four fixed recorded excerpts. Across the same pairs, the original shared-direction similarities of 0.776–0.936 became 0.069–0.507 after correction. Those four pairs establish the mechanism's effect, not speaker accuracy.
 - Re-extracted 775 retained spans without changing sample IDs, times, or activity. Independent-excerpt consolidation still failed accuracy validation after B-only recalibration; it is not a supported automatic method.
-- The integrated application passed 1,140 tests. Final release and UI validation continue with the broader speaker-pipeline work before final delivery.
+- The integrated application passed 1,149 tests, including compatibility and preparation checks. The broader [speaker-pipeline worklog](2026-10-08-speaker-consolidation.md) records final release, UI, and CI validation.
 
 # Technical debt
 
