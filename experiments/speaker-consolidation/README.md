@@ -195,3 +195,13 @@ UV_CACHE_DIR=/private/tmp/uv-speaker-consolidation uv run --no-project \
 ```
 
 The fresh replay bundle must include the corrected extractor and window collector. The same evidence is both current and original input to this wrapper; no re-extraction or fabricated provenance is needed. Scoring still retains anonymous local labels for unresolved intervals and measures acoustic timelines, not transcript publication.
+
+## Consolidation implementation equivalence
+
+Run the pinned baseline and optimized core against 192 synthetic configurations:
+
+```sh
+UV_CACHE_DIR=tmp/uv-cache uv run --no-project python experiments/speaker-consolidation/compare_implementations.py --output tmp/consolidation-equivalence
+```
+
+The runner compiles the production core and the baseline from commit `1e4d09b` together, renaming only the baseline enum. It compares complete speaker results exactly and duration audits within `1e-9` seconds. Inputs exercise ties, overlapping activity, duplicate activity, sample overlap with activity, capacity cutoffs, unknown labels, incompatible embeddings, and input order. It does not run models or use meeting data. The ignored receipt records source hashes, compiler version, and the comparison result.

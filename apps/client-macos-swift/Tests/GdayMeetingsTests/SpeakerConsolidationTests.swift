@@ -136,4 +136,27 @@ struct SpeakerConsolidationTests {
             try SpeakerConsolidation.run(document([changed])).result.clusters.first?.id != original.clusters.first?.id)
     }
 
+    @Test func overlappingSamplesCountOnlyTheirUnionWithinPublishedTrustedSpeech() throws {
+        let document = SpeakerEvidenceDocument(
+            samples: [
+                sample("first", local: "one", start: 0),
+                sample("overlap", local: "one", start: 2),
+                sample("last", local: "one", start: 4),
+                sample("return", local: "one", start: 12),
+                sample("crossing", local: "one", start: 14),
+            ],
+            activity: [(1.0, 2.0), (2.5, 6.0), (7.0, 9.0), (12.0, 20.0)].map {
+                .init(source: "microphone", localSpeakerID: "one", start: $0.0, end: $0.1)
+            }, windows: [window(["one"], end: 20, capacity: 15)])
+        let analysis = try SpeakerConsolidation.run(document)
+        #expect(analysis.audit.directSampleSpeakerSeconds == 7.5)
+        #expect(analysis.audit.channelInferredSpeakerSeconds == 2)
+        #expect(analysis.audit.unresolvedSpeakerSeconds == 5)
+        #expect(analysis.audit.untrustedSampleIDs == ["crossing"])
+        #expect(analysis.result.intervals.map(\.start) == [1, 2.5, 7, 12, 15])
+        #expect(analysis.result.intervals.map(\.end) == [2, 6, 9, 15, 20])
+        #expect(analysis.result.intervals.dropLast().allSatisfy { $0.clusterID != nil })
+        #expect(analysis.result.intervals.last?.clusterID == nil)
+    }
+
 }

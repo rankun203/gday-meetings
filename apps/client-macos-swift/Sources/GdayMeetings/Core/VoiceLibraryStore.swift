@@ -1,6 +1,87 @@
 import Combine
 import Foundation
 
+/// Matching needs only whether a conflicting review exists, not every overlapping pair.
+/// Library metadata has unique example IDs. A nil person remains a distinct review decision.
+enum VoiceReviewConflicts {
+    private struct Recording: Hashable {
+        var meetingID: UUID
+        var audioRevision: String?
+        var audioFile: String
+    }
+    private struct Span {
+        var id: UUID
+        var personID: UUID?
+        var start: Double
+        var end: Double
+    }
+    private struct Extremes {
+        struct Value {
+            var personID: UUID?
+            var boundary: Double
+        }
+        var first: Value?
+        var second: Value?
+
+        func otherBoundary(than personID: UUID?) -> Double {
+            guard let first else { return -.infinity }
+            return first.personID != personID ? first.boundary : (second?.boundary ?? -.infinity)
+        }
+
+        mutating func insert(personID: UUID?, boundary: Double) {
+            let value = Value(personID: personID, boundary: boundary)
+            if let first, first.personID == personID {
+                if boundary > first.boundary { self.first = value }
+            }
+            else if let second, second.personID == personID {
+                if boundary > second.boundary { self.second = value }
+                if let first, let second = self.second, second.boundary > first.boundary {
+                    self.first = second
+                    self.second = first
+                }
+            }
+            else if first == nil {
+                first = value
+            }
+            else if boundary > first!.boundary {
+                second = first
+                first = value
+            }
+            else if second == nil || boundary > second!.boundary {
+                second = value
+            }
+        }
+    }
+
+    static func confirmedExampleIDs(in examples: [VoiceExample]) -> Set<UUID> {
+        var recordings: [Recording: [Span]] = [:]
+        for example in examples where example.review == .confirmed && !example.excluded {
+            guard let range = example.range else { continue }
+            let recording = Recording(
+                meetingID: example.meetingID, audioRevision: example.audioRevision, audioFile: range.audioFile)
+            recordings[recording, default: []].append(
+                .init(id: example.id, personID: example.personID, start: range.start, end: range.end))
+        }
+        var conflicts = Set<UUID>()
+        for spans in recordings.values {
+            let ordered = spans.sorted { $0.start < $1.start }
+            var prior = Extremes()
+            for span in ordered {
+                if prior.otherBoundary(than: span.personID) > span.start { conflicts.insert(span.id) }
+                prior.insert(personID: span.personID, boundary: span.end)
+            }
+            var following = Extremes()
+            for span in ordered.reversed() {
+                // Negated starts reuse the same maximum operation to find the
+                // earliest later start belonging to a different person.
+                if following.otherBoundary(than: span.personID) > -span.end { conflicts.insert(span.id) }
+                following.insert(personID: span.personID, boundary: -span.start)
+            }
+        }
+        return conflicts
+    }
+}
+
 @MainActor
 final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var examples: [VoiceExample] = []
@@ -400,12 +481,15 @@ final class VoiceLibraryStore: ObservableObject {
     /// when their source recording is unavailable for playback.
     func matchingPeople(from people: [Person]) -> [Person] {
         defer { releaseRepresentations() }
+        guard !people.isEmpty else { return [] }
+        let conflictingIDs = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
         return people.map { person in
             var value = person
-            let confirmed = examples.filter {
-                $0.personID == person.id && $0.review == .confirmed && !$0.excluded
-                    && !hasConflictingReview($0)
-            }
+            let confirmed = (personExampleIDs[person.id] ?? []).compactMap { exampleIndices[$0] }.sorted()
+                .map { examples[$0] }.filter {
+                    $0.personID == person.id && $0.review == .confirmed && !$0.excluded
+                        && !conflictingIDs.contains($0.id)
+                }
             let evidence = confirmed.flatMap { example in
                 (hydratedExample(id: example.id)?.voiceEmbeddings ?? []).filter(\.isValid).map {
                     SpeakerEvidenceSample(

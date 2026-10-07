@@ -133,27 +133,39 @@ enum SpeakerConsolidation {
             }
         }
         var groups = units.indices.map { [$0] }
-        while groups.count > 1 {
+        var activeGroups = Array(units.indices)
+        while activeGroups.count > 1 {
             try cancellationCheck()
             var best: (Int, Int)?
             var bestSimilarity = -Double.infinity
-            for i in groups.indices {
+            for i in activeGroups.indices {
                 try cancellationCheck()
-                for j in groups.indices where j > i {
-                    let similarity = groups[i].flatMap { a in groups[j].map { similarities[a][$0] } }.min()!
+                for j in activeGroups.indices where j > i {
+                    let similarity = similarities[activeGroups[i]][activeGroups[j]]
                     if similarity >= configuration.minimumSimilarity && similarity > bestSimilarity {
                         best = (i, j)
                         bestSimilarity = similarity
                     }
                 }
             }
-            guard let (left, right) = best else { break }
+            guard let (leftIndex, rightIndex) = best else { break }
+            let left = activeGroups[leftIndex]
+            let right = activeGroups[rightIndex]
+            // Complete-link distance to a merged group is the minimum of its
+            // two previous distances. Keep leader order to preserve tie breaks.
+            for other in activeGroups where other != left && other != right {
+                let similarity = min(similarities[left][other], similarities[right][other])
+                similarities[left][other] = similarity
+                similarities[other][left] = similarity
+            }
             groups[left] = (groups[left] + groups[right]).sorted()
-            groups.remove(at: right)
+            groups[right] = []
+            activeGroups.remove(at: rightIndex)
         }
         var assignments: [String: String] = [:]
-        let clusters = try groups.map { group -> SpeakerConsolidationResult.Cluster in
+        let clusters = try activeGroups.map { index -> SpeakerConsolidationResult.Cluster in
             try cancellationCheck()
+            let group = groups[index]
             let samples = group.flatMap { units[$0].samples }
             let ids = samples.map(\.id).sorted()
             let type = samples[0].model
@@ -178,12 +190,18 @@ enum SpeakerConsolidation {
             try cancellationCheck()
             let window = trusted[local]
             let samples = sampleGroups[local] ?? []
-            for interval in activity[local]! {
+            let sampleSpans = merged(
+                samples.map {
+                    SpeakerEvidenceActivity(
+                        source: $0.source, localSpeakerID: $0.localSpeakerID, start: $0.start, end: $0.end)
+                })
+            var sampleIndex = 0
+            for (intervalIndex, interval) in activity[local]!.enumerated() {
+                if intervalIndex % 128 == 0 { try cancellationCheck() }
                 var cuts = [interval.start, interval.end]
                 cuts += [window?.publicationStart, window?.trustedEnd].compactMap { $0 }.filter {
                     $0 > interval.start && $0 < interval.end
                 }
-                cuts += samples.flatMap { [$0.start, $0.end] }.filter { $0 > interval.start && $0 < interval.end }
                 cuts = Array(Set(cuts)).sorted()
                 for (start, end) in zip(cuts, cuts.dropFirst()) {
                     let time = (start + end) / 2
@@ -191,15 +209,27 @@ enum SpeakerConsolidation {
                         window.map { time >= $0.publicationStart && time < ($0.trustedEnd ?? $0.publicationStart) }
                         ?? false
                     let id = inside ? assignments[local] : nil
-                    let isSample = id != nil && samples.contains { $0.start <= start && $0.end >= end }
                     if id == nil {
                         unresolved += end - start
                     }
-                    else if isSample {
-                        direct += end - start
-                    }
                     else {
-                        inferred += end - start
+                        // Sample boundaries affect the audit, not the assigned
+                        // identity. Sweep their union once instead of rescanning
+                        // every sample for each published activity interval.
+                        while sampleIndex < sampleSpans.count && sampleSpans[sampleIndex].end <= start {
+                            sampleIndex += 1
+                        }
+                        var index = sampleIndex
+                        var covered = 0.0
+                        while index < sampleSpans.count && sampleSpans[index].start < end {
+                            if index % 128 == 0 { try cancellationCheck() }
+                            covered += max(0, min(end, sampleSpans[index].end) - max(start, sampleSpans[index].start))
+                            index += 1
+                        }
+                        let duration = end - start
+                        let sampled = min(duration, covered)
+                        direct += sampled
+                        inferred += duration - sampled
                     }
                     let reason =
                         id != nil
