@@ -1,0 +1,83 @@
+<!--
+---
+title: Search results layout proposal
+date: 2026-10-07
+status: prototype
+scope: design-preview
+---
+-->
+<div id="search-layout" class="viz-dotted-background">
+<style>
+#search-layout {padding:12px 0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:light-dark(#202124,#eee);font-size:13px;}
+#search-layout * {box-sizing:border-box;}
+#search-layout .window {max-width:750px;margin:auto;background:light-dark(#fafafa,#202020);border:1px solid light-dark(#d6d6d6,#484848);border-radius:12px;overflow:hidden;position:relative;}
+#search-layout header {padding:18px 20px;background:light-dark(#f0f0f0,#292929);border-bottom:1px solid light-dark(#ddd,#3a3a3a);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
+#search-layout h2 {font-size:16px;margin:0;font-weight:600;}
+#search-layout .query {color:light-dark(#606060,#aaa);}
+#search-layout .toolbar {display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:15px 20px;font-size:12px;color:light-dark(#606060,#b2b2b2);}
+#search-layout button {font:inherit;color:inherit;background:light-dark(#eee,#383838);border:1px solid light-dark(#ccc,#555);border-radius:6px;padding:6px 10px;}
+#search-layout .result {display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;padding:18px 20px;border-top:1px solid light-dark(#e0e0e0,#383838);}
+#search-layout .result:hover {background:light-dark(#f0f4f9,#252b33);}
+#search-layout .rail {display:flex;align-items:center;flex-direction:column;gap:9px;}
+#search-layout .rank {font-size:12px;color:light-dark(#707070,#aaa);font-variant-numeric:tabular-nums;}
+#search-layout .play {width:34px;height:34px;padding:0;color:light-dark(#006ad4,#65adff);border-radius:50%;}
+#search-layout .title {padding:0;border:0;background:transparent;text-align:left;font-size:14px;font-weight:600;line-height:1.4;}
+#search-layout .summary {margin:4px 0 12px;color:light-dark(#666,#b4b4b4);font-size:12px;line-height:1.45;}
+#search-layout .columns {display:grid;grid-template-columns:158px minmax(0,1fr);gap:20px;}
+#search-layout .meta {display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-size:12px;color:light-dark(#666,#aaa);}
+#search-layout .badge {display:inline-flex;gap:5px;align-items:center;padding:3px 7px;border-radius:4px;background:light-dark(#e5eef9,#25384d);color:light-dark(#20558b,#a6caff);font-size:11px;font-weight:500;}
+#search-layout .badge.meeting {background:light-dark(#ece8f4,#383043);color:light-dark(#695187,#c7b4e2);}
+#search-layout .match-range {margin-bottom:10px;color:light-dark(#496785,#a6bdd5);font-size:11px;font-variant-numeric:tabular-nums;}
+#search-layout .range-labels {display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;}
+#search-layout .range-line {height:3px;background:light-dark(#8cafd2,#587da2);border-radius:2px;}
+#search-layout .excerpt {margin:0;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+#search-layout mark {background:light-dark(#dce9fb,#344d6b);color:inherit;border-radius:2px;}
+#search-layout .score {font-size:11px;color:light-dark(#777,#aaa);margin-top:13px;font-variant-numeric:tabular-nums;}
+#search-layout .footer {padding:13px 20px;border-top:1px solid light-dark(#ddd,#444);background:light-dark(#f0f0f0,#292929);font-size:12px;display:flex;align-items:center;gap:12px;}
+#search-layout .modal {position:absolute;inset:0;background:light-dark(#0005,#0008);padding:65px 35px;z-index:3;}
+#search-layout .sheet {background:light-dark(#fafafa,#292929);border:1px solid light-dark(#ccc,#555);border-radius:12px;padding:22px;box-shadow:0 12px 35px #0004;}
+#search-layout .sheet p {line-height:1.6;}
+#search-layout .sheet-head {display:flex;justify-content:space-between;gap:15px;align-items:start;}
+#search-layout .location {padding:24px;min-height:430px;}
+#search-layout [hidden] {display:none!important;}
+@media(max-width:520px) {#search-layout .columns {grid-template-columns:1fr;gap:10px;}#search-layout .meta {flex-direction:row;flex-wrap:wrap;align-items:center;}#search-layout .result {padding:16px 12px;gap:8px;grid-template-columns:36px minmax(0,1fr);}#search-layout .modal {padding:35px 12px;}#search-layout .score {line-height:1.6;}}
+</style>
+<div class="window" aria-label="Search results layout proposal">
+<header><h2>Search Results</h2><span class="query">⌕ &nbsp; retrieval architecture</span></header>
+<div class="list-view">
+<div class="toolbar"><span>4 results</span><label><input type="checkbox" class="scores" checked> Show Ranking Details</label><span>Semantic</span></div>
+<div class="rows"></div>
+</div>
+<div class="location" hidden><button class="back cursor-interaction">‹ Search Results</button><h2 style="margin-top:24px" class="location-title"></h2><p class="location-meta"></p><p class="location-text" style="line-height:1.7"></p></div>
+<div class="footer" aria-live="polite"><span>▶</span><span class="player-status">No audio playing</span></div>
+<div class="modal" hidden><section role="dialog" aria-modal="true" aria-labelledby="preview-title" class="sheet"><div class="sheet-head"><div><h2 id="preview-title"></h2><p class="preview-meta"></p></div><button class="close cursor-interaction" aria-label="Close Preview">✕</button></div><p class="preview-text"></p><button class="preview-play cursor-interaction">▶ Play</button></section></div>
+</div>
+<script>
+(() => {
+const root=document.getElementById('search-layout');
+const data=[
+{title:'Retrieval architecture and evaluation planning',summary:'Index design, query routing, and evaluation',type:'Transcript',date:'7 Oct 2026 · 2:30 pm',time:'12:40',end:'13:10',duration:'30 sec',score:'0.9336',text:'The retrieval architecture should combine keyword lookup with semantic search. We can compare both approaches using the same evaluation questions before choosing the default.'},
+{title:'Search planning',summary:'Retrieval architecture review',type:'Meeting',date:'6 Oct 2026 · 10:00 am',time:null,score:'0.9218',text:'Title match'},
+{title:'Platform discussion: search performance and storage choices',summary:'Reducing the time from query to useful results',type:'Transcript',date:'5 Oct 2026 · 11:15 am',time:'28:15',end:'28:45',duration:'30 sec',score:'0.9072',text:'Keep the retrieval index close to the application. That gives us a simpler architecture and lets us measure the time spent loading candidates separately from ranking them.'},
+{title:'Search evaluation',summary:'Comparing retrieval methods',type:'Transcript',date:'2 Oct 2026 · 9:00 am',time:'08:32',end:'08:54',duration:'22 sec',score:'0.8851',text:'For each query, collect the most useful passage and keep the surrounding context available. A matching title is helpful, but the passage explains why the result matters.'}
+];
+let timer,active=0,playing=-1,lastFocus;
+const rows=root.querySelector('.rows');
+data.forEach((d,i)=>{
+ const row=document.createElement('article');row.className='result';
+ row.innerHTML=`<div class="rail"><span class="rank">${i+1}</span><button class="play cursor-interaction" aria-label="Play ${d.time?'from '+d.time:'meeting from beginning'}">▶</button></div><div><button class="title cursor-interaction" aria-label="Preview ${d.title}">${d.title}</button><p class="summary">${d.summary}</p><div class="columns"><div class="meta"><span class="badge ${d.type==='Meeting'?'meeting':''}">${d.type==='Meeting'?'▣':'≋'} ${d.type}</span><span>${d.date}</span>${d.time?'':'<span>From beginning</span>'}</div><div>${d.time?`<div class="match-range" role="img" aria-label="Matching passage from ${d.time} to ${d.end}, ${d.duration}"><div class="range-labels" aria-hidden="true"><span>${d.time}</span><span>${d.duration}</span><span>${d.end}</span></div><div class="range-line" aria-hidden="true"></div></div>`:''}<p class="excerpt">${d.text}</p></div></div><div class="score">Content ${d.score} · Speakers 0/0 · Bonus 0.0000 · Score ${d.score}</div></div>`;
+ const play=row.querySelector('.play');play.onclick=e=>{e.stopPropagation();togglePlay(i);};play.ondblclick=e=>e.stopPropagation();
+ row.onclick=e=>{if(e.target.closest('.play'))return;if(e.detail===0){preview(i);return;}clearTimeout(timer);timer=setTimeout(()=>preview(i),280);};
+ row.ondblclick=e=>{if(e.target.closest('.play'))return;clearTimeout(timer);navigate(i);};rows.append(row);
+});
+function togglePlay(i){playing=playing===i?-1:i;root.querySelectorAll('.rail .play').forEach((b,j)=>{b.textContent=playing===j?'Ⅱ':'▶';b.setAttribute('aria-pressed',String(playing===j));});root.querySelector('.player-status').textContent=playing<0?'Paused':`${data[i].title} · ${data[i].time||'00:00'} · Playback preview`;}
+function preview(i){active=i;lastFocus=document.activeElement;const d=data[i];root.querySelector('#preview-title').textContent=d.title;root.querySelector('.preview-meta').textContent=`${d.type} · ${d.time?d.time+'–'+d.end:'Title match'} · ${d.date}`;root.querySelector('.preview-text').textContent=d.text;root.querySelector('.preview-play').textContent='▶ Play '+(d.time?'from '+d.time:'from Beginning');root.querySelector('.modal').hidden=false;root.querySelector('.close').focus();}
+function close(){root.querySelector('.modal').hidden=true;if(lastFocus&&lastFocus.focus)lastFocus.focus();}
+function navigate(i){close();root.querySelector('.list-view').hidden=true;root.querySelector('.location').hidden=false;root.querySelector('.location-title').textContent=data[i].title;root.querySelector('.location-meta').textContent=`${data[i].type} · ${data[i].time||'Meeting overview'}`;root.querySelector('.location-text').textContent=data[i].text;}
+root.querySelector('.close').onclick=close;root.querySelector('.modal').onclick=e=>{if(e.target===e.currentTarget)close();};root.querySelector('.preview-play').onclick=()=>togglePlay(active);root.querySelector('.back').onclick=()=>{root.querySelector('.location').hidden=true;root.querySelector('.list-view').hidden=false;};
+root.querySelector('.scores').onchange=e=>root.querySelectorAll('.score').forEach(s=>s.hidden=!e.target.checked);
+root.addEventListener('keydown',e=>{if(e.key==='Escape')close();if(e.key==='Tab'&&!root.querySelector('.modal').hidden){const first=root.querySelector('.close'),last=root.querySelector('.preview-play');if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
+const state={metadataWidth:158};if(globalThis.Tweak){const tweak=new Tweak({container:root.querySelector('.window'),onChange:()=>root.querySelectorAll('.columns').forEach(c=>c.style.gridTemplateColumns=window.innerWidth>520?`${state.metadataWidth}px minmax(0,1fr)`:'1fr')});tweak.addSlider(state,'metadataWidth',{label:'Metadata column',min:125,max:220,unit:'px'});}
+})();
+</script>
+</div>
