@@ -11,7 +11,7 @@ The search layout preview placed passage timestamps in the metadata column, away
 
 ## Implemented solution
 
-Updated `output/search-layout/search-results.html`, the 750px synthetic design preview, with a static whole-recording line above each transcript excerpt. A colored segment shows the matching interval at its proportional position and width. Start and end timestamps sit just outside the segment endpoints so short intervals retain readable labels. Title matches omit the range. Preview dialogs also show the passage's start and end times. The commit includes the previously untracked preview.
+Updated `output/search-layout/search-results.html`, the 750px synthetic design preview, with a static whole-recording line above each transcript excerpt. A colored segment shows the matching interval at its proportional position and width. Start and end timestamps sit just outside the segment endpoints so short intervals retain readable labels. Title matches show a fully colored range from 00:00 to the recording duration, replacing the separate “From beginning” label. Whole-recording endpoint labels align inward to stay within the column. Preview dialogs also show the passage's start and end times. The commit includes the previously untracked preview.
 
 ## Reasoning
 
@@ -23,4 +23,4 @@ None added to the application. This is a design prototype with synthetic timesta
 
 ## Notes
 
-Inspected the supplied before screenshot and captured the changed 750px preview in Chrome. Confirmed the neutral line, proportional colored segment, endpoint labels, omission on title matches, and accessible range descriptions including total recording duration. Activated Play and confirmed the range remained static while the separate playback status changed. Earlier preview validation covered dialog and double-click navigation. Reviewed wording against `docs/writing.md`; `git diff --check` passed. Narrow-width rendering and labels at the extreme recording boundaries were not revalidated in this update; the synthetic examples place matches inside the recording. No Swift files changed, so no macOS release build was required.
+Inspected the supplied before screenshot and captured the changed 750px preview in Chrome. Confirmed the neutral line, proportional colored segment, endpoint labels, full-width fill on title matches, and accessible range descriptions including total recording duration. Activated Play and confirmed the range remained static while the separate playback status changed. Earlier preview validation covered dialog and double-click navigation. Reviewed wording against `docs/writing.md`; `git diff --check` passed. Narrow-width rendering and partial-passage labels at the extreme recording boundaries were not revalidated in this update; the whole-recording labels were checked at both boundaries. No Swift files changed, so no macOS release build was required.
