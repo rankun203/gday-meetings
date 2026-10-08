@@ -26,6 +26,10 @@ struct LiveObservationIdentity {
     private(set) var provisionalAliases: [UUID: UUID] = [:]
     private var clusterAliases: [UUID: UUID] = [:]
 
+    init(meetingID: UUID) {
+        self.meetingID = meetingID
+    }
+
     mutating func accept(_ event: LiveSpeakerEvent) -> Bool {
         let previousEnd = local.cursors.first { $0.source == event.source }?.end ?? event.start
         guard local.accept(event) else { return false }
