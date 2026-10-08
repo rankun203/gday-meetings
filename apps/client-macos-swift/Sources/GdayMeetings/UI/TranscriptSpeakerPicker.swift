@@ -107,9 +107,9 @@ struct TranscriptSpeakerPicker: View {
         }
         .padding(16).frame(width: 320)
         .disabled(saving)
+        .defaultFocus($focused, true)
         .task {
             appliesToSpeaker = !associationUncertain
-            focused = true
         }
     }
 
