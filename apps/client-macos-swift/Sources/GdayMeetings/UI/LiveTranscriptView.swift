@@ -15,14 +15,6 @@ struct LiveTranscriptView: View {
     var body: some View {
         let displayedMeetingID = controller.draft?.meetingID
         VStack(alignment: .leading, spacing: 8) {
-            LiveTranscriptHeader(
-                followsLive: followsLive, hasRows: displayCache.count > 0,
-                issues: headerIssues, showsProviderSettings: false,
-                follow: { followsLive = true },
-                openProviders: {
-                    settingsTab = "providers"
-                    openSettings()
-                })
             if displayCache.count == 0 {
                 ContentUnavailableView {
                     Label(
@@ -61,6 +53,17 @@ struct LiveTranscriptView: View {
                     },
                     speakerPicker: { _, _, _ in AnyView(EmptyView()) })
             }
+        }
+        .overlay(alignment: .bottom) {
+            LiveTranscriptHeader(
+                followsLive: followsLive, hasRows: displayCache.count > 0,
+                issues: headerIssues, showsProviderSettings: false,
+                follow: { followsLive = true },
+                openProviders: {
+                    settingsTab = "providers"
+                    openSettings()
+                })
+                .padding(12)
         }
         .onAppear { refreshRows() }
         .onChange(of: controller.streamRevision) { _, _ in refreshRows() }
@@ -140,7 +143,7 @@ private struct PersonDisplayIdentity: Equatable {
     let name: String
 }
 
-/// Compact controls stay separate from volatile transcript rows.
+/// Floating controls leave the full transcript height available while following live text.
 struct LiveTranscriptHeader: View {
     let followsLive: Bool
     let hasRows: Bool
@@ -173,9 +176,12 @@ struct LiveTranscriptHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            Button("Follow Live", action: follow)
-                .disabled(followsLive || !hasRows)
-                .fixedSize()
+            if !followsLive && hasRows {
+                Button("Follow Live", action: follow)
+                    .fixedSize()
+                    .padding(6)
+                    .background(.regularMaterial, in: Capsule())
+            }
         }
     }
 }
