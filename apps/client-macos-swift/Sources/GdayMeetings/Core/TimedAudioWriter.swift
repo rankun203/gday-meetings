@@ -99,6 +99,11 @@ final class TimedAudioWriter {
     private let lock = NSLock()
     private var framesWritten: Int64 = 0
     private var sourceFrames: Int64 = 0
+    /// Accepted source time is independent of delayed resampler output. Fractional
+    /// track frames preserve duration across short, nonintegral-rate packets.
+    private var acceptedInputEnd: Double?
+    private var sourceFormat: AVAudioFormat?
+    private var pendingMutedEnd: Int64?
     private let epoch: TimeInterval
     private let filename: String
     private let voiceProcessed: Bool
@@ -117,15 +122,20 @@ final class TimedAudioWriter {
     func setMuted(_ value: Bool) {
         lock.lock()
         defer { lock.unlock() }
+        guard muted != value, !finished else { return }
         muted = value
-        // Never carry pre-mute resampler history into the next audible buffer.
-        converterNeedsReset = true
+        // A mute transition discards private pending PCM. Resolve its timeline
+        // as intentional silence on the next write, never drain it after mute.
+        if let acceptedInputEnd, acceptedInputEnd > Double(framesWritten) {
+            pendingMutedEnd = Int64(acceptedInputEnd.rounded())
+        }
+        converter = nil
+        sourceFormat = nil
     }
     private let alignedAudio: ((AVAudioPCMBuffer, Double) -> Void)?
     /// Silence runs in track frames; contiguous padding extends the last run.
     private var gapRuns: [(start: Int64, frames: Int64)] = []
     private var converter: AVAudioConverter?
-    private var converterNeedsReset = false
     private static let ioBufferBytes: UInt32 = 512 * 1024
     /// Gaps shorter than this are clock jitter or buffer scheduling, not outages worth reporting.
     private static let reportedGapSeconds = 0.1
@@ -216,51 +226,48 @@ final class TimedAudioWriter {
         guard file != nil || opus != nil else { return }
         do {
             let target = try Self.targetFrame(hostSeconds: hostSeconds, epoch: epoch, sampleRate: format.sampleRate)
+            guard buffer.format.sampleRate.isFinite, buffer.format.sampleRate > 0 else {
+                throw MeetingError.message("Audio capture returned an invalid sample rate.")
+            }
+            guard buffer.frameLength > 0 else { return }
+            try resolveMutedTailLocked()
+            let ratio = format.sampleRate / buffer.format.sampleRate
+            let frontier = max(acceptedInputEnd ?? Double(framesWritten), Double(framesWritten))
             if muted {
                 let end = try Self.targetFrame(
                     hostSeconds: hostSeconds + Double(buffer.frameLength) / buffer.format.sampleRate,
                     epoch: epoch, sampleRate: format.sampleRate)
                 let before = framesWritten
                 try padLocked(through: end, forwardSilence: true)
-                // A deliberately muted source is healthy even if the entire
-                // recording is silent. Keep no-audio detection about delivery.
                 sourceFrames += max(0, framesWritten - max(before, target))
+                acceptedInputEnd = max(frontier, Double(end))
                 return
             }
-            // Pad first so a converter reset after an outage applies to this buffer.
-            try padLocked(through: target)
-            let samples = buffer.format == format ? buffer : try convertLocked(buffer)
-            guard samples.frameLength > 0 else { return }
-            let overlap = max(0, framesWritten - target)
-            if overlap > tolerance {
-                // Drop overlapping source frames; copying here is safe in a regular non-RT tap.
-                let skipped = min(Int64(samples.frameLength), overlap)
-                guard skipped < samples.frameLength else { return }
-                let count = samples.frameLength - AVAudioFrameCount(skipped)
-                guard let trimmed = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count) else {
-                    throw MeetingError.message("Could not allocate aligned audio buffer.")
-                }
-                trimmed.frameLength = count
-                let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
-                for (source, destination) in zip(
-                    UnsafeMutableAudioBufferListPointer(samples.mutableAudioBufferList),
-                    UnsafeMutableAudioBufferListPointer(trimmed.mutableAudioBufferList))
-                {
-                    if let src = source.mData, let dst = destination.mData {
-                        memcpy(dst, src.advanced(by: Int(skipped) * bytesPerFrame), Int(count) * bytesPerFrame)
-                    }
-                }
-                try writeLocked(trimmed)
-                alignedAudio?(trimmed, Double(framesWritten) / format.sampleRate)
-                framesWritten += Int64(count)
-                sourceFrames += Int64(count)
+            // Discard overlap before it can contaminate a stateful resampler.
+            var input = buffer
+            if Double(target) < frontier - Double(tolerance) {
+                let skipped = min(Double(buffer.frameLength), ((frontier - Double(target)) / ratio).rounded(.up))
+                guard skipped < Double(buffer.frameLength) else { return }
+                input = try Self.slice(
+                    buffer, from: AVAudioFrameCount(skipped), count: buffer.frameLength - AVAudioFrameCount(skipped))
             }
-            else {
-                try writeLocked(samples)
-                alignedAudio?(samples, Double(framesWritten) / format.sampleRate)
-                framesWritten += Int64(samples.frameLength)
-                sourceFrames += Int64(samples.frameLength)
+            if Double(target) > frontier + Double(tolerance) {
+                try drainConverterLocked()
+                try padLocked(through: target)
+                acceptedInputEnd = Double(framesWritten)
+                sourceFormat = nil
             }
+            if sourceFormat != input.format {
+                try drainConverterLocked()
+                sourceFormat = input.format
+            }
+            // Snap sub-tolerance host jitter to the accepted source clock. Never
+            // snap to output count: that cursor can lag by the converter delay.
+            let start = max(acceptedInputEnd ?? Double(framesWritten), Double(framesWritten))
+            acceptedInputEnd = start + Double(input.frameLength) * ratio
+            let samples = input.format == format ? input : try convertLocked(input)
+            try writeAcceptedLocked(samples)
+
         }
         catch {
             failure = error
@@ -278,7 +285,15 @@ final class TimedAudioWriter {
         do {
             let target = try Self.targetFrame(
                 hostSeconds: throughHostSeconds, epoch: epoch, sampleRate: format.sampleRate)
-            try padLocked(through: target)
+            try resolveMutedTailLocked()
+            // Explicit source outage owns this boundary; preserve accepted audio
+            // before padding and prevent late packets from re-entering its clock.
+            if Double(target) > (acceptedInputEnd ?? Double(framesWritten)) {
+                try drainConverterLocked()
+                try padLocked(through: target)
+                acceptedInputEnd = max(acceptedInputEnd ?? 0, Double(framesWritten))
+                sourceFormat = nil
+            }
         }
         catch {
             failure = error
@@ -289,11 +304,15 @@ final class TimedAudioWriter {
     func finish(throughHostSeconds: TimeInterval? = nil) throws {
         lock.lock()
         defer { lock.unlock() }
-        if !finished, failure == nil, let throughHostSeconds {
+        if !finished, failure == nil {
             do {
-                let target = try Self.targetFrame(
-                    hostSeconds: throughHostSeconds, epoch: epoch, sampleRate: format.sampleRate)
-                try padLocked(through: target)
+                try resolveMutedTailLocked()
+                try drainConverterLocked()
+                if let throughHostSeconds {
+                    let target = try Self.targetFrame(
+                        hostSeconds: throughHostSeconds, epoch: epoch, sampleRate: format.sampleRate)
+                    try padLocked(through: target)
+                }
             }
             catch { failure = error }
         }
@@ -355,8 +374,6 @@ final class TimedAudioWriter {
             burst += Int64(count)
             gap -= Int64(count)
         }
-        // Resampler history from before the outage must not blend into the resumed audio.
-        converterNeedsReset = true
     }
 
     /// Maps channels at the source rate, then converts rate and layout into the track format.
@@ -415,14 +432,9 @@ final class TimedAudioWriter {
         // One converter per source format; a new device format gets fresh resampler state.
         if converter?.inputFormat != mappedFormat {
             converter = AVAudioConverter(from: mappedFormat, to: format)
-            converterNeedsReset = false
         }
         guard let converter else {
             throw MeetingError.message("Could not convert audio from \(input) to \(format).")
-        }
-        if converterNeedsReset {
-            converter.reset()
-            converterNeedsReset = false
         }
         let ratio = format.sampleRate / mappedFormat.sampleRate
         // Slack covers resampler output that was held back from earlier buffers.
@@ -448,6 +460,81 @@ final class TimedAudioWriter {
             )
         }
         return output
+    }
+
+    /// Copy a physical frame slice in either interleaved or planar PCM layout.
+    private static func slice(_ buffer: AVAudioPCMBuffer, from start: AVAudioFrameCount, count: AVAudioFrameCount)
+        throws -> AVAudioPCMBuffer
+    {
+        guard count > 0, start <= buffer.frameLength, count <= buffer.frameLength - start,
+            let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: count)
+        else { throw MeetingError.message("Could not allocate aligned audio buffer.") }
+        copy.frameLength = count
+        let bytesPerFrame = Int(buffer.format.streamDescription.pointee.mBytesPerFrame)
+        for (source, destination) in zip(
+            UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList),
+            UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList))
+        {
+            if let source = source.mData, let destination = destination.mData {
+                memcpy(destination, source.advanced(by: Int(start) * bytesPerFrame), Int(count) * bytesPerFrame)
+            }
+        }
+        return copy
+    }
+
+    private func writeAcceptedLocked(_ buffer: AVAudioPCMBuffer) throws {
+        let remaining = max(0, Int64((acceptedInputEnd ?? Double(framesWritten)).rounded()) - framesWritten)
+        let count = min(Int64(buffer.frameLength), remaining)
+        guard count > 0 else { return }
+        let samples =
+            count == Int64(buffer.frameLength)
+            ? buffer : try Self.slice(buffer, from: 0, count: AVAudioFrameCount(count))
+        try writeLocked(samples)
+        alignedAudio?(samples, Double(framesWritten) / format.sampleRate)
+        framesWritten += count
+        sourceFrames += count
+    }
+
+    private func resolveMutedTailLocked() throws {
+        guard let end = pendingMutedEnd else { return }
+        let before = framesWritten
+        try padLocked(through: end, forwardSilence: true)
+        sourceFrames += framesWritten - before
+        pendingMutedEnd = nil
+    }
+
+    /// End the current conversion epoch. Only delayed real input may be written;
+    /// filter ringout beyond the accepted input duration is discarded.
+    private func drainConverterLocked() throws {
+        guard let converter else { return }
+        defer { self.converter = nil }
+        let end = Int64((acceptedInputEnd ?? Double(framesWritten)).rounded())
+        let pending = max(0, end - framesWritten)
+        guard pending > 0 else { return }
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096) else {
+            throw MeetingError.message("Could not allocate resampler tail buffer.")
+        }
+        // The bound derives from actual accepted-but-unwritten frames. A broken
+        // converter cannot spin indefinitely or allocate an unbounded tail.
+        let maximumCalls = Int((pending + 4095) / 4096) + 2
+        for _ in 0..<maximumCalls {
+            output.frameLength = 0
+            var conversionError: NSError?
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            guard status != .error else {
+                throw MeetingError.message(
+                    "Could not finish audio conversion: \(conversionError?.localizedDescription ?? "unknown error").")
+            }
+            try writeAcceptedLocked(output)
+            if framesWritten >= end { return }
+            if status == .endOfStream || output.frameLength == 0 { break }
+        }
+        guard framesWritten >= end else {
+            throw MeetingError.message("Audio conversion ended before all accepted input was written.")
+        }
     }
 
     private func writeLocked(_ buffer: AVAudioPCMBuffer) throws {
