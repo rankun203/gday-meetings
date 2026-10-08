@@ -128,6 +128,30 @@ final class VoiceLibraryPersistence {
         try locked { try validateRevision() }
     }
 
+    func validateRepresentationRevision(exampleID: UUID) throws {
+        try validateRecordRevision(path: representationPath(exampleID))
+    }
+
+    func validateMatchingMetadataRevisions() throws {
+        for path in fileRevisions.keys where path.hasPrefix("examples/") || path.hasPrefix("deleted-people/") {
+            try Task.checkCancellation()
+            try validateRecordRevision(path: path)
+        }
+    }
+
+    private func validateRecordRevision(path: String) throws {
+        try locked {
+            let transaction = try pendingTransaction()
+            let current = try transaction?.revision ?? readHeader()?.revision
+            guard current == revision else { throw changedError() }
+            if transaction?.changes.contains(where: { $0.path == path }) != true {
+                guard VoiceLibraryStore.revision(url: try recordURL(path)) == fileRevisions[path] else {
+                    throw changedError()
+                }
+            }
+        }
+    }
+
     func commit(previous: VoiceLibraryDocument, next: VoiceLibraryDocument) throws {
         guard writable else { throw ServiceError("The voice library is read-only.") }
         try locked {

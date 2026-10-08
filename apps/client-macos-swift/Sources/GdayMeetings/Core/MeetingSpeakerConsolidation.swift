@@ -249,7 +249,7 @@ extension MeetingStore {
                 _ = try SpeakerEvidenceInputReceipt.validate(directory: folder, files: files, expected: analysis.2)
             })
         guard committed else { throw ServiceError(errorMessage ?? "Couldn’t save consolidated speaker labels.") }
-        if settings.recognizeSpeakers { voiceLibrary.suggestReviewedPeople(from: people) }
+        if settings.recognizeSpeakers { await voiceLibrary.suggestReviewedPeople(from: people) }
     }
 }
 

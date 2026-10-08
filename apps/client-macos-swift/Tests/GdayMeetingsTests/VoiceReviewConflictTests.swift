@@ -75,7 +75,7 @@ struct VoiceReviewConflictTests {
         #expect(VoiceReviewConflicts.confirmedExampleIDs(in: values.reversed()) == originalConflicts(values))
     }
 
-    @Test @MainActor func matchingUsesConfirmedPersonIndexAndUpdatesAfterReviews() throws {
+    @Test @MainActor func matchingUsesConfirmedPersonIndexAndUpdatesAfterReviews() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -92,12 +92,12 @@ struct VoiceReviewConflictTests {
         suggested.suggestedPersonID = person.id
         suggested.review = .suggested
         #expect(library.upsert([first, second, suggested]))
-        #expect(library.matchingPeople(from: [person, other]).allSatisfy { $0.voiceSamples.isEmpty })
+        #expect((try await library.matchingPeople(from: [person, other])).allSatisfy { $0.voiceSamples.isEmpty })
         #expect(library.confirm(ids: [second.id], personID: person.id))
-        let matched = library.matchingPeople(from: [person, other])
+        let matched = (try await library.matchingPeople(from: [person, other]))
         #expect(Set(matched[0].voiceSamples.map(\.speakerID)) == [first.id, second.id])
         #expect(matched[1].voiceSamples.isEmpty)
         #expect(library.clear(ids: [first.id]))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.map(\.speakerID) == [second.id])
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.map(\.speakerID) == [second.id])
     }
 }

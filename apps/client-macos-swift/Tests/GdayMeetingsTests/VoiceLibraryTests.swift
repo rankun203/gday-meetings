@@ -43,16 +43,16 @@ struct VoiceLibraryTests {
             embeddings: [.init(type: type, values: [1, 0])])
     }
 
-    @Test func onlyReviewedPlayableExamplesEnrollAndLaterSamplesStayUnreviewed() throws {
+    @Test func onlyReviewedPlayableExamplesEnrollAndLaterSamplesStayUnreviewed() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let person = Person(name: "Alex")
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
         let first = try example(root: directory)
         #expect(library.upsert([first]))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
         #expect(library.confirm(ids: [first.id], personID: person.id))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
         #expect(
             library.recordSample(
                 meetingID: first.meetingID, speakerID: first.speakerID,
@@ -60,10 +60,10 @@ struct VoiceLibraryTests {
                 embedding: first.embeddings[0], suggestion: person.id))
         #expect(library.examples.count == 2)
         #expect(library.examples.filter { $0.review == .confirmed }.count == 1)
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
     }
 
-    @Test func confirmedSamplesWithoutAudioCanSeedTheirMatchingModel() throws {
+    @Test func confirmedSamplesWithoutAudioCanSeedTheirMatchingModel() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let person = Person(
@@ -77,7 +77,7 @@ struct VoiceLibraryTests {
         #expect(old.origin == .legacyProfile && old.suggestedPersonID == person.id)
         #expect(old.suggestedPersonID == person.id && old.embeddings.isEmpty)
         #expect(library.confirm(ids: [old.id], personID: person.id))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
     }
 
     @Test func rejectionSurvivesReopeningAndSuppressesSimilarVoiceInNewRecording() throws {
@@ -198,7 +198,7 @@ struct VoiceLibraryTests {
         #expect(next.suggestedPersonID == nil && next.review == .unassigned)
     }
 
-    @Test func ingestKeepsCompatibleRunPodVectorWithoutAudioAndDoesNotInventConfirmation() throws {
+    @Test func ingestKeepsCompatibleRunPodVectorWithoutAudioAndDoesNotInventConfirmation() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
@@ -218,7 +218,7 @@ struct VoiceLibraryTests {
         #expect(library.ingest(meeting: meeting, directory: directory))
         #expect(library.examples.count == 1)
         #expect(library.confirm(ids: [sample.id], personID: person.id))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
         #expect(library.applyingDecisions(to: meeting) == meeting)
     }
 
@@ -242,7 +242,7 @@ struct VoiceLibraryTests {
                 == sample.embeddings)
     }
 
-    @Test func replacedAudioPreventsExtractionButPreservesConfirmedVectors() throws {
+    @Test func replacedAudioPreventsExtractionButPreservesConfirmedVectors() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
@@ -254,7 +254,7 @@ struct VoiceLibraryTests {
         try Data("replacement recording with different bytes".utf8).write(
             to: folder.appendingPathComponent("system.wav"))
         #expect(!library.audioIsCurrent(sample))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
         #expect(!library.addRepresentation(exampleID: sample.id, embedding: sample.embeddings[0]))
     }
 

@@ -34,7 +34,7 @@ The consolidation workload measures increasing sample counts for one local label
 
 ## Full People profile path
 
-The opt-in `VoiceLibraryScaleTests` test creates 8,000 confirmed 256-dimensional representations across eight people, persists them in a temporary library, releases hydrated representations, and measures the actual `matchingPeople` call on the main actor. Setup is excluded; representation reads, selection, and release are included. The filesystem cache is unspecified. The test verifies 12 selected samples per person for its single model and is skipped in ordinary test runs.
+The opt-in `VoiceLibraryScaleTests` test creates 8,000 confirmed 256-dimensional representations across eight people, persists them in a temporary library, releases hydrated representations, and measures the actual asynchronous `matchingPeople` call from the main actor. Setup is excluded; background representation reads, selection, revision validation, and worker completion are included. The filesystem cache is unspecified. The test verifies 12 selected samples per person for its single model and is skipped in ordinary test runs.
 
 Run from an isolated macOS package with release resources prepared:
 
@@ -42,4 +42,4 @@ Run from an isolated macOS package with release resources prepared:
 GDAY_PROFILE_SCALE=1 swift test -c release --filter VoiceLibraryScaleTests
 ```
 
-Save output under ignored `tmp/`. The line prefixed `GDAY_PROFILE_SCALE_RESULT` contains JSON schema version 1: workload name, example/person/model counts, embedding dimension, per-person/per-model budget, selected counts, elapsed seconds, setup/read inclusion flags, and cache state. Record the checkout revision and build configuration alongside the log. This full-path measurement complements the pure conflict sweep timing.
+Save output under ignored `tmp/`. The line prefixed `GDAY_PROFILE_SCALE_RESULT` contains JSON schema version 2: workload name, example/person/model counts, embedding dimension, per-person/per-model budget, selected counts, elapsed seconds, setup/read inclusion flags, and cache state. It also reports the count and maximum observed gap of a main-actor heartbeat scheduled every 10 ms. This measures actor availability during matching, not frame rendering. Record the checkout revision and build configuration alongside the log. The synchronous baseline used schema version 1 without heartbeat fields. This full-path measurement complements the pure conflict sweep timing.

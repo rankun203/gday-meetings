@@ -252,7 +252,7 @@ extension MeetingStore {
         await voiceLibrary.awaitLoaded()
         if settings.recognizeSpeakers, let meeting = meeting(id: id) {
             _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: id))
-            voiceLibrary.suggestReviewedPeople(from: people)
+            await voiceLibrary.suggestReviewedPeople(from: people)
         }
         guard settings.labelRecordedSpeakers,
             settings.serviceProviders.contains(where: {
@@ -330,7 +330,6 @@ extension MeetingStore {
         guard self.preserveTranscript(current) else { throw ServiceError("Couldn’t preserve the current transcript.") }
         var updated = LocalDiarizationAssignment.applying(result, to: current, fileCount: files.count)
         _ = self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id))
-        if recognize { self.voiceLibrary.suggestReviewedPeople(from: self.people) }
         updated = self.voiceLibrary.applyingDecisions(to: updated)
         let savedRevisions = try TranscriptRevisions.read(at: self.directory(for: id)).revisions
         if let normalized = TranscriptRevisions.snapshots(savedRevisions, current: current)
@@ -345,6 +344,7 @@ extension MeetingStore {
             resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
         self.markManagedTaskCompletion(on: &updated, kind: .diarization)
         guard await self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
+        if recognize { await self.voiceLibrary.suggestReviewedPeople(from: self.people) }
     }
 
     /// Binding is durable before applying the result. Read the current meeting

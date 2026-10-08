@@ -317,7 +317,7 @@ private final class ConsolidationCommitGate: @unchecked Sendable {
         #expect(!examples.isEmpty)
         #expect(
             examples.allSatisfy { $0.review == .suggested && $0.suggestedPersonID == personID && $0.personID == nil })
-        let profiles = store.voiceLibrary.matchingPeople(from: store.people)
+        let profiles = (try await store.voiceLibrary.matchingPeople(from: store.people))
         #expect(profiles.first { $0.id == personID }?.voiceSamples.count == 1)
     }
 

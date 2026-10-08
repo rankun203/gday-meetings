@@ -105,6 +105,17 @@ final class VoiceLibraryStore: ObservableObject {
     private var loadingTask: Task<LoadedState, Never>?
     private let writeOverride: (@Sendable (Data, URL) throws -> Void)?
     private let beforeLoad: (@Sendable () throws -> Void)?
+    private let matchingWorker = VoiceMatchingWorker()
+    /// Test seam executed on the worker, never while holding a filesystem lock.
+    var beforeMatchingRead: (@Sendable () throws -> Void)?
+    var beforeMatchingValidation: (@Sendable () throws -> Void)?
+    private struct MatchingOperation {
+        var id = UUID()
+        var input: VoiceMatchingWorker.Input
+        var task: Task<VoiceMatchingWorker.Output, Error>
+        var waiters: Set<UUID> = []
+    }
+    private var matchingOperations: [Bool: MatchingOperation] = [:]
     private var hydratedIDs: Set<UUID> = []
     private var exampleIndices: [UUID: Int] = [:]
     private var personExampleIDs: [UUID: Set<UUID>] = [:]
@@ -479,35 +490,78 @@ final class VoiceLibraryStore: ObservableObject {
 
     /// Confirmed samples are usable with the model that produced them, even
     /// when their source recording is unavailable for playback.
-    func matchingPeople(from people: [Person]) -> [Person] {
-        defer { releaseRepresentations() }
-        guard !people.isEmpty else { return [] }
-        let conflictingIDs = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
-        return people.map { person in
-            var value = person
-            let confirmed = (personExampleIDs[person.id] ?? []).compactMap { exampleIndices[$0] }.sorted()
-                .map { examples[$0] }.filter {
-                    $0.personID == person.id && $0.review == .confirmed && !$0.excluded
-                        && !conflictingIDs.contains($0.id)
-                }
-            let evidence = confirmed.flatMap { example in
-                (hydratedExample(id: example.id)?.voiceEmbeddings ?? []).filter(\.isValid).map {
-                    SpeakerEvidenceSample(
-                        id: example.id.uuidString, source: example.source,
-                        localSpeakerID: example.groupID.uuidString,
-                        start: example.start ?? 0, end: example.end ?? 0, embedding: $0)
-                }
+    func matchingPeople(from people: [Person]) async throws -> [Person] {
+        try await matchingResult(from: people, includeSuggestions: false).profiles
+    }
+
+    private func matchingResult(from people: [Person], includeSuggestions: Bool) async throws
+        -> VoiceMatchingWorker.Output
+    {
+        try Task.checkCancellation()
+        guard readable, isLoaded, !canonicalCommitInFlight, pendingDocument == nil, let persistence else {
+            throw ServiceError("The voice library is unavailable for matching.")
+        }
+        let snapshot = persistence.snapshot()
+        let input = VoiceMatchingWorker.Input(
+            directory: url.deletingLastPathComponent(), persistence: snapshot, examples: examples,
+            people: people, deletedPeople: deletedPeople, includeSuggestions: includeSuggestions)
+        for mode in Array(matchingOperations.keys) {
+            guard let operation = matchingOperations[mode] else { continue }
+            if operation.input.persistence.revision != snapshot.revision
+                || operation.input.persistence.fileRevisions != snapshot.fileRevisions
+                || operation.input.people != people
+            {
+                operation.task.cancel()
+                matchingOperations[mode] = nil
             }
-            let selected = Dictionary(grouping: evidence, by: \.model).values.flatMap {
-                VoiceProfileSelection.select($0, limit: 12)
-            }.sorted { $0.id < $1.id }
-            let byID = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.id.uuidString, $0) })
-            value.voiceSamples = selected.compactMap { sample in
-                guard let example = byID[sample.id] else { return nil }
-                return PersonVoiceSample(
-                    meetingID: example.meetingID, speakerID: example.id, voiceEmbedding: sample.embedding)
+        }
+        if matchingOperations[includeSuggestions] == nil {
+            let worker = matchingWorker
+            let beforeRead = beforeMatchingRead
+            let beforeValidation = beforeMatchingValidation
+            matchingOperations[includeSuggestions] = MatchingOperation(
+                input: input,
+                task: Task(priority: .utility) {
+                    try await worker.run(input, beforeRead: beforeRead, beforeValidation: beforeValidation)
+                })
+        }
+        let id = matchingOperations[includeSuggestions]!.id
+        let token = UUID()
+        matchingOperations[includeSuggestions]!.waiters.insert(token)
+        let task = matchingOperations[includeSuggestions]!.task
+        defer { releaseMatchingWaiter(token, operationID: id) }
+        let result: VoiceMatchingWorker.Output
+        do {
+            result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.releaseMatchingWaiter(token, operationID: id) }
             }
-            return value
+        }
+        catch {
+            // A review made while reading is expected invalidation, not a storage failure.
+            guard !Task.isCancelled, readable, !canonicalCommitInFlight, pendingDocument == nil,
+                persistence.snapshot().revision == snapshot.revision,
+                examples == input.examples, deletedPeople == input.deletedPeople
+            else { throw CancellationError() }
+            throw error
+        }
+        try Task.checkCancellation()
+        // No suspension between this validation and returning profiles or applying suggestions.
+        guard readable, !canonicalCommitInFlight, pendingDocument == nil,
+            persistence.snapshot().revision == snapshot.revision,
+            persistence.snapshot().fileRevisions == snapshot.fileRevisions,
+            examples == input.examples, deletedPeople == input.deletedPeople
+        else { throw CancellationError() }
+        return result
+    }
+
+    private func releaseMatchingWaiter(_ token: UUID, operationID: UUID) {
+        guard let mode = matchingOperations.first(where: { $0.value.id == operationID })?.key else { return }
+        matchingOperations[mode]?.waiters.remove(token)
+        if matchingOperations[mode]?.waiters.isEmpty == true {
+            matchingOperations[mode]?.task.cancel()
+            matchingOperations[mode] = nil
         }
     }
 
@@ -617,24 +671,24 @@ final class VoiceLibraryStore: ObservableObject {
         return hydratedExample(id: exampleID)
     }
 
-    func suggestReviewedPeople(from people: [Person]) {
-        defer { releaseRepresentations() }
-        let profiles = matchingPeople(from: people)
-        let candidates = examples.filter { !$0.isReviewed || !$0.rejectedPersonIDs.isEmpty }
-        for example in candidates { guard hydratedExample(id: example.id) != nil else { return } }
-        var next = document
-        for index in next.examples.indices {
-            let example = next.examples[index]
-            guard !example.isReviewed else { continue }
-            let matches = example.voiceEmbeddings.compactMap {
-                SpeakerRecognition.match(embedding: $0, people: profiles)
+    func suggestReviewedPeople(from people: [Person]) async {
+        do {
+            let result = try await matchingResult(from: people, includeSuggestions: true)
+            try Task.checkCancellation()
+            var next = document
+            for suggestion in result.suggestions {
+                guard let index = exampleIndices[suggestion.exampleID], !next.examples[index].isReviewed else {
+                    continue
+                }
+                next.examples[index].suggestedPersonID = suggestion.personID
+                next.examples[index].review = suggestion.personID == nil ? .unassigned : .suggested
             }
-            let candidates = Set(matches.map(\.personID))
-            let person = allowedSuggestion(for: example, personID: candidates.count == 1 ? candidates.first : nil)
-            next.examples[index].suggestedPersonID = person
-            next.examples[index].review = person == nil ? .unassigned : .suggested
+            if next.examples != document.examples { _ = commit(next) }
         }
-        if next.examples != document.examples { _ = commit(next) }
+        catch is CancellationError {}
+        catch {
+            errorMessage = "Couldn’t prepare voice matches. \(error.localizedDescription)"
+        }
     }
 
     /// Rejections are evidence, not global person bans. Exact reviewed audio is

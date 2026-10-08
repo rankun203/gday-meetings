@@ -60,7 +60,7 @@ struct Meeting: Codable, Identifiable, Equatable {
     }
 
 }
-struct Person: Codable, Identifiable, Equatable {
+struct Person: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     var name = ""
     var email = ""

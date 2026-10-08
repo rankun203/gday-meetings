@@ -332,7 +332,8 @@ final class VoiceLibraryPreparation: ObservableObject {
         }
         guard !Task.isCancelled else { return }
         if job.discover { groupUnassigned(type: job.type, exampleIDs: Set(job.exampleIDs)) }
-        library.suggestReviewedPeople(from: people())
+        await library.suggestReviewedPeople(from: people())
+        guard !Task.isCancelled else { return }
         update(jobID) { $0.state = $0.failures.isEmpty ? .completed : .failed }
     }
 

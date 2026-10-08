@@ -63,13 +63,13 @@ struct VoiceLegacyResolutionTests {
         #expect(recovered.suggestedPersonID == person.id)
         #expect(recovered.embeddings.count == 1)
         #expect(library.audioIsCurrent(recovered))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
         #expect(try MeetingFolderStorage.read(id: meeting.id, directory: directory).transcript == meeting.transcript)
         #expect(library.ingest(meeting: meeting, directory: folder))
         #expect(library.examples.count == 1)
     }
 
-    @Test func confirmationUsesAllCompatibleRepresentationsWithoutSourceAudio() throws {
+    @Test func confirmationUsesAllCompatibleRepresentationsWithoutSourceAudio() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
@@ -80,13 +80,13 @@ struct VoiceLegacyResolutionTests {
             embeddings: [vector])
         #expect(library.upsert([sample]))
         #expect(library.confirm(ids: [sample.id], personID: person.id))
-        let profiles = library.matchingPeople(from: [person])
+        let profiles = (try await library.matchingPeople(from: [person]))
         #expect(SpeakerRecognition.match(embedding: vector, people: profiles)?.personID == person.id)
         var incompatible = vector
         incompatible.type.revision = "different-model-revision"
         #expect(SpeakerRecognition.match(embedding: incompatible, people: profiles) == nil)
         #expect(library.reject(ids: [sample.id], personID: person.id))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
     }
 
     @Test func legacyDocumentRequiresExplicitMigrationAndRemainsUnchanged() throws {
@@ -103,7 +103,7 @@ struct VoiceLegacyResolutionTests {
         #expect(try Data(contentsOf: url) == data)
     }
 
-    @Test func resolvingAudioPreservesRejectedAndClearedDecisions() throws {
+    @Test func resolvingAudioPreservesRejectedAndClearedDecisions() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (meeting, person, folder) = try fixture(root: directory)
@@ -115,9 +115,9 @@ struct VoiceLegacyResolutionTests {
             library.resolveLegacyExample(exampleID: old.id, meeting: meeting, directory: folder))
         #expect(resolved.manuallyCleared && resolved.rejectedPersonIDs == [person.id])
         #expect(library.addRepresentation(exampleID: old.id, embedding: .init(type: type, values: [1, 0])))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
         #expect(library.confirm(ids: [old.id], personID: person.id))
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
     }
 
     @Test func confirmedSpeakerCanProjectOntoItsLocatedAudio() throws {
@@ -178,7 +178,7 @@ struct VoiceLegacyResolutionTests {
         #expect(library.examples(for: person.id).isEmpty)
     }
 
-    @Test func rejectedRepresentationVetoesSuggestionsAcrossStorageFields() throws {
+    @Test func rejectedRepresentationVetoesSuggestionsAcrossStorageFields() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (meeting, originalPerson, folder) = try fixture(root: directory)
@@ -193,7 +193,7 @@ struct VoiceLegacyResolutionTests {
         #expect(library.upsert([candidate]))
         #expect(library.suggest(exampleID: candidate.id, personID: person.id))
         #expect(library.examples.first(where: { $0.id == candidate.id })?.suggestedPersonID == nil)
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.isEmpty)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
     }
 
     @Test func projectedSpeakerOriginsRecoverOnlyAnUnambiguousAudioSource() throws {
@@ -217,7 +217,7 @@ struct VoiceLegacyResolutionTests {
         #expect(VoiceExampleResolution.resolve(old, meeting: meeting) == nil)
     }
 
-    @Test func undoRestoresConfirmationAfterAudioRecovery() throws {
+    @Test func undoRestoresConfirmationAfterAudioRecovery() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (meeting, person, folder) = try fixture(root: directory)
@@ -229,12 +229,12 @@ struct VoiceLegacyResolutionTests {
         #expect(library.addRepresentation(exampleID: old.id, embedding: .init(type: type, values: [1, 0])))
         #expect(library.undo())
         #expect(library.examples.first?.review == .confirmed)
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
         #expect(library.applyingDecisions(to: meeting).speakers.contains { $0.personID == person.id })
         #expect(library.confirm(ids: [old.id], personID: person.id))
         #expect(library.reject(ids: [old.id], personID: person.id))
         #expect(library.undo())
-        #expect(library.matchingPeople(from: [person])[0].voiceSamples.count == 1)
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
     }
 
     @Test func missingMicrophoneCannotFallBackToContradictorySystemAudio() throws {

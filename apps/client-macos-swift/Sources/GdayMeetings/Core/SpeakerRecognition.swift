@@ -39,7 +39,7 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-struct PersonVoiceSample: Codable, Equatable {
+struct PersonVoiceSample: Codable, Equatable, Sendable {
     var meetingID: UUID
     var speakerID: UUID
     var scope: String

@@ -1652,16 +1652,20 @@ extension MeetingStore {
             LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == sample.source.rawValue
         }
         guard candidates.count == 1 else { return }
-        let match = SpeakerRecognition.match(embedding: embedding, people: voiceLibrary.matchingPeople(from: people))
-        if !voiceLibrary.recordSample(
-            meetingID: meetingID, speakerID: sample.speakerID,
-            range: .init(
-                audioFile: candidates[0], source: sample.source.rawValue,
-                start: sample.start, end: sample.end),
-            embedding: embedding, suggestion: match?.personID)
-        {
+        // Capture evidence before matching. Profile reads and rejection checks run
+        // together on the worker; a stale result cannot discard this sample.
+        guard
+            voiceLibrary.recordSample(
+                meetingID: meetingID, speakerID: sample.speakerID,
+                range: .init(
+                    audioFile: candidates[0], source: sample.source.rawValue,
+                    start: sample.start, end: sample.end),
+                embedding: embedding, suggestion: nil)
+        else {
             errorMessage = voiceLibrary.errorMessage
+            return
         }
+        await voiceLibrary.suggestReviewedPeople(from: people)
     }
 
     func refreshVoiceAssignments(meetingIDs: Set<UUID>) async {
@@ -1672,7 +1676,7 @@ extension MeetingStore {
             let updated = voiceLibrary.applyingDecisions(to: meeting)
             if updated != meeting { _ = await updateMeeting(updated) }
         }
-        voiceLibrary.suggestReviewedPeople(from: people)
+        await voiceLibrary.suggestReviewedPeople(from: people)
     }
 
     private func scheduleVoiceAssignmentRefresh(meetingIDs: Set<UUID>) {

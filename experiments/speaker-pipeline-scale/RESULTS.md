@@ -11,9 +11,9 @@ scope: synthetic-performance-validation
 
 Retaining all meeting embeddings exposed avoidable repeated scans. Equivalent algorithms reduced measured consolidation time for 5,760 samples from 0.622 seconds to 0.052 seconds and for 512 mergeable local units from 4.110 seconds to 0.112 seconds. Reviewed-example conflict detection for 8,000 nonoverlapping examples fell from 18.667 seconds to 0.007 seconds. No evidence cap or sample removal was introduced.
 
-These are algorithm timings from one local run per workload, not app responsiveness or speaker accuracy measurements. The separate full-store check measured 3.010 seconds on the main actor for 8,000 confirmed embeddings. This remains a UI responsiveness issue, so moving hydration and selection off the main actor is the next required fix.
+The separate full-store baseline measured 3.010 seconds on the main actor for 8,000 confirmed embeddings. The asynchronous implementation completed in 6.206 seconds while the main actor processed 514 heartbeat ticks; its longest observed heartbeat gap was 58.7 ms. Total work increased with additional revision validation, while the main actor remained available during profile preparation. These are single-run measurements of algorithm cost and actor scheduling, not speaker accuracy or rendered frame rate.
 
-The full People profile-path benchmark is implemented and pending execution. It measures `VoiceLibraryStore.matchingPeople` with 8,000 persisted confirmed representations across eight people, including disk reads, selection, and release. Its result must be reported separately from the pure conflict sweep; see the [run instructions and JSON schema](README.md#full-people-profile-path).
+The full People profile-path benchmark measures `VoiceLibraryStore.matchingPeople` with 8,000 persisted confirmed representations across eight people. Its asynchronous version also measures main-actor heartbeat gaps during the call. Results are reported separately from the pure conflict sweep; see the [run instructions and JSON schema](README.md#full-people-profile-path).
 
 ## References
 
@@ -49,18 +49,27 @@ Private receipts are under `tmp/speaker-pipeline-scale-consolidation-baseline-20
 
 Consolidation now measures sample coverage using merged interval unions and a moving cursor. Sample-derived boundaries that previously coalesced into the same output interval no longer trigger repeated scans. Complete-link group similarities reuse a cached minimum while preserving group order and tie behavior.
 
-People matching now computes conflict IDs once, then reads examples through the existing person index in metadata order. The conflict sweep sorts each recording's spans, requiring O(N log N) time and O(N) auxiliary storage for N reviews. It preserves recording revision, audio-file, review, exclusion, range, and person-decision rules.
+People matching computes conflict IDs once. The asynchronous worker groups metadata by person in one pass, preserving metadata order within each group. The conflict sweep sorts each recording's spans, requiring O(N log N) time and O(N) auxiliary storage for N reviews. It preserves recording revision, audio-file, review, exclusion, range, and person-decision rules.
 
 ## Full People profile path
 
-The release-mode opt-in test passed with 8,000 confirmed 256-dimensional vectors across eight people. The complete `matchingPeople` call took **3.009986 seconds**, including representation reads, profile selection, and release. Each person retained exactly twelve matching samples. Bulk persistence and metadata construction were outside the timer; application representations were released before the call, while filesystem cache state was unspecified.
+The synchronous baseline release-mode test passed with 8,000 confirmed 256-dimensional vectors across eight people. The complete `matchingPeople` call took **3.009986 seconds**, including representation reads, profile selection, and release. Each person retained exactly twelve matching samples. Bulk persistence and metadata construction were outside the timer; application representations were released before the call, while filesystem cache state was unspecified.
 
-The source-copy comparison and aggregate receipt are recorded in ignored `tmp/speaker-pipeline-scale-full-store-20261008.json`; the release log is `/private/tmp/gday-speaker-profile-scale-release.log`. The integrated app also passed 1,154 tests in 200 suites and a separate release build. The profile measurement demonstrates that fast conflict detection alone does not remove the main-thread stall.
+The source-copy comparison and aggregate receipt are recorded in ignored `tmp/speaker-pipeline-scale-full-store-20261008.json`; the release log is `/private/tmp/gday-speaker-profile-scale-release.log`. That checkpoint also passed 1,154 tests in 200 suites and a separate release build, before the asynchronous worker change. The profile measurement demonstrates that fast conflict detection alone does not remove the main-thread stall.
+
+The asynchronous release benchmark passed with the same workload and twelve selected samples for every person. It includes representation reads, profile selection, final representation and metadata revision checks, and return to the main actor. A heartbeat task requested main-actor scheduling every 10 ms during matching.
+
+| Implementation | Total matching seconds | Heartbeats | Maximum heartbeat gap |
+| --- | ---: | ---: | ---: |
+| Synchronous baseline | 3.009986 | Not instrumented | Main actor occupied for the call |
+| Asynchronous worker | 6.206232 | 514 | 58.725 ms |
+
+Additional file-revision checks contribute I/O, but no separate ablation attributes the total-time increase to individual operations. The heartbeat measures scheduling availability, not actual input latency or frame rendering. The optimized test bundle built in 563.59 seconds; the test, including unmeasured setup and cleanup, passed in 21.285 seconds. Its log is `/private/tmp/gday-async-voice-profile-release.log`; source hashes, binary hashes, and aggregate results are recorded in ignored `tmp/async-voice-validation-20261008.json`.
 
 ## Limitations and technical debt
 
 Complete-link clustering retains quadratic pair storage and a worst-case cubic scan over active groups. The measured improvement removes repeated member cross-products; it does not make the whole algorithm quadratic. Dense overlap constraints and other vector distributions can have different costs. These workloads do not measure peak memory.
 
-People profile hydration and selection remain proportional to retained confirmed examples and run through the existing store path. The measured three-second main-actor stall is retained at this checkpoint and is being fixed next with owned background readers, cancellation, and revision checks that preserve current reviews. It is not accepted as the final experience. No persistent cache, schema migration, evidence pruning, or temporary compatibility path was added by these changes.
+People profile hydration and selection remain proportional to retained confirmed examples. The asynchronous implementation moves these operations to a serial worker with an independently owned read-only backend. It checks record and library revisions, then verifies the current reviewed metadata before returning profiles or saving suggestions. Record reads use short locks; selection holds no filesystem lock. Identical concurrent requests share a task within each request mode, cancellation removes individual waiters, and obsolete results cannot clear current suggestions. Live recording persists examples before requesting suggestions, so matching does not delay evidence retention or hydrate rejection evidence on the main actor. The implementation passed 1,164 app tests in 202 suites and a packaged release build. The heartbeat benchmark covers profile preparation; existing transactional metadata-write costs, including bulk suggestion publication, are outside its measured interval. No persistent cache, schema migration, evidence pruning, or temporary compatibility path was added.
 
 These measurements support the specific scan optimizations. App tests and a release build remain separate integration gates, and model evaluation remains necessary for changes to speaker identity decisions.
