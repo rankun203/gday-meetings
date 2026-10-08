@@ -128,25 +128,36 @@ final class VoiceLibraryPersistence {
     /// Snapshot the precise reviewed records needed by a profile. Unrelated live
     /// candidate commits must not cancel expensive reviewed-profile construction.
     func profileDependencyRevisions(exampleIDs: [UUID]) throws -> [String: String] {
-        try locked {
-            try validateRevision()
-            let overlay =
-                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
-                ?? [:]
-            var result: [String: String] = [:]
-            for id in exampleIDs {
-                for path in ["examples/\(id.uuidString).json", representationPath(id)] {
+        try locked { try validateRevision() }
+        let paths = exampleIDs.flatMap { ["examples/\($0.uuidString).json", representationPath($0)] }
+        var result: [String: String] = [:]
+        for start in stride(from: 0, to: paths.count, by: 32) {
+            try Task.checkCancellation()
+            let batch = paths[start..<min(paths.count, start + 32)]
+            let revisions = try locked {
+                let transaction = try pendingTransaction()
+                let overlay =
+                    transaction.map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) } ?? [:]
+                var values: [String: String] = [:]
+                for path in batch {
                     try Task.checkCancellation()
-                    if overlay[path] == nil,
-                        VoiceLibraryStore.revision(url: try recordURL(path)) != fileRevisions[path]
-                    {
-                        throw changedError()
+                    if overlay[path] != nil {
+                        // A newer transaction may touch unrelated candidates, but
+                        // it must not replace one of this profile's dependencies.
+                        guard transaction?.revision == revision else { throw changedError() }
+                        values[path] = try dependencyRevision(path, overlay: overlay)
                     }
-                    result[path] = try dependencyRevision(path, overlay: overlay)
+                    else {
+                        let observed = VoiceLibraryStore.revision(url: try recordURL(path))
+                        guard observed == fileRevisions[path] else { throw changedError() }
+                        values[path] = observed ?? "absent"
+                    }
                 }
+                return values
             }
-            return result
+            result.merge(revisions, uniquingKeysWith: { _, new in new })
         }
+        return result
     }
 
     func loadProfileRepresentations(exampleID: UUID, dependencies: [String: String]) throws
@@ -164,13 +175,19 @@ final class VoiceLibraryPersistence {
     }
 
     func validateProfileDependencies(_ dependencies: [String: String]) throws {
-        try locked {
-            let overlay =
-                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
-                ?? [:]
-            for (path, expected) in dependencies {
-                try Task.checkCancellation()
-                guard try dependencyRevision(path, overlay: overlay) == expected else { throw changedError() }
+        let paths = dependencies.keys.sorted()
+        for start in stride(from: 0, to: paths.count, by: 32) {
+            try Task.checkCancellation()
+            try locked {
+                let overlay =
+                    try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
+                    ?? [:]
+                for path in paths[start..<min(paths.count, start + 32)] {
+                    try Task.checkCancellation()
+                    guard try dependencyRevision(path, overlay: overlay) == dependencies[path] else {
+                        throw changedError()
+                    }
+                }
             }
         }
     }
@@ -193,14 +210,19 @@ final class VoiceLibraryPersistence {
     }
 
     func validateMatchingMetadataRevisions() throws {
-        try locked {
-            try validateRevision()
-            let overlay = try pendingTransaction().map { Set($0.changes.map(\.path)) } ?? []
-            for path in fileRevisions.keys where path.hasPrefix("examples/") || path.hasPrefix("deleted-people/") {
-                try Task.checkCancellation()
-                if !overlay.contains(path), VoiceLibraryStore.revision(url: try recordURL(path)) != fileRevisions[path]
-                {
-                    throw changedError()
+        let paths = fileRevisions.keys.filter { $0.hasPrefix("examples/") || $0.hasPrefix("deleted-people/") }.sorted()
+        for start in stride(from: 0, to: paths.count, by: 32) {
+            try Task.checkCancellation()
+            try locked {
+                try validateRevision()
+                let overlay = try pendingTransaction().map { Set($0.changes.map(\.path)) } ?? []
+                for path in paths[start..<min(paths.count, start + 32)] {
+                    try Task.checkCancellation()
+                    if !overlay.contains(path),
+                        VoiceLibraryStore.revision(url: try recordURL(path)) != fileRevisions[path]
+                    {
+                        throw changedError()
+                    }
                 }
             }
         }
@@ -223,12 +245,30 @@ final class VoiceLibraryPersistence {
         fileprivate var transaction: Transaction
         fileprivate var encoded: Data
         fileprivate var fileRevisions: [String: String]
+        fileprivate var readPaths: Set<String>
     }
 
-    /// Pure preparation against this backend's adopted snapshot. Run on a worker;
-    /// this creates no files and acquires no writer reservation.
+    /// Read-only preparation against this backend's adopted snapshot. Run on a
+    /// worker; it creates no files and acquires no writer reservation.
     func prepare(previous: VoiceLibraryDocument, next: VoiceLibraryDocument) throws -> PreparedCommit {
         try Task.checkCancellation()
+        var previous = previous
+        let desired = Dictionary(uniqueKeysWithValues: next.examples.map { ($0.id, $0) })
+        let readPaths = Set(
+            previous.examples.compactMap { value in
+                desired[value.id]?.embeddings.isEmpty == false ? representationPath(value.id) : nil
+            })
+        // Metadata-only callers need not synchronously load selected vectors.
+        // Read only prior representations that the desired document supplies,
+        // so an unchanged vector does not get rewritten on every live update.
+        for index in previous.examples.indices
+        where previous.examples[index].embeddings.isEmpty
+            && desired[previous.examples[index].id]?.embeddings.isEmpty == false
+        {
+            try Task.checkCancellation()
+            previous.examples[index].embeddings =
+                try loadRepresentations(exampleID: previous.examples[index].id)?.embeddings ?? []
+        }
         let changes = try changes(previous: previous, next: next)
         let transaction = Transaction(previousRevision: revision, revision: UUID(), changes: changes)
         let data = try encode(transaction)
@@ -236,7 +276,8 @@ final class VoiceLibraryPersistence {
             throw ServiceError("This voice-library change is too large. Save fewer examples at a time.")
         }
         try Task.checkCancellation()
-        return PreparedCommit(transaction: transaction, encoded: data, fileRevisions: fileRevisions)
+        return PreparedCommit(
+            transaction: transaction, encoded: data, fileRevisions: fileRevisions, readPaths: readPaths)
     }
 
     /// Caller must also validate its in-memory review document before publishing.
@@ -245,8 +286,8 @@ final class VoiceLibraryPersistence {
         try locked {
             let transaction = prepared.transaction
             guard revision == transaction.previousRevision else { throw changedError() }
-            for change in transaction.changes {
-                guard fileRevisions[change.path] == prepared.fileRevisions[change.path] else { throw changedError() }
+            for path in Set(transaction.changes.map(\.path)).union(prepared.readPaths) {
+                guard fileRevisions[path] == prepared.fileRevisions[path] else { throw changedError() }
             }
             try validateRevision()
             if let pending = try pendingTransaction() {
@@ -254,6 +295,10 @@ final class VoiceLibraryPersistence {
                 try refreshFileRevisions(pending.changes.map(\.path))
             }
             try validateFiles(transaction.changes)
+            // A vector read during preparation can suppress a representation
+            // write. It remains a dependency even when only metadata changes.
+            let writtenPaths = Set(transaction.changes.map(\.path))
+            try validateFiles(prepared.readPaths.subtracting(writtenPaths).map { Change(path: $0, data: nil) })
             guard !transaction.changes.isEmpty || revision == nil else { return }
             try beforeCommit?()
             do { try atomicWrite(prepared.encoded, to: directory.appendingPathComponent("transaction.json")) }

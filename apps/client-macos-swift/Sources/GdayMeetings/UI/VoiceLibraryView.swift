@@ -13,6 +13,8 @@ struct VoiceLibraryView: View {
     @ViewState private var assigning = false
     @ViewState private var assignmentExamples = Set<UUID>()
     @ViewState private var merging = false
+    @ViewState private var mergeExamples = Set<UUID>()
+    @ViewState private var reviewSaving = false
     private struct RecordingTarget: Identifiable {
         let id: UUID
         let rowID: UUID?
@@ -68,8 +70,8 @@ struct VoiceLibraryView: View {
                     Text("Listen to examples before confirming a person.").foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Undo", systemImage: "arrow.uturn.backward") { library.undo() }
-                    .disabled(!library.canUndo || !store.libraryWritable)
+                Button("Undo", systemImage: "arrow.uturn.backward") { perform(.undo) }
+                    .disabled(!library.canUndo || !store.libraryWritable || reviewSaving)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding(AppTheme.contentInset)
             Divider()
@@ -153,8 +155,9 @@ struct VoiceLibraryView: View {
         .task(id: selectedGroup) { await loadMeetingEntries() }
         .sheet(isPresented: $assigning) {
             VoicePersonAssignmentView(count: assignmentExamples.count) { personID in
-                guard library.confirm(ids: assignmentExamples, personID: personID) else { return false }
-                selectedExamples.removeAll()
+                let ids = assignmentExamples
+                guard await store.reviewVoiceExamples(.confirm(ids: ids, personID: personID)) else { return false }
+                selectedExamples.subtract(ids)
                 return true
             }
         }
@@ -166,9 +169,11 @@ struct VoiceLibraryView: View {
                 List(allGroups.filter { $0.id != selectedGroup }) { group in
                     HStack {
                         Button {
-                            guard library.merge(ids: selectedExamples.union(group.examples.map(\.id))) else { return }
-                            selectedExamples.removeAll()
-                            merging = false
+                            let selected = mergeExamples
+                            perform(.merge(ids: selected.union(group.examples.map(\.id)))) {
+                                selectedExamples.subtract(selected)
+                                merging = false
+                            }
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(groupTitle(group)).font(.headline)
@@ -181,8 +186,16 @@ struct VoiceLibraryView: View {
                         }
                     }
                 }.frame(height: 240)
-                Button("Cancel") { merging = false }.keyboardShortcut(.cancelAction)
+                if let localError {
+                    AppInlineMessage(text: localError, systemImage: "exclamationmark.triangle", tint: .red)
+                }
+                HStack {
+                    Button("Cancel") { merging = false }.keyboardShortcut(.cancelAction)
+                    if reviewSaving { ProgressView("Saving…").controlSize(.small) }
+                }
             }.padding(24).frame(width: 480)
+                .disabled(reviewSaving)
+                .interactiveDismissDisabled(reviewSaving)
         }
         .sheet(item: $selectedRecording) { target in
             VStack {
@@ -298,9 +311,9 @@ struct VoiceLibraryView: View {
                     let candidateName = name(for: candidate)
                 {
                     if example.review != .confirmed {
-                        Button("Confirm \(candidateName)") { library.confirm(ids: [example.id], personID: candidate) }
+                        Button("Confirm \(candidateName)") { perform(.confirm(ids: [example.id], personID: candidate)) }
                     }
-                    Button("Not \(candidateName)") { library.reject(ids: [example.id], personID: candidate) }
+                    Button("Not \(candidateName)") { perform(.reject(ids: [example.id], personID: candidate)) }
                 }
                 Button("Assign…") {
                     selectedExamples = [example.id]
@@ -309,16 +322,16 @@ struct VoiceLibraryView: View {
                 Spacer()
                 Menu {
                     Button(example.excluded ? "Use for Voice Recognition" : "Don’t Use for Voice Recognition") {
-                        library.exclude(ids: [example.id], excluded: !example.excluded)
+                        perform(.exclude(ids: [example.id], excluded: !example.excluded))
                     }
-                    if example.personID != nil { Button("Remove Assignment") { library.clear(ids: [example.id]) } }
-                    Button("Separate from Group") { library.split(ids: [example.id]) }
+                    if example.personID != nil { Button("Remove Assignment") { perform(.clear(ids: [example.id])) } }
+                    Button("Separate from Group") { perform(.split(ids: [example.id])) }
                 } label: {
                     Image(systemName: "ellipsis")
                 }
                 .menuStyle(.borderlessButton).fixedSize().help("Voice example actions")
                 .accessibilityLabel("Voice example actions")
-            }.controlSize(.small).disabled(!store.libraryWritable)
+            }.controlSize(.small).disabled(!store.libraryWritable || reviewSaving)
             VoiceExampleDetailsView(library: library, example: example)
         }
         .padding(12)
@@ -337,16 +350,35 @@ struct VoiceLibraryView: View {
             Spacer()
             Button("Assign Selected…") { presentAssignment(ids: selectedExamples) }.disabled(selectedExamples.isEmpty)
             Menu("Group") {
-                Button("Merge with Another Group…") { merging = true }
-                    .disabled(allGroups.count < 2)
-                Button("Separate Selected Examples") { library.split(ids: selectedExamples) }
+                Button("Merge with Another Group…") {
+                    mergeExamples = selectedExamples
+                    localError = nil
+                    merging = true
+                }
+                .disabled(allGroups.count < 2)
+                Button("Separate Selected Examples") { perform(.split(ids: selectedExamples)) }
             }.fixedSize().disabled(selectedExamples.isEmpty)
             Menu("More") {
-                Button("Don’t Use for Voice Recognition") { library.exclude(ids: selectedExamples) }
-                Button("Use for Voice Recognition") { library.exclude(ids: selectedExamples, excluded: false) }
-                Button("Remove Assignment") { library.clear(ids: selectedExamples) }
+                Button("Don’t Use for Voice Recognition") { perform(.exclude(ids: selectedExamples, excluded: true)) }
+                Button("Use for Voice Recognition") { perform(.exclude(ids: selectedExamples, excluded: false)) }
+                Button("Remove Assignment") { perform(.clear(ids: selectedExamples)) }
             }.fixedSize().disabled(selectedExamples.isEmpty)
-        }.padding(12).disabled(!store.libraryWritable)
+        }.padding(12).disabled(!store.libraryWritable || reviewSaving)
+    }
+
+    private func perform(_ action: VoiceReviewAction, onSuccess: @escaping () -> Void = {}) {
+        guard !reviewSaving else { return }
+        reviewSaving = true
+        localError = nil
+        Task {
+            if await store.reviewVoiceExamples(action) {
+                onSuccess()
+            }
+            else {
+                localError = store.errorMessage ?? library.errorMessage ?? "Couldn’t save the voice review. Try again."
+            }
+            reviewSaving = false
+        }
     }
 
     private func status(_ example: VoiceExample) -> String {
@@ -671,7 +703,8 @@ private struct VoicePersonAssignmentView: View {
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.dismiss) private var dismiss
     let count: Int
-    let assign: (UUID) -> Bool
+    let assign: (UUID) async -> Bool
+    @ViewState private var saving = false
     @ViewState private var query = ""
     @ViewState private var error: String?
     @FocusState private var searchFocused: Bool
@@ -704,8 +737,11 @@ private struct VoicePersonAssignmentView: View {
                     && !store.people.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame })
                 {
                     Button("Create Person") {
+                        guard !saving else { return }
+                        saving = true
                         let requestedName = name
                         Task {
+                            defer { saving = false }
                             let id = await store.addPerson(name: requestedName)
                             if store.people.contains(where: { $0.id == id }) {
                                 error = nil
@@ -718,6 +754,9 @@ private struct VoicePersonAssignmentView: View {
                 }
             }
         }.padding(24).frame(width: 440)
+            .disabled(saving)
+            .overlay { if saving { ProgressView("Saving…") } }
+            .interactiveDismissDisabled(saving)
             .task { searchFocused = true }
     }
     private func complete(_ personID: UUID) {
@@ -725,11 +764,18 @@ private struct VoicePersonAssignmentView: View {
             error = store.errorMessage ?? "Couldn’t save this person. Try again."
             return
         }
-        if assign(personID) {
-            dismiss()
-        }
-        else {
-            error = store.voiceLibrary.errorMessage ?? "Couldn’t save the assignment. Try again."
+        guard !saving else { return }
+        saving = true
+        error = nil
+        Task {
+            defer { saving = false }
+            if await assign(personID) {
+                dismiss()
+            }
+            else {
+                error =
+                    store.errorMessage ?? store.voiceLibrary.errorMessage ?? "Couldn’t save the assignment. Try again."
+            }
         }
     }
 }

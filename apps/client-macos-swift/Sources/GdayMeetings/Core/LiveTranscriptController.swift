@@ -271,7 +271,11 @@ final class LiveTranscriptController: ObservableObject {
         stream.setLabeling(value)
         publishStream()
         checkpoint()
-        defer { if speakerRecognitionEnabled { setSpeakerRecognitionEnabled(true) } }
+        defer {
+            if speakerRecognitionEnabled || observationIdentity != nil {
+                setSpeakerRecognitionEnabled(speakerRecognitionEnabled)
+            }
+        }
         guard value else {
             waitingForSpeakerModel = false
             detachSpeakerSession()

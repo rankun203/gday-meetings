@@ -128,6 +128,7 @@ final class VoiceLibraryStore: ObservableObject {
     var beforeMatchingRead: (@Sendable () throws -> Void)?
     var beforeMatchingValidation: (@Sendable () throws -> Void)?
     var beforeObservationPreparation: (@Sendable () throws -> Void)?
+    var beforeObservationCommit: (@Sendable () throws -> Void)?
     private struct MatchingOperation {
         var id = UUID()
         var input: VoiceMatchingWorker.Input
@@ -394,10 +395,9 @@ final class VoiceLibraryStore: ObservableObject {
         {
             return (document, selection)
         }
-        // Hydrate only reused representatives. Unrelated library vectors stay on disk.
-        for value in representatives where exampleIndices[value.id] != nil {
-            guard hydratedExample(id: value.id) != nil else { return nil }
-        }
+        // Desired vectors come from the durable recording observations. The
+        // preparation worker reads prior vectors for comparison; capture must
+        // never wait for a voice-library file lock on the UI actor.
         let desired = Dictionary(uniqueKeysWithValues: representatives.map { ($0.id, $0) })
         var next = document
         for value in representatives {
@@ -477,8 +477,24 @@ final class VoiceLibraryStore: ObservableObject {
                 try Task.checkCancellation()
                 guard persistence.snapshot().revision == snapshot.revision else { continue }
                 guard admitVoiceWrite(), canWrite() else { return false }
-                try persistence.commit(prepared)
-                publishCommittedVoiceDocument(plan.next, warning: persistence.maintenanceWarning)
+                // Reserve mutation only after preparation has been rebased. The
+                // canonical queue orders human reviews behind this transaction;
+                // filesystem locks and materialization never run on the UI actor.
+                canonicalCommitInFlight = true
+                defer { canonicalCommitInFlight = false }
+                let beforeCommit = beforeObservationCommit
+                let committed = try await Task.detached(priority: .utility) {
+                    let backend = try VoiceLibraryPersistence(directory: directory, write: snapshot.write)
+                    backend.adopt(snapshot)
+                    backend.beforeCommit = beforeCommit
+                    try backend.commit(prepared)
+                    return (backend.snapshot(), backend.maintenanceWarning)
+                }.value
+                // Once writing starts, observe its atomic outcome even if capture
+                // was cancelled. Abandoning a committed result would stale the
+                // in-memory revision and could lose a subsequent human review.
+                persistence.adopt(committed.0)
+                publishCommittedVoiceDocument(plan.next, warning: committed.1)
                 lastObservationSelection = (meetingID, representationsRevision, plan.selection)
                 return true
             }
@@ -486,6 +502,10 @@ final class VoiceLibraryStore: ObservableObject {
                 return false
             }
             catch {
+                // A human review can invalidate a snapshot while the worker is
+                // reading prior vectors. Rebase local changes; report genuine
+                // external conflicts instead of retrying those indefinitely.
+                if !Task.isCancelled, persistence.snapshot().revision != snapshot.revision { continue }
                 errorMessage = "Couldn’t save speaker review examples. \(error.localizedDescription)"
                 return false
             }
@@ -735,10 +755,17 @@ final class VoiceLibraryStore: ObservableObject {
     /// File identity and modification metadata invalidate replacement and edits
     /// without rereading hours of audio on the UI actor.
     nonisolated static func revision(url: URL) -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-            attributes[.type] as? FileAttributeType == .typeRegular,
-            let size = attributes[.size] as? NSNumber,
-            let modified = attributes[.modificationDate] as? Date
+        // Full attributesOfItem also resolves owner/group accounts through
+        // Directory Services. Matching checks many records while holding a file
+        // lock; request only the fields used by the existing revision format.
+        // A fresh URL prevents cached resource values hiding external edits.
+        let fresh = URL(fileURLWithPath: url.path)
+        guard
+            let values = try? fresh.resourceValues(forKeys: [
+                .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey,
+            ]),
+            values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize,
+            let modified = values.contentModificationDate
         else { return nil }
         return "\(size):\(modified.timeIntervalSince1970)"
     }

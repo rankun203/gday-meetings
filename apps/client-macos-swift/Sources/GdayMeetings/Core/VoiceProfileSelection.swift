@@ -41,22 +41,31 @@ enum VoiceProfileSelection {
             centrality[lhs] == centrality[rhs] ? lhs > rhs : centrality[lhs] < centrality[rhs]
         }!
         var chosen = [first]
-        var remaining = Set(candidates.indices).subtracting(chosen)
+        var remaining = Array(candidates.indices).filter { $0 != first }
+        // Cache distance to the nearest selected example. Adding an exemplar
+        // needs only one new dot product per candidate, preserving the original
+        // farthest-first score without recomputing all previous comparisons.
+        var closest = [Double?](repeating: nil, count: candidates.count)
+        let qualities = candidates.map(quality)
+        var newest = first
         while chosen.count < limit, !remaining.isEmpty {
             try cancellationCheck()
-            let next = remaining.sorted().max { lhs, rhs in
-                func score(_ index: Int) -> Double {
-                    let similarities = chosen.filter {
-                        candidates[$0].model == candidates[index].model && vectors[$0].count == vectors[index].count
-                    }.map { VoiceEmbeddingMath.dot(vectors[index], vectors[$0]) }
-                    return 1 - (similarities.max() ?? -1) + 0.1 * quality(candidates[index])
-                }
-                let left = score(lhs)
-                let right = score(rhs)
+            for index in remaining {
+                if index % 64 == 0 { try cancellationCheck() }
+                guard candidates[index].model == candidates[newest].model,
+                    vectors[index].count == vectors[newest].count
+                else { continue }
+                let similarity = VoiceEmbeddingMath.dot(vectors[index], vectors[newest])
+                closest[index] = closest[index].map { max($0, similarity) } ?? similarity
+            }
+            let next = remaining.max { lhs, rhs in
+                let left = 1 - (closest[lhs] ?? -1) + 0.1 * qualities[lhs]
+                let right = 1 - (closest[rhs] ?? -1) + 0.1 * qualities[rhs]
                 return left == right ? lhs > rhs : left < right
             }!
             chosen.append(next)
-            remaining.remove(next)
+            remaining.removeAll { $0 == next }
+            newest = next
         }
         return chosen.map { candidates[$0] }
     }

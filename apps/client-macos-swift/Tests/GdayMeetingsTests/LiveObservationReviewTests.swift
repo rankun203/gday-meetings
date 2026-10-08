@@ -214,4 +214,49 @@ struct LiveObservationReviewTests {
         #expect(reviewed.speakerID == value.speakerID)
     }
 
+    @Test func cancellationDuringBackgroundCommitStillPublishesItsAtomicOutcome() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = VoiceLibraryStore(loading: .immediate, directory: root)
+        let meeting = UUID()
+        let value = example(meeting: meeting, speaker: UUID(), observation: "cancelled-writer")
+        let entered = AsyncStream.makeStream(of: Void.self)
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        store.beforeObservationCommit = {
+            entered.continuation.yield(())
+            release.wait()
+        }
+        let write = Task {
+            await store.reconcileObservationExamplesForCapture(meetingID: meeting, representatives: [value])
+        }
+        for await _ in entered.stream { break }
+        // This continuation runs on MainActor while the writer holds its file
+        // lock, proving that blocked storage does not block the interface.
+        try await Task.sleep(for: .milliseconds(20))
+        write.cancel()
+        store.beforeObservationCommit = nil
+        release.signal()
+        #expect(await write.value)
+        #expect(store.examples.contains { $0.id == value.id })
+        let person = UUID()
+        #expect(store.confirm(ids: [value.id], personID: person))
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: root)
+        #expect(reopened.examples.first { $0.id == value.id }?.personID == person)
+    }
+
+    @Test func failedBackgroundCommitReleasesReservationWithoutPublishingEvidence() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = VoiceLibraryStore(loading: .immediate, directory: root)
+        let meeting = UUID()
+        let value = example(meeting: meeting, speaker: UUID(), observation: "failed-writer")
+        store.beforeObservationCommit = { throw CocoaError(.fileWriteUnknown) }
+        #expect(!(await store.reconcileObservationExamplesForCapture(meetingID: meeting, representatives: [value])))
+        #expect(store.examples.isEmpty)
+        store.beforeObservationCommit = nil
+        #expect(await store.reconcileObservationExamplesForCapture(meetingID: meeting, representatives: [value]))
+        #expect(store.examples.contains { $0.id == value.id })
+    }
+
 }

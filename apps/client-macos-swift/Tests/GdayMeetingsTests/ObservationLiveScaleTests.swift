@@ -7,6 +7,30 @@ import Testing
 /// Opt-in resource experiment. Replays recorded model callbacks without rerunning
 /// inference; repeats/remaps recording windows to exercise a two-hour session.
 struct ObservationLiveScaleTests {
+    @MainActor private final class HeartbeatState {
+        var phase = "replay idle"
+        var audioThrough = 0.0
+        var previousPhase = "replay idle"
+        var previous = ContinuousClock.now
+        var maximum = Duration.zero
+        var gaps: [Double] = []
+        var count = 0
+        var maximumContext: [String: Any] = [:]
+        func record(countTick: Bool = true) {
+            let now = ContinuousClock.now
+            let gap = previous.duration(to: now)
+            let components = gap.components
+            gaps.append(Double(components.seconds) + Double(components.attoseconds) / 1e18)
+            if gap > maximum {
+                maximum = gap
+                maximumContext = ["audioSeconds": audioThrough, "previousPhase": previousPhase, "phase": phase]
+            }
+            previous = now
+            previousPhase = phase
+            if countTick { count += 1 }
+        }
+    }
+
     struct Trace: Decodable {
         struct Entry: Decodable {
             var audioSubmittedThrough: Double
@@ -87,18 +111,12 @@ struct ObservationLiveScaleTests {
         var callbackCycles = 0
         var lastCheckpoint = 0.0
         var activeClusterIDs = Set<UUID>()
-        var simulatedAudioThrough = 0.0
         let clock = ContinuousClock()
-        var lastHeartbeat = clock.now
-        var maxHeartbeatGap = Duration.zero
-        var heartbeatCount = 0
+        let heartbeatState = HeartbeatState()
         let heartbeat = Task { @MainActor in
             while !Task.isCancelled {
                 try await Task.sleep(for: .milliseconds(10))
-                let now = clock.now
-                maxHeartbeatGap = max(maxHeartbeatGap, lastHeartbeat.duration(to: now))
-                lastHeartbeat = now
-                heartbeatCount += 1
+                heartbeatState.record()
             }
         }
         defer { heartbeat.cancel() }
@@ -115,7 +133,7 @@ struct ObservationLiveScaleTests {
                 let through = offset + entry.audioSubmittedThrough
                 if through > duration { break }
                 callbacks += 1
-                simulatedAudioThrough = through
+                heartbeatState.audioThrough = through
                 if var event = entry.event, entry.kind == "speakerEvent" {
                     event.generation = remap(event.generation)
                     event.start += offset
@@ -158,9 +176,14 @@ struct ObservationLiveScaleTests {
                 let ready = adapter.takeReady()
                 admitted += ready.count
                 if !ready.isEmpty {
+                    heartbeatState.phase = "identity worker"
                     let began = clock.now
-                    let result = try await worker.ingest(ready, activity: adapter.trustedActivity())
+                    let result = try await worker.ingest(
+                        ready, activity: adapter.trustedActivity(),
+                        untrustedActivity: adapter.untrustedActivity(),
+                        untrustedSampleIDs: adapter.untrustedSampleIDs(ready))
                     engineTimes.append(seconds(began.duration(to: clock.now)))
+                    heartbeatState.phase = "identity update application"
                     let applyStarted = clock.now
                     adapter.apply(result)
                     applyTimes.append(seconds(applyStarted.duration(to: clock.now)))
@@ -185,13 +208,16 @@ struct ObservationLiveScaleTests {
                                 observationID: sample.id)
                         }
                     }
+                    heartbeatState.phase = "representative reconciliation"
                     let reconcileStarted = clock.now
                     #expect(
                         await library.reconcileObservationExamplesForCapture(
                             meetingID: meeting, representatives: representatives))
                     reconciliationTimes.append(seconds(reconcileStarted.duration(to: clock.now)))
+                    heartbeatState.phase = "schedule People matching"
                     library.scheduleReviewedPeopleSuggestions(from: people)
                 }
+                heartbeatState.phase = "timeline projection"
                 let projectionStarted = clock.now
                 projected = adapter.projection(preserving: projected)
                 projectionTimes.append(seconds(projectionStarted.duration(to: clock.now)))
@@ -208,6 +234,7 @@ struct ObservationLiveScaleTests {
                     print("GDAY_SCALE_STAGE replay audio \(through)s, callbacks \(callbacks), embeddings \(admitted)")
                     lastCheckpoint = through
                 }
+                heartbeatState.phase = "callback yield"
                 await Task.yield()
             }
             cycle += 1
@@ -215,15 +242,17 @@ struct ObservationLiveScaleTests {
         }
         let replayElapsed = seconds(started.duration(to: clock.now))
         print("GDAY_SCALE_STAGE replay complete: \(replayElapsed)s; final matching begins")
+        heartbeatState.phase = "final People matching"
         let finalMatchingStarted = clock.now
         await library.suggestReviewedPeople(from: people)
         let finalMatchingSeconds = seconds(finalMatchingStarted.duration(to: clock.now))
-        maxHeartbeatGap = max(maxHeartbeatGap, lastHeartbeat.duration(to: clock.now))
+        heartbeatState.record(countTick: false)
         heartbeat.cancel()
         let identities = projected?.speakers ?? []
         let result: [String: Any] = [
-            "schemaVersion": 1, "workload": "recorded-callbacks-repeated-with-remapped-local-windows",
-            "sourceAudioSeconds": sourceDuration, "simulatedAudioSeconds": simulatedAudioThrough,
+            "schemaVersion": 2, "capacityIngestion": "trusted-and-direct-untrusted-v6",
+            "workload": "recorded-callbacks-repeated-with-remapped-local-windows",
+            "sourceAudioSeconds": sourceDuration, "simulatedAudioSeconds": heartbeatState.audioThrough,
             "recordingCycles": callbackCycles, "callbackCount": callbacks, "admittedEmbeddings": admitted,
             "existingPeople": people.count, "existingExamples": existingCount,
             "setupSecondsExcluded": setupSeconds, "replayWallSeconds": replayElapsed,
@@ -231,8 +260,11 @@ struct ObservationLiveScaleTests {
             "projection": summary(projectionTimes), "identityWorker": summary(engineTimes),
             "representativeReconciliation": summary(reconciliationTimes),
             "finalMatchingSeconds": finalMatchingSeconds,
-            "mainActorHeartbeatCount": heartbeatCount,
-            "mainActorMaximumHeartbeatGapSeconds": seconds(maxHeartbeatGap),
+            "mainActorHeartbeatCount": heartbeatState.count,
+            "mainActorHeartbeatGaps": summary(heartbeatState.gaps),
+            "maximumHeartbeatGapContext": heartbeatState.maximumContext,
+            "concurrentLoad": env["GDAY_OBSERVATION_SCALE_LOAD_NOTE"] ?? "not controlled",
+            "mainActorMaximumHeartbeatGapSeconds": seconds(heartbeatState.maximum),
             "postSetupPeakRSSBytes": baselineRSS, "finalPeakRSSBytes": peakRSS(),
             "peakRSSGrowthBytes": max(0, peakRSS() - baselineRSS), "checkpoints": checkpoints,
             "speakerMetadataCount": identities.count, "activeClusters": activeClusterIDs.count,

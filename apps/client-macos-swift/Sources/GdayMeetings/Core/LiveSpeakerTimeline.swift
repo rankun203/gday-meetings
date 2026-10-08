@@ -400,11 +400,16 @@ struct LiveSpeakerIntervalIndex {
         gapsBySource = Dictionary(grouping: timeline.gaps, by: \.source).mapValues {
             RangeIndex($0, start: { $0.start }, end: { $0.end })
         }
-        speakersBySource = Dictionary(grouping: timeline.speakers, by: \.source)
-        let sourcesByID = Dictionary(grouping: timeline.speakers, by: \.id).mapValues { Set($0.map(\.source)) }
+        speakersBySource = Self.groupSpeakers(timeline.speakers)
+        let sourcesByID = Dictionary(grouping: timeline.speakers, by: \.id).mapValues {
+            Set($0.flatMap { [$0.source] + ($0.additionalSources ?? []) })
+        }
         var grouped: [LiveAudioSource: [LiveSpeakerInterval]] = [:]
         for interval in timeline.intervals {
-            for source in sourcesByID[interval.speakerID] ?? [] { grouped[source, default: []].append(interval) }
+            for source in sourcesByID[interval.speakerID] ?? []
+            where interval.source == nil || interval.source == source {
+                grouped[source, default: []].append(interval)
+            }
         }
         for (source, values) in grouped {
             sources[source] = RangeIndex(values, start: { $0.start }, end: { $0.end })
@@ -415,7 +420,7 @@ struct LiveSpeakerIntervalIndex {
         let sameSources =
             self.timeline.speakers.count == timeline.speakers.count
             && zip(self.timeline.speakers, timeline.speakers).allSatisfy {
-                $0.id == $1.id && $0.source == $1.source
+                $0.id == $1.id && $0.source == $1.source && $0.additionalSources == $1.additionalSources
             }
         if sameSources, self.timeline.intervals == timeline.intervals {
             if self.timeline.gaps != timeline.gaps {
@@ -424,13 +429,20 @@ struct LiveSpeakerIntervalIndex {
                 }
             }
             if self.timeline.speakers != timeline.speakers {
-                speakersBySource = Dictionary(grouping: timeline.speakers, by: \.source)
+                speakersBySource = Self.groupSpeakers(timeline.speakers)
             }
             self.timeline = timeline
         }
         else {
             self = Self(timeline)
         }
+    }
+
+    private static func groupSpeakers(_ speakers: [LiveSpeakerIdentity]) -> [LiveAudioSource: [LiveSpeakerIdentity]] {
+        Dictionary(
+            uniqueKeysWithValues: LiveAudioSource.allCases.map { source in
+                (source, speakers.filter { $0.includes(source) })
+            })
     }
 
     func evidence(for phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase?) -> LiveSpeakerTimeline {

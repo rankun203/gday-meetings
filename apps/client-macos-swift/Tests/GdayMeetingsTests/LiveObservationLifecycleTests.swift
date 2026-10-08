@@ -160,4 +160,55 @@ private actor ControlledVoiceWorker: LiveVoiceEmbeddingProcessing {
         await runtime.emitSample(sample(7))
         #expect(try SpeakerEvidenceStore.read(directory: directory).samples.count == before)
     }
+    @Test func anonymousEmbeddingsFollowLabelTogglesWithNamingAlwaysOff() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let runtime = ControlledSpeakerRuntime()
+        let worker = ControlledVoiceWorker()
+        let controller = LiveTranscriptController(speakerRuntime: { runtime }, voiceWorker: { worker })
+        controller.begin(
+            meetingID: UUID(), language: "en", directory: directory, sources: [.microphone],
+            sink: LiveAudioSink(), enabled: false, diarizationProvider: .init(kind: .speakerLabeling),
+            speakerLabelsEnabled: false, speakerRecognitionEnabled: false, observationPolicy: .init())
+        #expect(await worker.prepares == 0)
+        controller.setSpeakerLabelsEnabled(true)
+        try await wait { await worker.prepares == 1 }
+        await worker.releasePreparation()
+        try await wait { controller.speakerRecognitionStatus.contains("is ready") }
+        // Disabling labels must release anonymous analysis even though naming
+        // was never enabled. Wait for that cancellation before starting again.
+        controller.setSpeakerLabelsEnabled(false)
+        try await wait { await worker.cancels > 0 }
+        controller.setSpeakerLabelsEnabled(true)
+        try await wait { await worker.prepares == 2 }
+        await worker.releasePreparation()
+        try await wait { controller.speakerRecognitionStatus.contains("is ready") }
+        let local = UUID()
+        let generation = UUID()
+        let sample = LiveSpeakerAudioSample(
+            speakerID: local, source: .microphone, generation: generation,
+            start: 0, end: 3, samples: [0.1])
+        let event = LiveSpeakerEvent(
+            source: .microphone, generation: generation, sequence: 0,
+            speakers: [
+                .init(
+                    id: local, source: .microphone, generation: generation, slot: 0,
+                    model: "synthetic", revision: "1")
+            ],
+            intervals: [.init(speakerID: local, start: 0, end: 4)], start: 0, end: 4,
+            continuity: .init(
+                generation: generation.uuidString, source: LiveAudioSource.microphone.rawValue,
+                localSpeakerIDs: [local.uuidString], publicationStart: 0, observedEnd: 4,
+                policyRevision: SpeakerEvidenceWindow.protectedPolicy))
+        await runtime.emit(event, sample: sample)
+        try await wait { await worker.extracted.count == 1 }
+        await worker.releaseExtraction()
+        await controller.finish()
+        #expect(try SpeakerEvidenceStore.read(directory: directory).samples.count == 1)
+        #expect(controller.speakerEvidenceComplete)
+        #expect(controller.draft?.speakerTimeline?.speakers.contains { $0.voiceEmbedding != nil } == true)
+        #expect(controller.draft?.speakerTimeline?.speakers.allSatisfy { $0.personID == nil } == true)
+    }
+
 }

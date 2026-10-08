@@ -185,3 +185,59 @@ Raw frozen transcript blocks remain raw. Projection writes apply edits, and dura
 Validation: the complete macOS app suite passed **1,240 tests in 216 suites (150.255 seconds)**; the observation evaluation harness passed **17 tests**. Logs are `tmp/live-observation-app-tests.log` and the receipt-bound experiment outputs. Other active sessions may subsequently change unrelated search/playback files, so final release validation must run again after integration.
 
 This checkpoint is not production activation. The fresh two-second clean-speech development experiment failed its accuracy gate despite increased embedding coverage. It stays isolated. A lone contrary observation currently interrupts continuity before a second observation corroborates a voice change; the next isolated experiment carries explicit provisional status, excludes uncertain samples from profile training/naming, and measures all speech rather than dropping unresolved intervals. Unsampled local-channel history must also not acquire global identity solely through an unbounded alias. Disjoint validation remains unopened until the complete candidate passes development gates.
+
+# Explicit provisional continuity and supported-run probe
+
+The isolated pending candidate adds explicit provisional assignment state, excludes pending vectors from profile training and representative selection, and carries uncertainty through live intervals, transcript phrases, persistence/recovery, and speaker-name rendering. An initial safety test caught a real custom-decoder omission that restored person names after recovery; it was fixed before evaluation. The valid immutable checkpoint passes six tests across three suites, including exact review, unrelated uncertain rows, and undo. The raced failed snapshot is explicitly marked invalid and produced no metrics.
+
+Actual adapter replay with two-second samples now gives settled confusion **17.454%, 17.000%, 24.889%, 0.200%**. It resolves the six-speaker false split without changing the cosine threshold. Three-second samples remain **17.454%, 17.000%, 26.584%, 0.200%**. Arrivals still exceeds the original **15.355%** baseline by 2.099 percentage points, so the complete candidate has not passed. Provisional speaker-time remains scored: two-second arrivals 4.22 seconds, saturated 3.92 seconds, and six-speaker overlap 17.75 seconds. These assignments cannot automatically inherit People names.
+
+Actual private D remains **117.640% → 114.246%**, J random remains **25.780%**, and all five private batch random regressions remain unchanged. Live provisional speaker-time is 85.38 seconds in D and 56.71 seconds in J. Parallel replay and other app tests affect elapsed times; these runs are correctness/provenance evidence, not isolated latency benchmarks.
+
+The next post-meeting diagnostic restricts global IDs to directly sampled spans or their contiguous trusted activity runs, retaining anonymous local identities elsewhere. It uses final recorded worker assignments and may use future evidence, so it is explicitly not actual-app or causal acceptance. No reference owners guide the mapping and no speech time is discarded. With two-second vectors, contiguous-run confusion is **16.494%, 37.140%, 32.306%, 10.634%**; with three-second vectors it is **19.957%, 33.197%, 33.185%, 11.788%**. Direct spans alone are still more fragmented. Scoping mitigates the contaminated old-channel merge in arrivals, but simple run boundaries fragment correct same-speaker speech around unsampled pauses and turns. Whole-channel aliases are unsafe; naive per-run scoping is also insufficient. Further architecture work must preserve anonymous continuity while restricting the evidence that can propagate global identity, rather than treating either coarse unit as certain.
+
+Artifacts are under `tmp/observation-pending-20261008/{checkpoint,two-second,three-second,private,batch-private-results}`. The hypothesis implementation is `experiments/observation-speaker-identity/scope_supported_runs.py`; its tests verify unsampled later turns, pending exclusion, and capacity boundaries. Twenty-one experiment harness tests pass. The disjoint validation cohort remains untouched.
+
+An activity-overlap explanation for arrivals was tested and rejected. On the contaminated old 6829 track, the later owners contribute 3.01 seconds (8555), 6.75 seconds (4446), .88 seconds (2961), and 9.62 seconds (4507). Only .10 seconds overlap another active local track; the remaining 20.16 seconds are exclusive under retained activity. A veto based only on simultaneous activity would therefore leave almost all contamination intact. The clean sampler has stricter posterior thresholds than published activity, but full probabilities were not retained in these traces, so their exact rejection reason cannot be inferred from activity alone.
+
+# Current decision snapshot — development gates still open
+
+The provisional-continuity correction passes its safety and known private regression tests. It is a useful component, not completion of the whole feature. The remaining public arrivals gap requires better frontend evidence; metadata-only hypotheses have not passed. The table reports **source-ownership conditional confusion**, not DER, in scenario order. Every scored timeline retains unresolved speech.
+
+| Candidate / evidence | Arrivals | Short turns | Saturated rearm | Six-speaker overlap | Decision |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Original v1 local-label baseline | 15.355% | 17.000% | 40.368% | 0.200% | Comparator |
+| Actual pending identity, 3-second samples | 17.454% | 17.000% | 26.584% | 0.200% | Arrivals gap remains |
+| Actual pending identity, 2-second samples | 17.454% | 17.000% | 24.889% | 0.200% | Safety/regressions pass; arrivals gap remains |
+| Earlier credible resets, 45-second bootstrap, v6 identity before pending fix | 26.508% | 39.756% | 27.375% | 0.200% | Rejected complete pipeline |
+| Trust cutoff only, 2-second samples, batch diagnostic | 23.456% | 28.523% | 28.997% | 0.200% | Direct evidence leaves fragmented turns |
+| Pre-cut continuity + post-cut run epochs, 2-second samples, batch diagnostic | 20.151% | 37.140% | 28.206% | 0.200% | Sparse returns still fragment |
+| Pre-cut continuity + post-cut run epochs, 3-second samples, batch diagnostic | 22.542% | 33.197% | 27.875% | 0.200% | Rejected metadata-only hypothesis |
+
+Both trust-cutoff variants preserve all five previously passing private random-review scores. The run-epoch diagnostic validates every original source/local activity footprint before scoring, restores original anonymous fallback IDs, and does not invent new segmentation states. Twenty-five harness tests pass. These batch diagnostics can use future evidence and are not causal app acceptance.
+
+Next investigate the already preregistered 12-second bootstrap suffix with credible-eight resets. Keep the 45-second physical history, purity thresholds, and embedding type. First compare 45/off against 12/off to isolate headroom; then evaluate separately retained fresh bootstrap embeddings with independent physical support. Existing 45/off schema-3 source, binary, and model receipts are available. No public validation inference has run and no failed candidate has been promoted.
+
+The fresh 12/off frontend comparison has now completed on all four development recordings. Six frontend tests passed per run and the new `replay_bootstrap.py` receipt binds the existing compiled frontend to its original source/model hashes, requested bootstrap cell, audio, and output artifacts. Shortening the suffix changes raw local-label ownership confusion from 38.933% to 22.438% (arrivals), 31.969% to 26.445% (short turns), 41.747% to 38.139% (saturated rearm), and leaves six-speaker overlap at 0.200%. Windows change from 4/3/7/1 to 2/2/3/1, and ordinary samples from 14/2/18/11 to 17/5/18/11. The saturated short-turn bootstrap disappears. These are intermediate frontend measurements, not acceptance against the original v1 baseline or the complete identity pipeline.
+
+Coverage still limits identification: 12/off samples 11/12 owners in arrivals, 5/12 in short turns, 10/12 in saturated rearm, and 6/6 in the control. Short turns produce their first embedding only at 50.58 seconds; repeated 1.5-second turns do not satisfy the unchanged three-second sampler. The actual pending-identity adapter is being rebuilt in an isolated schema-3/off package. Its fixture validates bootstrap context but never publishes that historical audio or treats duplicate physical audio as simultaneous evidence. All inference is development-only; validation remains unopened.
+
+# Background persistence and bounded People matching
+
+The two-hour recorded-callback workload contains 10,600 callbacks, 590 generated embeddings, and a pre-existing library of 8,000 reviewed examples belonging to 16 fixture people. It does not run acoustic inference or render the UI, and repeating the same recording does not create independent accuracy evidence. The final run paused intentional agent builds and inference; receipts retain that coordination and the frozen executable hash.
+
+| Measurement | Original implementation | Final quiet replay |
+| --- | ---: | ---: |
+| Replay wall time | 231.9 seconds | 72.4 seconds |
+| Identity worker p95 | 215 milliseconds | 71.8 milliseconds |
+| Main-actor heartbeat maximum | 1,250 milliseconds | 223 milliseconds |
+| Main-actor heartbeat p95 | Not recorded | 19.1 milliseconds |
+| Final People matching, background | 110 seconds | 17.3 seconds |
+
+All vector hydration, transaction preparation, and atomic capture commits now run off the main actor. A completed durable commit is adopted even if its initiating task was canceled. User review actions serialize with capture commits and reject stale selections as a whole. Reviewed profiles reuse dependency-validated work, allow at most two cold profile builds concurrently, and use an exactly equivalent incremental diversity-selection calculation. Source membership changes invalidate cached timeline lookups. Turning on speaker labels starts anonymous embeddings even when People recognition is disabled.
+
+The final replay retained nine active clusters with nine identity vectors and zero vectors on retired identities. Its process high-water memory was 696 MB, including fixture setup; growth after setup was 0.46 MB. This is not a claim that the application requires only that incremental memory. A residual 223-millisecond heartbeat gap remains visible near representative reconciliation. The earlier interrupted lock-contention replay and the overloaded 27.6-second-heartbeat replay are retained as failed performance attempts, not acceptance results. Receipts and metrics are in `tmp/observation-resource-20261008/`; `run_scale.py` reproduces the workload against a frozen test bundle.
+
+A subsequent independent review found a transaction dependency missing from validation: a representation read during preparation still matters when its unchanged write is optimized away. The fix validates those read dependencies before commit. Its new regression test was compiled against an older application object during a concurrent build and failed as expected for that older implementation; a coherent rebuild is required before this checkpoint is committed. Accuracy and production activation gates remain open as described above.
+
+The coherent rebuild passed **28 focused tests in eight suites (4.101 seconds)**, including the read-dependency regression, immediate cancellation of obsolete matching waiters while the shared profile build continues, label-toggle lifecycle, stable review selections, exact profile-selection parity, and source-aware timeline caching. Log: `tmp/voice-reviewed-resource-tests.log`. This validates the storage/performance checkpoint; production accuracy activation remains a separate unfinished gate.
