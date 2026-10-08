@@ -33,6 +33,7 @@ final class MeetingPlayback: ObservableObject {
     }
     @Published private(set) var isPlaybackBlocked = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var trackErrors: [Int: String] = [:]
     @Published private(set) var waveforms: [AudioWaveform?] = []
     @Published private(set) var isLoadingWaveforms = false
     @Published private(set) var mutedTracks: Set<Int> = []
@@ -265,20 +266,23 @@ final class MeetingPlayback: ObservableObject {
 
     func selectTrack(_ track: Int) {
         guard hasSelection, !isPlaybackBlocked, !isLoading else { return }
+        guard trackErrors[track] == nil else { return }
         selectedTrack = Self.validTrack(track, count: sourceFiles.count)
         mutedTracks = selectedTrack < 0 ? [] : Set(sourceFiles.indices.filter { $0 != selectedTrack })
         applyMix()
     }
 
     func toggleMute(_ index: Int) {
-        guard sourceFiles.indices.contains(index), !isPlaybackBlocked, !isLoading else { return }
+        guard sourceFiles.indices.contains(index), trackErrors[index] == nil, !isPlaybackBlocked, !isLoading else {
+            return
+        }
         if mutedTracks.contains(index) {
             mutedTracks.remove(index)
         }
         else {
             mutedTracks.insert(index)
         }
-        let audible = sourceFiles.indices.filter { !mutedTracks.contains($0) }
+        let audible = sourceFiles.indices.filter { trackErrors[$0] == nil && !mutedTracks.contains($0) }
         selectedTrack = audible.count == 1 ? audible[0] : -1
         applyMix()
     }
@@ -342,6 +346,7 @@ final class MeetingPlayback: ObservableObject {
         isSeeking = false
         hasEnded = false
         errorMessage = nil
+        trackErrors = [:]
     }
 
     /// Lets lifecycle/fixture checks await owned work without depending on UI sleeps.
@@ -379,6 +384,7 @@ final class MeetingPlayback: ObservableObject {
             return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
         }
         errorMessage = nil
+        trackErrors = [:]
         hasEnded = false
         isSeeking = false
         duration = 0
@@ -400,7 +406,9 @@ final class MeetingPlayback: ObservableObject {
                 guard let self, self.generation == operation, !Task.isCancelled else { return }
                 if let cached, self.waveforms[index] == nil {
                     self.waveforms[index] = cached
-                    self.duration = max(self.duration, cached.duration)
+                    if self.isLoading, self.trackErrors[index] == nil {
+                        self.duration = max(self.duration, cached.duration)
+                    }
                 }
             }
         }
@@ -412,16 +420,26 @@ final class MeetingPlayback: ObservableObject {
             let transport = StreamingPlayback(silent: UIPreview.enabled)
             do {
                 var readableFiles: [URL] = []
-                for file in files {
+                var preparationErrors: [Int: String] = [:]
+                for (index, file) in files.enumerated() {
                     try Task.checkCancellation()
-                    let prepared = try await prepare(file)
-                    if prepared.temporary { temporary.append(prepared.url) }
-                    readableFiles.append(prepared.url)
+                    do {
+                        let prepared = try await prepare(file)
+                        if prepared.temporary { temporary.append(prepared.url) }
+                        readableFiles.append(prepared.url)
+                    }
+                    catch is CancellationError { throw CancellationError() }
+                    catch {
+                        preparationErrors[index] = error.localizedDescription
+                        readableFiles.append(file)
+                    }
                 }
                 try Task.checkCancellation()
                 transport.onUpdate = { [weak self] snapshot in
                     Task { @MainActor in
                         guard let self, self.generation == operation else { return }
+                        let errors = self.trackErrors.merging(snapshot.trackErrors) { _, new in new }
+                        if self.trackErrors != errors { self.trackErrors = errors }
                         if snapshot.requiresReload { self.transportNeedsReload = true }
                         guard self.seekGeneration == snapshot.revision,
                             !self.isSeeking
@@ -439,7 +457,7 @@ final class MeetingPlayback: ObservableObject {
                         }
                     }
                 }
-                let length = try await transport.prepare(files: readableFiles)
+                let length = try await transport.prepare(files: readableFiles, unavailableTracks: preparationErrors)
                 try Task.checkCancellation()
                 guard let self, self.generation == operation else { throw CancellationError() }
                 self.transport = transport
@@ -452,6 +470,7 @@ final class MeetingPlayback: ObservableObject {
                 self.waveformTask = Task { [weak self] in
                     for (index, readable) in readableFiles.enumerated() {
                         guard !Task.isCancelled else { return }
+                        guard self?.trackErrors[index] == nil else { continue }
                         let envelope = try? await readWaveform(files[index], readable)
                         guard let self, self.generation == operation, !Task.isCancelled else { return }
                         if let envelope { self.waveforms[index] = envelope }

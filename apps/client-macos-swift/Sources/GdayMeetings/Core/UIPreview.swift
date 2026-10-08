@@ -59,6 +59,13 @@ enum UIPreview {
                 for (index, name) in meeting.audioFiles.enumerated() {
                     try writeFixture(to: folder.appendingPathComponent(name), source: index)
                 }
+                if title == "Synthetic conversation",
+                    ProcessInfo.processInfo.arguments.contains("--preview-unavailable-track")
+                        || Bundle.main.object(forInfoDictionaryKey: "GdayUnavailableTrackPreview") as? Bool == true
+                {
+                    meeting.audioFiles[0] = "microphone.opus"
+                    try Data("Invalid synthetic audio".utf8).write(to: folder.appendingPathComponent("microphone.opus"))
+                }
                 try await store.insertImportedMeeting(meeting)
                 try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
                 try writeDataEventFixtures(directory: folder)

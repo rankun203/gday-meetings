@@ -25,10 +25,14 @@ final class StreamingPlayback: @unchecked Sendable {
         let revision: UUID
         let error: String?
         let requiresReload: Bool
+        let trackErrors: [Int: String]
     }
     var onUpdate: (@Sendable (Snapshot) -> Void)?
     private let queue = DispatchQueue(label: "com.gdaymeetings.playback", qos: .userInitiated)
-    private var readers: [any StreamingAudioReading] = []
+    private var readers: [(any StreamingAudioReading)?] = []
+    private var trackErrors: [Int: String] = [:]
+    private var mutedTracks: Set<Int> = []
+    private let openReader: @Sendable (URL) throws -> any StreamingAudioReading
     private var buffers: [AVAudioPCMBuffer] = []
     private var ring: PlaybackRing?
     private var engine: AVAudioEngine?
@@ -47,7 +51,13 @@ final class StreamingPlayback: @unchecked Sendable {
     private let silent: Bool
     private let manualRendering: Bool
 
-    init(silent: Bool = false, manualRendering: Bool = false) {
+    init(
+        silent: Bool = false, manualRendering: Bool = false,
+        openReader: @escaping @Sendable (URL) throws -> any StreamingAudioReading = {
+            try StreamingAudioReader.open($0)
+        }
+    ) {
+        self.openReader = openReader
         self.silent = silent
         self.manualRendering = manualRendering
     }
@@ -69,15 +79,30 @@ final class StreamingPlayback: @unchecked Sendable {
         return result
     }
 
-    func prepare(files: [URL]) async throws -> Double {
+    func prepare(files: [URL], unavailableTracks: [Int: String] = [:]) async throws -> Double {
         try await perform { [self] in
             guard !closed, !files.isEmpty else { throw CancellationError() }
-            readers = try files.map { try StreamingAudioReader.open($0) }
-            totalFrames = readers.map(\.totalFrames).max() ?? 0
+            trackErrors = unavailableTracks
+            readers = files.enumerated().map { index, file in
+                guard trackErrors[index] == nil else { return nil }
+                do {
+                    let reader = try openReader(file)
+                    guard reader.totalFrames > 0 else { throw ServiceError("This audio track is empty.") }
+                    return reader
+                }
+                catch {
+                    trackErrors[index] = error.localizedDescription
+                    return nil
+                }
+            }
+            publish()
+            try requirePlayableTrack()
+            totalFrames = readers.compactMap { $0?.totalFrames }.max() ?? 0
             endFrame = totalFrames
             guard totalFrames > 0 else { throw ServiceError("This recording is empty.") }
             let ring = try PlaybackRing(tracks: readers.count)
             self.ring = ring
+            updateMix()
             buffers = try readers.map { _ in
                 guard
                     let buffer = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: Self.blockSize)
@@ -153,7 +178,12 @@ final class StreamingPlayback: @unchecked Sendable {
             self.revision = revision
             drainStarted = nil
             gday_playback_reset(ring.pointer)
-            for reader in readers { try reader.seek(frame: min(origin, reader.totalFrames)) }
+            for index in readers.indices {
+                guard let reader = readers[index] else { continue }
+                do { try reader.seek(frame: min(origin, reader.totalFrames)) }
+                catch { failTrack(index, error: error) }
+            }
+            try requirePlayableTrack()
             try fill()
             publish()
         }
@@ -201,10 +231,8 @@ final class StreamingPlayback: @unchecked Sendable {
     func setRate(_ rate: Double) { queue.async { [self] in pitch?.rate = Float(rate) } }
     func setMuted(_ muted: Set<Int>) {
         queue.async { [self] in
-            guard let ring else { return }
-            var mask: UInt32 = 0
-            for index in readers.indices where !muted.contains(index) { mask |= 1 << UInt32(index) }
-            gday_playback_set_audible(ring.pointer, mask)
+            mutedTracks = muted
+            updateMix()
         }
     }
     func close(removing temporary: [URL] = []) {
@@ -245,14 +273,45 @@ final class StreamingPlayback: @unchecked Sendable {
                 let channels = buffer.floatChannelData!
                 channels[0].update(repeating: 0, count: Int(Self.blockSize))
                 channels[1].update(repeating: 0, count: Int(Self.blockSize))
-                if produced < reader.totalFrames { try reader.read(into: buffer, frames: Self.blockSize) }
+                if let reader, produced < reader.totalFrames {
+                    do { try reader.read(into: buffer, frames: Self.blockSize) }
+                    catch {
+                        failTrack(index, error: error)
+                        channels[0].update(repeating: 0, count: Int(Self.blockSize))
+                        channels[1].update(repeating: 0, count: Int(Self.blockSize))
+                    }
+                }
                 // Shorter tracks remain silent on the shared timeline.
                 gday_playback_write_track(ring.pointer, UInt32(index), channels[0], channels[1], count)
             }
+            try requirePlayableTrack()
             gday_playback_commit(ring.pointer, count)
             produced += Int64(count)
         }
     }
+    private func failTrack(_ index: Int, error: Error) {
+        trackErrors[index] = error.localizedDescription
+        readers[index] = nil
+        updateMix()
+    }
+
+    private func requirePlayableTrack() throws {
+        guard readers.contains(where: { $0 != nil }) else {
+            publish()
+            let detail = trackErrors.sorted { $0.key < $1.key }.first?.value ?? ""
+            throw ServiceError("No audio tracks can be played. " + detail)
+        }
+    }
+
+    private func updateMix() {
+        guard let ring else { return }
+        var mask: UInt32 = 0
+        for index in readers.indices where readers[index] != nil && !mutedTracks.contains(index) {
+            mask |= 1 << UInt32(index)
+        }
+        gday_playback_set_audible(ring.pointer, mask)
+    }
+
     private var position: Double {
         min(
             Double(endFrame) / 48000,
@@ -276,7 +335,7 @@ final class StreamingPlayback: @unchecked Sendable {
             Snapshot(
                 time: position, playing: playing,
                 ended: !playing && produced >= endFrame && position >= Double(endFrame) / 48000,
-                revision: revision, error: error, requiresReload: requiresReload))
+                revision: revision, error: error, requiresReload: requiresReload, trackErrors: trackErrors))
     }
     private func fail(_ message: String) {
         playing = false

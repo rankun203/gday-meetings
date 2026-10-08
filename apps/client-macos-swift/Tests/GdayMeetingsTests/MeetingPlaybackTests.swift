@@ -221,6 +221,44 @@ struct MeetingPlaybackTests {
         #expect(FileManager.default.fileExists(atPath: source.path))
     }
 
+    @Test(arguments: [false, true])
+    func failedTrackKeepsOtherTrackAndOriginalIndices(preparationFailure: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let broken = directory.appendingPathComponent("microphone.opus")
+        let good = directory.appendingPathComponent("system.wav")
+        try Data("Invalid synthetic audio".utf8).write(to: broken)
+        try makeSilence(good, seconds: 2)
+        let playback = MeetingPlayback(prepareAudio: { file in
+            if preparationFailure && file == broken { throw ServiceError("Fixture preparation failed") }
+            return PreparedPlaybackAudio(url: file, temporary: false)
+        })
+        defer { playback.clear() }
+        playback.select(meeting: Meeting(title: "Partial audio"), files: [broken, good])
+        await playback.waitForPreparation()
+        await playback.waitForWaveforms()
+        #expect(playback.errorMessage == nil)
+        #expect(playback.trackErrors[0] != nil)
+        #expect(playback.trackErrors[1] == nil)
+        #expect(playback.duration == 2)
+        #expect(playback.audioURL(forTrack: 1) == good)
+        playback.selectTrack(0)
+        #expect(playback.selectedTrack == -1)
+        playback.selectTrack(1)
+        #expect(playback.selectedTrack == 1)
+        playback.toggleMute(0)
+        #expect(playback.mutedTracks == [0])
+        playback.selectTrack(-1)
+        playback.toggleMute(1)
+        #expect(playback.selectedTrack == -1)
+        #expect(playback.mutedTracks == [1])
+        playback.toggleMute(1)
+        #expect(playback.selectedTrack == 1)
+        playback.clear()
+        #expect(playback.trackErrors.isEmpty)
+    }
+
     @Test func failedPreparationReportsErrorWithoutStartingPlayback() async throws {
         let playback = MeetingPlayback(prepareAudio: { _ in throw ServiceError("Fixture decode failed") })
         playback.select(meeting: Meeting(title: "Broken"), files: [URL(fileURLWithPath: "/fixture/invalid.opus")])
@@ -242,18 +280,18 @@ struct MeetingPlaybackTests {
         let files = [URL(fileURLWithPath: "/fixture/microphone.opus"), URL(fileURLWithPath: "/fixture/system.opus")]
         playback.select(meeting: meeting, files: files, track: 1)
         await playback.waitForPreparation()
-        #expect(await counter.count == 1)
+        #expect(await counter.count == 2)
         #expect(playback.errorMessage?.contains("Fixture failure 1") == true)
         playback.setRecordingActive(true)
         playback.togglePlayPause()
         await playback.waitForPreparation()
-        #expect(await counter.count == 1)
+        #expect(await counter.count == 2)
         #expect(playback.errorMessage?.contains("Fixture failure 1") == true)
         playback.setRecordingActive(false)
         playback.togglePlayPause()
         await playback.waitForPreparation()
-        #expect(await counter.count == 2)
-        #expect(playback.errorMessage?.contains("Fixture failure 2") == true)
+        #expect(await counter.count == 4)
+        #expect(playback.errorMessage?.contains("Fixture failure 3") == true)
         #expect(playback.meetingID == meeting.id)
         #expect(playback.selectedTrack == 1)
         #expect(!playback.isPlaying)

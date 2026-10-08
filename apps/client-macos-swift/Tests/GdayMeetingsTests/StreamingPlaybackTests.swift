@@ -5,7 +5,77 @@ import Testing
 
 @testable import GdayMeetings
 
+private final class FailingTrackReader: StreamingAudioReading {
+    let totalFrames: Int64 = 96000
+    let failure: String
+    private var reads = 0
+    init(failure: String) { self.failure = failure }
+    func seek(frame: Int64) throws {
+        if failure == "seek" { throw ServiceError("Synthetic seek failure") }
+    }
+    func read(into buffer: AVAudioPCMBuffer, frames: AVAudioFrameCount) throws {
+        reads += 1
+        if failure == "read", reads > 12 { throw ServiceError("Synthetic read failure") }
+        buffer.frameLength = frames
+        for channel in 0..<2 {
+            buffer.floatChannelData![channel].update(repeating: 0.25, count: Int(frames))
+        }
+    }
+}
+
 struct StreamingPlaybackTests {
+    @Test(arguments: ["open", "seek", "read"])
+    func trackFailureDoesNotStopOrAttenuateRemainingAudio(failure: String) async throws {
+        let player = StreamingPlayback(
+            manualRendering: true,
+            openReader: { url in
+                if url.lastPathComponent == "failed" {
+                    if failure == "open" { throw ServiceError("Synthetic open failure") }
+                    return FailingTrackReader(failure: failure)
+                }
+                return FailingTrackReader(failure: "none")
+            })
+        defer { player.close() }
+        let updates = AsyncStream<StreamingPlayback.Snapshot>.makeStream()
+        player.onUpdate = { updates.continuation.yield($0) }
+        let duration = try await player.prepare(files: [URL(fileURLWithPath: "/failed"), URL(fileURLWithPath: "/good")])
+        #expect(duration == 2)
+        try await player.seek(to: 0.2, revision: UUID())
+        try await player.play(rate: 1)
+        var audio: AVAudioPCMBuffer?
+        for _ in 0..<10 { audio = try await player.renderOffline(frames: 4096) }
+        let rendered = try #require(audio)
+        let average =
+            (0..<Int(rendered.frameLength)).reduce(Float(0)) { $0 + abs(rendered.floatChannelData![0][$1]) }
+            / Float(rendered.frameLength)
+        #expect(abs(average - 0.25) < 0.01)
+        // Force a snapshot after any failure discovered by offline refill.
+        try await player.seek(to: 1, revision: UUID())
+        updates.continuation.finish()
+        var last: StreamingPlayback.Snapshot?
+        for await snapshot in updates.stream { last = snapshot }
+        #expect(last?.trackErrors[0] != nil)
+        #expect(last?.trackErrors[1] == nil)
+        #expect(last?.error == nil)
+        // Original index 1 still controls the surviving track.
+        player.setMuted([1])
+        try await player.play(rate: 1)
+        for _ in 0..<8 { audio = try await player.renderOffline(frames: 4096) }
+        #expect((0..<Int(audio!.frameLength)).allSatisfy { abs(audio!.floatChannelData![0][$0]) < 0.00001 })
+    }
+
+    @Test func allTracksFailWithVisibleError() async throws {
+        let player = StreamingPlayback(
+            manualRendering: true,
+            openReader: { _ in
+                throw ServiceError("Synthetic invalid audio")
+            })
+        defer { player.close() }
+        await #expect(throws: ServiceError.self) {
+            _ = try await player.prepare(files: [URL(fileURLWithPath: "/one"), URL(fileURLWithPath: "/two")])
+        }
+    }
+
     @Test func excerptNeverRendersSpeechBeyondItsEndAndNormalSeekRestoresFullAudio() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
         defer { try? FileManager.default.removeItem(at: url) }

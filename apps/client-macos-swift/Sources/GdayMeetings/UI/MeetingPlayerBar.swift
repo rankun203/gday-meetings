@@ -32,6 +32,12 @@ struct MeetingPlayerBar: View {
                                         .help("Command-click to reveal this audio file in Finder.")
                                         .accessibilityAction(named: "Reveal in Finder") { revealTrack(index) }
                                         .contextMenu { Button("Reveal in Finder") { revealTrack(index) } }
+                                    if let error = playback.trackErrors[index] {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.yellow)
+                                            .help("Audio unavailable. " + error)
+                                            .accessibilityLabel("\(name): Audio unavailable. \(error)")
+                                    }
                                     Spacer()
                                     Button {
                                         playback.toggleMute(index)
@@ -46,10 +52,17 @@ struct MeetingPlayerBar: View {
                                             "\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)"
                                         )
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
-                                        .disabled(playback.isLoading || playback.isPlaybackBlocked)
+                                        .disabled(
+                                            playback.isLoading || playback.isPlaybackBlocked
+                                                || playback.trackErrors[index] != nil)
                                 }.frame(width: 160)
                                 Group {
-                                    if trackWaveformsMounted {
+                                    if playback.trackErrors[index] != nil {
+                                        Text("Audio unavailable")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    else if trackWaveformsMounted {
                                         PlaybackPosition(
                                             progress: playback.progress,
                                             waveforms: playback.waveforms.indices.contains(index)
@@ -239,7 +252,10 @@ struct MeetingPlayerBar: View {
             selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })
         ) {
             Text("All Tracks").tag(-1)
-            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
+            ForEach(
+                Array(playback.trackNames.enumerated()).filter { playback.trackErrors[$0.offset] == nil },
+                id: \.offset
+            ) { index, name in
                 Text(name).tag(index)
             }
         }
@@ -310,9 +326,13 @@ struct MeetingPlayerBar: View {
     }
 
     private var audibleWaveforms: [AudioWaveform] {
-        if playback.mutedTracks.count == playback.trackNames.count { return playback.waveforms.compactMap { $0 } }
+        if playback.mutedTracks.count == playback.trackNames.count {
+            return playback.waveforms.enumerated().compactMap {
+                playback.trackErrors[$0.offset] == nil ? $0.element : nil
+            }
+        }
         return playback.waveforms.enumerated().compactMap {
-            playback.mutedTracks.contains($0.offset) ? nil : $0.element
+            playback.mutedTracks.contains($0.offset) || playback.trackErrors[$0.offset] != nil ? nil : $0.element
         }
     }
 
