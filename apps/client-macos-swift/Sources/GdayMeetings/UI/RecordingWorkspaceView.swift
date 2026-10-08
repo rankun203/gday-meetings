@@ -316,7 +316,7 @@ struct RecordingWorkspaceView: View {
             RecordingSettingsDisclosure(meetingID: meetingID, status: store.recordingMeter.status)
 
         }
-        .padding(AppTheme.contentSpacing)
+        .padding([.horizontal, .top], AppTheme.contentSpacing)
         .modifier(AppContentSurface())
     }
     /// Names the new device when a source is switching to one. When both

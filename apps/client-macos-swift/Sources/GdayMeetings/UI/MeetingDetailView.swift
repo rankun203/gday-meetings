@@ -86,15 +86,17 @@ struct MeetingDetailView: View {
     private func detailContent(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
             meetingHeader(meeting)
-            if store.recordingID == meetingID {
-                RecordingWorkspaceView(meetingID: meetingID)
-            }
-            if !usesWindowToolbar {
-                MeetingContentTabs(selection: Binding(get: { tab }, set: { tab = $0 }))
-            }
-            GeometryReader { viewport in
-                meetingContent(meeting, tab: tab)
-                    .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: store.recordingID == meetingID ? 0 : AppTheme.contentSpacing) {
+                if store.recordingID == meetingID {
+                    RecordingWorkspaceView(meetingID: meetingID)
+                }
+                if !usesWindowToolbar {
+                    MeetingContentTabs(selection: Binding(get: { tab }, set: { tab = $0 }))
+                }
+                GeometryReader { viewport in
+                    meetingContent(meeting, tab: tab)
+                        .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+                }
             }
         }.padding(.horizontal, AppTheme.contentInset).padding(.top, AppTheme.contentSpacing).padding(.bottom, 16)
     }

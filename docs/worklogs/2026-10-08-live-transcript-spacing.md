@@ -10,7 +10,7 @@ Removing the transcription switch left a dedicated row with a disabled Follow Li
 
 ## Implemented solution
 
-Move transcript controls into a bottom overlay. Show Follow Live only when text exists and following is paused. Keep transcript issue details accessible without reserving a header row. Following, scrolling, and editing callbacks remain unchanged.
+Move transcript controls into a bottom overlay. Show Follow Live only when text exists and following is paused. Keep transcript issue details accessible without reserving a header row. Following, scrolling, and editing callbacks remain unchanged. A follow-up screenshot exposed another 24 points of stacked spacing: the recording panel’s bottom padding and the detail stack’s section spacing. Remove the bottom padding and group recording controls with meeting content at zero spacing during capture. Preserve header spacing and saved-meeting section spacing.
 
 ## Validation
 
