@@ -6,9 +6,9 @@ struct PeopleNameRecord: Equatable, Sendable {
     let name: String
 }
 
-enum PeopleNameMatchKind: String, Sendable { case exact, pinyin, initials, prefix, spelling }
+enum PeopleNameMatchKind: String, Codable, Sendable { case exact, pinyin, initials, prefix, spelling }
 
-struct PeopleNameCandidate: Identifiable, Equatable, Sendable {
+struct PeopleNameCandidate: Identifiable, Equatable, Codable, Sendable {
     var id: UUID { personID }
     let personID: UUID
     let name: String
@@ -21,7 +21,7 @@ struct PeopleNameCandidate: Identifiable, Equatable, Sendable {
     var isConfident: Bool { score > 0.906 }
 }
 
-struct PeopleNameResolution: Equatable, Sendable {
+struct PeopleNameResolution: Equatable, Codable, Sendable {
     let query: String
     let candidates: [PeopleNameCandidate]
     let residualQuery: String

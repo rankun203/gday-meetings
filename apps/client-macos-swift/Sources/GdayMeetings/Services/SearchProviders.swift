@@ -9,7 +9,7 @@ struct SearchProviderDescriptor: Sendable {
     let modes: Set<SearchMode>
 }
 
-struct ProviderSearchRequest: Sendable {
+struct ProviderSearchRequest: Codable, Sendable {
     var id = UUID()
     var query: String
     var mode: SearchMode = .text
@@ -19,6 +19,7 @@ struct ProviderSearchRequest: Sendable {
     /// Ranked pages use an offset cursor; legacy passage-order pages use a passage ID.
     var ranked = false
     var identifiedPeople: Set<UUID> = []
+    var submissionID: UUID? = nil
 }
 
 struct ProviderSearchAudioRange: Equatable, Codable, Sendable {
@@ -27,7 +28,7 @@ struct ProviderSearchAudioRange: Equatable, Codable, Sendable {
     let duration: Double
 }
 
-struct ProviderSearchResult: Identifiable, Equatable, Sendable {
+struct ProviderSearchResult: Identifiable, Equatable, Codable, Sendable {
     /// Stable within the provider and source revision, independent of streaming event order.
     let id: String
     let meetingID: UUID
@@ -40,7 +41,7 @@ struct ProviderSearchResult: Identifiable, Equatable, Sendable {
     var scoreBreakdown: SpeakerMatchScore? = nil
 }
 
-struct ProviderSearchSnapshot: Sendable {
+struct ProviderSearchSnapshot: Codable, Sendable {
     let requestID: UUID
     let providerID: UUID
     let sequence: Int
@@ -53,7 +54,12 @@ struct ProviderSearchSnapshot: Sendable {
 
 protocol SearchProvider: Sendable {
     var descriptor: SearchProviderDescriptor { get }
+    var searchLog: SearchLog? { get }
     func search(_ request: ProviderSearchRequest) -> AsyncThrowingStream<ProviderResult<ProviderSearchSnapshot>, Error>
+}
+
+extension SearchProvider {
+    var searchLog: SearchLog? { nil }
 }
 
 protocol SearchIndexProvider: SearchProvider {
@@ -87,6 +93,7 @@ enum SearchProviderError: Error, LocalizedError {
 struct LocalTextSearchProvider: SearchProvider {
     static let id = UUID(uuidString: "838E72BD-5E66-4A76-956B-A90A979DEAB2")!
     let index: LibraryIndex
+    var searchLog: SearchLog? { .init(directory: index.directory, providerID: Self.id) }
     var descriptor: SearchProviderDescriptor {
         .init(id: Self.id, name: "Library Text Search", modes: [.text])
     }
@@ -95,6 +102,15 @@ struct LocalTextSearchProvider: SearchProvider {
     {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
+                let clock = ContinuousClock.now
+                searchLog?.record(
+                    .init(
+                        kind: "search_started", requestID: request.id, submissionID: request.submissionID,
+                        request: request,
+                        configuration: [
+                            "retriever": "sqlite-fts5", "reranker": "none",
+                            "order": request.ranked ? "bm25" : "passage-id",
+                        ]))
                 do {
                     guard request.mode == .text else { throw SearchProviderError.unsupportedMode }
                     try Task.checkCancellation()
@@ -109,29 +125,43 @@ struct LocalTextSearchProvider: SearchProvider {
                             id: String(passage.id), meetingID: passage.meetingID, title: passage.title,
                             excerpt: passage.excerpt, sourceRevision: nil, passage: passage)
                     }
+                    let snapshot = ProviderSearchSnapshot(
+                        requestID: request.id, providerID: Self.id, sequence: 0, results: results, total: page.total,
+                        nextCursor: results.count == limit
+                            ? (request.ranked ? request.after + Int64(results.count) : page.results.last?.id) : nil,
+                        isFinal: true)
+                    searchLog?.record(
+                        .init(
+                            kind: "search_completed", requestID: request.id, submissionID: request.submissionID,
+                            timingsMS: ["total": SearchLog.milliseconds(since: clock)], snapshot: snapshot))
                     continuation.yield(
                         .init(
-                            value: .init(
-                                requestID: request.id, providerID: Self.id, sequence: 0, results: results,
-                                total: page.total,
-                                nextCursor: results.count == limit
-                                    ? (request.ranked ? request.after + Int64(results.count) : page.results.last?.id)
-                                    : nil,
-                                isFinal: true),
+                            value: snapshot,
                             dataFlow: .init(
                                 location: .local, targetID: Self.id, targetName: descriptor.name,
                                 startedAt: started, endedAt: Date(), bodies: ["Search query"],
                                 purpose: "Search the local library index")))
                     continuation.finish()
                 }
-                catch { continuation.finish(throwing: error) }
+                catch {
+                    searchLog?.record(
+                        .init(
+                            kind: Task.isCancelled || error is CancellationError ? "search_cancelled" : "search_failed",
+                            requestID: request.id, submissionID: request.submissionID,
+                            timingsMS: ["total": SearchLog.milliseconds(since: clock)],
+                            error: error.localizedDescription))
+                    continuation.finish(throwing: error)
+                }
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
         }
     }
 
-    func page(query: String, after: Int64, excludingTagIDs: Set<UUID>) async throws -> LibrarySearchPage {
-        let request = ProviderSearchRequest(query: query, after: after, excludingTagIDs: excludingTagIDs)
+    func page(
+        query: String, after: Int64, excludingTagIDs: Set<UUID>, requestID: UUID = UUID(), submissionID: UUID? = nil
+    ) async throws -> LibrarySearchPage {
+        let request = ProviderSearchRequest(
+            id: requestID, query: query, after: after, excludingTagIDs: excludingTagIDs, submissionID: submissionID)
         for try await event in search(request) {
             try Task.checkCancellation()
             guard event.value.requestID == request.id, event.value.providerID == Self.id else {

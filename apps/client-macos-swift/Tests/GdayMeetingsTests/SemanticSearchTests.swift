@@ -52,6 +52,30 @@ struct SemanticSearchTests {
             #expect(result.results.count == 100)
             #expect(result.results.first?.evidence.first?.excerpt == "speaker passage")
         }
+        await SearchLog.flush()
+        let log = try #require(provider.searchLog)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let events = try Data(contentsOf: log.fileURL).split(separator: 10).map {
+            try decoder.decode(SearchLogEvent.self, from: Data($0))
+        }
+        let started = try #require(events.first { $0.kind == "search_started" })
+        let completed = try #require(events.first { $0.kind == "search_completed" })
+        #expect(started.request?.identifiedPeople == [person])
+        #expect(started.configuration?["embeddingSpace"] == SemanticModelID.granite97M.space)
+        #expect(started.configuration?["modelAssetsDigest"]?.count == 64)
+        let trace = try #require(completed.retrieval)
+        let candidates = try #require(trace.rounds.last).candidates
+        #expect(candidates.count > 100)
+        #expect(candidates.allSatisfy { !$0.sourceRevision.isEmpty && !$0.sourceFingerprint.isEmpty })
+        let boosted = try #require(completed.snapshot?.results.first)
+        #expect(trace.reranked.first == boosted.id)
+        let candidate = try #require(candidates.first { $0.resultID == boosted.id })
+        #expect(candidate.annRank != nil && candidate.annDistance != nil)
+        #expect(candidate.speakerUnion && candidate.score?.bonus == 0.1)
+        #expect(completed.snapshot?.results.count == 100)
+        #expect(completed.timingsMS?["embedding"] != nil && trace.timingsMS["ann"] != nil)
+        #expect(trace.indexEpoch != nil && trace.indexSequence > 0)
         var contentOnly = provider.configuration
         contentOnly.speakerMatchBoost = 0
         let unboosted = SemanticSearchProvider(

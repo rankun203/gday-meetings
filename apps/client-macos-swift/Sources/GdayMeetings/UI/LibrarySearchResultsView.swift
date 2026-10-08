@@ -310,12 +310,14 @@ private struct NativeSearchResults: NSViewRepresentable {
         @objc func clicked() {
             guard let table, rows.indices.contains(table.clickedRow) else { return }
             let result = activeResult(in: rows[table.clickedRow])
+            parent.session.recordInteraction(result, action: "open", input: "mouse")
             clearResultSelection()
             parent.open(result)
         }
         @objc func activate() {
             guard let table, rows.indices.contains(table.selectedRow) else { return }
             let result = activeResult(in: rows[table.selectedRow])
+            parent.session.recordInteraction(result, action: "open", input: "keyboard")
             clearResultSelection()
             parent.open(result)
         }
@@ -340,6 +342,7 @@ private struct NativeSearchResults: NSViewRepresentable {
                 guard let self, let group = self.rows.first(where: { $0.id == groupID }) else { return }
                 let result = self.activeResult(in: group)
                 self.clearResultSelection()
+                self.parent.session.recordInteraction(result, action: "play", input: "control")
                 self.parent.play(result)
             }
             cell.selectMatch = { [weak self] matchID in
@@ -349,6 +352,7 @@ private struct NativeSearchResults: NSViewRepresentable {
                 guard let self, let group = self.rows.first(where: { $0.id == groupID }) else { return }
                 let result = self.activeResult(in: group)
                 self.clearResultSelection()
+                self.parent.session.recordInteraction(result, action: "navigate", input: "control")
                 self.parent.navigate(result)
             }
             return cell
@@ -389,6 +393,7 @@ private struct NativeSearchResults: NSViewRepresentable {
                 table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
                 updating = false
             }
+            parent.session.recordInteraction(result, action: "select_match", input: "control")
             parent.selectMatch(result)
         }
     }

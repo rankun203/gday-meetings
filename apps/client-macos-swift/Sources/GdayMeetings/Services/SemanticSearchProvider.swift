@@ -6,6 +6,8 @@ struct SemanticSearchProvider: SearchIndexProvider {
     let directory: URL
     let index: SemanticSearchIndex
     let encoder: any SemanticEmbedding
+    var logsSearch = true
+    var searchLog: SearchLog? { logsSearch ? .init(directory: directory, providerID: id) : nil }
     var descriptor: SearchProviderDescriptor { .init(id: id, name: "Local Search", modes: [.semantic]) }
     func prepare() async throws {
         try await index.prepare(model: configuration.selectedModel)
@@ -79,25 +81,58 @@ struct SemanticSearchProvider: SearchIndexProvider {
     {
         AsyncThrowingStream { continuation in
             let task = Task {
+                let clock = ContinuousClock.now
+                let model = configuration.selectedModel
+                let manifest = LocalModelRegistry.descriptor(model.localID)
+                let settings = [
+                    "embeddingModel": model.rawValue, "embeddingSpace": model.space,
+                    "modelRepository": manifest.repository, "modelRevision": manifest.revision,
+                    "modelAssetsDigest": SemanticSource.hash(
+                        Data(manifest.assets.map { $0.path + ":" + $0.digest }.joined(separator: "\n").utf8)),
+                    "dimensions": String(model.dimensions), "reranker": "fp32-cosine-speaker-boost-v1",
+                    "speakerMatchBoost": String(configuration.boost), "retriever": "usearch-2.26.4-int8-hnsw",
+                    "candidateLimit": "1000", "connectivity": "32", "expansionSearch": "2000",
+                    "peopleResolver": "PeopleNameIndex-v1",
+                ]
+                searchLog?.record(
+                    .init(
+                        kind: "search_started", requestID: request.id, submissionID: request.submissionID,
+                        request: request, configuration: settings))
                 do {
                     guard request.mode == .semantic else { throw SearchProviderError.unsupportedMode }
                     let started = Date()
                     let query = try await encoder.embed(request.query, isQuery: true)
-                    let results = try await index.search(
+                    let embeddingMS = SearchLog.milliseconds(since: clock)
+                    let outcome = try await index.searchWithTrace(
                         vector: query, model: configuration.selectedModel, request: request, boost: configuration.boost)
+                    let results = outcome.results
+                    let snapshot = ProviderSearchSnapshot(
+                        requestID: request.id, providerID: id, sequence: 0,
+                        results: results, total: results.count, nextCursor: nil, isFinal: true)
                     try Task.checkCancellation()
+                    searchLog?.record(
+                        .init(
+                            kind: "search_completed", requestID: request.id, submissionID: request.submissionID,
+                            timingsMS: ["embedding": embeddingMS, "total": SearchLog.milliseconds(since: clock)],
+                            snapshot: snapshot, retrieval: outcome.trace))
                     continuation.yield(
                         .init(
-                            value: .init(
-                                requestID: request.id, providerID: id, sequence: 0,
-                                results: results, total: results.count, nextCursor: nil, isFinal: true),
+                            value: snapshot,
                             dataFlow: .init(
                                 location: .local, targetID: id, targetName: "Local Search", startedAt: started,
                                 endedAt: Date(), bodies: ["Search query"], purpose: "Search meeting content by meaning")
                         ))
                     continuation.finish()
                 }
-                catch { continuation.finish(throwing: error) }
+                catch {
+                    searchLog?.record(
+                        .init(
+                            kind: Task.isCancelled || error is CancellationError ? "search_cancelled" : "search_failed",
+                            requestID: request.id, submissionID: request.submissionID,
+                            timingsMS: ["total": SearchLog.milliseconds(since: clock)],
+                            error: error.localizedDescription))
+                    continuation.finish(throwing: error)
+                }
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
         }

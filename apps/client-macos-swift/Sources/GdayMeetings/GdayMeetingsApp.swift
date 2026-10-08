@@ -220,6 +220,7 @@ final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
         mainWindowLifecycle.isTerminating = true
         Task {
             let saved = await store.finalizeForQuit()
+            await SearchLog.flush()
             if !saved { mainWindowLifecycle.isTerminating = false }
             sender.reply(toApplicationShouldTerminate: saved)
         }

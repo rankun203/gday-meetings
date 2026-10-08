@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 /// Indexed source locations let search open content without starting playback.
-enum LibrarySearchKind: String, Sendable { case title, notes, summary, transcript }
+enum LibrarySearchKind: String, Codable, Sendable { case title, notes, summary, transcript }
 
 struct LibrarySearchPassage: Sendable {
     var kind: LibrarySearchKind
@@ -12,7 +12,7 @@ struct LibrarySearchPassage: Sendable {
     var end: Double? = nil
 }
 
-struct LibrarySearchResult: Identifiable, Equatable, Sendable {
+struct LibrarySearchResult: Identifiable, Equatable, Codable, Sendable {
     let id: Int64
     let meetingID: UUID
     let title: String
@@ -29,7 +29,7 @@ struct LibrarySearchPage: Sendable {
     let total: Int
 }
 
-struct SearchDisplayResult: Identifiable, Equatable, Sendable {
+struct SearchDisplayResult: Identifiable, Equatable, Codable, Sendable {
     let id: String
     let meetingID: UUID
     let title: String
@@ -107,6 +107,54 @@ final class LibrarySearchSession: ObservableObject {
     private var completedNameRequest: UUID?
     private var people: [PeopleNameRecord] = []
     private var preparingProviders = false
+    private var searchLogs: [SearchLog] = []
+    private var submissionID = UUID()
+    private var submissionStarted = ContinuousClock.now
+    private var displaySnapshotID: UUID?
+    private var displayedAt = ContinuousClock.now
+
+    private func record(_ event: SearchLogEvent) {
+        for log in searchLogs { log.record(event) }
+    }
+    private func recordDisplay(isFinal: Bool) {
+        let snapshotID = UUID()
+        displaySnapshotID = snapshotID
+        displayedAt = .now
+        record(
+            .init(
+                kind: "results_displayed", requestID: generation, submissionID: submissionID,
+                timingsMS: ["sinceSubmission": SearchLog.milliseconds(since: submissionStarted)],
+                display: displayResults, snapshotID: snapshotID, isFinal: isFinal,
+                failures: Dictionary(uniqueKeysWithValues: providerFailures.map { ($0.key.uuidString, $0.value) })))
+    }
+    func recordInteraction(_ result: SearchDisplayResult, action: String, input: String) {
+        guard let snapshotID = displaySnapshotID,
+            let rank = displayResults.firstIndex(where: { $0.id == result.id && $0.meetingID == result.meetingID })
+        else { return }
+        let groups = SearchResultGroup.grouping(displayResults)
+        guard let group = groups.firstIndex(where: { $0.id == result.meetingID }),
+            let match = groups[group].matches.firstIndex(where: { $0.id == result.id })
+        else { return }
+        record(
+            .init(
+                kind: "result_interaction", requestID: generation, submissionID: submissionID,
+                snapshotID: snapshotID,
+                interaction: .init(
+                    resultID: result.id, meetingID: result.meetingID, action: action, input: input,
+                    resultRank: rank + 1, groupRank: group + 1, matchRank: match + 1,
+                    elapsedSinceDisplayMS: SearchLog.milliseconds(since: displayedAt))))
+    }
+    private func startSubmission() {
+        if preparingProviders, error == nil {
+            record(
+                .init(
+                    kind: "preparation_cancelled", requestID: submissionID, submissionID: submissionID,
+                    timingsMS: ["sinceSubmission": SearchLog.milliseconds(since: submissionStarted)]))
+        }
+        submissionID = UUID()
+        submissionStarted = .now
+        displaySnapshotID = nil
+    }
     @Published private(set) var mode: SearchMode = .text
     @Published private(set) var rankedResults: [FusedSearchResult] = []
     @Published private(set) var providerFailures: [UUID: String] = [:]
@@ -114,22 +162,21 @@ final class LibrarySearchSession: ObservableObject {
     @Published var activeMatches: [UUID: String] = [:]
     var scrollOffset: Double = 0
     private(set) var generation = UUID() {
-        didSet { activeMatches = [:] }
+        didSet {
+            activeMatches = [:]
+            displaySnapshotID = nil
+        }
     }
     private var task: Task<Void, Never>?
     private var index: LibraryIndex?
     private var exhausted = false
     private var excludingTagIDs: Set<UUID> = []
     private var coordinator: SearchCoordinator?
-    private let loadPage: @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage
+    private let loadPage: (@Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage)?
 
     init(
         resolvePeople: (@Sendable (String, [PeopleNameRecord]) async throws -> PeopleNameResolution)? = nil,
-        loadPage: @escaping @Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage = {
-            index, query, cursor, excludingTagIDs in
-            try await LocalTextSearchProvider(index: index).page(
-                query: query, after: cursor, excludingTagIDs: excludingTagIDs)
-        }
+        loadPage: (@Sendable (LibraryIndex, String, Int64, Set<UUID>) async throws -> LibrarySearchPage)? = nil
     ) {
         self.loadPage = loadPage
         let resolver = PeopleNameResolver()
@@ -173,6 +220,7 @@ final class LibrarySearchSession: ObservableObject {
             return
         }
         let current = generation
+        let peopleStarted = ContinuousClock.now
         let query = query
         let people = people
         let resolver = resolveNames
@@ -189,6 +237,11 @@ final class LibrarySearchSession: ObservableObject {
             guard request == nameRequest else { return }
             completedNameRequest = request
             peopleResolution = resolution
+            record(
+                .init(
+                    kind: "people_resolved", requestID: submissionID, submissionID: submissionID,
+                    timingsMS: ["peopleResolution": SearchLog.milliseconds(since: peopleStarted)],
+                    people: resolution, error: peopleError))
             contentQuery = query
             guard !preparingProviders else {
                 if error != nil { isLoading = false }
@@ -223,7 +276,13 @@ final class LibrarySearchSession: ObservableObject {
         total = 0
     }
     var canLoadMore: Bool { !isLoading && error == nil && !exhausted }
-    func beginPreparation(_ draft: String, mode: SearchMode) {
+    func beginPreparation(_ draft: String, mode: SearchMode, log: SearchLog? = nil) {
+        startSubmission()
+        searchLogs = log.map { [$0] } ?? []
+        record(
+            .init(
+                kind: "query_submitted", requestID: submissionID, submissionID: submissionID,
+                request: .init(id: submissionID, query: draft, mode: mode)))
         task?.cancel()
         generation = UUID()
         query = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -242,6 +301,10 @@ final class LibrarySearchSession: ObservableObject {
         resolvePeopleAndLoad()
     }
     func preparationFailed(_ message: String) {
+        record(
+            .init(
+                kind: "preparation_failed", requestID: submissionID, submissionID: submissionID,
+                timingsMS: ["sinceSubmission": SearchLog.milliseconds(since: submissionStarted)], error: message))
         error = message
         isLoading = false
     }
@@ -271,6 +334,8 @@ final class LibrarySearchSession: ObservableObject {
         guard !trimmed.isEmpty else { return false }
         task?.cancel()
         generation = UUID()
+        startSubmission()
+        searchLogs = index.map { [SearchLog(directory: $0.directory, providerID: LocalTextSearchProvider.id)] } ?? []
         self.index = index
         self.excludingTagIDs = excludingTagIDs
         query = trimmed
@@ -298,6 +363,8 @@ final class LibrarySearchSession: ObservableObject {
         guard !trimmed.isEmpty else { return false }
         task?.cancel()
         generation = UUID()
+        if !preparingProviders { startSubmission() }
+        searchLogs = providers.compactMap(\.searchLog)
         query = trimmed
         self.mode = mode
         preparingProviders = false
@@ -329,11 +396,12 @@ final class LibrarySearchSession: ObservableObject {
         guard let coordinator else { return }
         task?.cancel()
         generation = UUID()
+        displaySnapshotID = nil
         let generation = generation
         let request = ProviderSearchRequest(
             id: generation, query: contentQuery, mode: mode, limit: SearchCoordinator.maximumResults,
             excludingTagIDs: excludingTagIDs, ranked: mode != .text,
-            identifiedPeople: peopleResolution.unambiguousPeople)
+            identifiedPeople: peopleResolution.unambiguousPeople, submissionID: submissionID)
         isLoading = true
         error = nil
         providerFailures = [:]
@@ -345,6 +413,7 @@ final class LibrarySearchSession: ObservableObject {
                     providerFailures = progress.failures
                     total = progress.results.count
                     isLoading = !progress.isFinal
+                    recordDisplay(isFinal: progress.isFinal)
                     if progress.isFinal, progress.results.isEmpty, !progress.failures.isEmpty {
                         error = progress.failures.values.sorted().joined(separator: " ")
                     }
@@ -372,12 +441,21 @@ final class LibrarySearchSession: ObservableObject {
         let excludingTagIDs = excludingTagIDs
         task = Task {
             do {
-                let page = try await loadPage(index, query, cursor, excludingTagIDs)
+                let page: LibrarySearchPage
+                if let loadPage {
+                    page = try await loadPage(index, query, cursor, excludingTagIDs)
+                }
+                else {
+                    page = try await LocalTextSearchProvider(index: index).page(
+                        query: query, after: cursor, excludingTagIDs: excludingTagIDs,
+                        requestID: generation, submissionID: submissionID)
+                }
                 guard !Task.isCancelled, generation == self.generation else { return }
                 results += page.results
                 total = page.total
                 exhausted = page.results.count < 50
                 isLoading = false
+                recordDisplay(isFinal: true)
             }
             catch {
                 guard !Task.isCancelled, generation == self.generation else { return }

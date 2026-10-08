@@ -535,7 +535,6 @@ struct LibraryView: View {
             {
                 store.localSearch.typingBegan(provider)
             }
-            if query.isEmpty, showsSearchResults { showsSearchResults = false }
         }
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
         .alert(
@@ -633,7 +632,11 @@ struct LibraryView: View {
         showsSearchResults = true
         openedSearchResult = nil
         searchFocused = false
-        searchSession.beginPreparation(query, mode: .semantic)
+        searchSession.beginPreparation(
+            query, mode: .semantic,
+            log: store.libraryWritable
+                ? store.selectedSearchProvider.map { SearchLog(directory: store.dataDirectory, providerID: $0.id) }
+                : nil)
         let exclusions = store.excludedTagIDs
         searchPreparationTask = Task {
             await searchSession.waitForPeopleResolution()
@@ -647,7 +650,8 @@ struct LibraryView: View {
                 return
             }
             do {
-                let provider = try await store.localSearch.prepare(configured)
+                var provider = try await store.localSearch.prepare(configured)
+                provider.logsSearch = store.libraryWritable
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
                 let providers: [any SearchProvider] = [provider]
                 _ = searchSession.submit(query, mode: .semantic, providers: providers, excludingTagIDs: exclusions)

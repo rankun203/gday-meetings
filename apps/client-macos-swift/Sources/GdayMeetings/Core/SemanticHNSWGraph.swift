@@ -51,7 +51,14 @@ final class SemanticHNSWGraph {
         let excluded: Set<Int64>
         init(_ excluded: Set<Int64>) { self.excluded = excluded }
     }
+    struct Match {
+        let key: Int64
+        let distance: Float
+    }
     func search(_ vector: [Float], count requested: Int, excluding: Set<Int64>) throws -> [Int64] {
+        try searchMatches(vector, count: requested, excluding: excluding).map(\.key)
+    }
+    func searchMatches(_ vector: [Float], count requested: Int, excluding: Set<Int64>) throws -> [Match] {
         guard vector.count == dimensions else { throw SearchProviderError.invalidResponse }
         let limit = min(requested, count)
         guard limit > 0 else { return [] }
@@ -71,7 +78,7 @@ final class SemanticHNSWGraph {
             }
         }
         try Self.check(error)
-        return keys.prefix(found).map(Int64.init)
+        return (0..<found).map { Match(key: Int64(keys[$0]), distance: distances[$0]) }
     }
     func save(_ url: URL) throws {
         var error: usearch_error_t?

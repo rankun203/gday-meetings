@@ -222,7 +222,7 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
     }
 }
 
-struct SpeakerMatchScore: Equatable, Sendable {
+struct SpeakerMatchScore: Equatable, Codable, Sendable {
     let similarity: Double
     let matchedPeople: Int
     let identifiedPeople: Int

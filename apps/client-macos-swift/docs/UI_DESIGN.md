@@ -126,6 +126,8 @@ Render generated bold CJK labels such as `**结论：**正文` as a bold label f
 
 ## People and passages in library search
 
+Editing or clearing the toolbar search draft preserves the current page, submitted search, and keyboard focus. Return submits a nonempty replacement query; an empty submission leaves the current search unchanged.
+
 Search Results has a compact match count and ranking-details control. Search uses the provider selected in General; the results page has no mode override. Show unambiguous People matches in one row of compact transcript-style chips with overflow. Matched phrases and the speaker preference are available in help. Put uncertain names under **Possible Matches**, explaining that they do not affect ranking. Selecting a chip opens the person and reveals them even when a previous People filter hid them. Duplicate names remain separate candidates.
 
 Embed the complete query once, retaining names and relationships. Name matching runs locally, off the main actor, with exact, reversed, pinyin, initials, prefix, and spelling evidence. Only unambiguous People matches contribute a soft speaker bonus, using confirmed speaker associations in the returned window. No person-based filtering or query rewriting occurs. The full query and content embeddings keep mentions searchable.

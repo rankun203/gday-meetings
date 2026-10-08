@@ -24,6 +24,12 @@ mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 /usr/bin/ditto "$binary_dir/swift-crypto_Crypto.bundle" "$app_path/Contents/Resources/swift-crypto_Crypto.bundle"
 /usr/bin/ditto "$binary_dir/FluidAudio_FluidAudio.bundle" "$app_path/Contents/Resources/FluidAudio_FluidAudio.bundle"
 /bin/cp "$client_dir/packaging/macos/Info.plist" "$app_path/Contents/Info.plist"
+build_revision="${GDAY_BUILD_REVISION:-$(git -C "$client_dir" rev-parse HEAD 2>/dev/null || printf 'local')}"
+if [[ -z "${GDAY_BUILD_REVISION:-}" && -n "$(git -C "$client_dir" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+    build_revision+="-dirty"
+fi
+/usr/libexec/PlistBuddy -c "Add :GdayBuildRevision string $build_revision" "$app_path/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :GdayBuiltAt string $(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$app_path/Contents/Info.plist"
 /bin/cp "$client_dir/packaging/macos/GdayMeetings.icns" "$app_path/Contents/Resources/GdayMeetings.icns"
 /usr/bin/ditto "$build_dir/native-audio-$(uname -m)/install/licenses" "$app_path/Contents/Resources/ThirdPartyLicenses"
 # Remove the retired attribution from reused build bundles.
