@@ -311,7 +311,7 @@ final class LiveTranscriptController: ObservableObject {
         speakerProvider = runtime
         let boundaries = Dictionary(
             uniqueKeysWithValues: (draft?.speakerTimeline?.cursors ?? []).map { ($0.source, $0.end) })
-        speakerStartup = Task { [self] in
+        speakerStartup = Task(name: "Start live speaker labeling") { [self] in
             do {
                 try await runtime.start(
                     model: model, sources: sources, sink: sink, boundaries: boundaries,
@@ -357,7 +357,7 @@ final class LiveTranscriptController: ObservableObject {
         guard let runtime = speakerProvider else { return }
         let token = speakerGeneration
         speakerProvider = nil
-        pendingSpeakerFinalizations[token] = Task { [self] in
+        pendingSpeakerFinalizations[token] = Task(name: "Finish live speaker labeling") { [self] in
             let completed = await LiveFinishRace.run(seconds: 5) { await runtime.finish() }
             if !completed {
                 speakerEvidenceFailed = true
@@ -510,7 +510,7 @@ final class LiveTranscriptController: ObservableObject {
         let token = voiceGeneration
         let worker = makeVoiceWorker()
         speakerRecognitionStatus = "Preparing speaker association…"
-        voiceStartup = Task {
+        voiceStartup = Task(name: "Prepare live voice embeddings") {
             defer { if token == voiceGeneration { voiceStartup = nil } }
             do {
                 try await worker.prepare(priority: .capture)
@@ -573,7 +573,7 @@ final class LiveTranscriptController: ObservableObject {
         let evidence = speakerEvidence
         let evidenceMeetingID = draft?.meetingID
         let workID = UUID()
-        voiceWork = Task {
+        voiceWork = Task(name: "Extract and match live voice embedding") {
             defer {
                 pendingVoiceWork.removeValue(forKey: workID)
                 if voiceGeneration == voiceToken {
@@ -627,7 +627,7 @@ final class LiveTranscriptController: ObservableObject {
         let workID = UUID()
         let evidence = speakerEvidence
         let meetingID = draft?.meetingID
-        let work = Task {
+        let work = Task(name: "Save voice omission") {
             defer { pendingVoiceWork.removeValue(forKey: workID) }
             do {
                 try await evidence?.appendOmission(
@@ -669,7 +669,7 @@ final class LiveTranscriptController: ObservableObject {
         let untrustedSamples = observationIdentity?.untrustedSampleIDs(samples) ?? []
         let previous = observationWork
         let epoch = observationEpoch
-        observationWork = Task {
+        observationWork = Task(name: "Resolve live speaker identities") {
             await previous?.value
             guard !Task.isCancelled, epoch == observationEpoch else { return }
             do {
@@ -787,7 +787,7 @@ final class LiveTranscriptController: ObservableObject {
         let boundaries = self.boundaries
         cancelProvider = { await provider.cancel() }
         stopProvider = { await provider.finish() }
-        startup = Task { [self] in
+        startup = Task(name: "Start live transcription") { [self] in
             do {
                 let locale = try await AppleLiveTranscription.prepare(language: draft.locale) { [weak self] value in
                     await self?.setStatus(value, token: token)
@@ -832,7 +832,7 @@ final class LiveTranscriptController: ObservableObject {
         token: UUID, work: @escaping () async -> Bool, cancel: (() async -> Void)?
     ) {
         acceptedGenerations.insert(token)
-        pendingFinalizations[token] = Task {
+        pendingFinalizations[token] = Task(name: "Finish live transcription") {
             let finished = await LiveFinishRace.run(seconds: 5, work: work)
             if !finished, let cancel { Task { await cancel() } }
             acceptedGenerations.remove(token)
@@ -1051,7 +1051,7 @@ final class LiveTranscriptController: ObservableObject {
         do {
             // Normal display consumes exactly the saved segments. No raw journal
             // replay, paragraph generation, or second transcript publication.
-            draft = try await Task.detached(priority: .utility) {
+            draft = try await Task.detached(name: "Read live transcript draft", priority: .utility) {
                 try LiveTranscriptDraft.read(at: directory, meetingID: metadata.meetingID)
             }.value
         }

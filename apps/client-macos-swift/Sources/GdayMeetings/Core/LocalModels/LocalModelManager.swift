@@ -212,7 +212,7 @@ final class LocalModelManager: ObservableObject {
         let operation = UUID()
         operations[id] = operation
         states[id] = .init(phase: download ? .downloading : .verifying, totalBytes: descriptor.downloadBytes)
-        tasks[id] = Task { [weak self] in
+        tasks[id] = Task(name: "Prepare local model: \(id.rawValue)") { [weak self] in
             guard let self else { return }
             do {
                 try await prepareStorage()
@@ -369,7 +369,9 @@ final class LocalModelManager: ObservableObject {
                 let worker = worker
                 pending = CommunityPreparation(
                     names: Set(loading.modelNames),
-                    task: Task { try await worker.prepare(loading, directory: directory) })
+                    task: Task(name: "Load community voice models") {
+                        try await worker.prepare(loading, directory: directory)
+                    })
                 communityPreparation = pending
             }
             do {

@@ -78,6 +78,16 @@ A watchdog must own the actual stop action and verify it; a reminder to an inact
 
 ## Instruments and storage
 
+### Identify recording operations
+
+Add the **Swift Tasks** instrument (included in the **Swift Concurrency** template) to inspect named recording tasks, including live transcription, speaker labeling, voice embedding extraction, identity review, transcript delivery and storage, and model preparation. Source-specific tasks include the fixed microphone or system source name. These task names follow asynchronous work; Time Profiler's shared runtime thread rows can still show the process name.
+
+Add **Points of Interest** to see `Refresh live transcript`, `Process live speaker audio`, and `Extract voice embedding` intervals under subsystem `com.gdaymeetings.macos`. Intervals contain no meeting content or identifiers and measure the complete named operation, including its CPU preparation. They do not establish accelerator utilization or replace the Core ML instrument's prediction events. Each invocation has its own interval ID, so overlapping calls remain distinct.
+
+For the next recording, run the new build and start a capture with **Time Profiler + Swift Tasks + Points of Interest** before starting the meeting. Keep Core ML and device instruments when their measurements are needed. Existing traces and a currently running older build cannot acquire them. The app's explicit dispatch queues already have labels; shared Swift concurrency and framework threads must not be renamed to match the task temporarily executing on them.
+
+### Capture and export
+
 Attach **Time Profiler + GPU + Neural Engine + Core ML** to the installed app. For a single prepared capture:
 
 ```sh

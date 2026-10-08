@@ -31,6 +31,9 @@ actor CommunityVoiceEmbeddingExtractor {
     /// 16 kHz mono speech. The caller excludes overlap and retains provenance.
     /// Returns a raw vector; callers normalize and attach its explicit model type.
     func extract(samples: [Float]) throws -> [Double] {
+        let interval = RecordingSignposts.signposter.beginInterval(
+            "Extract voice embedding", id: RecordingSignposts.signposter.makeSignpostID())
+        defer { RecordingSignposts.signposter.endInterval("Extract voice embedding", interval) }
         try Task.checkCancellation()
         let audioCount = audioConstraint.shape.reduce(1) { $0 * $1.intValue }
         guard samples.count >= 32_000, samples.count <= audioCount, samples.allSatisfy(\.isFinite) else {

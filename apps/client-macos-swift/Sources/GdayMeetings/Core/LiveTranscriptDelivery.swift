@@ -53,7 +53,7 @@ final class LiveTranscriptGapReporter: @unchecked Sendable {
         let start = !running
         running = true
         lock.unlock()
-        if start { Task { await drain() } }
+        if start { Task(name: "Deliver live transcript gaps") { await drain() } }
     }
 
     private func next() -> LiveTranscriptGap? {

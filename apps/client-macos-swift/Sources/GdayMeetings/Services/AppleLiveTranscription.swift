@@ -98,7 +98,7 @@ actor AppleLiveTranscription {
             // queue is the sole backlog; tiny system packets have the same budget as microphone packets.
             try await analyzer.start(inputSequence: AsyncStream(unfolding: { await input.next() }))
             let sessionID = UUID()
-            let results = Task {
+            let results = Task(name: "Live transcription results: \(source.rawValue)") {
                 do {
                     for try await result in transcriber.results {
                         let range = result.range

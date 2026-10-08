@@ -119,7 +119,7 @@ actor LocalLiveDiarization {
             for source in sources {
                 let session = Session(source: source, boundary: boundaries[source] ?? 0, config: config, models: models)
                 sessions.append(session)
-                session.feed = Task { await self.feed(session) }
+                session.feed = Task(name: "Live speaker labeling: \(source.rawValue)") { await self.feed(session) }
             }
             sink.replace(Dictionary(uniqueKeysWithValues: sessions.map { ($0.source, $0.queue) }), consumer: consumer)
         }
@@ -135,6 +135,9 @@ actor LocalLiveDiarization {
         guard !cancelled, !Task.isCancelled,
             let session = sessions.first(where: { $0.source == source && $0.generation == generation })
         else { throw CancellationError() }
+        let interval = RecordingSignposts.signposter.beginInterval(
+            "Process live speaker audio", id: RecordingSignposts.signposter.makeSignpostID())
+        defer { RecordingSignposts.signposter.endInterval("Process live speaker audio", interval) }
         return try autoreleasepool {
             session.diarizer.appendAudio(block)
             return try session.diarizer.processBufferedAudio()

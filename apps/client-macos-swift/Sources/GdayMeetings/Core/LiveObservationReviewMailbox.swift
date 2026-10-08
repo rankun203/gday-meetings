@@ -20,7 +20,7 @@ import Foundation
         guard !cancelled else { return }
         pending = snapshot
         guard work == nil else { return }
-        work = Task { [self] in
+        work = Task(name: "Review live speaker observations") { [self] in
             defer { work = nil }
             while !cancelled, let next = pending {
                 pending = nil

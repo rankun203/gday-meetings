@@ -163,7 +163,7 @@ actor LiveTranscriptProjectionStorage {
     ) {
         pending = Pending(draft: draft, snapshot: snapshot, directory: directory, finished: finished, report: report)
         guard worker == nil else { return }
-        worker = Task {
+        worker = Task(name: "Save live transcript projection") {
             while pending != nil {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let next = pending else { continue }

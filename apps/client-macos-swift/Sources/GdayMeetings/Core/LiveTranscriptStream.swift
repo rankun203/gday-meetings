@@ -186,6 +186,9 @@ final class LiveTranscriptStream {
     }
 
     private func refresh(finishing: Bool = false) {
+        let interval = RecordingSignposts.signposter.beginInterval(
+            "Refresh live transcript", id: RecordingSignposts.signposter.makeSignpostID())
+        defer { RecordingSignposts.signposter.endInterval("Refresh live transcript", interval) }
         attributedPhraseCount = 0
         pending.sort(by: LiveTranscriptPhrase.ordered)
         var carry = previous
