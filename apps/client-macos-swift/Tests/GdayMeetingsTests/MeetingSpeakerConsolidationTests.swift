@@ -78,6 +78,27 @@ import Testing
         #expect(updated.speakers == meeting.speakers)
     }
 
+    @Test func liveReviewProtectsObservedSpeechWithoutLockingFutureMachineAssignments() throws {
+        let named = MeetingSpeaker(
+            label: "Speaker 1", track: "microphone", providerName: "Live",
+            personID: UUID(), manuallyAssigned: true, manualReviewThrough: ["microphone": 10])
+        var meeting = Meeting(title: "Live review boundary")
+        meeting.replaceSpeakers([named])
+        meeting.transcript = [row(named, 0), row(named, 8), row(named, 12)]
+        let replacement = MeetingSpeaker(label: "Speaker 2", track: "microphone", providerName: "Consolidation")
+        let labels = LocalDiarizationResult(
+            modelRevision: "synthetic",
+            ranges: [.init(track: "microphone", label: replacement.label, start: 0, end: 20)],
+            speakers: [replacement])
+        let recovered = try JSONDecoder().decode(MeetingSpeaker.self, from: JSONEncoder().encode(named))
+        #expect(recovered.manualReviewThrough == named.manualReviewThrough)
+        let updated = MeetingSpeakerConsolidation.applying(labels, to: meeting)
+        #expect(updated.transcript[0] == meeting.transcript[0])
+        #expect(updated.transcript[1] == meeting.transcript[1])
+        #expect(updated.transcript[2].speakerID == replacement.id)
+        #expect(updated.transcript[2].personID == nil)
+    }
+
     @Test func invalidEvidenceAndUnsampledActivityPreserveExistingLabels() throws {
         let speaker = MeetingSpeaker(label: "mic_01", track: "microphone", providerName: "Synthetic")
         var meeting = Meeting(title: "Synthetic missing evidence")

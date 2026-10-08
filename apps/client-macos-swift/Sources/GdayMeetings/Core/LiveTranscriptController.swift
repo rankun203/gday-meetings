@@ -33,6 +33,7 @@ final class LiveTranscriptController: ObservableObject {
     @Published private var checkpointIssue: String?
     @Published private var dataEventIssue: String?
     @Published private var speakerAnalysisIssue: String?
+    @Published private var observationReviewIssue: String?
     @Published private var voiceMatchingIssue: String?
     private var voiceMatchingError: Error?
     private var projectionWriter = LiveTranscriptProjectionWriter()
@@ -52,16 +53,20 @@ final class LiveTranscriptController: ObservableObject {
 
     var liveTranscriptIssues: [String] {
         var issues =
-            [transcriptionIssue, checkpointIssue, projectionIssue, dataEventIssue].compactMap { $0 }
+            [transcriptionIssue, checkpointIssue, projectionIssue, dataEventIssue, observationReviewIssue].compactMap {
+                $0
+            }
             + transcriptionFailures
         if speakerLabelsEnabled || speakerRecognitionEnabled, let issue = speakerAnalysisIssue { issues.append(issue) }
-        if speakerRecognitionEnabled, let issue = voiceMatchingIssue { issues.append(issue) }
+        if speakerRecognitionEnabled || observationIdentity != nil, let issue = voiceMatchingIssue {
+            issues.append(issue)
+        }
         var seen = Set<String>()
         return issues.filter { seen.insert($0).inserted }
     }
     var canOpenProviderSettings: Bool {
         ((speakerLabelsEnabled || speakerRecognitionEnabled) && speakerAnalysisIssue != nil)
-            || (speakerRecognitionEnabled && voiceMatchingIssue != nil)
+            || ((speakerRecognitionEnabled || observationIdentity != nil) && voiceMatchingIssue != nil)
     }
 
     var speakerStatusMessages: [String] {
@@ -71,27 +76,47 @@ final class LiveTranscriptController: ObservableObject {
             ? [speakerLabelStatus, speakerRecognitionStatus] : [speakerLabelStatus]
         return messages.filter { !$0.isEmpty }
     }
-    private var speakerProvider: LocalLiveDiarization?
+    private var speakerProvider: (any LiveSpeakerRuntime)?
     private var speakerStartup: Task<Void, Never>?
     private var speakerGeneration = UUID()
     private var acceptedSpeakerGenerations = Set<UUID>()
     private var pendingSpeakerFinalizations: [UUID: Task<Bool, Never>] = [:]
-    private var voiceWorker: LiveVoiceEmbeddingWorker?
+    private var voiceWorker: (any LiveVoiceEmbeddingProcessing)?
     private var voiceStartup: Task<Void, Never>?
     private var voiceWork: Task<Void, Never>?
+    private var voiceSampleQueue = LiveVoiceSampleQueue()
     private var pendingVoiceWork: [UUID: Task<Void, Never>] = [:]
     private var voiceGeneration = UUID()
     private var voiceEmbeddings: [UUID: TypedVoiceEmbedding] = [:]
+    private var observationIdentity: LiveObservationIdentity?
+    private var observationWorker: LiveObservationIdentityWorker?
+    private var observationWork: Task<Void, Never>?
+    private var observationEpoch = UUID()
     private var speakerEvidence: SpeakerEvidenceStore?
     private(set) var speakerEvidenceComplete = false
     private var speakerEvidenceFailed = false
     private var peopleProvider: () -> [Person] = { [] }
     private var enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)?
+    private var observationReviewMailbox: LiveObservationReviewMailbox?
     private var recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)?
     private var modelObservation: AnyCancellable?
     private var waitingForSpeakerModel = false
     private var waitingForVoiceModel = false
     private var lastSpeakerCheckpoint = Date.distantPast
+
+    private let makeSpeakerRuntime: () -> any LiveSpeakerRuntime
+    private let makeVoiceWorker: () -> any LiveVoiceEmbeddingProcessing
+    private let reviewDrainTimeout: Double
+
+    init(
+        speakerRuntime: @escaping () -> any LiveSpeakerRuntime = { LocalLiveDiarization() },
+        voiceWorker: @escaping () -> any LiveVoiceEmbeddingProcessing = { LiveVoiceEmbeddingWorker() },
+        reviewDrainTimeout: Double = 5
+    ) {
+        makeSpeakerRuntime = speakerRuntime
+        makeVoiceWorker = voiceWorker
+        self.reviewDrainTimeout = reviewDrainTimeout
+    }
 
     var presentedRows: (finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) {
         let people = Set(peopleProvider().map(\.id))
@@ -161,9 +186,11 @@ final class LiveTranscriptController: ObservableObject {
         meetingID: UUID, language: String, directory: URL, sources: [LiveAudioSource],
         sink: LiveAudioSink, enabled: Bool, diarizationProvider: ServiceProvider? = nil,
         speakerLabelsEnabled: Bool = false, speakerRecognitionEnabled: Bool = false,
+        observationPolicy: SpeakerObservationClustering.Configuration? = nil,
         people: @escaping () -> [Person] = { [] },
         enrollVoice: ((UUID?, UUID, TypedVoiceEmbedding?) -> Void)? = nil,
-        recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)? = nil
+        recordVoice: ((LiveSpeakerAudioSample, TypedVoiceEmbedding) async -> Void)? = nil,
+        observationReview: (([LiveObservationReviewAssignment]) async -> Bool)? = nil
     ) {
         transcriptionIssue = nil
         transcriptionFailures = []
@@ -184,6 +211,17 @@ final class LiveTranscriptController: ObservableObject {
         peopleProvider = people
         self.enrollVoice = enrollVoice
         self.recordVoice = recordVoice
+        observationReviewIssue = nil
+        observationReviewMailbox?.cancel()
+        observationReviewMailbox = observationReview.map { callback in
+            LiveObservationReviewMailbox(write: callback) { [weak self] saved in
+                guard let self, self.draft?.meetingID == meetingID else { return }
+                self.observationReviewIssue =
+                    saved
+                    ? nil
+                    : "Couldn’t save speaker review examples. Voice evidence remains in the recording."
+            }
+        }
         modelObservation = LocalModelManager.shared.$states.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.sink != nil else { return }
@@ -194,14 +232,20 @@ final class LiveTranscriptController: ObservableObject {
                 {
                     self.setSpeakerLabelsEnabled(self.speakerLabelsEnabled)
                 }
-                if self.waitingForVoiceModel, self.speakerRecognitionEnabled,
+                if self.waitingForVoiceModel, self.speakerRecognitionEnabled || self.observationIdentity != nil,
                     LocalModelManager.shared.state(for: .community1).phase == .ready
                 {
-                    self.setSpeakerRecognitionEnabled(true)
+                    self.setSpeakerRecognitionEnabled(self.speakerRecognitionEnabled)
                 }
             }
         }
+        observationWork?.cancel()
+        observationWork = nil
+        observationEpoch = UUID()
+        observationIdentity = observationPolicy.map { _ in LiveObservationIdentity(meetingID: meetingID) }
+        observationWorker = observationPolicy.map { LiveObservationIdentityWorker(configuration: $0) }
         voiceEmbeddings = [:]
+        voiceSampleQueue.removeAll()
         pendingVoiceWork = [:]
         pendingFinalizations = [:]
         finalizationFailed = false
@@ -259,7 +303,7 @@ final class LiveTranscriptController: ObservableObject {
         }
         acceptedSpeakerGenerations.insert(token)
         speakerLabelStatus = "Preparing live speaker labels…"
-        let runtime = LocalLiveDiarization()
+        let runtime = makeSpeakerRuntime()
         speakerProvider = runtime
         let boundaries = Dictionary(
             uniqueKeysWithValues: (draft?.speakerTimeline?.cursors ?? []).map { ($0.source, $0.end) })
@@ -309,20 +353,22 @@ final class LiveTranscriptController: ObservableObject {
         guard let runtime = speakerProvider else { return }
         let token = speakerGeneration
         speakerProvider = nil
-        pendingSpeakerFinalizations[token] = Task {
+        pendingSpeakerFinalizations[token] = Task { [self] in
             let completed = await LiveFinishRace.run(seconds: 5) { await runtime.finish() }
             if !completed {
                 speakerEvidenceFailed = true
                 Task { await runtime.cancel() }
             }
-            if let work = voiceWork {
-                let drained = await LiveFinishRace.run(seconds: 5) {
-                    await work.value
-                    return true
-                }
-                if !drained {
-                    speakerEvidenceFailed = true
-                    work.cancel()
+            let drained = await LiveFinishRace.run(seconds: 5) { [weak self] in
+                await self?.drainVoiceAnalysis()
+                return true
+            }
+            if !drained {
+                speakerEvidenceFailed = true
+                voiceStartup?.cancel()
+                voiceWork?.cancel()
+                while let queued = voiceSampleQueue.pop() {
+                    recordVoiceOmission(queued.sample, reason: "Voice extraction did not finish before the deadline")
                 }
             }
             acceptedSpeakerGenerations.remove(token)
@@ -335,7 +381,12 @@ final class LiveTranscriptController: ObservableObject {
     private func receiveSpeakerEvent(_ event: LiveSpeakerEvent, token: UUID) async {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
-        guard draft?.speakerTimeline?.accept(event) == true else { return }
+        if observationIdentity != nil {
+            guard observationIdentity?.accept(event) == true else { return }
+        }
+        else {
+            guard draft?.speakerTimeline?.accept(event) == true else { return }
+        }
         do {
             try await speakerEvidence?.append(
                 event.intervals.map {
@@ -351,8 +402,14 @@ final class LiveTranscriptController: ObservableObject {
         }
         // A timed-out finalization may retire this generation while journal I/O yields.
         guard acceptedSpeakerGenerations.contains(token) else { return }
-        stream.accept(event)
-        publishStream()
+        if observationIdentity != nil {
+            publishObservationIdentity()
+            processObservationIdentity()
+        }
+        else {
+            stream.accept(event)
+            publishStream()
+        }
         draft?.speakerTimeline?.intervals.removeAll { $0.end < event.end - LiveTranscriptStream.maximumLabelWait }
         if event.final || Date().timeIntervalSince(lastSpeakerCheckpoint) >= 2 {
             checkpoint()
@@ -363,6 +420,7 @@ final class LiveTranscriptController: ObservableObject {
     private func receiveSpeakerGap(_ gap: LiveTranscriptGap, token: UUID) async {
         guard acceptedSpeakerGenerations.contains(token) else { return }
         if draft?.speakerTimeline == nil { draft?.speakerTimeline = LiveSpeakerTimeline() }
+        observationIdentity?.accept(gap)
         draft?.speakerTimeline?.gaps.append(gap)
         do {
             try await speakerEvidence?.appendGap(
@@ -389,7 +447,7 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     private func refreshVoiceReadyStatus() {
-        guard speakerRecognitionEnabled else { return }
+        guard speakerRecognitionEnabled || observationIdentity != nil else { return }
         if let error = voiceMatchingError {
             let message = LiveSpeakerModelDiagnostics.voiceFailure(
                 phase: LocalModelManager.shared.state(for: .community1).phase,
@@ -406,18 +464,28 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func setSpeakerRecognitionEnabled(_ value: Bool) {
+        // Naming preference must not restart the anonymous identity extractor.
+        if observationIdentity != nil, speakerLabelsEnabled,
+            voiceWorker != nil || voiceStartup != nil, voiceMatchingError == nil
+        {
+            speakerRecognitionEnabled = value
+            refreshVoiceReadyStatus()
+            return
+        }
         voiceMatchingIssue = nil
         voiceMatchingError = nil
         waitingForVoiceModel = false
         closeDataEvent(voiceGeneration)
         voiceGeneration = UUID()
         voiceStartup?.cancel()
+        voiceStartup = nil
         voiceWork?.cancel()
+        voiceSampleQueue.removeAll()
         voiceWork = nil
         if let worker = voiceWorker { Task { await worker.cancel() } }
         voiceWorker = nil
         speakerRecognitionEnabled = value
-        guard value else {
+        guard value || observationIdentity != nil else {
             speakerRecognitionStatus = "Speaker association is off."
             return
         }
@@ -436,16 +504,20 @@ final class LiveTranscriptController: ObservableObject {
             return
         }
         let token = voiceGeneration
-        let worker = LiveVoiceEmbeddingWorker()
+        let worker = makeVoiceWorker()
         speakerRecognitionStatus = "Preparing speaker association…"
         voiceStartup = Task {
+            defer { if token == voiceGeneration { voiceStartup = nil } }
             do {
-                try await worker.prepare()
+                try await worker.prepare(priority: .capture)
                 guard token == voiceGeneration, !Task.isCancelled else {
                     await worker.cancel()
                     return
                 }
                 voiceWorker = worker
+                if let next = voiceSampleQueue.pop() {
+                    receiveVoiceSample(next.sample, token: next.token)
+                }
                 refreshVoiceReadyStatus()
                 openLocalDataEvent(
                     token, targetID: ThisMacProvider.id, targetName: "This Mac",
@@ -454,6 +526,9 @@ final class LiveTranscriptController: ObservableObject {
             catch {
                 await worker.cancel()
                 guard token == voiceGeneration, !Task.isCancelled else { return }
+                while let queued = voiceSampleQueue.pop() {
+                    recordVoiceOmission(queued.sample, reason: "Voice model preparation failed")
+                }
                 waitingForVoiceModel = LocalModelManager.shared.state(for: .community1).phase != .ready
                 voiceMatchingError = error
                 let message = LiveSpeakerModelDiagnostics.voiceFailure(
@@ -466,9 +541,30 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     private func receiveVoiceSample(_ sample: LiveSpeakerAudioSample, token: UUID) {
-        guard acceptedSpeakerGenerations.contains(token), speakerLabelsEnabled, speakerRecognitionEnabled,
-            let worker = voiceWorker, voiceWork == nil
+        guard acceptedSpeakerGenerations.contains(token), speakerLabelsEnabled,
+            speakerRecognitionEnabled || observationIdentity != nil
         else { return }
+        if voiceWork != nil || voiceWorker == nil {
+            if observationIdentity != nil {
+                if voiceWorker == nil && voiceStartup == nil {
+                    recordVoiceOmission(sample, reason: "Voice model is unavailable")
+                    return
+                }
+                let accepted = voiceSampleQueue.enqueue(sample, token: token)
+                if let omitted = voiceSampleQueue.lastOmitted {
+                    recordVoiceOmission(
+                        omitted.sample,
+                        reason: accepted ? "Superseded queued voice refresh" : "Voice extraction queue capacity reached"
+                    )
+                }
+                if !accepted {
+                    voiceMatchingIssue =
+                        "Voice analysis is behind recording; some speech will need review after recording."
+                }
+            }
+            return
+        }
+        guard let worker = voiceWorker else { return }
         let voiceToken = voiceGeneration
         let evidence = speakerEvidence
         let evidenceMeetingID = draft?.meetingID
@@ -476,16 +572,21 @@ final class LiveTranscriptController: ObservableObject {
         voiceWork = Task {
             defer {
                 pendingVoiceWork.removeValue(forKey: workID)
-                if voiceGeneration == voiceToken { voiceWork = nil }
+                if voiceGeneration == voiceToken {
+                    voiceWork = nil
+                    if !Task.isCancelled, let next = voiceSampleQueue.pop() {
+                        receiveVoiceSample(next.sample, token: next.token)
+                    }
+                }
             }
             do {
-                guard let embedding = try await worker.extract(sample) else { return }
+                guard let embedding = try await worker.extract(sample, priority: .capture) else { return }
+                let observation = SpeakerEvidenceSample(
+                    id: UUID().uuidString, source: sample.source.rawValue,
+                    localSpeakerID: sample.speakerID.uuidString, start: sample.start, end: sample.end,
+                    embedding: embedding, quality: 1)
                 do {
-                    try await evidence?.append(
-                        SpeakerEvidenceSample(
-                            id: UUID().uuidString, source: sample.source.rawValue,
-                            localSpeakerID: sample.speakerID.uuidString, start: sample.start, end: sample.end,
-                            embedding: embedding, quality: 1))
+                    try await evidence?.append(observation)
                 }
                 catch {
                     if draft?.meetingID == evidenceMeetingID { speakerEvidenceFailed = true }
@@ -495,6 +596,11 @@ final class LiveTranscriptController: ObservableObject {
                     acceptedSpeakerGenerations.contains(token)
                 else { return }
                 voiceMatchingIssue = nil
+                if observationIdentity != nil {
+                    observationIdentity?.accept(observation)
+                    processObservationIdentity()
+                    return
+                }
                 voiceEmbeddings[sample.speakerID] = embedding
                 draft?.speakerTimeline?.retainEmbedding(embedding, for: sample.speakerID)
                 await recordVoice?(sample, embedding)
@@ -511,6 +617,91 @@ final class LiveTranscriptController: ObservableObject {
             }
         }
         if let voiceWork { pendingVoiceWork[workID] = voiceWork }
+    }
+
+    private func recordVoiceOmission(_ sample: LiveSpeakerAudioSample, reason: String) {
+        let workID = UUID()
+        let evidence = speakerEvidence
+        let meetingID = draft?.meetingID
+        let work = Task {
+            defer { pendingVoiceWork.removeValue(forKey: workID) }
+            do {
+                try await evidence?.appendOmission(
+                    .init(
+                        source: sample.source.rawValue,
+                        localSpeakerID: sample.speakerID.uuidString, start: sample.start, end: sample.end,
+                        reason: reason))
+            }
+            catch {
+                if draft?.meetingID == meetingID { speakerEvidenceFailed = true }
+            }
+        }
+        pendingVoiceWork[workID] = work
+    }
+
+    private func drainVoiceAnalysis() async {
+        await voiceStartup?.value
+        while let work = voiceWork {
+            await work.value
+            if Task.isCancelled { return }
+        }
+        await observationWork?.value
+    }
+
+    private func publishObservationIdentity() {
+        guard let observationIdentity else { return }
+        let projection = observationIdentity.projection(preserving: draft?.speakerTimeline)
+        draft?.speakerTimeline = projection
+        stream.replaceObservationTimeline(projection)
+        publishStream()
+    }
+
+    private func processObservationIdentity() {
+        guard let worker = observationWorker else { return }
+        let samples = observationIdentity?.takeReady() ?? []
+        guard !samples.isEmpty else { return }
+        let activity = observationIdentity?.trustedActivity() ?? []
+        let untrustedActivity = observationIdentity?.untrustedActivity() ?? []
+        let untrustedSamples = observationIdentity?.untrustedSampleIDs(samples) ?? []
+        let previous = observationWork
+        let epoch = observationEpoch
+        observationWork = Task {
+            await previous?.value
+            guard !Task.isCancelled, epoch == observationEpoch else { return }
+            do {
+                let result = try await worker.ingest(
+                    samples, activity: activity, untrustedActivity: untrustedActivity,
+                    untrustedSampleIDs: untrustedSamples)
+                guard !Task.isCancelled, epoch == observationEpoch else { return }
+                observationIdentity?.apply(result)
+                publishObservationIdentity()
+                voiceEmbeddings = Dictionary(
+                    uniqueKeysWithValues: (draft?.speakerTimeline?.speakers ?? []).compactMap {
+                        guard $0.manuallyAssigned, let embedding = $0.voiceEmbedding else { return nil }
+                        return ($0.id, embedding)
+                    })
+                var reviews: [LiveObservationReviewAssignment] = []
+                if let meetingID = draft?.meetingID {
+                    for cluster in result.clusters {
+                        let id = MeetingSpeakerConsolidation.identity(
+                            meetingID: meetingID, clusterID: cluster.id,
+                            method: "live-observation-identity-v1")
+                        for sample in cluster.prototypes {
+                            voiceEmbeddings[id] = sample.embedding
+                            reviews.append(.init(sample: sample, meetingSpeakerID: id))
+                        }
+                    }
+                }
+                observationReviewMailbox?.enqueue(reviews)
+                speakerRecognitionStatus = "Meeting speaker identities are based on voice observations."
+                checkpoint()
+            }
+            catch {
+                guard epoch == observationEpoch, !Task.isCancelled else { return }
+                voiceMatchingIssue =
+                    "Voice identity evidence could not be processed. Uncertain speech remains unassigned."
+            }
+        }
     }
 
     func seedPreview(meetingID: UUID, directory: URL, previouslyAssignedPersonID: UUID? = nil) {
@@ -690,6 +881,29 @@ final class LiveTranscriptController: ObservableObject {
             speakerEvidenceFailed = true
             for work in remainingVoiceWork { work.cancel() }
         }
+        let identitiesDrained = await LiveFinishRace.run(seconds: 5) { [weak self] in
+            await self?.drainVoiceAnalysis()
+            return true
+        }
+        if !identitiesDrained {
+            observationEpoch = UUID()
+            observationWork?.cancel()
+            observationReviewMailbox?.cancel()
+            voiceSampleQueue.removeAll()
+            speakerEvidenceFailed = true
+        }
+        if observationIdentity != nil && (!voiceDrained || !identitiesDrained || speakerEvidenceFailed) {
+            draft?.speakerLabelsComplete = false
+        }
+        let reviewsDrained = await LiveFinishRace.run(seconds: reviewDrainTimeout) { [weak self] in
+            await self?.observationReviewMailbox?.drain()
+            return true
+        }
+        if !reviewsDrained {
+            observationReviewIssue =
+                "Speaker review examples did not finish saving. Voice evidence remains available for consolidation."
+            observationReviewMailbox?.cancel()
+        }
         do {
             let complete = !speakerEvidenceFailed
             try await speakerEvidence?.finish(complete: complete)
@@ -703,6 +917,7 @@ final class LiveTranscriptController: ObservableObject {
         closeDataEvent(voiceGeneration)
         voiceGeneration = UUID()
         voiceStartup?.cancel()
+        voiceStartup = nil
         voiceWork?.cancel()
         if let worker = voiceWorker { Task { await worker.cancel() } }
         voiceWorker = nil

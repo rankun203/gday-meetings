@@ -16,6 +16,7 @@ final class LiveTranscriptStream {
     private var frozenOverrideIDs = Set<UUID>()
     private var activeOverrides: [LiveTranscriptOverride] = []
     private var overrideIDs = Set<UUID>()
+    private var identityAliases: [UUID: UUID] = [:]
     private var speakerMetadata: [UUID: LiveSpeakerIdentity] = [:]
     private var snapshotHead: LiveTranscriptFrozenBlock?
     private var snapshotTail: [LiveTranscriptPhrase] = []
@@ -30,12 +31,17 @@ final class LiveTranscriptStream {
     private var sealedThrough: [LiveAudioSource: Double] = [:]
     private var sealedRecognition: [RecognitionSource: Double] = [:]
     private var latestTime = 0.0
+    private var observationIdentity = false
     private var labeling = false
     private var sources: [LiveAudioSource] = [.system]
     private var recognitionEnds: [LiveAudioSource: Double] = [:]
     private var carryReset: [LiveAudioSource: Double] = [:]
 
-    func frozenRow(at index: Int) -> LiveTranscriptPhrase { displayedFrozen?[index] ?? frozen[index] }
+    func frozenRow(at index: Int) -> LiveTranscriptPhrase {
+        let row = displayedFrozen?[index] ?? frozen[index]
+        guard !overrides.contains(where: { $0.personWasAssigned && row.overlaps($0.anchor) }) else { return row }
+        return LiveSpeakerAliases.applying(row, aliases: identityAliases, speakers: speakerMetadata)
+    }
 
     func updateEdits(_ overrides: [LiveTranscriptOverride], speakers: [LiveSpeakerIdentity]) {
         self.overrides = overrides
@@ -78,12 +84,14 @@ final class LiveTranscriptStream {
         overrideIDs = []
         frozenOverrideIDs = []
         speakerMetadata = [:]
+        identityAliases = [:]
         frozenCount = 0
         snapshotHead = nil
         snapshotTail = []
         pending = []
         partials = []
         timeline = LiveSpeakerTimeline()
+        observationIdentity = false
         previous = [:]
         sealedThrough = [:]
         sealedRecognition = [:]
@@ -144,6 +152,16 @@ final class LiveTranscriptStream {
         refresh()
     }
 
+    func replaceObservationTimeline(_ value: LiveSpeakerTimeline) {
+        observationIdentity = true
+        if identityAliases != (value.identityAliases ?? [:]) { resetRevision += 1 }
+        identityAliases = value.identityAliases ?? [:]
+        speakerMetadata = Dictionary(uniqueKeysWithValues: value.speakers.map { ($0.id, $0) })
+        timeline = value
+        latestTime = max(latestTime, value.cursors.map(\.end).max() ?? 0)
+        refresh()
+    }
+
     func accept(_ gap: LiveTranscriptGap) {
         timeline.gaps.append(gap)
         carryReset[gap.source] = max(carryReset[gap.source] ?? 0, gap.end)
@@ -162,7 +180,9 @@ final class LiveTranscriptStream {
     }
 
     var snapshot: LiveTranscriptEffectiveSnapshot {
-        .init(head: snapshotHead, tail: snapshotTail + hotFinalized)
+        .init(
+            head: snapshotHead, tail: snapshotTail + hotFinalized, identityAliases: identityAliases,
+            speakers: speakerMetadata)
     }
 
     private func refresh(finishing: Bool = false) {
@@ -182,10 +202,14 @@ final class LiveTranscriptStream {
             }
             let observed = labeling ? timeline.attributing(phrase, bridgeUnknownWords: false) : [phrase]
             attributedPhraseCount += 1
-            var effective = Self.carryForward(observed, previous: &carry, timeline: timeline, labeling: labeling)
+            var effective =
+                observationIdentity
+                ? observed : Self.carryForward(observed, previous: &carry, timeline: timeline, labeling: labeling)
             let cursor = timeline.cursors.first { $0.source == phrase.source }?.end ?? -1
             let cutoff = max(
-                labeling ? min(cursor, recognitionCutoff) : recognitionCutoff,
+                labeling
+                    ? min(observationIdentity ? cursor - Self.maximumLabelWait : cursor, recognitionCutoff)
+                    : recognitionCutoff,
                 latestTime - Self.maximumLabelWait)
             // Seal a chronological prefix only. This preserves native row positions.
             let sealed = finishing || phrase.end <= cutoff
@@ -234,7 +258,8 @@ final class LiveTranscriptStream {
             }
             attributedPhraseCount += 1
             let observed = labeling ? timeline.attributing(phrase, bridgeUnknownWords: false) : [phrase]
-            return Self.carryForward(observed, previous: &carry, timeline: timeline, labeling: labeling)
+            return observationIdentity
+                ? observed : Self.carryForward(observed, previous: &carry, timeline: timeline, labeling: labeling)
         }
         if !activeOverrides.isEmpty {
             var edits = LiveTranscriptDraft(meetingID: UUID(), locale: "")
@@ -309,8 +334,14 @@ final class LiveTranscriptFrozenBlock: Sendable {
 struct LiveTranscriptEffectiveSnapshot: Sendable {
     let head: LiveTranscriptFrozenBlock?
     let tail: [LiveTranscriptPhrase]
+    var identityAliases: [UUID: UUID] = [:]
+    var speakers: [UUID: LiveSpeakerIdentity] = [:]
 
-    var phrases: [LiveTranscriptPhrase] { Self.materialize(head, tail: tail) }
+    var phrases: [LiveTranscriptPhrase] {
+        Self.materialize(head, tail: tail).map { row in
+            return LiveSpeakerAliases.applying(row, aliases: identityAliases, speakers: speakers)
+        }
+    }
 
     private static func materialize(_ head: LiveTranscriptFrozenBlock?, tail: [LiveTranscriptPhrase])
         -> [LiveTranscriptPhrase]

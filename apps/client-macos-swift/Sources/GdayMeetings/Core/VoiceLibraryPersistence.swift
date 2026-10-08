@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -22,11 +23,11 @@ final class VoiceLibraryPersistence {
         var version = 1
         var revision: UUID
     }
-    private struct Change: Codable {
+    fileprivate struct Change: Codable, Sendable {
         var path: String
         var data: Data?
     }
-    private struct Transaction: Codable {
+    fileprivate struct Transaction: Codable, Sendable {
         var version = 1
         var previousRevision: UUID?
         var revision: UUID
@@ -124,6 +125,65 @@ final class VoiceLibraryPersistence {
         }
     }
 
+    /// Snapshot the precise reviewed records needed by a profile. Unrelated live
+    /// candidate commits must not cancel expensive reviewed-profile construction.
+    func profileDependencyRevisions(exampleIDs: [UUID]) throws -> [String: String] {
+        try locked {
+            try validateRevision()
+            let overlay =
+                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
+                ?? [:]
+            var result: [String: String] = [:]
+            for id in exampleIDs {
+                for path in ["examples/\(id.uuidString).json", representationPath(id)] {
+                    try Task.checkCancellation()
+                    if overlay[path] == nil,
+                        VoiceLibraryStore.revision(url: try recordURL(path)) != fileRevisions[path]
+                    {
+                        throw changedError()
+                    }
+                    result[path] = try dependencyRevision(path, overlay: overlay)
+                }
+            }
+            return result
+        }
+    }
+
+    func loadProfileRepresentations(exampleID: UUID, dependencies: [String: String]) throws
+        -> VoiceLibraryRepresentations?
+    {
+        try locked {
+            let overlay =
+                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
+                ?? [:]
+            for path in ["examples/\(exampleID.uuidString).json", representationPath(exampleID)] {
+                guard try dependencyRevision(path, overlay: overlay) == dependencies[path] else { throw changedError() }
+            }
+            return try readRecord(path: representationPath(exampleID), overlay: overlay)
+        }
+    }
+
+    func validateProfileDependencies(_ dependencies: [String: String]) throws {
+        try locked {
+            let overlay =
+                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
+                ?? [:]
+            for (path, expected) in dependencies {
+                try Task.checkCancellation()
+                guard try dependencyRevision(path, overlay: overlay) == expected else { throw changedError() }
+            }
+        }
+    }
+
+    private func dependencyRevision(_ path: String, overlay: [String: Change]) throws -> String {
+        if let change = overlay[path] {
+            return change.data.map {
+                "transaction:" + SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
+            } ?? "absent"
+        }
+        return VoiceLibraryStore.revision(url: try recordURL(path)) ?? "absent"
+    }
+
     func validateCurrentRevision() throws {
         try locked { try validateRevision() }
     }
@@ -133,9 +193,16 @@ final class VoiceLibraryPersistence {
     }
 
     func validateMatchingMetadataRevisions() throws {
-        for path in fileRevisions.keys where path.hasPrefix("examples/") || path.hasPrefix("deleted-people/") {
-            try Task.checkCancellation()
-            try validateRecordRevision(path: path)
+        try locked {
+            try validateRevision()
+            let overlay = try pendingTransaction().map { Set($0.changes.map(\.path)) } ?? []
+            for path in fileRevisions.keys where path.hasPrefix("examples/") || path.hasPrefix("deleted-people/") {
+                try Task.checkCancellation()
+                if !overlay.contains(path), VoiceLibraryStore.revision(url: try recordURL(path)) != fileRevisions[path]
+                {
+                    throw changedError()
+                }
+            }
         }
     }
 
@@ -149,6 +216,52 @@ final class VoiceLibraryPersistence {
                     throw changedError()
                 }
             }
+        }
+    }
+
+    struct PreparedCommit: Sendable {
+        fileprivate var transaction: Transaction
+        fileprivate var encoded: Data
+        fileprivate var fileRevisions: [String: String]
+    }
+
+    /// Pure preparation against this backend's adopted snapshot. Run on a worker;
+    /// this creates no files and acquires no writer reservation.
+    func prepare(previous: VoiceLibraryDocument, next: VoiceLibraryDocument) throws -> PreparedCommit {
+        try Task.checkCancellation()
+        let changes = try changes(previous: previous, next: next)
+        let transaction = Transaction(previousRevision: revision, revision: UUID(), changes: changes)
+        let data = try encode(transaction)
+        guard data.count <= 64 * 1024 * 1024 else {
+            throw ServiceError("This voice-library change is too large. Save fewer examples at a time.")
+        }
+        try Task.checkCancellation()
+        return PreparedCommit(transaction: transaction, encoded: data, fileRevisions: fileRevisions)
+    }
+
+    /// Caller must also validate its in-memory review document before publishing.
+    func commit(_ prepared: PreparedCommit) throws {
+        guard writable else { throw ServiceError("The voice library is read-only.") }
+        try locked {
+            let transaction = prepared.transaction
+            guard revision == transaction.previousRevision else { throw changedError() }
+            for change in transaction.changes {
+                guard fileRevisions[change.path] == prepared.fileRevisions[change.path] else { throw changedError() }
+            }
+            try validateRevision()
+            if let pending = try pendingTransaction() {
+                try apply(pending)
+                try refreshFileRevisions(pending.changes.map(\.path))
+            }
+            try validateFiles(transaction.changes)
+            guard !transaction.changes.isEmpty || revision == nil else { return }
+            try beforeCommit?()
+            do { try atomicWrite(prepared.encoded, to: directory.appendingPathComponent("transaction.json")) }
+            catch {
+                guard (try? pendingTransaction()?.revision) == transaction.revision else { throw error }
+            }
+            revision = transaction.revision
+            materializeCommitted(transaction)
         }
     }
 

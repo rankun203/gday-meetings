@@ -23,7 +23,9 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
         if let savedSegments {
             let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
             return savedSegments.map { segment in
-                var row = segment.livePhrase(meetingID: meetingID)
+                var row = LiveSpeakerAliases.applying(
+                    segment.livePhrase(meetingID: meetingID),
+                    aliases: speakerTimeline?.identityAliases ?? [:], speakers: speakers)
                 if let id = row.speakerIdentity, let speaker = speakers[id] {
                     row.personID = speaker.personID
                     row.voiceEmbedding = speaker.voiceEmbedding
@@ -39,7 +41,20 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     }
 
     var segments: [TranscriptSegment] {
-        if let savedSegments { return savedSegments }
+        if let savedSegments {
+            let aliases = speakerTimeline?.identityAliases ?? [:]
+            let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
+            return savedSegments.map { original in
+                guard let old = original.speakerID, speakers[old]?.manuallyAssigned != true else { return original }
+                let id = LiveSpeakerAliases.resolve(old, aliases: aliases)
+                guard id != old, let speaker = speakers[id] else { return original }
+                var value = original
+                value.speakerID = id
+                value.speaker = speaker.label
+                value.personID = speaker.personID
+                return value
+            }
+        }
         return finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map {
             TranscriptSegment(live: $0)
         }
@@ -54,11 +69,16 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 let identity = $0.speakerIdentity ?? $0.id
                 guard seen.insert(identity).inserted else { return nil }
                 return MeetingSpeaker(
-                    id: identity, label: $0.speakerLabel, track: $0.source.rawValue,
+                    id: identity, label: $0.speakerLabel,
+                    track: speakerTimeline?.speakers.first(where: { $0.id == identity })?.additionalSources?.isEmpty
+                        == false
+                        ? "multiple" : $0.source.rawValue,
                     providerName: provider, voiceEmbedding: $0.voiceEmbedding,
                     personID: $0.personID, confirmed: $0.personID != nil,
                     sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source,
                     manuallyAssigned: speakerTimeline?.speakers.first(where: { $0.id == identity })?.manuallyAssigned,
+                    manualReviewThrough: speakerTimeline?.speakers.first(where: { $0.id == identity })?
+                        .manualReviewThrough,
                     colorSlot: $0.resolvedSpeakerColorSlot)
             }
     }
@@ -115,7 +135,9 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
             var effective = self
             let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
             effective.phrases = effectivePhrases.map { original in
-                var row = original
+                var row = LiveSpeakerAliases.applying(
+                    original,
+                    aliases: speakerTimeline?.identityAliases ?? [:], speakers: speakers)
                 if let identity = row.speakerIdentity, let speaker = speakers[identity] {
                     row.personID = speaker.personID
                     row.voiceEmbedding = speaker.voiceEmbedding

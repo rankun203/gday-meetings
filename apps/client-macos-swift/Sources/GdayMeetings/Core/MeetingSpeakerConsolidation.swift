@@ -65,6 +65,7 @@ enum MeetingSpeakerConsolidation {
                 replacement.label = old.label
                 replacement.personID = old.personID
                 replacement.manuallyAssigned = old.manuallyAssigned
+                replacement.manualReviewThrough = old.manualReviewThrough
                 replacement.confirmed = old.confirmed
                 replacement.confidence = old.confidence
             }
@@ -74,7 +75,7 @@ enum MeetingSpeakerConsolidation {
             let row = updated.transcript[index]
             let old = row.speakerID.flatMap { original[$0] }
             // Explicit corrections, including an explicit removal, survive regrouping.
-            guard old?.manuallyAssigned != true, row.end > row.start else { continue }
+            guard old?.protectsManualAssignment(to: row) != true, row.end > row.start else { continue }
             let source = row.source?.rawValue ?? normalizedSource(old?.track)
             guard let source else { continue }
             // A dominant safe portion does not identify the rest of a transcript row.
@@ -193,7 +194,7 @@ extension MeetingStore {
             analysis.1.result, evidence: analysis.0, meeting: original, method: analysis.1.audit.method)
         let unresolved = analysis.1.result.intervals.filter { $0.clusterID == nil }.reduce(0) { $0 + $1.end - $1.start }
         let protected = original.transcript.filter { row in
-            original.speakers.contains { $0.id == row.speakerID && $0.manuallyAssigned == true }
+            original.speakers.first { $0.id == row.speakerID }?.protectsManualAssignment(to: row) == true
         }.count
         result.detail =
             "\(analysis.1.result.clusters.count) voice groups. \(Int(unresolved.rounded())) seconds of speaker activity need review. \(protected) manually assigned passages kept."

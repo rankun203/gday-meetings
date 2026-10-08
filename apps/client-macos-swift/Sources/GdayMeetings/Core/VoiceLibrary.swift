@@ -43,6 +43,8 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var manuallyGrouped = false
     var createdAt = Date()
     var origin: VoiceExampleOrigin?
+    /// Stable evidence identity for automatically selected live representatives.
+    var observationID: String?
     var firstPassage: VoiceSampleRange?
     var sourceResolutionIssue: String?
 
@@ -69,6 +71,7 @@ struct VoiceProjectionOrigin: Codable, Equatable, Sendable {
     var personID: UUID?
     var manuallyAssigned: Bool?
     var confidence: Double?
+    var manualReviewThrough: [String: Double]?
 
     static func identity(exampleID: UUID, segmentID: UUID) -> UUID {
         let hash = Array(SHA256.hash(data: Data((exampleID.uuidString + segmentID.uuidString).utf8)))

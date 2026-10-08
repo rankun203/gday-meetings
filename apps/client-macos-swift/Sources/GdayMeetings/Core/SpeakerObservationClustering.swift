@@ -123,7 +123,9 @@ struct SpeakerObservationClustering {
 
     /// Activity must already pass the caller's credibility/window checks. It
     /// constrains simultaneous epochs, not whole channel lifetimes.
-    mutating func recordActivity(_ intervals: [SpeakerEvidenceActivity]) throws {
+    mutating func recordActivity(
+        _ intervals: [SpeakerEvidenceActivity], trustLocalContinuity: Bool = true
+    ) throws {
         guard
             intervals.allSatisfy({
                 !$0.source.isEmpty && !$0.localSpeakerID.isEmpty
@@ -138,7 +140,7 @@ struct SpeakerObservationClustering {
             let candidates = tracks.values.filter {
                 $0.source == interval.source && $0.local == interval.localSpeakerID && $0.startedAt <= interval.start
             }
-            if candidates.count == 1 { value.clusterID = candidates[0].clusterID }
+            if trustLocalContinuity && candidates.count == 1 { value.clusterID = candidates[0].clusterID }
             if let index = recentActivity.firstIndex(where: {
                 $0.source == value.source && $0.local == value.local && $0.clusterID == value.clusterID
                     && $0.start <= value.end && value.start <= $0.end
@@ -155,7 +157,8 @@ struct SpeakerObservationClustering {
     }
 
     mutating func ingest(
-        _ sample: SpeakerEvidenceSample, cancellationCheck: () throws -> Void = {}
+        _ sample: SpeakerEvidenceSample, trustLocalContinuity: Bool = true,
+        cancellationCheck: () throws -> Void = {}
     ) throws -> Decision {
         try cancellationCheck()
         guard configuration.isValid, sample.embedding.isValid, !sample.id.isEmpty,
@@ -177,7 +180,15 @@ struct SpeakerObservationClustering {
         }
         let trackKey = Self.trackKey(sample)
         var assigned: String?
-        if var track = next.tracks[trackKey] {
+        if !trustLocalContinuity {
+            // Capacity exhausts channel continuity, not the independent acoustic
+            // observation. Never train or inherit its former local voice epoch.
+            next.tracks.removeValue(forKey: trackKey)
+            let created = try next.newTrack([sample], isChange: true, cancellationCheck: cancellationCheck)
+            next.bindActivity(created, endingAt: sample.end)
+            assigned = created.clusterID
+        }
+        else if var track = next.tracks[trackKey] {
             let mean = Self.mean(track.samples.map(\.vector))
             if VoiceEmbeddingMath.dot(mean, sample.vector) >= configuration.changeSimilarity {
                 // A lone low-similarity sample followed by the original voice is
@@ -363,10 +374,13 @@ struct SpeakerObservationClustering {
         else { return nil }
         return best.0
     }
-    private mutating func bindActivity(_ track: Track) {
+    private mutating func bindActivity(_ track: Track, endingAt: Double = .infinity) {
         var updated: [Activity] = []
         for var value in recentActivity {
-            guard value.source == track.source && value.local == track.local && value.end > track.startedAt else {
+            guard
+                value.source == track.source && value.local == track.local && value.end > track.startedAt
+                    && value.start < endingAt
+            else {
                 updated.append(value)
                 continue
             }
@@ -375,6 +389,12 @@ struct SpeakerObservationClustering {
                 prefix.end = track.startedAt
                 updated.append(prefix)
                 value.start = track.startedAt
+            }
+            if value.end > endingAt {
+                var suffix = value
+                suffix.start = endingAt
+                updated.append(suffix)
+                value.end = endingAt
             }
             value.clusterID = track.clusterID
             updated.append(value)

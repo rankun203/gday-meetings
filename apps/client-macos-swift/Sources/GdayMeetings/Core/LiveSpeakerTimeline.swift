@@ -11,14 +11,23 @@ struct LiveSpeakerIdentity: Codable, Equatable, Identifiable, Sendable {
     var voiceEmbedding: TypedVoiceEmbedding?
     var activityPolicy: String?
     var manuallyAssigned = false
-    var label: String { (source == .microphone ? "mic_" : "sys_") + String(format: "%02d", slot + 1) }
+    /// User review protects speech observed at assignment, not future propagation.
+    var manualReviewThrough: [String: Double]?
+    var meetingLabel: String?
+    var additionalSources: [LiveAudioSource]?
+    func includes(_ source: LiveAudioSource) -> Bool {
+        self.source == source || (additionalSources ?? []).contains(source)
+    }
+    var label: String { meetingLabel ?? ((source == .microphone ? "mic_" : "sys_") + String(format: "%02d", slot + 1)) }
     var colorSlot: Int { 2 + slot * 2 + (source == .microphone ? 0 : 1) }
 }
 
 struct LiveSpeakerInterval: Codable, Equatable, Sendable {
+    var source: LiveAudioSource? = nil
     var speakerID: UUID
     var start: Double
     var end: Double
+    var localTrackID: UUID?
 }
 
 struct LiveSpeakerEvent: Codable, Sendable {
@@ -46,6 +55,7 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
     var cursors: [Cursor] = []
     var gaps: [LiveTranscriptGap] = []
     var retiredGenerations: [UUID]?
+    var identityAliases: [UUID: UUID]?
 
     @discardableResult mutating func accept(_ event: LiveSpeakerEvent) -> Bool {
         guard event.start.isFinite, event.end.isFinite, event.start >= 0, event.end >= event.start else { return false }
@@ -113,6 +123,12 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
         else { return }
         speakers[index].personID = personID
         speakers[index].manuallyAssigned = manual
+        if manual {
+            speakers[index].manualReviewThrough = Dictionary(
+                uniqueKeysWithValues: cursors.filter {
+                    speakers[index].includes($0.source)
+                }.map { ($0.source.rawValue, $0.end) })
+        }
     }
 
     /// Timed words use exclusive observed speaker activity. Untimed phrases
@@ -120,8 +136,10 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
     func attributing(
         _ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil, bridgeUnknownWords: Bool = true
     ) -> [LiveTranscriptPhrase] {
-        let ids = Set(speakers.filter { $0.source == phrase.source }.map(\.id))
-        let sourceIntervals = intervals.filter { ids.contains($0.speakerID) }
+        let ids = Set(speakers.filter { $0.includes(phrase.source) }.map(\.id))
+        let sourceIntervals = intervals.filter {
+            ids.contains($0.speakerID) && ($0.source == nil || $0.source == phrase.source)
+        }
         let relevant = sourceIntervals.filter { $0.start < phrase.end && $0.end > phrase.start }
         func identity(
             _ start: Double, _ end: Double, activity: [LiveSpeakerInterval], timedWord: Bool = false

@@ -94,4 +94,25 @@ struct SpeakerEvidenceStoreTests {
         await #expect(throws: (any Error).self) { try await blocked.append(sample(2)) }
         #expect(try Data(contentsOf: url) == corrupt)
     }
+    @Test func malformedOmissionCannotBypassAppendValidationThroughJournalJSON() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let omission = SpeakerEvidenceOmission(
+            source: "microphone", localSpeakerID: "local-a",
+            start: -1, end: 3, reason: "Backpressure")
+        let store = SpeakerEvidenceStore(directory: root)
+        await #expect(throws: (any Error).self) { try await store.appendOmission(omission) }
+        let url = root.appendingPathComponent(SpeakerEvidenceStore.fileName)
+        let record =
+            #"{"version":1,"extractionOmission":{"source":"microphone","localSpeakerID":"local-a","start":-1,"end":3,"reason":"Backpressure"}}"#
+        let bytes = Data((record + "\n" + #"{"version":1,"complete":true}"# + "\n").utf8)
+        try bytes.write(to: url)
+        #expect(throws: (any Error).self) { try SpeakerEvidenceStore.read(directory: root) }
+        #expect(throws: (any Error).self) { try SpeakerEvidenceStore.isComplete(directory: root) }
+        let recovered = SpeakerEvidenceStore(directory: root)
+        await #expect(throws: (any Error).self) { try await recovered.append(sample(0)) }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
 }

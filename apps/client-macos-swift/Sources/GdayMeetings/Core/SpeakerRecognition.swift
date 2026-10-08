@@ -20,10 +20,21 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     var voiceSampleRevision: String?
     /// Optional for older libraries; nil does not prove human review.
     var manuallyAssigned: Bool?
+    /// Live reviews cover observed speech; nil retains whole-label review semantics.
+    var manualReviewThrough: [String: Double]?
     var voiceReviewOrigin: VoiceProjectionOrigin?
     var voiceReviewExampleID: UUID?
     /// A meeting-local palette slot, independent of the assigned person's name.
     var colorSlot: Int?
+
+    func protectsManualAssignment(to row: TranscriptSegment) -> Bool {
+        guard manuallyAssigned == true else { return false }
+        guard let watermarks = manualReviewThrough else { return true }
+        let source = row.source?.rawValue ?? (["mic": "microphone", "system_mix": "system"][track] ?? track)
+        guard source == "microphone" || source == "system" else { return true }
+        // Preserve a complete row if any of it was explicitly reviewed.
+        return row.start < (watermarks[source] ?? 0)
+    }
 
     var canAssignPerson: Bool { sourcePlaceholder == nil }
     var canReviewVoice: Bool { canAssignPerson && resolvedVoiceEmbedding?.isValid == true }
@@ -227,6 +238,7 @@ extension MeetingStore {
         replacement[index].confidence = nil
         replacement[index].confirmed = personID != nil
         replacement[index].manuallyAssigned = true
+        replacement[index].manualReviewThrough = nil
         _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: meetingID))
         guard
             voiceLibrary.assign(

@@ -4,7 +4,7 @@ import Foundation
 /// Experimental replay adapter around the same causal reducer usable during capture.
 /// Local activity bounds publication; embeddings own identity within those bounds.
 enum SpeakerObservationConsolidation {
-    static let revision = "observation-epochs-dormant-continuity-v5"
+    static let revision = "observation-epochs-direct-capacity-v6"
 
     static func run(
         _ document: SpeakerEvidenceDocument,
@@ -45,7 +45,7 @@ enum SpeakerObservationConsolidation {
                 continue
             }
             guard let window = windows[key(sample.source, sample.localSpeakerID)],
-                sample.start >= window.publicationStart, sample.end <= window.trustedEnd!
+                sample.start >= window.publicationStart, sample.end <= window.observedEnd
             else {
                 untrusted.append(sample.id)
                 outsideWindow.append(sample.id)
@@ -90,7 +90,21 @@ enum SpeakerObservationConsolidation {
                 return .init(source: span.source, localSpeakerID: span.localSpeakerID, start: start, end: end)
             }
             try engine.recordActivity(recentActivity)
-            _ = try engine.ingest(sample, cancellationCheck: cancellationCheck)
+            let window = windows[key(sample.source, sample.localSpeakerID)]!
+            let continuity = sample.end <= window.trustedEnd!
+            if !continuity {
+                // Independent evidence remains useful after the channel capacity
+                // boundary; its support must not inherit the expired local epoch.
+                let directActivity = document.activity.compactMap { span -> SpeakerEvidenceActivity? in
+                    guard let ownWindow = windows[key(span.source, span.localSpeakerID)] else { return nil }
+                    let start = max(span.start, sample.start, ownWindow.trustedEnd!)
+                    let end = min(span.end, sample.end, ownWindow.observedEnd)
+                    guard start < end else { return nil }
+                    return .init(source: span.source, localSpeakerID: span.localSpeakerID, start: start, end: end)
+                }
+                try engine.recordActivity(directActivity, trustLocalContinuity: false)
+            }
+            _ = try engine.ingest(sample, trustLocalContinuity: continuity, cancellationCheck: cancellationCheck)
             let sequences = (engine.lastRevisions.map(\.sequence) + engine.lastClusterMerges.map(\.sequence)).sorted()
             for sequence in sequences {
                 if let update = engine.lastRevisions.first(where: { $0.sequence == sequence }) {
@@ -156,7 +170,7 @@ enum SpeakerObservationConsolidation {
                 try cancellationCheck()
                 let spanPosition = speechPosition(span.start)
                 var cuts = [span.start, span.end]
-                cuts += [window?.publicationStart, window?.trustedEnd].compactMap { $0 }
+                cuts += [window?.publicationStart, window?.trustedEnd, window?.observedEnd].compactMap { $0 }
                 for sample in localSamples {
                     cuts += [sample.start, sample.end]
                     for position in [
@@ -174,13 +188,15 @@ enum SpeakerObservationConsolidation {
                     let trusted = window.map { time >= $0.publicationStart && time < $0.trustedEnd! } ?? false
                     let covering = localSamples.filter { $0.start <= time && time < $0.end }
                     var id: String?
-                    if trusted && !covering.isEmpty {
+                    let observed = window.map { time >= $0.publicationStart && time < $0.observedEnd } ?? false
+                    if observed && !covering.isEmpty {
                         let ids = Set(covering.compactMap { assignments[$0.id] })
                         if ids.count == 1 && covering.allSatisfy({ assignments[$0.id] != nil }) { id = ids.first }
                     }
                     else if trusted {
-                        let before = localSamples.filter { $0.end <= time }.max { $0.end < $1.end }
-                        let after = localSamples.filter { $0.start > time }.min { $0.start < $1.start }
+                        let continuitySamples = localSamples.filter { $0.end <= window!.trustedEnd! }
+                        let before = continuitySamples.filter { $0.end <= time }.max { $0.end < $1.end }
+                        let after = continuitySamples.filter { $0.start > time }.min { $0.start < $1.start }
                         let neighbors = [before, after].compactMap { $0 }
                         let near = neighbors.filter {
                             min(

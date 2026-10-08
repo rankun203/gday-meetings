@@ -192,7 +192,11 @@ enum LocalDiarizationAssignment {
         for index in updated.transcript.indices {
             let row = updated.transcript[index]
             let old = row.speakerID.flatMap { oldByID[$0] }
-            if old?.personID != nil || old?.manuallyAssigned == true { continue }
+            if old?.protectsManualAssignment(to: row) == true
+                || (old?.personID != nil && old?.manualReviewThrough == nil)
+            {
+                continue
+            }
             let track: String?
             if let value = old?.track, value.hasPrefix("track") {
                 track = value
@@ -200,7 +204,7 @@ enum LocalDiarizationAssignment {
             else if fileCount == 1 {
                 track = "track0"
             }
-            else if let value = old?.track {
+            else if let value = row.source?.rawValue ?? old?.track {
                 let source = value == "mic" ? "microphone" : (value == "system_mix" ? "system" : value)
                 let candidates = result.trackSources.filter { $0.value == source && source != "unknown" }
                 track = candidates.count == 1 ? candidates.first?.key : nil

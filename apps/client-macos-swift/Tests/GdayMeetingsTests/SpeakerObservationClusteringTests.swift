@@ -37,6 +37,57 @@ struct SpeakerObservationClusteringTests {
         configuration.maximumContinuityGap = 5
         return try SpeakerConsolidation.run(document, configuration: configuration)
     }
+    @Test func exhaustedChannelUsesDirectEvidenceWithoutFormerEpochOrShellAlias() throws {
+        var engine = SpeakerObservationClustering()
+        let original = try engine.ingest(sample("old"))
+        _ = try engine.ingest(sample("old-confirm", start: 4))
+        let newVoice = try engine.ingest(
+            sample("new", start: 12, values: [0, 1]), trustLocalContinuity: false)
+        #expect(newVoice != original && newVoice != .ambiguous)
+        #expect(engine.retainedTrackCount == 0)
+        #expect(engine.lastClusterMerges.isEmpty)
+        #expect(try engine.ingest(sample("return", start: 20), trustLocalContinuity: false) == original)
+        #expect(engine.retainedTrackCount == 0)
+    }
+
+    @Test func capacityCutsInferenceButKeepsDirectNewVoiceAndReturningVoice() throws {
+        let values = [
+            sample("old"), sample("old-confirm", start: 4),
+            sample("new", start: 12, values: [0, 1]), sample("return", start: 20),
+        ]
+        var evidence = document(
+            values,
+            activity: [
+                .init(source: "microphone", localSpeakerID: "one", start: 0, end: 30)
+            ])
+        evidence.windows![0].capacityReachedAt = 10
+        let result = try run(evidence)
+        #expect(result.result.clusters.count == 2)
+        #expect(result.result.clusters.contains { $0.sampleIDs == ["old", "old-confirm", "return"] })
+        #expect(result.audit.observationDiagnostics?.outsideWindowSampleIDs.isEmpty == true)
+        #expect(result.result.intervals.contains { $0.start <= 12 && $0.end >= 15 && $0.clusterID != nil })
+        #expect(
+            result.result.intervals.filter {
+                $0.start >= 10 && !($0.start >= 12 && $0.end <= 15)
+                    && !($0.start >= 20 && $0.end <= 23)
+            }.allSatisfy { $0.clusterID == nil })
+    }
+
+    @Test func untrustedActivityDoesNotInheritFormerTrackAndDirectOverlapCannotMerge() throws {
+        var engine = SpeakerObservationClustering()
+        _ = try engine.ingest(sample("old"))
+        try engine.recordActivity(
+            [
+                .init(source: "microphone", localSpeakerID: "one", start: 10, end: 13),
+                .init(source: "microphone", localSpeakerID: "two", start: 10, end: 13),
+            ], trustLocalContinuity: false)
+        let first = try engine.ingest(sample("first", start: 10, values: [0, 1]), trustLocalContinuity: false)
+        let second = try engine.ingest(
+            sample("second", local: "two", start: 10, values: [0, 1]), trustLocalContinuity: false)
+        #expect(first != second)
+        #expect(engine.cannotLinkComparisons > 0)
+    }
+
     @Test func reusedChannelSplitsAndFragmentsReconnect() throws {
         let samples = [
             sample("a"), sample("b", start: 20, values: [0, 1]),

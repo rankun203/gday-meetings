@@ -46,11 +46,26 @@ struct SpeakerEvidenceWindow: Codable, Equatable, Sendable {
     }
 }
 
+struct SpeakerEvidenceOmission: Codable, Equatable, Sendable {
+    var source: String
+    var localSpeakerID: String
+    var start: Double
+    var end: Double
+    var reason: String
+
+    var isValid: Bool {
+        start.isFinite && end.isFinite && start >= 0 && end > start
+            && !source.isEmpty && !localSpeakerID.isEmpty && !reason.isEmpty
+    }
+}
+
 struct SpeakerEvidenceDocument: Codable, Equatable, Sendable {
     var samples: [SpeakerEvidenceSample] = []
     var activity: [SpeakerEvidenceActivity] = []
     /// Missing metadata is unknown provenance, never implicit continuity permission.
     var windows: [SpeakerEvidenceWindow]?
+    /// Selected speech excerpts omitted by extraction backpressure; audio is retained.
+    var extractionOmissions: [SpeakerEvidenceOmission]?
 
     mutating func recordWindow(_ window: SpeakerEvidenceWindow) throws {
         guard window.isValid else { throw CocoaError(.fileReadCorruptFile) }

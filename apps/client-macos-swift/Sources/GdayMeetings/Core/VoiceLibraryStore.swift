@@ -91,6 +91,24 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var isLoaded = false
     private(set) var decisions: [VoiceSpeakerDecision] = []
     private var document = VoiceLibraryDocument()
+    private var scheduledSuggestions: Task<Void, Never>?
+    private struct ObservationSelection: Equatable {
+        var id: UUID
+        var observationID: String?
+        var speakerID: UUID
+        var groupID: UUID
+        var range: VoiceSampleRange?
+        var embeddings: [TypedVoiceEmbedding]
+        init(_ value: VoiceExample) {
+            id = value.id
+            observationID = value.observationID
+            speakerID = value.speakerID
+            groupID = value.groupID
+            range = value.range
+            embeddings = value.embeddings
+        }
+    }
+    private var lastObservationSelection: (meetingID: UUID, revision: Int, values: [ObservationSelection])?
     private let url: URL
     private let canWrite: () -> Bool
     private var persistence: VoiceLibraryPersistence?
@@ -109,6 +127,7 @@ final class VoiceLibraryStore: ObservableObject {
     /// Test seam executed on the worker, never while holding a filesystem lock.
     var beforeMatchingRead: (@Sendable () throws -> Void)?
     var beforeMatchingValidation: (@Sendable () throws -> Void)?
+    var beforeObservationPreparation: (@Sendable () throws -> Void)?
     private struct MatchingOperation {
         var id = UUID()
         var input: VoiceMatchingWorker.Input
@@ -288,19 +307,7 @@ final class VoiceLibraryStore: ObservableObject {
         }
         do {
             try persistence.commit(previous: document, next: next)
-            let changedRepresentations = next.examples.contains { value in
-                guard let index = exampleIndices[value.id] else {
-                    return !value.embeddings.isEmpty
-                }
-                return document.examples[index].embeddings != value.embeddings
-            }
-            document = next
-            if changedRepresentations { representationsRevision += 1 }
-            errorMessage = persistence.maintenanceWarning
-            publish()
-            hydratedIDs.formUnion(
-                document.examples.filter { !$0.embeddings.isEmpty }.map(\.id))
-            releaseRepresentations()
+            publishCommittedVoiceDocument(next, warning: persistence.maintenanceWarning)
             if !changed.isEmpty { didChange?(changed) }
             return true
         }
@@ -308,6 +315,22 @@ final class VoiceLibraryStore: ObservableObject {
             errorMessage = "Couldn’t save the voice library. \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func publishCommittedVoiceDocument(_ next: VoiceLibraryDocument, warning: String?) {
+        let changedRepresentations = next.examples.contains { value in
+            guard let index = exampleIndices[value.id] else {
+                return !value.embeddings.isEmpty
+            }
+            return document.examples[index].embeddings != value.embeddings
+        }
+        document = next
+        if changedRepresentations { representationsRevision += 1 }
+        errorMessage = warning
+        publish()
+        hydratedIDs.formUnion(
+            document.examples.filter { !$0.embeddings.isEmpty }.map(\.id))
+        releaseRepresentations()
     }
 
     @discardableResult
@@ -340,6 +363,134 @@ final class VoiceLibraryStore: ObservableObject {
         }
         guard next.examples != document.examples else { return true }
         return commit(next)
+    }
+
+    /// New capture evidence supersedes older suggestions without blocking the
+    /// live identity actor on profile matching. The worker validates revisions.
+    func scheduleReviewedPeopleSuggestions(from people: [Person]) {
+        scheduledSuggestions?.cancel()
+        scheduledSuggestions = Task { [weak self] in
+            await self?.suggestReviewedPeople(from: people)
+        }
+    }
+
+    /// Replace the current unreviewed representative selection atomically. Human
+    /// reviews remain attached to their exact audio even when clustering changes.
+    private func observationReconciliation(meetingID: UUID, representatives: [VoiceExample])
+        -> (next: VoiceLibraryDocument, selection: [ObservationSelection])?
+    {
+        guard admitVoiceWrite(), canWrite(), persistence != nil else { return nil }
+        guard
+            representatives.allSatisfy({
+                $0.meetingID == meetingID && $0.observationID?.isEmpty == false && $0.range != nil
+                    && !$0.isReviewed && !$0.manuallyGrouped && $0.personID == nil
+                    && !$0.embeddings.isEmpty && $0.embeddings.allSatisfy(\.isValid)
+            }), Set(representatives.map(\.id)).count == representatives.count
+        else { return nil }
+        let selection = representatives.map(ObservationSelection.init).sorted { $0.id.uuidString < $1.id.uuidString }
+        if let previous = lastObservationSelection, previous.meetingID == meetingID,
+            previous.revision == representationsRevision, previous.values == selection,
+            representatives.allSatisfy({ exampleIndices[$0.id] != nil })
+        {
+            return (document, selection)
+        }
+        // Hydrate only reused representatives. Unrelated library vectors stay on disk.
+        for value in representatives where exampleIndices[value.id] != nil {
+            guard hydratedExample(id: value.id) != nil else { return nil }
+        }
+        let desired = Dictionary(uniqueKeysWithValues: representatives.map { ($0.id, $0) })
+        var next = document
+        for value in representatives {
+            guard let index = exampleIndices[value.id] else { continue }
+            let old = next.examples[index]
+            guard old.meetingID == meetingID, old.observationID == value.observationID,
+                old.range == value.range
+            else { return nil }
+        }
+        let undoEvidence = Set(next.undo.flatMap { $0.examples.map(\.id) })
+        next.examples.removeAll {
+            $0.meetingID == meetingID && $0.observationID != nil && desired[$0.id] == nil
+                && !$0.isReviewed && !$0.manuallyGrouped && !undoEvidence.contains($0.id)
+        }
+        let retainedIndices = Dictionary(
+            uniqueKeysWithValues: next.examples.enumerated().map { ($0.element.id, $0.offset) })
+        for value in representatives {
+            if let index = retainedIndices[value.id] {
+                let old = next.examples[index]
+                // A confirmed voice, explicit rejection/removal, or user grouping
+                // cannot be undone by a delayed clustering callback.
+                guard !old.isReviewed && !old.manuallyGrouped else { continue }
+                if old.speakerID != value.speakerID || old.groupID != value.groupID {
+                    next.examples[index].speakerID = value.speakerID
+                    next.examples[index].groupID = value.groupID
+                    next.examples[index].suggestedPersonID = nil
+                    next.examples[index].review = .unassigned
+                }
+                next.examples[index].embeddings = value.embeddings
+            }
+            else {
+                next.examples.append(value)
+            }
+        }
+        return (next, selection)
+    }
+
+    @discardableResult
+    func reconcileObservationExamples(meetingID: UUID, representatives: [VoiceExample]) -> Bool {
+        guard let plan = observationReconciliation(meetingID: meetingID, representatives: representatives),
+            plan.next.examples == document.examples || commit(plan.next)
+        else { return false }
+        lastObservationSelection = (meetingID, representationsRevision, plan.selection)
+        return true
+    }
+
+    /// Prepare the library-wide diff away from the UI actor. Human reviews stay
+    /// available while preparation runs; a changed revision rebuilds the plan.
+    func reconcileObservationExamplesForCapture(meetingID: UUID, representatives: [VoiceExample]) async -> Bool {
+        while !Task.isCancelled {
+            guard let plan = observationReconciliation(meetingID: meetingID, representatives: representatives),
+                let persistence
+            else { return false }
+            if plan.next.examples == document.examples {
+                lastObservationSelection = (meetingID, representationsRevision, plan.selection)
+                return true
+            }
+            let previous = document
+            let snapshot = persistence.snapshot()
+            let directory = url.deletingLastPathComponent()
+            let beforePreparation = beforeObservationPreparation
+            let preparation = Task.detached(priority: .utility) {
+                try Task.checkCancellation()
+                try beforePreparation?()
+                let backend = try VoiceLibraryPersistence(directory: directory, writable: false)
+                backend.adopt(snapshot)
+                let result = try backend.prepare(previous: previous, next: plan.next)
+                try Task.checkCancellation()
+                return result
+            }
+            do {
+                let prepared = try await withTaskCancellationHandler {
+                    try await preparation.value
+                } onCancel: {
+                    preparation.cancel()
+                }
+                try Task.checkCancellation()
+                guard persistence.snapshot().revision == snapshot.revision else { continue }
+                guard admitVoiceWrite(), canWrite() else { return false }
+                try persistence.commit(prepared)
+                publishCommittedVoiceDocument(plan.next, warning: persistence.maintenanceWarning)
+                lastObservationSelection = (meetingID, representationsRevision, plan.selection)
+                return true
+            }
+            catch is CancellationError {
+                return false
+            }
+            catch {
+                errorMessage = "Couldn’t save speaker review examples. \(error.localizedDescription)"
+                return false
+            }
+        }
+        return false
     }
 
     @discardableResult
@@ -749,6 +900,33 @@ final class VoiceLibraryStore: ObservableObject {
         where example.meetingID == meeting.id && example.range == nil {
             _ = resolveLegacyExample(exampleID: example.id, meeting: meeting, directory: directory, reportError: false)
         }
+        // Finalize every retained live example, including reviewed evidence for a
+        // retired cluster that no longer appears in the transcript's speaker list.
+        if finalizeLive {
+            let pending = examples.filter {
+                $0.meetingID == meeting.id && $0.origin == .liveSpeech
+                    && $0.isPlayable && $0.audioRevision == nil
+            }
+            for example in pending { guard hydratedExample(id: example.id) != nil else { return false } }
+            var next = document
+            for example in pending {
+                guard let index = next.examples.firstIndex(where: { $0.id == example.id }),
+                    let original = example.audioFile
+                else { continue }
+                let candidates =
+                    meeting.audioFiles.contains(original)
+                    ? [original]
+                    : meeting.audioFiles.filter {
+                        LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == example.source
+                    }
+                guard candidates.count == 1, let file = candidates.first,
+                    let revision = Self.revision(url: directory.appendingPathComponent(file))
+                else { continue }
+                next.examples[index].audioFile = file
+                next.examples[index].audioRevision = revision
+            }
+            if next != document, !commit(next) { return false }
+        }
         var additions: [VoiceExample] = []
         for speaker in meeting.speakers where speaker.canAssignPerson && speaker.voiceReviewOrigin == nil {
             if examples.contains(where: {
@@ -972,6 +1150,7 @@ final class VoiceLibraryStore: ObservableObject {
             restored.id = origin.speakerID
             restored.personID = origin.personID
             restored.manuallyAssigned = origin.manuallyAssigned
+            restored.manualReviewThrough = origin.manualReviewThrough
             restored.confidence = origin.confidence
             restored.voiceReviewOrigin = nil
             restored.voiceReviewExampleID = nil
@@ -998,7 +1177,13 @@ final class VoiceLibraryStore: ObservableObject {
                 let speaker = updated.speakers.first(where: { $0.id == row.speakerID })
             else { continue }
             let file: String?
-            if speaker.track.hasPrefix("track"), let track = Int(speaker.track.dropFirst(5)),
+            if let source = row.source {
+                let candidates = updated.audioFiles.filter {
+                    LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == source.rawValue
+                }
+                file = candidates.count == 1 ? candidates.first : nil
+            }
+            else if speaker.track.hasPrefix("track"), let track = Int(speaker.track.dropFirst(5)),
                 updated.audioFiles.indices.contains(track)
             {
                 file = updated.audioFiles[track]
@@ -1037,10 +1222,12 @@ final class VoiceLibraryStore: ObservableObject {
             }
             assigned.voiceReviewOrigin = .init(
                 speakerID: speaker.id, personID: speaker.personID,
-                manuallyAssigned: speaker.manuallyAssigned, confidence: speaker.confidence)
+                manuallyAssigned: speaker.manuallyAssigned, confidence: speaker.confidence,
+                manualReviewThrough: speaker.manualReviewThrough)
             assigned.voiceReviewExampleID = first.id
             assigned.personID = people.count == 1 ? people.first! : nil
             assigned.manuallyAssigned = true
+            assigned.manualReviewThrough = nil
             assigned.confidence = nil
             if !updated.speakers.contains(where: { $0.id == assigned.id }) { updated.speakers.append(assigned) }
             updated.transcript[index].speakerID = assigned.id

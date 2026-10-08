@@ -440,7 +440,7 @@ final class MeetingStore: ObservableObject {
     var deletingMeetingIDs = Set<UUID>()
     var canonicalWriteHook: (@Sendable () throws -> Void)?
 
-    private func enqueueCanonical(_ operation: @escaping @MainActor () async -> Bool) async -> Bool {
+    func enqueueCanonical(_ operation: @escaping @MainActor () async -> Bool) async -> Bool {
         let previous = canonicalTail
         canonicalPending += 1
         let task = Task { @MainActor in
@@ -1199,6 +1199,10 @@ final class MeetingStore: ObservableObject {
                 },
                 recordVoice: { [weak self] sample, embedding in
                     await self?.recordVoiceExample(meetingID: meeting.id, sample: sample, embedding: embedding)
+                },
+                observationReview: { [weak self] representatives in
+                    await self?.recordObservationVoiceExamples(meetingID: meeting.id, representatives: representatives)
+                        ?? false
                 })
             captureHealth = [
                 microphone
@@ -1555,6 +1559,7 @@ final class MeetingStore: ObservableObject {
             meeting.speakers[index].voiceSampleRange = nil
             meeting.speakers[index].voiceSampleRevision = nil
             meeting.speakers[index].manuallyAssigned = nil
+            meeting.speakers[index].manualReviewThrough = nil
             meeting.speakers[index].voiceReviewOrigin = nil
             meeting.speakers[index].voiceReviewExampleID = nil
         }

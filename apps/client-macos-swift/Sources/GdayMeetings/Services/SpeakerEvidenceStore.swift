@@ -18,6 +18,7 @@ actor SpeakerEvidenceStore {
         var window: SpeakerEvidenceWindow?
         var complete: Bool?
         var gap: Gap?
+        var extractionOmission: SpeakerEvidenceOmission?
     }
     private let url: URL
     private var handle: FileHandle?
@@ -38,6 +39,11 @@ actor SpeakerEvidenceStore {
 
     func appendGap(source: String, start: Double, end: Double, reason: String) throws {
         try write(Record(gap: Gap(source: source, start: start, end: end, reason: reason)))
+    }
+
+    func appendOmission(_ omission: SpeakerEvidenceOmission) throws {
+        guard omission.isValid else { throw CocoaError(.fileWriteUnknown) }
+        try write(Record(extractionOmission: omission))
     }
 
     private func write(_ record: Record) throws {
@@ -99,6 +105,10 @@ actor SpeakerEvidenceStore {
         var document = SpeakerEvidenceDocument()
         _ = try scan(url) { record in
             if let sample = record.sample { document.samples.append(sample) }
+            if let omission = record.extractionOmission {
+                if document.extractionOmissions == nil { document.extractionOmissions = [] }
+                document.extractionOmissions?.append(omission)
+            }
             document.activity.append(contentsOf: record.activity ?? [])
             if let window = record.window {
                 guard
@@ -130,7 +140,9 @@ actor SpeakerEvidenceStore {
                 let count = pending.distance(from: pending.startIndex, to: newline) + 1
                 guard count <= 4 * 1024 * 1024 else { throw CocoaError(.fileReadCorruptFile) }
                 let record = try JSONDecoder().decode(Record.self, from: pending.prefix(count - 1))
-                guard record.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+                guard record.version == 1, record.extractionOmission?.isValid != false else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
                 try visit(record)
                 pending.removeFirst(count)
                 committed += UInt64(count)
