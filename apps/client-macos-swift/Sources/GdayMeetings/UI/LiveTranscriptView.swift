@@ -177,10 +177,17 @@ struct LiveTranscriptHeader: View {
             }
             Spacer(minLength: 8)
             if !followsLive && hasRows {
-                Button("Follow Live", action: follow)
-                    .fixedSize()
-                    .padding(6)
-                    .background(.regularMaterial, in: Capsule())
+                Button(action: follow) {
+                    Image(systemName: "arrow.down.to.line")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                .help("Follow Live")
+                .accessibilityLabel("Follow Live")
             }
         }
     }
