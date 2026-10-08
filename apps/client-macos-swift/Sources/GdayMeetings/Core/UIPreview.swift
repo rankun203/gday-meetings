@@ -126,6 +126,21 @@ enum UIPreview {
                         start: 8, end: 15, speaker: third.label,
                         text: "I’ll update the schedule after this call.", speakerID: third.id),
                 ]
+                if ProcessInfo.processInfo.arguments.contains("--synthetic-grouped-search")
+                    || Bundle.main.object(forInfoDictionaryKey: "GdayGroupedSearchPreview") as? Bool == true
+                {
+                    conversation.transcript.append(contentsOf: [
+                        TranscriptSegment(
+                            start: 24, end: 34, speaker: first.label,
+                            text: "The schedule includes a review before the next milestone.", speakerID: first.id),
+                        TranscriptSegment(
+                            start: 32, end: 40, speaker: second.label,
+                            text: "Check the schedule again after the review is complete.", speakerID: second.id),
+                        TranscriptSegment(
+                            start: 52, end: 53, speaker: third.label,
+                            text: "The schedule is ready.", speakerID: third.id),
+                    ])
+                }
                 if ProcessInfo.processInfo.arguments.contains("--transcript-layout")
                     || Bundle.main.object(forInfoDictionaryKey: "GdayTranscriptLayoutPreview") as? Bool == true
                 {

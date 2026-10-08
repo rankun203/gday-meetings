@@ -3,19 +3,18 @@ import SwiftUI
 
 struct LibrarySearchResultsView: View {
     @ObservedObject var session: LibrarySearchSession
-    @Binding var mode: SearchMode
     var open: (SearchDisplayResult) -> Void
     var retry: () -> Void
     var openPerson: (UUID) -> Void = { _ in }
 
     var play: (SearchDisplayResult) -> Void = { _ in }
+    var selectMatch: (SearchDisplayResult) -> Void = { _ in }
     var canPlay = true
     var index: LibraryIndex?
     @AppStorage("showSearchRankingDetails") private var showRankingDetails = false
     @ViewState private var summaries: [UUID: String] = [:]
     @ViewState private var playableMeetings: Set<UUID> = []
     @ViewState private var timelines: [String: SearchResultTimeline] = [:]
-    @ViewState private var preview: SearchDisplayResult?
 
     private var matchedPeople: [PeopleNameCandidate] {
         session.peopleResolution.candidates.filter { session.peopleResolution.unambiguousPeople.contains($0.personID) }
@@ -28,13 +27,12 @@ struct LibrarySearchResultsView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text(session.total.map { "\($0.formatted()) \($0 == 1 ? "result" : "results")" } ?? "Searching…")
+                    Text(session.total.map { "\($0.formatted()) \($0 == 1 ? "match" : "matches")" } ?? "Searching…")
                         .font(.headline)
                     if session.isLoading { ProgressView().controlSize(.small) }
                     Spacer()
                     Toggle("Show Ranking Details", isOn: $showRankingDetails).toggleStyle(.checkbox)
                         .disabled(session.mode != .semantic || !session.usesRankedSearch)
-                    SearchModePicker(selection: $mode)
                 }
                 if !matchedPeople.isEmpty {
                     ViewThatFits(in: .horizontal) {
@@ -56,15 +54,13 @@ struct LibrarySearchResultsView: View {
                     }
                 }
             }.padding(AppTheme.contentInset)
-                .frame(maxWidth: 750)
                 .frame(maxWidth: .infinity)
             NativeSearchResults(
                 session: session, results: session.displayResults, generation: session.generation,
                 showRankingDetails: showRankingDetails, summaries: summaries, playableMeetings: playableMeetings,
-                canPlay: canPlay, timelines: timelines,
-                open: open, play: play, preview: { preview = $0 }
+                canPlay: canPlay, timelines: timelines, activeMatches: session.activeMatches,
+                open: open, play: play, selectMatch: selectMatch
             )
-            .frame(maxWidth: 750)
             .frame(maxWidth: .infinity)
             .overlay {
                 if session.isLoading && session.displayResults.isEmpty {
@@ -92,11 +88,6 @@ struct LibrarySearchResultsView: View {
         }
         .background(AppTheme.readingBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(item: $preview) { result in
-            SearchResultPreview(
-                result: result, summary: summaries[result.meetingID], timeline: timelines[result.id],
-                canPlay: canPlay && playableMeetings.contains(result.meetingID), play: { play(result) })
-        }
         .task(id: session.displayResults) {
             let results = session.displayResults
             let ids = Set(results.map(\.meetingID))
@@ -163,9 +154,10 @@ private struct NativeSearchResults: NSViewRepresentable {
     let playableMeetings: Set<UUID>
     let canPlay: Bool
     let timelines: [String: SearchResultTimeline]
+    let activeMatches: [UUID: String]
     let open: (SearchDisplayResult) -> Void
     let play: (SearchDisplayResult) -> Void
-    let preview: (SearchDisplayResult) -> Void
+    let selectMatch: (SearchDisplayResult) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -177,7 +169,8 @@ private struct NativeSearchResults: NSViewRepresentable {
         table.headerView = nil
         table.style = .inset
         table.backgroundColor = .clear
-        table.rowHeight = 96
+        table.rowHeight = 100
+        table.usesAutomaticRowHeights = false
         table.intercellSpacing = NSSize(width: 0, height: 1)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.autoresizingMask = [.width]
@@ -189,7 +182,6 @@ private struct NativeSearchResults: NSViewRepresentable {
         table.dataSource = context.coordinator
         table.target = context.coordinator
         table.action = #selector(Coordinator.clicked)
-        table.doubleAction = #selector(Coordinator.doubleClicked)
         table.activate = { [weak coordinator = context.coordinator] in coordinator?.activate() }
         table.setAccessibilityLabel("Search Results")
         scroll.documentView = table
@@ -205,7 +197,6 @@ private struct NativeSearchResults: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) { context.coordinator.update(self) }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
-        coordinator.pendingPreview?.cancel()
         if let observer = coordinator.observer { NotificationCenter.default.removeObserver(observer) }
     }
 
@@ -214,11 +205,13 @@ private struct NativeSearchResults: NSViewRepresentable {
         weak var table: SearchResultsTable?
         weak var scroll: NSScrollView?
         var observer: NSObjectProtocol?
-        var rows: [SearchDisplayResult] = []
+        var rows: [SearchResultGroup] = []
         var generation: UUID?
         var updating = false
         var announced = false
-        var pendingPreview: DispatchWorkItem?
+        private var resizeReloadPending = false
+        private var renderedMatches: [UUID: String] = [:]
+        private let measurementCell = SearchResultCell()
         init(_ parent: NativeSearchResults) { self.parent = parent }
         func update(_ value: NativeSearchResults) {
             guard let table, let scroll else { return }
@@ -226,20 +219,23 @@ private struct NativeSearchResults: NSViewRepresentable {
             let presentationChanged =
                 parent.showRankingDetails != value.showRankingDetails || parent.summaries != value.summaries
                 || parent.canPlay != value.canPlay || parent.playableMeetings != value.playableMeetings
-                || parent.timelines != value.timelines
+                || parent.timelines != value.timelines || renderedMatches != value.activeMatches
             parent = value
+            renderedMatches = value.activeMatches
             let reset = generation != value.generation
             if reset {
                 announced = false
-                pendingPreview?.cancel()
             }
             generation = value.generation
-            if rows != value.results || reset || presentationChanged {
+            let groups = SearchResultGroup.grouping(value.results)
+            if rows != groups || reset || presentationChanged {
                 let offset = value.session.scrollOffset
-                rows = value.results
+                rows = groups
                 table.reloadData()
                 table.layoutSubtreeIfNeeded()
-                if let selection = value.session.selection, let row = rows.firstIndex(where: { $0.id == selection }) {
+                if let selection = value.session.selection,
+                    let row = rows.firstIndex(where: { $0.matches.contains { $0.id == selection } })
+                {
                     table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 }
                 else {
@@ -279,49 +275,113 @@ private struct NativeSearchResults: NSViewRepresentable {
                 Task { @MainActor in session.loadMore() }
             }
         }
+        func tableViewColumnDidResize(_ notification: Notification) {
+            guard !resizeReloadPending else { return }
+            resizeReloadPending = true
+            // Finish AppKit's resize, then restore the current result identity rather than an old row index.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                defer { self.resizeReloadPending = false }
+                guard let table = self.table else { return }
+                let selection = self.parent.session.selection
+                self.updating = true
+                table.reloadData()
+                if let selection,
+                    let row = self.rows.firstIndex(where: { $0.matches.contains { $0.id == selection } })
+                {
+                    table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                }
+                else {
+                    table.deselectAll(nil)
+                }
+                self.updating = false
+                self.scrolled()
+            }
+        }
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
         func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
-        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            parent.showRankingDetails && rows[row].scoreBreakdown != nil ? 216 : 190
-        }
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let table else { return }
-            parent.session.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
+            parent.session.selection =
+                rows.indices.contains(table.selectedRow) ? activeResult(in: rows[table.selectedRow]).id : nil
         }
         @objc func clicked() {
-            pendingPreview?.cancel()
             guard let table, rows.indices.contains(table.clickedRow) else { return }
-            let result = rows[table.clickedRow]
-            let work = DispatchWorkItem { [weak self] in self?.parent.preview(result) }
-            pendingPreview = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+            let result = activeResult(in: rows[table.clickedRow])
+            clearResultSelection()
+            parent.open(result)
         }
         @objc func activate() {
-            pendingPreview?.cancel()
             guard let table, rows.indices.contains(table.selectedRow) else { return }
-            parent.open(rows[table.selectedRow])
+            let result = activeResult(in: rows[table.selectedRow])
+            clearResultSelection()
+            parent.open(result)
         }
-        @objc func doubleClicked() {
-            pendingPreview?.cancel()
-            guard let table, rows.indices.contains(table.clickedRow) else { return }
-            parent.open(rows[table.clickedRow])
+        private func clearResultSelection() {
+            parent.session.selection = nil
+            guard let table else { return }
+            table.deselectAll(nil)
+            if let focusedView = table.window?.firstResponder as? NSView,
+                focusedView === table || focusedView.isDescendant(of: table)
+            {
+                table.window?.makeFirstResponder(nil)
+            }
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             let identifier = NSUserInterfaceItemIdentifier("search-result")
             let cell =
                 tableView.makeView(withIdentifier: identifier, owner: nil) as? SearchResultCell ?? SearchResultCell()
             cell.identifier = identifier
-            let result = rows[row]
-            cell.configure(
-                result, rank: row + 1, summary: parent.summaries[result.meetingID],
-                timeline: parent.timelines[result.id],
-                showScore: parent.showRankingDetails,
-                canPlay: parent.canPlay && parent.playableMeetings.contains(result.meetingID))
+            configure(cell, row: row, width: tableColumn?.width ?? tableView.bounds.width)
+            let groupID = rows[row].id
             cell.play = { [weak self] in
-                self?.pendingPreview?.cancel()
-                self?.parent.play(result)
+                guard let self, let group = self.rows.first(where: { $0.id == groupID }) else { return }
+                let result = self.activeResult(in: group)
+                self.clearResultSelection()
+                self.parent.play(result)
+            }
+            cell.selectMatch = { [weak self] matchID in
+                self?.selectMatch(matchID, in: groupID)
             }
             return cell
+        }
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            let width = tableView.tableColumns[0].width
+            configure(measurementCell, row: row, width: width)
+            return measurementCell.height(fitting: width)
+        }
+        private func configure(_ cell: SearchResultCell, row: Int, width: CGFloat) {
+            cell.updateLayout(width: width)
+            let group = rows[row]
+            let result = activeResult(in: group)
+            cell.configure(
+                group, selected: result, summary: parent.summaries[result.meetingID],
+                timelines: parent.timelines,
+                showScore: parent.showRankingDetails,
+                canPlay: parent.canPlay && parent.playableMeetings.contains(result.meetingID))
+        }
+
+        private func activeResult(in group: SearchResultGroup) -> SearchDisplayResult {
+            group.matches.first(where: { $0.id == parent.session.activeMatches[group.id] }) ?? group.matches[0]
+        }
+
+        private func selectMatch(_ matchID: String, in groupID: UUID) {
+            guard let row = rows.firstIndex(where: { $0.id == groupID }),
+                let result = rows[row].matches.first(where: { $0.id == matchID })
+            else { return }
+            parent.session.activeMatches[groupID] = matchID
+            renderedMatches = parent.session.activeMatches
+            parent.session.selection = nil
+            if let table {
+                updating = true
+                table.deselectAll(nil)
+                if let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? SearchResultCell {
+                    configure(cell, row: row, width: table.tableColumns[0].width)
+                }
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                updating = false
+            }
+            parent.selectMatch(result)
         }
     }
 }
@@ -342,6 +402,11 @@ private final class SearchResultCell: NSTableCellView {
     let title = NSTextField(wrappingLabelWithString: "")
     let metadata = NSTextField(wrappingLabelWithString: "")
     let source = NSTextField(labelWithString: "")
+    private let sourceBadge = NSView()
+    private let columns = NSStackView()
+    private var wideConstraints: [NSLayoutConstraint] = []
+    private var compactConstraints: [NSLayoutConstraint] = []
+    private var usesWideLayout = false
     let summary = NSTextField(labelWithString: "")
     let excerpt = NSTextField(wrappingLabelWithString: "")
     let score = NSTextField(labelWithString: "")
@@ -349,6 +414,7 @@ private final class SearchResultCell: NSTableCellView {
     let timeline = SearchTimelineView()
     let playButton = NSButton(title: "", target: nil, action: nil)
     var play: (() -> Void)?
+    var selectMatch: ((String) -> Void)?
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
             timeline.emphasized = backgroundStyle == .emphasized
@@ -363,8 +429,8 @@ private final class SearchResultCell: NSTableCellView {
             field.textColor = .secondaryLabelColor
         }
         source.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        source.wantsLayer = true
-        source.layer?.cornerRadius = 4
+        sourceBadge.wantsLayer = true
+        sourceBadge.layer?.cornerRadius = 4
         source.alignment = .center
         rank.alignment = .center
         excerpt.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -372,10 +438,66 @@ private final class SearchResultCell: NSTableCellView {
             field.lineBreakMode = [title, metadata, excerpt].contains(field) ? .byWordWrapping : .byTruncatingTail
             field.maximumNumberOfLines = field === excerpt ? 4 : (field === title || field === metadata ? 2 : 1)
             field.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(field)
         }
-        timeline.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(timeline)
+        sourceBadge.translatesAutoresizingMaskIntoConstraints = false
+        sourceBadge.addSubview(source)
+        NSLayoutConstraint.activate([
+            source.leadingAnchor.constraint(equalTo: sourceBadge.leadingAnchor, constant: 8),
+            source.trailingAnchor.constraint(equalTo: sourceBadge.trailingAnchor, constant: -8),
+            source.topAnchor.constraint(equalTo: sourceBadge.topAnchor, constant: 4),
+            source.bottomAnchor.constraint(equalTo: sourceBadge.bottomAnchor, constant: -4),
+        ])
+        source.setContentHuggingPriority(.required, for: .horizontal)
+        source.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let meetingColumn = NSStackView(views: [title, summary, sourceBadge, metadata])
+        meetingColumn.orientation = .vertical
+        meetingColumn.alignment = .leading
+        meetingColumn.spacing = 6
+        meetingColumn.setCustomSpacing(4, after: title)
+        for field in [title, summary, metadata] {
+            field.widthAnchor.constraint(equalTo: meetingColumn.widthAnchor).isActive = true
+        }
+
+        let passageColumn = NSStackView(views: [timeline, excerpt])
+        passageColumn.orientation = .vertical
+        passageColumn.alignment = .leading
+        passageColumn.spacing = 6
+        timeline.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        timeline.widthAnchor.constraint(equalTo: passageColumn.widthAnchor).isActive = true
+        excerpt.widthAnchor.constraint(equalTo: passageColumn.widthAnchor).isActive = true
+        timeline.selectMatch = { [weak self] in self?.selectMatch?($0) }
+
+        columns.addArrangedSubview(meetingColumn)
+        columns.addArrangedSubview(passageColumn)
+        columns.orientation = .vertical
+        columns.alignment = .leading
+        columns.spacing = 12
+        wideConstraints = [
+            meetingColumn.widthAnchor.constraint(equalTo: columns.widthAnchor, multiplier: 0.32),
+            passageColumn.trailingAnchor.constraint(equalTo: columns.trailingAnchor),
+        ]
+        compactConstraints = [
+            meetingColumn.widthAnchor.constraint(equalTo: columns.widthAnchor),
+            passageColumn.widthAnchor.constraint(equalTo: columns.widthAnchor),
+        ]
+        NSLayoutConstraint.activate(compactConstraints)
+
+        let content = NSStackView(views: [columns, score])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 8
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        for view in [columns, score] {
+            view.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
+        }
+        for field in [title, summary, metadata, excerpt, score, rank] {
+            field.setContentHuggingPriority(.required, for: .vertical)
+            field.setContentCompressionResistancePriority(.required, for: .vertical)
+        }
+
+        addSubview(rank)
         playButton.bezelStyle = .circular
         playButton.translatesAutoresizingMaskIntoConstraints = false
         playButton.target = self
@@ -391,68 +513,73 @@ private final class SearchResultCell: NSTableCellView {
             playButton.topAnchor.constraint(equalTo: rank.bottomAnchor, constant: 8),
             playButton.widthAnchor.constraint(equalToConstant: 36),
             playButton.heightAnchor.constraint(equalToConstant: 36),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 56),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            title.heightAnchor.constraint(lessThanOrEqualToConstant: 34),
-            summary.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            summary.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 5),
-            summary.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            source.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            source.topAnchor.constraint(equalTo: topAnchor, constant: 76),
-            source.widthAnchor.constraint(equalToConstant: 90),
-            source.heightAnchor.constraint(equalToConstant: 22),
-            metadata.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            metadata.topAnchor.constraint(equalTo: source.bottomAnchor, constant: 8),
-            metadata.widthAnchor.constraint(equalToConstant: 150),
-            timeline.leadingAnchor.constraint(equalTo: metadata.trailingAnchor, constant: 18),
-            timeline.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            timeline.topAnchor.constraint(equalTo: source.topAnchor),
-            timeline.heightAnchor.constraint(equalToConstant: 28),
-            excerpt.leadingAnchor.constraint(equalTo: timeline.leadingAnchor),
-            excerpt.topAnchor.constraint(equalTo: timeline.bottomAnchor, constant: 8),
-            excerpt.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            excerpt.heightAnchor.constraint(lessThanOrEqualToConstant: 68),
-            score.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            score.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            score.topAnchor.constraint(equalTo: topAnchor, constant: 188),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 56),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
         ])
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         summary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         score.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textField = title
     }
+    func height(fitting width: CGFloat) -> CGFloat {
+        let constraint = widthAnchor.constraint(equalToConstant: width)
+        constraint.isActive = true
+        defer { constraint.isActive = false }
+        layoutSubtreeIfNeeded()
+        return ceil(fittingSize.height)
+    }
+    func updateLayout(width: CGFloat) {
+        // Leaves about 324 points for a passage: roughly ten English words at the system font size.
+        let wide = width >= 580
+        if wide != usesWideLayout {
+            usesWideLayout = wide
+            NSLayoutConstraint.deactivate(wide ? compactConstraints : wideConstraints)
+            columns.orientation = wide ? .horizontal : .vertical
+            columns.alignment = wide ? .top : .leading
+            columns.spacing = wide ? 24 : 12
+            NSLayoutConstraint.activate(wide ? wideConstraints : compactConstraints)
+        }
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func playResult() { play?() }
     func configure(
-        _ result: SearchDisplayResult, rank position: Int, summary summaryTitle: String?,
-        timeline range: SearchResultTimeline?, showScore: Bool, canPlay: Bool
+        _ group: SearchResultGroup, selected result: SearchDisplayResult, summary summaryTitle: String?,
+        timelines: [String: SearchResultTimeline], showScore: Bool, canPlay: Bool
     ) {
-        rank.stringValue = position.formatted()
-        rank.setAccessibilityLabel("Result \(position)")
+        rank.stringValue = group.rank.formatted()
+        rank.setAccessibilityLabel("First match rank \(group.rank)")
         title.stringValue = result.title
         title.toolTip = result.title
         metadata.stringValue = result.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? ""
         source.stringValue = result.sourceLabel
         let tint: NSColor = result.passage?.kind == .title ? .systemPurple : .systemBlue
         source.textColor = tint
-        source.layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
+        sourceBadge.layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
         summary.stringValue = summaryTitle ?? ""
         summary.toolTip = summaryTitle
+        summary.isHidden = summary.stringValue.isEmpty
         score.stringValue = showScore ? result.scoreBreakdown?.description ?? "" : ""
         score.toolTip = score.stringValue
         score.isHidden = !showScore || result.scoreBreakdown == nil
         excerpt.stringValue =
-            result.passage?.kind == .title ? "" : result.excerpt.replacingOccurrences(of: "\n", with: " ")
-        timeline.configure(range, start: result.playbackStart)
+            result.passage?.kind == .title
+            ? ""
+            : result.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+        excerpt.isHidden = excerpt.stringValue.isEmpty
+        timeline.isHidden = !group.matches.contains { timelines[$0.id] != nil || $0.playbackStart != nil }
+        timeline.configure(matches: group.matches, selected: result, timelines: timelines)
+        // A reused cell can need fresh backing contents even when its interval is unchanged.
+        timeline.needsDisplay = true
         let start = result.playbackStart
         playButton.isHidden = start == nil
         playButton.isEnabled = canPlay && start != nil
         playButton.toolTip =
             canPlay
-            ? start.map { "Play from " + playbackTime($0) }
+            ? start.map { "Open meeting and play from " + playbackTime($0) }
             : "Playback is unavailable while recording or when this meeting has no audio."
-        playButton.setAccessibilityLabel("Play \(result.title) from \(playbackTime(start ?? 0))")
+        playButton.setAccessibilityLabel("Open \(result.title) and play from \(playbackTime(start ?? 0))")
         toolTip = result.passage?.kind == .title ? result.title : result.excerpt
     }
 }
@@ -469,7 +596,7 @@ private extension SearchDisplayResult {
     }
 }
 
-/// Draws source time only; intentionally has no tracking or playback state.
+/// Source intervals and native match controls remain independent of playback progress.
 class SearchTimelineView: NSView {
     private var range: SearchResultTimeline?
     private var start: Double?
@@ -478,8 +605,63 @@ class SearchTimelineView: NSView {
     private var last = "" as NSString
     private var firstWidth: CGFloat = 0
     private var lastWidth: CGFloat = 0
+    private var segments: [(range: SearchResultTimeline, button: SearchSegmentButton)] = []
+    var selectMatch: ((String) -> Void)?
     var emphasized = false { didSet { if oldValue != emphasized { needsDisplay = true } } }
     override var isFlipped: Bool { true }
+    func configure(
+        matches: [SearchDisplayResult], selected: SearchDisplayResult, timelines: [String: SearchResultTimeline]
+    ) {
+        let focusedMatch = segments.first(where: { window?.firstResponder === $0.button })?.button.matchID
+        configure(timelines[selected.id], start: selected.playbackStart)
+        for segment in segments { segment.button.removeFromSuperview() }
+        segments.removeAll(keepingCapacity: true)
+        // Longer intervals stay behind short ones; a meeting-title match must not block passage controls.
+        let ordered = matches.enumerated().sorted { lhs, rhs in
+            let left = timelines[lhs.element.id].map { $0.end - $0.start } ?? 0
+            let right = timelines[rhs.element.id].map { $0.end - $0.start } ?? 0
+            if left != right { return left > right }
+            if lhs.element.id == selected.id { return false }
+            if rhs.element.id == selected.id { return true }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+        for match in ordered {
+            guard let interval = timelines[match.id] else { continue }
+            let button = SearchSegmentButton(frame: .zero)
+            button.setButtonType(.pushOnPushOff)
+            button.isBordered = false
+            button.title = ""
+            button.state = match.id == selected.id ? .on : .off
+            button.matchID = match.id
+            button.isMeeting = match.passage?.kind == .title
+            button.focusRingType = .exterior
+            let label = "\(match.sourceLabel) from \(playbackTime(interval.start)) to \(playbackTime(interval.end))"
+            button.setAccessibilityLabel(label)
+            button.toolTip = label + "\n" + match.excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+            button.onSelect = { [weak self] in self?.selectMatch?(match.id) }
+            addSubview(button)
+            segments.append((interval, button))
+        }
+        if let focusedMatch, let button = segments.first(where: { $0.button.matchID == focusedMatch })?.button {
+            window?.makeFirstResponder(button)
+        }
+        setAccessibilityElement(segments.isEmpty)
+        needsLayout = true
+        needsDisplay = true
+    }
+    override func layout() {
+        super.layout()
+        for segment in segments {
+            let markerWidth = max(2, bounds.width * (segment.range.endFraction - segment.range.startFraction))
+            let width = max(8, markerWidth)
+            let markerX = bounds.width * segment.range.startFraction
+            let x = max(0, min(bounds.width - width, markerX - (width - markerWidth) / 2))
+            segment.button.frame = NSRect(x: max(0, x), y: 17, width: width, height: 11)
+            segment.button.markerRect = NSRect(
+                x: max(0, markerX - x), y: segment.button.isMeeting ? 9 : 3,
+                width: min(markerWidth, width), height: segment.button.isMeeting ? 2 : 6)
+        }
+    }
     func configure(_ range: SearchResultTimeline?, start: Double?) {
         guard self.range != range || self.start != start else { return }
         self.range = range
@@ -504,6 +686,11 @@ class SearchTimelineView: NSView {
         ]
         guard let range else {
             first.draw(at: .zero, withAttributes: attributes)
+            if !segments.isEmpty {
+                NSColor.separatorColor.setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: 24, width: bounds.width, height: 2), xRadius: 1, yRadius: 1)
+                    .fill()
+            }
             return
         }
         let width = bounds.width
@@ -511,10 +698,12 @@ class SearchTimelineView: NSView {
         let right = width * range.endFraction
         (emphasized ? NSColor.alternateSelectedControlTextColor.withAlphaComponent(0.35) : .separatorColor).setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 24, width: width, height: 2), xRadius: 1, yRadius: 1).fill()
-        (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).setFill()
-        NSBezierPath(
-            roundedRect: NSRect(x: left, y: 23, width: max(2, right - left), height: 4), xRadius: 1, yRadius: 1
-        ).fill()
+        if segments.isEmpty {
+            (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).setFill()
+            NSBezierPath(
+                roundedRect: NSRect(x: left, y: 23, width: max(2, right - left), height: 4), xRadius: 1, yRadius: 1
+            ).fill()
+        }
         var firstX = min(max(0, left - firstWidth / 2), max(0, width - firstWidth))
         var lastX = min(max(0, right - lastWidth / 2), max(0, width - lastWidth))
         if lastX < firstX + firstWidth + 8 {
@@ -527,36 +716,43 @@ class SearchTimelineView: NSView {
     }
 }
 
-private struct SearchResultPreview: View {
-    let result: SearchDisplayResult
-    let summary: String?
-    let timeline: SearchResultTimeline?
-    let canPlay: Bool
-    let play: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(result.title).font(.title2).textSelection(.enabled)
-            if let summary, !summary.isEmpty { Text(summary).foregroundStyle(.secondary) }
-            HStack {
-                Text(result.sourceLabel)
-                if let date = result.createdAt { Text(date.formatted(date: .abbreviated, time: .shortened)) }
-            }.font(.callout).foregroundStyle(.secondary)
-            if let timeline {
-                Text("\(playbackTime(timeline.start))–\(playbackTime(timeline.end))").monospacedDigit()
-            }
-            if result.passage?.kind != .title {
-                ScrollView {
-                    Text(result.excerpt).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                }
-            }
-            HStack {
-                if result.playbackStart != nil {
-                    Button("Play", systemImage: "play.fill", action: play).disabled(!canPlay)
-                }
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-        }.padding(24).frame(width: 600).frame(minHeight: 240, maxHeight: 480)
+private final class SearchSegmentButton: NSButton {
+    var onSelect: (() -> Void)?
+    var matchID = ""
+    var isMeeting = false
+    override var isFlipped: Bool { true }
+    var markerRect = NSRect.zero { didSet { needsDisplay = true } }
+    private var hoverArea: NSTrackingArea?
+    private var hovered = false { didSet { needsDisplay = true } }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        target = self
+        action = #selector(selectSegment)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func selectSegment() { onSelect?() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2).fill()
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.systemBlue.withAlphaComponent(state == .on ? 1 : 0.5).setFill()
+        let marker = NSBezierPath(roundedRect: markerRect, xRadius: 2, yRadius: 2)
+        marker.fill()
+        if hovered || isHighlighted {
+            NSColor.labelColor.withAlphaComponent(0.6).setStroke()
+            marker.lineWidth = 1
+            marker.stroke()
+        }
     }
 }

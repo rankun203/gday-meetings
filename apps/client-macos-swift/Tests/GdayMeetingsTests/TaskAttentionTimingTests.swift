@@ -227,7 +227,6 @@ extension TaskAttentionTimingTests {
         let provider = ServiceProvider(kind: .localSearch)
         store.settings.serviceProviders = [provider]
         store.settings.searchProviderID = provider.id
-        store.settings.defaultSearchMode = .semantic
         store.recordingID = UUID()
         #expect(await store.queueSearchIndexCommand(id: meetingID, revision: "synthetic-source", force: false) == nil)
         let id = try #require(

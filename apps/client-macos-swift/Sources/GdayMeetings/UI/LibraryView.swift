@@ -206,7 +206,7 @@ struct LibraryView: View {
                 Group {
                     if showsSearchResults {
                         LibrarySearchResultsView(
-                            session: searchSession, mode: searchModeBinding,
+                            session: searchSession,
                             open: openSearchResult, retry: retrySearch,
                             openPerson: { id in
                                 workspace.people.query = ""
@@ -223,7 +223,8 @@ struct LibraryView: View {
                                 selectedPeople = [id]
                                 search = ""
                             },
-                            play: playSearchResult, canPlay: !recordingActive, index: store.libraryIndex
+                            play: openSearchResult, selectMatch: playSearchResult,
+                            canPlay: !recordingActive, index: store.libraryIndex
                         )
                         .onExitCommand {
                             showsSearchResults = false
@@ -616,23 +617,11 @@ struct LibraryView: View {
         searchPreparationTask?.cancel()
         let requestID = UUID()
         searchRequestID = requestID
-        let mode = store.settings.defaultSearchMode
         searchSession.updatePeople(store.people.map { .init(id: $0.id, name: $0.name) })
         showsSearchResults = true
         openedSearchResult = nil
         searchFocused = false
-        if mode == .text {
-            if let index = store.libraryIndex {
-                _ = searchSession.submit(
-                    query, mode: .text, providers: [LocalTextSearchProvider(index: index)],
-                    excludingTagIDs: store.excludedTagIDs)
-            }
-            else {
-                _ = searchSession.submit(query, index: nil, excludingTagIDs: store.excludedTagIDs)
-            }
-            return
-        }
-        searchSession.beginPreparation(query, mode: mode)
+        searchSession.beginPreparation(query, mode: .semantic)
         let exclusions = store.excludedTagIDs
         searchPreparationTask = Task {
             await searchSession.waitForPeopleResolution()
@@ -641,42 +630,21 @@ struct LibraryView: View {
                 searchSession.finishPeopleOnly()
                 return
             }
-            guard
-                let configured = store.settings.serviceProviders.first(where: {
-                    $0.id == store.settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
-                })
-            else {
-                searchSession.preparationFailed("Choose and prepare a Local Search provider in Service Providers.")
+            guard let configured = store.selectedSearchProvider else {
+                searchSession.preparationFailed("Choose a Search provider in General settings.")
                 return
             }
             do {
                 let provider = try await store.localSearch.prepare(configured)
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
                 let providers: [any SearchProvider] = [provider]
-                _ = searchSession.submit(query, mode: mode, providers: providers, excludingTagIDs: exclusions)
+                _ = searchSession.submit(query, mode: .semantic, providers: providers, excludingTagIDs: exclusions)
             }
             catch {
                 guard !Task.isCancelled, searchRequestID == requestID else { return }
                 searchSession.preparationFailed(error.localizedDescription)
             }
         }
-    }
-
-    private var searchModeBinding: Binding<SearchMode> {
-        Binding(
-            get: { store.settings.defaultSearchMode },
-            set: { mode in
-                let previous = store.settings
-                store.settings.defaultSearchMode = mode
-                guard store.saveSettings() else {
-                    store.settings = previous
-                    return
-                }
-                if !searchSession.query.isEmpty {
-                    search = searchSession.query
-                    submitSearch()
-                }
-            })
     }
 
     private func retrySearch() {
@@ -713,6 +681,7 @@ struct LibraryView: View {
         destination = .meetings
         openedSearchResult = result
         showsSearchResults = false
+        playSearchResult(result)
     }
 
     private func activateLibrarySearch() {

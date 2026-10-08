@@ -19,37 +19,62 @@ struct LocalSearchConfigurationTests {
         let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         #expect(legacy.serviceProviders.first?.kind == .localSearch)
         #expect(legacy.searchProviderID == legacy.serviceProviders.first?.id)
-        #expect(legacy.defaultSearchMode == .semantic)
         var provider = ServiceProvider(kind: .localSearch)
         provider.localSearch = .init(
             semanticModel: .granite311M, speakerMatchBoost: 0.15)
         var settings = legacy
         settings.serviceProviders = [provider]
         settings.selectProvider(provider.id, for: .search)
-        settings.defaultSearchMode = .fusion
         let restored = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
         #expect(restored.serviceProviders.first == provider)
         #expect(restored.selectedProvider(for: .search) == provider.id)
-        #expect(restored.defaultSearchMode == .semantic)
+        #expect(restored.selectedSearchProvider == provider)
         #expect(!provider.kind.isLocalSpeaker)
         #expect(provider.kind.isLocal)
         #expect(provider.kind.capabilities == [.search])
     }
 
-    @Test func localSearchDefaultsMigrateOnceAndPreserveLaterTextChoice() throws {
+    @Test func localSearchDefaultsMigrateOnceWithoutRestoringRemovedProviders() throws {
         let fresh = AppSettings()
         #expect(fresh.serviceProviders.first?.kind == .localSearch)
         #expect(fresh.searchProviderID == fresh.serviceProviders.first?.id)
         var migrated = try JSONDecoder().decode(
             AppSettings.self, from: Data(#"{"defaultSearchMode":"text"}"#.utf8))
-        #expect(migrated.defaultSearchMode == .semantic)
-        migrated.defaultSearchMode = .text
         let restored = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(migrated))
-        #expect(restored.defaultSearchMode == .text)
+        #expect(restored.selectedSearchProvider?.kind == .localSearch)
         #expect(restored.serviceProviders.count == 1)
         migrated.serviceProviders = []
         let removed = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(migrated))
         #expect(removed.serviceProviders.isEmpty)
+    }
+
+    @Test(arguments: ["text", "fusion", "semantic"])
+    func obsoleteModeCannotOverrideGeneralProviderSelection(_ mode: String) throws {
+        let first = ServiceProvider(kind: .localSearch)
+        let selected = ServiceProvider(kind: .localSearch)
+        var settings = AppSettings()
+        settings.serviceProviders = [first, selected]
+        settings.selectProvider(selected.id, for: .search)
+        var saved = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        saved["defaultSearchMode"] = mode
+
+        let restored = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: saved))
+
+        #expect(restored.selectedSearchProvider == selected)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+        #expect(encoded["defaultSearchMode"] == nil)
+    }
+
+    @Test func unavailableSelectedProviderDoesNotFallBackToAnotherProvider() {
+        let first = ServiceProvider(kind: .localSearch)
+        var selected = ServiceProvider(kind: .localSearch)
+        selected.isEnabled = false
+        var settings = AppSettings()
+        settings.serviceProviders = [first, selected]
+        settings.selectProvider(selected.id, for: .search)
+        #expect(settings.selectedSearchProvider == nil)
+        settings.selectProvider(nil, for: .search)
+        #expect(settings.selectedSearchProvider == nil)
     }
 
     @MainActor @Test func managedCoreMLFilesDetermineReadinessWithoutLegacyPaths() async throws {

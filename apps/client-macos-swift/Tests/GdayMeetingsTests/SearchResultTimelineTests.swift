@@ -85,6 +85,88 @@ extension SearchResultTimelineTests {
 }
 
 @MainActor struct SearchTimelineRenderingTests {
+    @Test func groupedMarkersKeepShortPassagesClickableWhenTitleIsSelected() throws {
+        let meeting = UUID()
+        let passage = LibrarySearchResult(
+            id: 1, meetingID: meeting, title: "Planning", createdAt: Date(),
+            kind: .title, segmentID: nil, start: nil, excerpt: "Planning")
+        let title = SearchDisplayResult(
+            id: "title", meetingID: meeting, title: "Planning", excerpt: "Planning",
+            createdAt: nil, passage: passage, audio: nil)
+        let short = SearchDisplayResult(
+            id: "short", meetingID: meeting, title: "Planning", excerpt: "Confirm the next step.",
+            createdAt: nil, passage: nil, audio: .init(filename: "audio.wav", start: 20, duration: 1))
+        let untimed = SearchDisplayResult(
+            id: "untimed", meetingID: meeting, title: "Planning", excerpt: "A note without timing.",
+            createdAt: nil, passage: nil, audio: nil)
+        let view = SearchTimelineView(frame: .init(x: 0, y: 0, width: 400, height: 28))
+        let window = host(view)
+        defer { window.close() }
+        let matches = [title, short, untimed]
+        let timelines = Dictionary(
+            uniqueKeysWithValues: matches.compactMap { match in
+                match.timeline(duration: 60).map { (match.id, $0) }
+            })
+        var chosen: String?
+        view.selectMatch = { chosen = $0 }
+        view.configure(matches: matches, selected: title, timelines: timelines)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let buttons = view.subviews.compactMap { $0 as? NSButton }
+        #expect(buttons.count == 2)
+        #expect(buttons.filter { $0.state == .on }.count == 1)
+        try #require(buttons.allSatisfy { $0.frame.width > 0 && $0.frame.height > 0 })
+        let point = view.convert(NSPoint(x: 400 * 20.5 / 60, y: 22), to: view.superview)
+        let hit = try #require(view.hitTest(point) as? NSButton)
+        #expect(hit.state == .off)
+        #expect(hit.toolTip?.contains("Confirm the next step.") == true)
+        hit.performClick(nil)
+        #expect(chosen == short.id)
+
+        view.configure(matches: matches, selected: short, timelines: timelines)
+        let refreshed = view.subviews.compactMap { $0 as? NSButton }
+        #expect(refreshed.count == 2)
+        #expect(refreshed.filter { $0.state == .on }.count == 1)
+        #expect(refreshed.last?.state == .on)
+    }
+
+    @Test func overlappingMarkersRetainSeparateAccessibleActions() throws {
+        let meeting = UUID()
+        let matches = ["first", "second"].map { id in
+            SearchDisplayResult(
+                id: id, meetingID: meeting, title: "Planning", excerpt: "A matching passage.",
+                createdAt: nil, passage: nil, audio: .init(filename: "audio.wav", start: 12, duration: 8))
+        }
+        let view = SearchTimelineView(frame: .init(x: 0, y: 0, width: 400, height: 28))
+        let window = host(view)
+        defer { window.close() }
+        let timelines = Dictionary(
+            uniqueKeysWithValues: matches.compactMap { match in
+                match.timeline(duration: 60).map { (match.id, $0) }
+            })
+        var chosen: [String] = []
+        view.selectMatch = { chosen.append($0) }
+        view.configure(matches: matches, selected: matches[0], timelines: timelines)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let buttons = view.subviews.compactMap { $0 as? NSButton }
+        #expect(buttons.count == 2)
+        #expect(buttons.last?.state == .on)
+        for button in buttons {
+            #expect(button.accessibilityLabel()?.contains("0:12") == true)
+            button.performClick(nil)
+        }
+        #expect(Set(chosen) == Set(["first", "second"]))
+    }
+
+    private func host(_ view: NSView) -> NSWindow {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 80), styleMask: [.borderless], backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(view)
+        return window
+    }
+
     @Test func unchangedStaticRangeDoesNotInvalidateDrawing() throws {
         let view = InvalidationTrackingTimelineView(frame: .init(x: 0, y: 0, width: 400, height: 28))
         let range = try #require(SearchResultTimeline(duration: 60, start: 12, end: 18))

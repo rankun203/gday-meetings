@@ -96,7 +96,6 @@ struct AppSettings: Codable, Equatable {
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
     var searchProviderID: UUID? = Self.defaultSearchProvider.id
-    var defaultSearchMode: SearchMode = .semantic
     var liveDiarizationProviderID: UUID?
     var diarizationProviderID: UUID?
     var showLiveSpeakerLabels = false
@@ -136,7 +135,7 @@ struct AppSettings: Codable, Equatable {
     /// `nil` records from the macOS default input.
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
-        case serviceProviders, transcriptionProviderID, summaryProviderID, searchProviderID, defaultSearchMode,
+        case serviceProviders, transcriptionProviderID, summaryProviderID, searchProviderID,
             searchDefaultsVersion,
             liveDiarizationProviderID, diarizationProviderID,
             showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers, labelRecordedSpeakers,
@@ -270,14 +269,11 @@ extension AppSettings {
         transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
         summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
         searchProviderID = try values.decodeIfPresent(UUID.self, forKey: .searchProviderID)
-        let savedSearchMode = try values.decodeIfPresent(SearchMode.self, forKey: .defaultSearchMode)
-        defaultSearchMode = savedSearchMode == .text ? .text : .semantic
         searchDefaultsVersion = try values.decodeIfPresent(Int.self, forKey: .searchDefaultsVersion) ?? 0
         if searchDefaultsVersion < 1 {
             if !serviceProviders.contains(where: { $0.kind == .localSearch }) {
                 serviceProviders.append(ServiceProvider(kind: .localSearch))
             }
-            defaultSearchMode = .semantic
             searchDefaultsVersion = 1
         }
         selectSoleSearchProvider()

@@ -111,8 +111,11 @@ final class LibrarySearchSession: ObservableObject {
     @Published private(set) var rankedResults: [FusedSearchResult] = []
     @Published private(set) var providerFailures: [UUID: String] = [:]
     var selection: String?
+    @Published var activeMatches: [UUID: String] = [:]
     var scrollOffset: Double = 0
-    private(set) var generation = UUID()
+    private(set) var generation = UUID() {
+        didSet { activeMatches = [:] }
+    }
     private var task: Task<Void, Never>?
     private var index: LibraryIndex?
     private var exhausted = false

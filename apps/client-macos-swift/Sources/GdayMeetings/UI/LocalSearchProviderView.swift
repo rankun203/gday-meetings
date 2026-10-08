@@ -107,19 +107,6 @@ struct LocalSearchProviderView: View {
     }
 }
 
-struct SearchModePicker: View {
-    @Binding var selection: SearchMode
-    var body: some View {
-        Picker("Search Mode", selection: $selection) {
-            Text("Text").tag(SearchMode.text)
-            Text("Semantic").tag(SearchMode.semantic)
-        }
-        .pickerStyle(.menu)
-        .fixedSize()
-        .help("Text matches words. Semantic searches by meaning with the selected model.")
-    }
-}
-
 struct LibraryTextSearchProviderView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject var status: LibraryDataStatus

@@ -140,6 +140,10 @@ The recording panel’s **Transcribe** and **Label Speakers** switches control p
 
 Use `--synthetic-recording-start --synthetic-pagination` to add **Start Synthetic Recording** to the preview banner. Click it after the meeting list appears, both at the top and after scrolling to older meetings. It inserts a new synthetic meeting, selects it, and reveals its complete first row. **Stop & Save** ends the synthetic state so the check can be repeated. This exercises list insertion and recording presentation without audio capture or a provider request; generated fixture audio already exists when the recording state begins.
 
-## Search loading progress
+## Search results and loading progress
+
+For end-to-end Local Search checks, use the full app with `GDAY_SWIFT_DATA_DIR` pointing to a temporary copy of a configured data folder. Preview creates a new synthetic folder and does not inherit the installed model. Copy the model files and settings along with meeting data; use a SQLite backup for a database that is open in another app. Disable copied pending-task journals for search-only validation. Do not switch search to Text to work around an unprepared fixture. Keep captures containing real content outside the repository, quit the validation app, and delete the temporary copy afterward.
+
+Launch with `--synthetic-grouped-search`, or set the `GdayGroupedSearchPreview` Boolean bundle flag, to add overlapping and short transcript matches to the synthetic conversation. These synthetic passages cover grouped-result layout; end-to-end search needs a prepared Local Search provider and model. Check that notes, summary, and transcript matches share one meeting row; switch matches using the timeline, then open the selected match. Playback is silent.
 
 Launch with `--synthetic-search-loading` to exercise the production search field with an eight-second estimate and a ten-second simulated load. The fill reaches 95%, waits for completion, finishes, and fades out. The fixture repeats after three seconds without preparing a model or writing runtime observations. Check Command-F, typing, resizing, light/dark appearance, and Reduce Motion while the indicator is visible. This validates presentation; actual preparation time and database persistence require separate checks.

@@ -341,10 +341,7 @@ final class LocalSearchController: ObservableObject {
 
 extension MeetingStore {
     var selectedSearchProvider: ServiceProvider? {
-        guard settings.defaultSearchMode == .semantic else { return nil }
-        return settings.serviceProviders.first {
-            $0.id == settings.searchProviderID && $0.kind == .localSearch && $0.supports(.search)
-        }
+        settings.selectedSearchProvider
     }
     func searchConfigurationChanged() {
         guard libraryWritable, !isPreparingToQuit, !isChangingLibrary else { return }
@@ -462,6 +459,12 @@ extension MeetingStore {
 }
 
 extension AppSettings {
+    var selectedSearchProvider: ServiceProvider? {
+        serviceProviders.first {
+            $0.id == searchProviderID && $0.kind == .localSearch && $0.supports(.search)
+        }
+    }
+
     mutating func selectSoleSearchProvider() {
         let eligible = serviceProviders.filter { $0.supports(.search) }
         if eligible.count == 1 { searchProviderID = eligible[0].id }
