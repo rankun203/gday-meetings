@@ -129,6 +129,33 @@ extension SearchResultTimelineTests {
         #expect(refreshed.last?.state == .on)
     }
 
+    @Test(arguments: [
+        (trackWidth: 300.0, start: 0.0, duration: 1.0, expectedX: 0.0, expectedWidth: 12.0),
+        (trackWidth: 300.0, start: 24.0, duration: 1.0, expectedX: 120.0, expectedWidth: 12.0),
+        (trackWidth: 300.0, start: 59.0, duration: 1.0, expectedX: 288.0, expectedWidth: 12.0),
+        (trackWidth: 300.0, start: 12.0, duration: 12.0, expectedX: 60.0, expectedWidth: 60.0),
+        (trackWidth: 8.0, start: 24.0, duration: 1.0, expectedX: 0.0, expectedWidth: 8.0),
+    ])
+    func shortMarkersExtendRightUntilTheyReachTheTrackEnd(
+        trackWidth: Double, start: Double, duration: Double, expectedX: Double, expectedWidth: Double
+    ) throws {
+        let match = SearchDisplayResult(
+            id: "passage", meetingID: UUID(), title: "Planning", excerpt: "Confirm the next step.",
+            createdAt: nil, passage: nil,
+            audio: .init(filename: "audio.wav", start: start, duration: duration))
+        let range = try #require(match.timeline(duration: 60))
+        let view = SearchTimelineView(frame: .init(x: 0, y: 0, width: trackWidth, height: 28))
+        let window = host(view)
+        defer { window.close() }
+        view.configure(matches: [match], selected: match, timelines: [match.id: range])
+        window.contentView?.layoutSubtreeIfNeeded()
+        let button = try #require(view.subviews.compactMap { $0 as? NSButton }.first)
+        #expect(abs(button.frame.minX - expectedX) < 0.001)
+        #expect(abs(button.frame.width - expectedWidth) < 0.001)
+        #expect(button.frame.minX >= 0)
+        #expect(button.frame.maxX <= view.bounds.width)
+    }
+
     @Test func overlappingMarkersRetainSeparateAccessibleActions() throws {
         let meeting = UUID()
         let matches = ["first", "second"].map { id in

@@ -8,6 +8,7 @@ struct LibrarySearchResultsView: View {
     var openPerson: (UUID) -> Void = { _ in }
 
     var play: (SearchDisplayResult) -> Void = { _ in }
+    var navigate: (SearchDisplayResult) -> Void = { _ in }
     var selectMatch: (SearchDisplayResult) -> Void = { _ in }
     var canPlay = true
     var index: LibraryIndex?
@@ -59,7 +60,7 @@ struct LibrarySearchResultsView: View {
                 session: session, results: session.displayResults, generation: session.generation,
                 showRankingDetails: showRankingDetails, summaries: summaries, playableMeetings: playableMeetings,
                 canPlay: canPlay, timelines: timelines, activeMatches: session.activeMatches,
-                open: open, play: play, selectMatch: selectMatch
+                open: open, play: play, navigate: navigate, selectMatch: selectMatch
             )
             .frame(maxWidth: .infinity)
             .overlay {
@@ -157,6 +158,7 @@ private struct NativeSearchResults: NSViewRepresentable {
     let activeMatches: [UUID: String]
     let open: (SearchDisplayResult) -> Void
     let play: (SearchDisplayResult) -> Void
+    let navigate: (SearchDisplayResult) -> Void
     let selectMatch: (SearchDisplayResult) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -343,6 +345,12 @@ private struct NativeSearchResults: NSViewRepresentable {
             cell.selectMatch = { [weak self] matchID in
                 self?.selectMatch(matchID, in: groupID)
             }
+            cell.navigate = { [weak self] in
+                guard let self, let group = self.rows.first(where: { $0.id == groupID }) else { return }
+                let result = self.activeResult(in: group)
+                self.clearResultSelection()
+                self.parent.navigate(result)
+            }
             return cell
         }
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -413,7 +421,9 @@ private final class SearchResultCell: NSTableCellView {
     let rank = NSTextField(labelWithString: "")
     let timeline = SearchTimelineView()
     let playButton = NSButton(title: "", target: nil, action: nil)
+    let navigateButton = NSButton(title: "", target: nil, action: nil)
     var play: (() -> Void)?
+    var navigate: (() -> Void)?
     var selectMatch: ((String) -> Void)?
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
@@ -505,6 +515,15 @@ private final class SearchResultCell: NSTableCellView {
         playButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
         playButton.imagePosition = .imageOnly
         playButton.action = #selector(playResult)
+        navigateButton.isBordered = false
+        navigateButton.contentTintColor = .secondaryLabelColor
+        navigateButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        navigateButton.translatesAutoresizingMaskIntoConstraints = false
+        navigateButton.target = self
+        navigateButton.action = #selector(navigateToResult)
+        navigateButton.image = NSImage(systemSymbolName: "arrow.up.forward", accessibilityDescription: nil)
+        navigateButton.imagePosition = .imageOnly
+        addSubview(navigateButton)
         NSLayoutConstraint.activate([
             rank.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             rank.topAnchor.constraint(equalTo: topAnchor, constant: 12),
@@ -513,6 +532,11 @@ private final class SearchResultCell: NSTableCellView {
             playButton.topAnchor.constraint(equalTo: rank.bottomAnchor, constant: 8),
             playButton.widthAnchor.constraint(equalToConstant: 36),
             playButton.heightAnchor.constraint(equalToConstant: 36),
+            navigateButton.centerXAnchor.constraint(equalTo: rank.centerXAnchor),
+            navigateButton.topAnchor.constraint(equalTo: playButton.bottomAnchor, constant: 4),
+            navigateButton.widthAnchor.constraint(equalToConstant: 28),
+            navigateButton.heightAnchor.constraint(equalToConstant: 28),
+            navigateButton.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12),
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 56),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             content.topAnchor.constraint(equalTo: topAnchor, constant: 12),
@@ -544,6 +568,7 @@ private final class SearchResultCell: NSTableCellView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func playResult() { play?() }
+    @objc private func navigateToResult() { navigate?() }
     func configure(
         _ group: SearchResultGroup, selected result: SearchDisplayResult, summary summaryTitle: String?,
         timelines: [String: SearchResultTimeline], showScore: Bool, canPlay: Bool
@@ -580,6 +605,8 @@ private final class SearchResultCell: NSTableCellView {
             ? start.map { "Open meeting and play from " + playbackTime($0) }
             : "Playback is unavailable while recording or when this meeting has no audio."
         playButton.setAccessibilityLabel("Open \(result.title) and play from \(playbackTime(start ?? 0))")
+        navigateButton.toolTip = "Show in Meetings"
+        navigateButton.setAccessibilityLabel("Show \(result.title) in Meetings")
         toolTip = result.passage?.kind == .title ? result.title : result.excerpt
     }
 }
@@ -652,15 +679,19 @@ class SearchTimelineView: NSView {
     override func layout() {
         super.layout()
         for segment in segments {
-            let markerWidth = max(2, bounds.width * (segment.range.endFraction - segment.range.startFraction))
-            let width = max(8, markerWidth)
-            let markerX = bounds.width * segment.range.startFraction
-            let x = max(0, min(bounds.width - width, markerX - (width - markerWidth) / 2))
-            segment.button.frame = NSRect(x: max(0, x), y: 17, width: width, height: 11)
+            let marker = markerFrame(for: segment.range, y: 17, height: 11)
+            segment.button.frame = marker
             segment.button.markerRect = NSRect(
-                x: max(0, markerX - x), y: segment.button.isMeeting ? 9 : 3,
-                width: min(markerWidth, width), height: segment.button.isMeeting ? 2 : 6)
+                x: 0, y: segment.button.isMeeting ? 9 : 3,
+                width: marker.width, height: segment.button.isMeeting ? 2 : 6)
         }
+    }
+    private func markerFrame(for range: SearchResultTimeline, y: CGFloat, height: CGFloat) -> NSRect {
+        let trackWidth = max(0, bounds.width)
+        let width = min(trackWidth, max(12, trackWidth * (range.endFraction - range.startFraction)))
+        // Keep the start accurate until the enlarged marker reaches the recording's right edge.
+        let x = min(trackWidth * range.startFraction, trackWidth - width)
+        return NSRect(x: x, y: y, width: width, height: height)
     }
     func configure(_ range: SearchResultTimeline?, start: Double?) {
         guard self.range != range || self.start != start else { return }
@@ -700,9 +731,7 @@ class SearchTimelineView: NSView {
         NSBezierPath(roundedRect: NSRect(x: 0, y: 24, width: width, height: 2), xRadius: 1, yRadius: 1).fill()
         if segments.isEmpty {
             (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).setFill()
-            NSBezierPath(
-                roundedRect: NSRect(x: left, y: 23, width: max(2, right - left), height: 4), xRadius: 1, yRadius: 1
-            ).fill()
+            NSBezierPath(rect: markerFrame(for: range, y: 23, height: 4)).fill()
         }
         var firstX = min(max(0, left - firstWidth / 2), max(0, width - firstWidth))
         var lastX = min(max(0, right - lastWidth / 2), max(0, width - lastWidth))
@@ -743,11 +772,11 @@ private final class SearchSegmentButton: NSButton {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override var focusRingMaskBounds: NSRect { bounds }
     override func drawFocusRingMask() {
-        NSBezierPath(roundedRect: bounds, xRadius: 2, yRadius: 2).fill()
+        NSBezierPath(rect: bounds).fill()
     }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.systemBlue.withAlphaComponent(state == .on ? 1 : 0.5).setFill()
-        let marker = NSBezierPath(roundedRect: markerRect, xRadius: 2, yRadius: 2)
+        let marker = NSBezierPath(rect: markerRect)
         marker.fill()
         if hovered || isHighlighted {
             NSColor.labelColor.withAlphaComponent(0.6).setStroke()

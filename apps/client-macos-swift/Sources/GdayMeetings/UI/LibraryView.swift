@@ -47,6 +47,7 @@ struct LibraryView: View {
     @StateObject private var workspace = LibraryWorkspaceState()
     @ViewState private var showsSearchResults = false
     @ViewState private var openedSearchResult: SearchDisplayResult?
+    @ViewState private var presentedSearchResult: SearchDisplayResult?
     @ViewState private var searchFocused = false
     @ViewState private var searchModelNotice: ServiceProvider?
     @ViewState private var promptedSearchModels: Set<String> = []
@@ -223,7 +224,7 @@ struct LibraryView: View {
                                 selectedPeople = [id]
                                 search = ""
                             },
-                            play: openSearchResult, selectMatch: playSearchResult,
+                            play: openSearchResult, navigate: navigateToSearchResult, selectMatch: playSearchResult,
                             canPlay: !recordingActive, index: store.libraryIndex
                         )
                         .onExitCommand {
@@ -486,6 +487,13 @@ struct LibraryView: View {
         .sheet(isPresented: $store.presentsRecordingSetup) {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
         }
+        .sheet(item: $presentedSearchResult) { result in
+            MeetingDetailSheet(
+                meetingID: result.meetingID,
+                initialTranscriptRowID: result.segmentID,
+                initialContentTab: searchContentTab(for: result)
+            ) { presentedSearchResult = nil }
+        }
         .background(PlaybackSpaceKey(playback: playback))
         .focusedSceneValue(\.librarySearchAction, focusLibrarySearch)
         .focusedSceneValue(\.newMeetingNotesAction, createMeetingNotes)
@@ -601,7 +609,11 @@ struct LibraryView: View {
     }
 
     private var searchContentTab: MeetingContentTab? {
-        switch openedSearchResult?.passage?.kind {
+        searchContentTab(for: openedSearchResult)
+    }
+
+    private func searchContentTab(for result: SearchDisplayResult?) -> MeetingContentTab? {
+        switch result?.passage?.kind {
         case .notes: .notes
         case .summary: .summary
         case .transcript: .transcript
@@ -676,6 +688,11 @@ struct LibraryView: View {
     }
 
     private func openSearchResult(_ result: SearchDisplayResult) {
+        presentedSearchResult = result
+        playSearchResult(result)
+    }
+
+    private func navigateToSearchResult(_ result: SearchDisplayResult) {
         workspace.selectMeeting(result.meetingID)
         selectedMeeting = result.meetingID
         destination = .meetings

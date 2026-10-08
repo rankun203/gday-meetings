@@ -4,7 +4,6 @@ struct ContextDetailView: View {
     @Environment(\.transcriptLayoutService) private var transcriptLayout
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
-    @Environment(\.showManagedTask) private var showManagedTask
     let title: String
     let personID: UUID?
     let tagID: UUID?
@@ -60,17 +59,7 @@ struct ContextDetailView: View {
         }
         .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
             if let selectedMeeting {
-                VStack(spacing: 0) {
-                    HStack {
-                        Spacer()
-                        Button("Done") { self.selectedMeeting = nil }.keyboardShortcut(.cancelAction)
-                    }.padding()
-                    MeetingDetailView(meetingID: selectedMeeting)
-                }.frame(width: 800, height: 650)
-                    .environment(\.showManagedTask) { id in
-                        self.selectedMeeting = nil
-                        showManagedTask(id)
-                    }
+                MeetingDetailSheet(meetingID: selectedMeeting) { self.selectedMeeting = nil }
             }
         }
         .confirmationDialog(
