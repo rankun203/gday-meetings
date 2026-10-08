@@ -81,6 +81,8 @@ No duplicate explanations or claims that an index is a backup. Compare the imple
 
 # Transcript scrolling
 
+Opening a saved meeting reads canonical `transcript.jsonl` rows and only the checkpoint's transcript commit fields. An unfinished checkpoint supplies the committed byte boundary, row count, and pending rows; ordinary row reads do not decode its speaker history. Source-placeholder recovery uses explicit flags on the loaded rows in a background task. Loading does not wait for that check. A correction is saved only after revalidating the current transcript and speaker metadata, preserving unrelated edits. Full checkpoint drafts remain available to recovery and transcript history workflows.
+
 Preserve the screenshot's timestamp/speaker/wrapped-text columns and fixed transcript actions. Remove filesystem work from row construction, linear segment searches from bindings, and permanently active multiline editors. Use reusable native table rows with one active editor, stable identities, cached text heights, and targeted change publication. Single-click a row to play from it; double-click transcript text to edit or a speaker badge to choose a person. Display rows show a subtle hover highlight. Text selection is available while editing. Keep the title header compact with a small play control. Editor activation, save/cancel, keyboard navigation, seeking, and accessibility must remain usable.
 
 ProMotion is a measurement target: about 8.3 ms per frame at 120 Hz, not an animation toggle. Validate on real display hardware and report hitches/limits candidly.

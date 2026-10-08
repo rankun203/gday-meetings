@@ -43,6 +43,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     var segments: [TranscriptSegment] {
         if let savedSegments {
             let aliases = speakerTimeline?.identityAliases ?? [:]
+            guard !aliases.isEmpty else { return savedSegments }
             let speakers = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
             return savedSegments.map { original in
                 guard let old = original.speakerID, speakers[old]?.manuallyAssigned != true else { return original }
@@ -61,6 +62,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
     }
 
     var speakers: [MeetingSpeaker] {
+        let identities = Dictionary(uniqueKeysWithValues: (speakerTimeline?.speakers ?? []).map { ($0.id, $0) })
         var seen = Set<UUID>()
         return finalizedParagraphs.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .compactMap {
@@ -68,17 +70,15 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 // survive adoption without turning the source into a voice identity.
                 let identity = $0.speakerIdentity ?? $0.id
                 guard seen.insert(identity).inserted else { return nil }
+                let speaker = identities[identity]
                 return MeetingSpeaker(
                     id: identity, label: $0.speakerLabel,
-                    track: speakerTimeline?.speakers.first(where: { $0.id == identity })?.additionalSources?.isEmpty
-                        == false
-                        ? "multiple" : $0.source.rawValue,
+                    track: speaker?.additionalSources?.isEmpty == false ? "multiple" : $0.source.rawValue,
                     providerName: provider, voiceEmbedding: $0.voiceEmbedding,
                     personID: $0.personID, confirmed: $0.personID != nil,
                     sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source,
-                    manuallyAssigned: speakerTimeline?.speakers.first(where: { $0.id == identity })?.manuallyAssigned,
-                    manualReviewThrough: speakerTimeline?.speakers.first(where: { $0.id == identity })?
-                        .manualReviewThrough,
+                    manuallyAssigned: speaker?.manuallyAssigned,
+                    manualReviewThrough: speaker?.manualReviewThrough,
                     colorSlot: $0.resolvedSpeakerColorSlot)
             }
     }

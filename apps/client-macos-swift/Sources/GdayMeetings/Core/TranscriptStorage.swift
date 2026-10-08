@@ -36,7 +36,7 @@ enum TranscriptStorage {
                 }
                 return []
             }
-            if let checkpoint = try LiveTranscriptProjection.checkpoint(at: directory), !checkpoint.finished {
+            if let checkpoint = try LiveTranscriptProjection.transcriptCommit(at: directory), !checkpoint.finished {
                 return try readRows(url, bytes: checkpoint.bytes, count: checkpoint.rows) + checkpoint.segments
             }
             return try readRows(url)

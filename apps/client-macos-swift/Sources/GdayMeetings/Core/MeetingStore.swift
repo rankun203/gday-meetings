@@ -47,6 +47,7 @@ final class MeetingStore: ObservableObject {
     var meetingLoadRequests: [UUID: UUID] = [:]
     var meetingLoadOperations: [UUID: MeetingLoadOperation] = [:]
     let meetingLoadQueue = MeetingLoadQueue()
+    let liveSourceRecovery = LiveSourcePlaceholderRecovery()
     var meetingLoadReader: @Sendable (UUID, URL) throws -> Meeting = { id, directory in
         try MeetingFolderStorage.read(id: id, directory: directory)
     }
@@ -815,6 +816,33 @@ final class MeetingStore: ObservableObject {
         meetings[index] = meeting
         return await save()
     }
+    func commitSourcePlaceholderRecovery(
+        _ sources: [UUID: LiveAudioSource], expected snapshot: Meeting, generation: UUID
+    ) async -> Bool {
+        await enqueueCanonical { [self] in
+            guard libraryWritable, generation == externalReloadGeneration, !isChangingLibrary,
+                recordingID != snapshot.id, !deletingMeetingIDs.contains(snapshot.id),
+                let index = meetings.firstIndex(where: { $0.id == snapshot.id }),
+                meetings[index].liveTranscriptAdopted,
+                meetings[index].transcriptSource == snapshot.transcriptSource,
+                meetings[index].transcript == snapshot.transcript,
+                LiveSourcePlaceholderRecovery.matchingSpeakerMetadata(meetings[index].speakers, snapshot.speakers)
+            else { return false }
+            // Merge into the current meeting to preserve unrelated edits made while waiting.
+            var updated = meetings[index]
+            for speakerIndex in updated.speakers.indices {
+                let speaker = updated.speakers[speakerIndex]
+                if speaker.sourcePlaceholder == nil, let source = sources[speaker.id] {
+                    updated.speakers[speakerIndex].sourcePlaceholder = source
+                }
+            }
+            guard updated.speakers != meetings[index].speakers else { return true }
+            meetings[index] = updated
+            invalidateExternalMeetingReloads(ids: [snapshot.id])
+            return await performCanonicalSave()
+        }
+    }
+
     func hasCommittedTaskReceipt(_ task: ManagedTaskRecord) -> Bool {
         lastSavedLibrary.meetings.first { $0.id == task.meetingID }?
             .completedTaskIDs[task.kind.rawValue] == task.id

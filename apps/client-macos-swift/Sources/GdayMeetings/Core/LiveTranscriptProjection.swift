@@ -15,6 +15,25 @@ enum LiveTranscriptProjection {
         var finished: Bool
     }
 
+    /// Viewing rows needs the commit boundary, not the recording's speaker history.
+    struct TranscriptCommit: Decodable {
+        var version: Int
+        var bytes: UInt64
+        var rows: Int
+        var segments: [TranscriptSegment]
+        var finished: Bool
+    }
+
+    static func transcriptCommit(at directory: URL) throws -> TranscriptCommit? {
+        let url = directory.appendingPathComponent(checkpointName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let value = try JSONDecoder().decode(TranscriptCommit.self, from: Data(contentsOf: url))
+        guard value.version == 2 else {
+            throw MeetingError.message("This transcript checkpoint uses an unsupported format.")
+        }
+        return value
+    }
+
     static func checkpoint(at directory: URL) throws -> Checkpoint? {
         let url = directory.appendingPathComponent(checkpointName)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }

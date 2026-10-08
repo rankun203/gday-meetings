@@ -2,7 +2,8 @@ import Foundation
 
 extension LiveTranscriptDraft {
     var hasUsableText: Bool {
-        !segments.isEmpty
+        if let savedSegments { return !savedSegments.isEmpty }
+        return !segments.isEmpty
     }
 }
 
@@ -25,7 +26,7 @@ extension MeetingStore {
     }
 
     func recoverUnadoptedLiveTranscript(_ meeting: Meeting) async {
-        await recoverLiveSourcePlaceholders(meeting)
+        scheduleLiveSourcePlaceholderRecovery(meeting)
         guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
         else { return }
@@ -37,28 +38,6 @@ extension MeetingStore {
         catch {
             errorMessage = "Couldn’t recover the live transcript for \(meeting.title). The saved file was kept."
         }
-    }
-
-    /// Source labels overlap detected labels. Recover their meaning only from
-    /// the checkpoint's matching identities, never from spelling.
-    private func recoverLiveSourcePlaceholders(_ meeting: Meeting) async {
-        guard libraryWritable, meeting.liveTranscriptAdopted,
-            meeting.speakers.contains(where: { $0.sourcePlaceholder == nil }),
-            let draft = try? LiveTranscriptDraft.read(at: directory(for: meeting.id), meetingID: meeting.id),
-            meeting.transcriptSource?.id == liveTranscriptSource(draft, meeting: meeting).id
-        else { return }
-        let sources = Dictionary(
-            uniqueKeysWithValues: draft.speakers.compactMap { speaker in
-                speaker.sourcePlaceholder.map { (speaker.id, $0) }
-            })
-        var updated = meeting
-        for index in updated.speakers.indices {
-            let speaker = updated.speakers[index]
-            if speaker.sourcePlaceholder == nil, let source = sources[speaker.id] {
-                updated.speakers[index].sourcePlaceholder = source
-            }
-        }
-        if updated.speakers != meeting.speakers { _ = await updateMeeting(updated) }
     }
 
     /// Publish the recording's source and speaker metadata without copying its
