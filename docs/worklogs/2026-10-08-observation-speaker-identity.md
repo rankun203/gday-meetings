@@ -47,7 +47,7 @@ Eligibility is a major confound: the candidate accepted only 38/82, 103/250, 3/6
 
 Private artifacts: `tmp/observation-identity-evaluation-20261008/baseline-verified` and `candidate-final-results`. Despite the directory name, this denotes the first source-frozen candidate and is not a release endorsement. Three Python harness checks pass (binary/evidence provenance failure and unresolved retention).
 
-# Remaining architectural work
+# Remaining architectural work at the first candidate
 
 This implementation establishes an opt-in experimental core and safe post-meeting publication plumbing. It does not yet replace live capture association, implement pending-observation reconsideration, provide a bounded transcript revision horizon, or establish a validated short-window segmentation provider. Same-source overlap discovered in inferred timelines is withheld, but full overlap-aware cluster constraints still need observation-local support rather than whole-label or sampled-window-only assumptions. The prototype budget is bounded; retained cluster history and matching work are not yet bounded for arbitrarily long meetings. Those limits must be designed and measured before claiming a production online identity engine. Keep the validated production default.
 
@@ -80,3 +80,45 @@ Root review corrected the runner-up margin to include scores below the admission
 The complete shared workspace passed 1,187 Swift tests in 206 suites (125.728 seconds of test execution), including the observation, task-publication and causal regression tests. Seven Python evaluation/admission checks passed. Changed production Swift and test files passed strict formatting lint. The existing baseline retained equivalent output and coverage across 192 synthetic configurations. Its standalone scale driver also compiled and completed workloads through 5,760 observations and 512 trusted units.
 
 The separate search UI task remains responsible for its ongoing changes; those files are excluded from this checkpoint. All private evaluation artifacts remain ignored. Release compilation passed in 262.84 seconds; the binary links for macOS 26.0 with SDK 27.0. Only the existing missing Command Line Tools search-path warnings appeared. This validates compilation, not a new packaged-app UI or live accuracy claim.
+
+# Development diagnosis and revised hypotheses
+
+Work continued after the first candidate failed. On B, non-overlapping embeddings carrying the same local label have median cosine .638 (5th percentile .499), while different-label pairs have median .143 (95th percentile .311). These labels are noisy diagnostics, not human truth. A .72 minimum over every exemplar therefore rejects much ordinary within-voice variation. Worker-derived pair labels overlap substantially and cannot substitute for verified speaker identity.
+
+`calibrate.py` tested 45 development-only policies (centroid/top-three/minimum scoring, five thresholds, three bounded local hints) and selected on B saved-worker disagreement before evaluating other previously examined recordings. Centroid .55 with margin .04 and no hint recovered B/C random human DER, but J/G/D still regressed. `refine.py` then tested pending reassignment, centroid merging, and timeline horizons on B. A 120-second horizon recovered G and nearly D, showing arbitrary short temporal expiration creates unresolved-label fragmentation. These scripts are exploratory Python hypotheses; their metrics do not establish live callback performance or exact Swift parity.
+
+`epochs.py` tests a different unit: a local temporal epoch whose denoised rolling prototype can change. One divergent sample is held out of prototype updates; two mutually coherent divergent samples start a new epoch at the first divergent observation. The prototype uses up to twelve recent accepted vectors; post-meeting epoch means associate globally. This preserves useful local continuity without making a channel indivisible. Initial development-selected settings (.45 change, .55 new-voice coherence, .65 global mean match) recover four random-reviewed baseline scores and improve J's previously examined targeted excerpt score. D's remaining difference is caused by fixed 120-second propagation expiry, not the number of clusters: 300 seconds recovers its baseline. That observation motivates preserving dormant track continuity across silence rather than declaring a new speaker merely because wall-clock time elapsed. It does not independently calibrate a 300-second production threshold.
+
+The first epoch probe omitted production trust cutoffs and inferred-overlap withholding. A guarded rerun adds both before conclusions; earlier exploratory outputs remain separate. Even successful post-meeting scores require actual causal live adapter validation, bounded correction behavior, and independent new evaluation before broader claims.
+
+Guarded epoch rerun confirmed the same random-reviewed outcomes; J targeted DER remains 37.490%. This motivated the online rolling-epoch reducer now under development. Its actual arrival-order summaries and explicit cluster aliases differ from the Python post-meeting mean calculation, so a new direct Swift evaluation is required. The reviewed implementation must also transfer cannot-link constraints when clusters alias; otherwise an old overlap exclusion can disappear when its cluster ID is removed.
+
+# Exact rolling-epoch Swift evaluation
+
+The first direct Swift epoch reducer (.65 global admission, .04 margin, .45 change, .55 coherent change, twelve rolling vectors) reproduces random-reviewed baseline DER on J/B/G/C. J targeted DER improves to **35.312%** from the exact current production baseline **43.012%**. D remains worse at **126.418%** versus **114.246%**, so this version is not accepted.
+
+This version measures temporal support in observed-speech seconds rather than wall-clock seconds. Its fifteen-second support budget still expires between agreeing observations. Holding the exact nine D clusters and all decisions fixed, changing only the support budget to sixty observed-speech seconds restores **114.246%**; 300 seconds and effectively unbounded support give the same reviewed score. This isolates a timeline construction failure rather than an embedding grouping failure. The principled next correction is to interpolate observed activity bracketed by matching voice evidence, while retaining bounded one-sided extrapolation and refusing bridges across contrary or unresolved observations. A larger D-tuned constant is not the selected fix.
+
+Private exact-source results are in `tmp/observation-identity-evaluation-20261008/candidate-epoch-v2-results`; separate gap ablations use `candidate-epoch-configurable` and `epoch-D-gap*.json`. The configurable runner records the full supplied policy in every audit. Final actual live-adapter replay is a separate requirement because post-meeting interpolation can use later evidence beyond the live revision horizon.
+
+Comparator correction: the exact current baseline runner gives J targeted DER 43.012%; an earlier informal 47.15% comparator came from a different historical comparison. All final comparisons use the current baseline receipt. The first epoch Python 37.490% and Swift 35.312% remain improvements relative to 43.012%.
+
+D support audit distinguishes two live problems. A principal reviewed region at approximately 29:04–29:18 lies between prior same-track embedding end 26:21 and next embedding start 30:49, so a dormant established epoch can retain continuity without future evidence. Other short reviewed regions intersect tracks whose first retained embedding arrives many minutes later. A thirty-second live revision horizon cannot retroactively use those later vectors; provisional anonymous activity and post-meeting refinement are required. These intersections are not proof that every overlapping local track is a genuine speaker: D also has substantial excess activity. The audit therefore diagnoses availability and support, not independent voice identity truth.
+
+The exact v4 bracketing/activity-constraint run retains baseline random DER on four recordings and reduces D's remaining regression to **115.600% versus 114.246%**. Missed and extra speaker-time are identical; the difference is **1.2934 confused speaker-seconds** out of 95.4945 reviewed reference speaker-seconds. These match two tail spans at approximately 44:21–44:23, after the last embedding at 42:37 and with no following embedding. Bracketing interpolation cannot fix one-sided tail expiry. J targeted DER remains **35.312% versus 43.012%**. This isolates the next semantic correction: preserve an established dormant epoch forward until contradictory evidence or an explicit continuity break, instead of making an arbitrary support budget rename its later speech.
+
+# Exact v5 batch regression gate
+
+The dormant established-epoch continuation correction passes the five known random human-reviewed regression comparisons. This is the exact source-hashed Swift reducer and reconstruction, not the earlier Python approximation. All compiled source hashes still matched after evaluation.
+
+| Recording | Existing production random DER | v5 random DER | Existing targeted DER | v5 targeted DER | Assignable speaker-time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| J | 25.780% | 25.780% | 43.012% | **35.312%** | 87.255% |
+| B | 15.965% | 15.965% | 26.527% | 26.527% | 99.999% |
+| G | 19.887% | 19.887% | — | — | 100.000% |
+| D | 114.246% | 114.246% | — | — | 63.404% |
+| C | 19.406% | 19.406% | — | — | 99.442% |
+
+J targeted improvement is 7.70 percentage points, on a previously examined, speaker-coverage-selected subset. It is not independent population accuracy. All random-reviewed scores match baseline; none of these five recordings is new holdout. v5 produces 16/7/1/9/3 clusters respectively. Worker disagreement is 53.452/40.907/31.166/50.443/21.795%, reported separately from human accuracy. Optimized standalone batch grouping takes 16.5–423 ms across the documents, excluding model inference and the live scheduler.
+
+Artifacts: `tmp/observation-identity-evaluation-20261008/candidate-epoch-v5-results/evaluation.json` and `candidate-epoch-v5.build.json`. This passes the known post-meeting regression gate. Actual causal adapter results and the disjoint public speaker cohort remain separate acceptance requirements; batch interpolation and final aliases must not be presented as live-at-the-time accuracy.

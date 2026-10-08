@@ -4,7 +4,7 @@ import Foundation
 /// Experimental replay adapter around the same causal reducer usable during capture.
 /// Local activity bounds publication; embeddings own identity within those bounds.
 enum SpeakerObservationConsolidation {
-    static let revision = "observation-prototypes-bounded-continuity-v1"
+    static let revision = "observation-epochs-dormant-continuity-v5"
 
     static func run(
         _ document: SpeakerEvidenceDocument,
@@ -75,20 +75,43 @@ enum SpeakerObservationConsolidation {
         samples.sort { $0.end == $1.end ? $0.id < $1.id : $0.end < $1.end }
         var engine = SpeakerObservationClustering(configuration: policy)
         var assignments: [String: String] = [:]
+        let trustedActivity = document.activity.compactMap { span -> SpeakerEvidenceActivity? in
+            guard let window = windows[key(span.source, span.localSpeakerID)] else { return nil }
+            let start = max(span.start, window.publicationStart)
+            let end = min(span.end, window.trustedEnd!)
+            guard end > start else { return nil }
+            return .init(source: span.source, localSpeakerID: span.localSpeakerID, start: start, end: end)
+        }
         for sample in samples {
-            if case .assigned(let id) = try engine.ingest(sample, cancellationCheck: cancellationCheck) {
-                assignments[sample.id] = id
+            let recentActivity = trustedActivity.compactMap { span -> SpeakerEvidenceActivity? in
+                let start = max(span.start, sample.end - policy.recentSeconds)
+                let end = min(span.end, sample.end)
+                guard end > start else { return nil }
+                return .init(source: span.source, localSpeakerID: span.localSpeakerID, start: start, end: end)
             }
-            else {
-                ambiguous.append(sample.id)
+            try engine.recordActivity(recentActivity)
+            _ = try engine.ingest(sample, cancellationCheck: cancellationCheck)
+            let sequences = (engine.lastRevisions.map(\.sequence) + engine.lastClusterMerges.map(\.sequence)).sorted()
+            for sequence in sequences {
+                if let update = engine.lastRevisions.first(where: { $0.sequence == sequence }) {
+                    assignments[update.sampleID] = update.clusterID
+                }
+                else if let merge = engine.lastClusterMerges.first(where: { $0.sequence == sequence }) {
+                    assignments = assignments.mapValues { $0 == merge.fromClusterID ? merge.toClusterID : $0 }
+                }
             }
+        }
+        ambiguous = samples.filter { assignments[$0.id] == nil }.map(\.id)
+        let assignedSamples = Dictionary(grouping: samples.filter { assignments[$0.id] != nil }) {
+            assignments[$0.id]!
         }
         // Membership hashes identify a reproducible batch artifact, while reducer
         // IDs remain stable as observations arrive during a live session.
         var publishedIDs: [String: String] = [:]
         let clusters = try engine.clusters.map { cluster -> SpeakerConsolidationResult.Cluster in
             try cancellationCheck()
-            let ids = cluster.samples.map(\.id).sorted()
+            let members = assignedSamples[cluster.id] ?? []
+            let ids = members.map(\.id).sorted()
             let type = cluster.model
             let fields =
                 [
@@ -99,9 +122,10 @@ enum SpeakerObservationConsolidation {
             let id = "voice-" + SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
             publishedIDs[cluster.id] = id
             let representatives = try VoiceProfileSelection.selectCancellable(
-                cluster.samples, limit: representativeLimit, cancellationCheck: cancellationCheck)
+                members, limit: representativeLimit, cancellationCheck: cancellationCheck)
             return .init(id: id, model: type, sampleIDs: ids, representativeSampleIDs: representatives.map(\.id))
         }
+        let establishedIDs = Set(engine.clusters.filter(\.isEstablished).compactMap { publishedIDs[$0.id] })
         assignments = assignments.mapValues { publishedIDs[$0]! }
         let sampleGroups = Dictionary(grouping: samples) { key($0.source, $0.localSpeakerID) }
         let activityGroups = Dictionary(grouping: document.activity) { key($0.source, $0.localSpeakerID) }
@@ -122,15 +146,26 @@ enum SpeakerObservationConsolidation {
                     activity.append(span)
                 }
             }
+            // Count intervening observed speech, not wall-clock silence. A
+            // dormant voice hypothesis survives pauses while continuous speech
+            // still requires refreshed identity evidence within the configured bound.
+            func speechPosition(_ time: Double) -> Double {
+                activity.reduce(0) { $0 + max(0, min(time, $1.end) - $1.start) }
+            }
             for span in activity {
                 try cancellationCheck()
+                let spanPosition = speechPosition(span.start)
                 var cuts = [span.start, span.end]
                 cuts += [window?.publicationStart, window?.trustedEnd].compactMap { $0 }
                 for sample in localSamples {
-                    cuts += [
-                        sample.start, sample.end, sample.start - maximumContinuityGap,
-                        sample.end + maximumContinuityGap,
-                    ]
+                    cuts += [sample.start, sample.end]
+                    for position in [
+                        speechPosition(sample.start) - maximumContinuityGap,
+                        speechPosition(sample.end) + maximumContinuityGap,
+                    ] {
+                        let cut = span.start + position - spanPosition
+                        if cut > span.start && cut < span.end { cuts.append(cut) }
+                    }
                 }
                 cuts = Array(Set(cuts.filter { $0 >= span.start && $0 <= span.end })).sorted()
                 for (start, end) in zip(cuts, cuts.dropFirst()) {
@@ -148,12 +183,29 @@ enum SpeakerObservationConsolidation {
                         let after = localSamples.filter { $0.start > time }.min { $0.start < $1.start }
                         let neighbors = [before, after].compactMap { $0 }
                         let near = neighbors.filter {
-                            min(abs(time - $0.start), abs(time - $0.end)) <= maximumContinuityGap
+                            min(
+                                abs(speechPosition(time) - speechPosition($0.start)),
+                                abs(speechPosition(time) - speechPosition($0.end))) <= maximumContinuityGap
                         }
-                        let ids = Set(neighbors.compactMap { assignments[$0.id] })
-                        // A conflicting or unresolved bracketing observation blocks
-                        // propagation even when only the other observation is near.
-                        if !near.isEmpty && ids.count == 1 && neighbors.allSatisfy({ assignments[$0.id] != nil }) {
+                        let ids = Set(near.compactMap { assignments[$0.id] })
+                        // Only evidence within the supported local horizon can
+                        // oppose continuation; distant future voices do not veto it.
+                        if let before, let after, let left = assignments[before.id],
+                            left == assignments[after.id]
+                        {
+                            // Matching evidence on both sides supports interpolation
+                            // through this track's observed speech, even across pauses.
+                            id = left
+                        }
+                        else if after == nil, let before, let previous = assignments[before.id],
+                            establishedIDs.contains(previous)
+                        {
+                            // Established voice epochs resume provisionally on the
+                            // same trusted local track. A contrary/ambiguous sample
+                            // blocks this branch; window trust still bounds it.
+                            id = previous
+                        }
+                        else if !near.isEmpty && ids.count == 1 && near.allSatisfy({ assignments[$0.id] != nil }) {
                             id = ids.first
                         }
                     }
