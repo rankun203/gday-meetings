@@ -92,10 +92,29 @@ The first timeline row shows saved transcript labels as historical context, the 
 
 The viewer's 0.85 similarity / 0.08 margin gate is a diagnostic filter only. It is not calibrated on this meeting, not an estimated probability, and not an applied association rule. A passing reference can still be the wrong person, especially when the actual person has no confirmed reference. UMAP coordinates, exact 256-dimensional neighbors, historical context, named-reference diagnostics, and production clusters answer different questions; none substitutes for reviewing the audio.
 
+# Compare projections and exact similarities
+
+After exporting Atlas, generate the comparison page in a fresh ignored directory:
+
+```sh
+uv run --no-project --with numpy --with scipy --with 'scikit-learn>=1.8' --with pyarrow --with plotly \
+  python experiments/speaker-projector/comparison.py \
+  --export tmp/projector-output --site tmp/projector-site \
+  --output tmp/projector-comparison
+cp tmp/projector-comparison/comparison* tmp/projector-site/
+cp tmp/projector-comparison/atlas-index.html tmp/projector-site/projector/index.html
+```
+
+Open `/comparison.html` on the same loopback server, or use **Compare Distances** in Atlas. **Distances (MDS)** is the default. **Neighborhoods (UMAP)** retains the original coordinates. **Exact Similarities** shows normalized 256-dimensional cosine scores on a fixed −1 to 1 scale. Select a point, heatmap cell, or sample from the selectors to compare scores and play the corresponding excerpts. Nearest neighbors exclude overlapping same-source excerpts by default.
+
+Metric MDS uses Euclidean chord distance, `sqrt(2 - 2 * cosine)`, with seed 42, four initializations, and at most 600 iterations. Cluster names affect colors and heatmap ordering only. Fidelity uses unique unordered off-diagonal pairs across all samples, including references. Distance-rank correlation is Spearman correlation. Scale-adjusted stress is `sqrt(sum((d - a*q)^2) / sum(d^2))`, where `a = dot(d,q)/dot(q,q)`, `d` is original distance, and `q` is projected distance. It is a custom scale-adjusted residual, not an identity accuracy score.
+
+The generator verifies canonical row identities and each excerpt's exact audio hash, rechecks inputs, and atomically publishes staged artifacts with a receipt. It supports 3–1,000 samples to bound quadratic computation; larger datasets require an explicit sampling study. Plotly is served locally. All-identical embeddings fail clearly instead of producing an arbitrary projection.
+
 # Validate
 
 ```sh
-uv run --no-project --with numpy python -m unittest discover -s experiments/speaker-projector
+uv run --no-project --with numpy --with scipy --with 'scikit-learn>=1.8' python -m unittest discover -s experiments/speaker-projector
 ```
 
 Synthetic checks cover historical context without identity inheritance, confirmed-reference eligibility, overlapping-audio exclusion, typed-vector compatibility, exact neighbors, complete cluster membership, reference timestamp integrity, capacity trust, and union coverage. Actual production evidence and Atlas rendering are validated separately by the caller.

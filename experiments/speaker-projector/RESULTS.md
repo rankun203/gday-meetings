@@ -19,6 +19,8 @@ The exporter consumes production evidence and cluster assignments, preserves sep
 
 # Results and limitations
 
+The distance comparison preserves all 272 rows and evaluates 36,856 unique unordered pairs, including references. Metric MDS improves distance-rank correlation from 0.688 (UMAP) to 0.728 and reduces scale-adjusted stress from 0.522 to 0.340. Stress fits one global scale before measuring the normalized residual; it is not an identity accuracy metric. Both maps remain lossy. The exact cosine heatmap and linked sample inspector expose the original scores. Seven additional synthetic comparison tests pass, bringing the projector suite to twenty tests.
+
 | Check | Result |
 | --- | --- |
 | Historical context does not assign replay identity | Pass |
