@@ -33,7 +33,11 @@ def main():
     sources = [type_source]
     if args.mode == "consolidation":
         sources += [CORE / name for name in ("VoiceEmbeddingMath.swift", "SpeakerEvidence.swift", "VoiceProfileSelection.swift")]
-        sources += [args.consolidation_source or CORE / "SpeakerConsolidation.swift", HERE / "ConsolidationBench.swift"]
+        consolidation = args.consolidation_source or CORE / "SpeakerConsolidation.swift"
+        # Historical standalone implementations predate the observation adapter.
+        if "SpeakerObservationConsolidation" in consolidation.read_text():
+            sources += [CORE / "SpeakerObservationClustering.swift", CORE / "SpeakerObservationConsolidation.swift"]
+        sources += [consolidation, HERE / "ConsolidationBench.swift"]
     else:
         # Compile the actual independent production declarations, excluding app storage dependencies.
         store = CORE / "VoiceLibraryStore.swift"

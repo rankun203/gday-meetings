@@ -213,4 +213,50 @@ import Testing
         #expect(updated.transcript.allSatisfy { $0.speakerID == replacement.id })
     }
 
+    @Test func observationIdentityNeverInheritsEvenUnsplitNamedLocalTrack() throws {
+        let old = MeetingSpeaker(label: "mic_01", track: "microphone", providerName: "Synthetic", personID: UUID())
+        var meeting = Meeting(title: "Observation identity boundary")
+        meeting.replaceSpeakers([old])
+        meeting.transcript = [row(old, 0)]
+        let evidence = document([self.evidence("a", old.id, 0, [1, 0])])
+        let result = try SpeakerConsolidation.run(evidence).result
+        let method = "observation-test-v1"
+        let labels = MeetingSpeakerConsolidation.labeling(result, evidence: evidence, meeting: meeting, method: method)
+        #expect(labels.modelRevision == method)
+        #expect(labels.speakers.first?.id != old.id)
+        #expect(labels.speakers.first?.personID == nil)
+        let updated = MeetingSpeakerConsolidation.applying(labels, to: meeting)
+        #expect(updated.transcript.first?.personID == nil)
+        let repeated = MeetingSpeakerConsolidation.labeling(
+            result, evidence: evidence, meeting: updated, method: method)
+        #expect(repeated.speakers == labels.speakers)
+        #expect(
+            MeetingSpeakerConsolidation.identity(meetingID: meeting.id, clusterID: "a", method: method)
+                != MeetingSpeakerConsolidation.identity(meetingID: meeting.id, clusterID: "a"))
+    }
+
+    @Test func observationSplitDoesNotSpreadChannelPersonAndPreservesManualRows() {
+        let local = MeetingSpeaker(
+            label: "mic_01", track: "microphone", providerName: "Synthetic", personID: UUID(), manuallyAssigned: true)
+        var meeting = Meeting(title: "Observation split with correction")
+        meeting.replaceSpeakers([local])
+        meeting.transcript = [row(local, 0), row(local, 10)]
+        let a = evidence("a", local.id, 0, [1, 0])
+        let b = evidence("b", local.id, 10, [0, 1])
+        let result = SpeakerConsolidationResult(
+            clusters: [
+                .init(id: "a", model: a.model, sampleIDs: [a.id], representativeSampleIDs: [a.id]),
+                .init(id: "b", model: b.model, sampleIDs: [b.id], representativeSampleIDs: [b.id]),
+            ],
+            intervals: [
+                .init(source: "microphone", localSpeakerID: local.id.uuidString, start: 0, end: 3, clusterID: "a"),
+                .init(source: "microphone", localSpeakerID: local.id.uuidString, start: 10, end: 13, clusterID: "b"),
+            ], rejectedSampleIDs: [])
+        let labels = MeetingSpeakerConsolidation.labeling(
+            result, evidence: document([a, b]), meeting: meeting, method: "observation-test-v1")
+        #expect(labels.speakers.count == 2)
+        #expect(labels.speakers.allSatisfy { $0.personID == nil && $0.id != local.id })
+        #expect(MeetingSpeakerConsolidation.applying(labels, to: meeting).transcript == meeting.transcript)
+    }
+
 }

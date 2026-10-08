@@ -30,7 +30,8 @@ def main():
     baseline.write_text(re.sub(r"\bSpeakerConsolidation\b", "SpeakerConsolidationBaseline", original))
     sources = [core / name for name in (
         "LocalModels/TypedVoiceEmbedding.swift", "VoiceEmbeddingMath.swift", "SpeakerEvidence.swift",
-        "VoiceProfileSelection.swift", "SpeakerConsolidation.swift")]
+        "VoiceProfileSelection.swift", "SpeakerConsolidation.swift",
+        "SpeakerObservationClustering.swift", "SpeakerObservationConsolidation.swift")]
     sources += [baseline, HERE / "CompareImplementations.swift"]
     executable = output / "compare"
     command = ["xcrun", "swiftc", "-O", "-parse-as-library", *map(str, sources), "-o", str(executable)]

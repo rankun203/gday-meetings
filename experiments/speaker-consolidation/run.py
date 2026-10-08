@@ -27,7 +27,8 @@ def source_snapshot(package, bundle, model_data):
     return dict(
         productionSHA256={name: sha(production / name) for name in (
             "Services/LocalLiveDiarization.swift", "Core/CommunityVoiceEmbeddingExtractor.swift",
-            "Core/SpeakerConsolidation.swift", "Core/SpeakerEvidence.swift", "Core/VoiceEmbeddingMath.swift",
+            "Core/SpeakerConsolidation.swift", "Core/SpeakerObservationClustering.swift",
+            "Core/SpeakerObservationConsolidation.swift", "Core/SpeakerEvidence.swift", "Core/VoiceEmbeddingMath.swift",
             "Core/LocalModels/TypedVoiceEmbedding.swift", "Core/VoiceProfileSelection.swift", "Core/LiveSpeakerCapacity.swift")},
         replaySourceSHA256=sha(package / "Tests/GdayMeetingsTests/SpeakerConsolidationReplayTests.swift"),
         testBundleSHA256=sha(bundle), driverSourceSHA256=sha(__file__), modelAssetsSHA256=assets)

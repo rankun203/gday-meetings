@@ -17,7 +17,8 @@ def main():
     experiment = Path(__file__).resolve().parent
     core = experiment.parents[1]/"apps/client-macos-swift/Sources/GdayMeetings/Core"
     sources = [core/"LocalModels/TypedVoiceEmbedding.swift", core/"SpeakerEvidence.swift",
-               core/"VoiceEmbeddingMath.swift", core/"VoiceProfileSelection.swift", core/"SpeakerConsolidation.swift"]
+               core/"VoiceEmbeddingMath.swift", core/"VoiceProfileSelection.swift", core/"SpeakerConsolidation.swift",
+               core/"SpeakerObservationClustering.swift", core/"SpeakerObservationConsolidation.swift"]
     drivers = dict(excerpt="Consolidate.swift",channel="ChannelConsolidate.swift",trusted="TrustedChannelConsolidate.swift",
                    reextract="Reextract.swift",audit="EmbeddingAudit.swift")
     if args.tool == "excerpt":

@@ -8,6 +8,9 @@ enum SpeakerConsolidation {
     struct Configuration: Codable, Equatable, Sendable {
         var minimumSimilarity = 0.72
         var representativeLimit = 3
+        /// Experimental until replay acceptance passes; nil preserves the validated baseline.
+        var observationPolicy: SpeakerObservationClustering.Configuration? = nil
+        var maximumContinuityGap: Double? = nil
     }
     struct Audit: Codable, Equatable, Sendable {
         struct Unit: Codable, Equatable, Sendable {
@@ -20,6 +23,11 @@ enum SpeakerConsolidation {
             var minimumSampleToMeanCosine: Double
             var meanSampleToMeanCosine: Double
         }
+        struct ObservationDiagnostics: Codable, Equatable, Sendable {
+            var unsupportedActivitySampleIDs: [String]
+            var outsideWindowSampleIDs: [String]
+            var ambiguousSampleIDs: [String]
+        }
         var method = SpeakerConsolidation.revision
         var units: [Unit]
         var cannotLinkUnitPairs: Int
@@ -27,6 +35,7 @@ enum SpeakerConsolidation {
         var channelInferredSpeakerSeconds: Double
         var unresolvedSpeakerSeconds: Double
         var untrustedSampleIDs: [String]
+        var observationDiagnostics: ObservationDiagnostics? = nil
     }
     struct Analysis: Codable, Equatable, Sendable {
         var result: SpeakerConsolidationResult
@@ -46,6 +55,12 @@ enum SpeakerConsolidation {
         cancellationCheck: () throws -> Void = {}
     ) throws -> Analysis {
         try cancellationCheck()
+        if let policy = configuration.observationPolicy {
+            return try SpeakerObservationConsolidation.run(
+                document, policy: policy, representativeLimit: configuration.representativeLimit,
+                maximumContinuityGap: configuration.maximumContinuityGap ?? 15,
+                cancellationCheck: cancellationCheck)
+        }
         guard configuration.minimumSimilarity.isFinite, (-1...1).contains(configuration.minimumSimilarity),
             configuration.representativeLimit > 0
         else { throw CocoaError(.fileReadCorruptFile) }

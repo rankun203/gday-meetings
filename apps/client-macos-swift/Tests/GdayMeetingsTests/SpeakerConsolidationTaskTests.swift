@@ -343,4 +343,45 @@ private final class ConsolidationCommitGate: @unchecked Sendable {
         #expect(store.voiceLibrary.examples.first { $0.id == reviewed.id }?.review == .confirmed)
     }
 
+    @Test func observationTaskPersistsActualMethodAndPreservesOnlyReviewedPassage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, original, audio) = try await fixture(root: root)
+        let personID = await store.addPerson(name: "Alex")
+        let speaker = try #require(original.speakers.first)
+        let reviewed = VoiceExample(
+            meetingID: original.id, speakerID: speaker.id, source: "microphone",
+            audioFile: "microphone.wav", audioRevision: VoiceLibraryStore.revision(url: audio),
+            start: 0, end: 3, personID: personID, review: .confirmed,
+            embeddings: [try #require(speaker.voiceEmbedding)])
+        #expect(store.voiceLibrary.upsert([reviewed]))
+        var configuration = SpeakerConsolidation.Configuration()
+        configuration.observationPolicy = .init()
+        try await store.performSpeakerConsolidation(id: original.id, configuration: configuration)
+        let updated = try #require(store.meeting(id: original.id))
+        let resultID = try #require(updated.speakerLabelSource?.resultID)
+        let folder = store.directory(for: original.id)
+        let labels = try JSONDecoder().decode(
+            LocalDiarizationResult.self,
+            from: Data(contentsOf: folder.appendingPathComponent("speaker-labels-\(resultID).json")))
+        #expect(labels.modelRevision != SpeakerConsolidation.revision)
+        #expect(labels.speakers.allSatisfy { !original.speakers.map(\.id).contains($0.id) && $0.personID == nil })
+        let receipt = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: folder.appendingPathComponent("speaker-consolidation-\(resultID).json")))
+                as? [String: Any])
+        let savedConfiguration = try #require(receipt["configuration"] as? [String: Any])
+        #expect(savedConfiguration["observationPolicy"] as? [String: Any] != nil)
+        let analysis = try #require(receipt["analysis"] as? [String: Any])
+        let audit = try #require(analysis["audit"] as? [String: Any])
+        #expect(audit["method"] as? String == labels.modelRevision)
+        let first = try #require(updated.speakers.first { $0.id == updated.transcript[0].speakerID })
+        let second = try #require(updated.speakers.first { $0.id == updated.transcript[1].speakerID })
+        #expect(first.personID == personID && first.manuallyAssigned == true)
+        #expect(first.voiceReviewExampleID == reviewed.id)
+        #expect(second.personID == nil)
+        let disk = try MeetingFolderStorage.read(id: original.id, directory: root)
+        #expect(disk.transcript == updated.transcript)
+    }
+
 }

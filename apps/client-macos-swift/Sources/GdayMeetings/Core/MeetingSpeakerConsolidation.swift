@@ -7,7 +7,8 @@ enum MeetingSpeakerConsolidation {
     static let revision = SpeakerConsolidation.revision
 
     static func labeling(
-        _ result: SpeakerConsolidationResult, evidence: SpeakerEvidenceDocument, meeting: Meeting
+        _ result: SpeakerConsolidationResult, evidence: SpeakerEvidenceDocument, meeting: Meeting,
+        method: String = revision
     ) -> LocalDiarizationResult {
         let samples = Dictionary(evidence.samples.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var speakers: [MeetingSpeaker] = []
@@ -18,7 +19,8 @@ enum MeetingSpeakerConsolidation {
             guard let sample = cluster.representativeSampleIDs.compactMap({ samples[$0] }).first else { continue }
             let source = Set(cluster.sampleIDs.compactMap { samples[$0]?.source })
             let track = source.count == 1 ? source.first! : "multiple"
-            let id = speakerIdentity(cluster: cluster, result: result, evidence: evidence, meeting: meeting)
+            let id = speakerIdentity(
+                cluster: cluster, result: result, evidence: evidence, meeting: meeting, method: method)
             let existing = meeting.speakers.first { $0.id == id }
             var label = existing?.label ?? ""
             if label.isEmpty || publishedLabels.contains(label) {
@@ -47,7 +49,7 @@ enum MeetingSpeakerConsolidation {
             }
         }
         return .init(
-            modelRevision: revision, ranges: ranges, speakers: speakers, providerName: "Speaker Consolidation",
+            modelRevision: method, ranges: ranges, speakers: speakers, providerName: "Speaker Consolidation",
             unresolvedRanges: result.intervals.filter { $0.clusterID == nil }.map {
                 .init(track: $0.source, start: $0.start, end: $0.end)
             })
@@ -117,13 +119,15 @@ enum MeetingSpeakerConsolidation {
 
     static func speakerIdentity(
         cluster: SpeakerConsolidationResult.Cluster, result: SpeakerConsolidationResult,
-        evidence: SpeakerEvidenceDocument, meeting: Meeting
+        evidence: SpeakerEvidenceDocument, meeting: Meeting, method: String = revision
     ) -> UUID {
         let members = Set(cluster.sampleIDs)
         let samples = evidence.samples.filter { members.contains($0.id) }
         let locals = Set(samples.map(\.localSpeakerID))
         let sources = Set(samples.map(\.source))
-        if locals.count == 1, sources.count == 1, let local = locals.first,
+        // Only the legacy algorithm treats a whole local track as one identity.
+        // Observation clusters never inherit a channel UUID or its person decision.
+        if method == revision, locals.count == 1, sources.count == 1, let local = locals.first,
             let source = sources.first, let id = UUID(uuidString: local),
             meeting.speakers.contains(where: { $0.id == id }),
             result.intervals.contains(where: { $0.source == source && $0.localSpeakerID == local }),
@@ -132,11 +136,11 @@ enum MeetingSpeakerConsolidation {
         {
             return id
         }
-        return identity(meetingID: meeting.id, clusterID: cluster.id)
+        return identity(meetingID: meeting.id, clusterID: cluster.id, method: method)
     }
 
-    static func identity(meetingID: UUID, clusterID: String) -> UUID {
-        let bytes = Array(SHA256.hash(data: Data("\(meetingID)|\(revision)|\(clusterID)".utf8)).prefix(16))
+    static func identity(meetingID: UUID, clusterID: String, method: String = revision) -> UUID {
+        let bytes = Array(SHA256.hash(data: Data("\(meetingID)|\(method)|\(clusterID)".utf8)).prefix(16))
         return UUID(
             uuid: (
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -154,7 +158,9 @@ enum MeetingSpeakerConsolidation {
 }
 
 extension MeetingStore {
-    func performSpeakerConsolidation(id: UUID) async throws {
+    func performSpeakerConsolidation(
+        id: UUID, configuration: SpeakerConsolidation.Configuration = .init()
+    ) async throws {
         guard libraryWritable, recordingID != id, let original = meeting(id: id),
             original.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(id))
         else { throw ServiceError("Wait for transcription to finish before consolidating speakers.") }
@@ -171,7 +177,9 @@ extension MeetingStore {
                     "Retained voice evidence is not supported for consolidation. Use Analyze Recording to label speakers."
                 )
             }
-            let result = try SpeakerConsolidation.run(evidence) { try Task.checkCancellation() }
+            let result = try SpeakerConsolidation.run(evidence, configuration: configuration) {
+                try Task.checkCancellation()
+            }
             try SpeakerEvidenceInputReceipt.validate(directory: folder, files: files, expected: inputReceipt)
             return (evidence, result, inputReceipt)
         }
@@ -181,7 +189,8 @@ extension MeetingStore {
             operation.cancel()
         }
         try Task.checkCancellation()
-        var result = MeetingSpeakerConsolidation.labeling(analysis.1.result, evidence: analysis.0, meeting: original)
+        var result = MeetingSpeakerConsolidation.labeling(
+            analysis.1.result, evidence: analysis.0, meeting: original, method: analysis.1.audit.method)
         let unresolved = analysis.1.result.intervals.filter { $0.clusterID == nil }.reduce(0) { $0 + $1.end - $1.start }
         let protected = original.transcript.filter { row in
             original.speakers.contains { $0.id == row.speakerID && $0.manuallyAssigned == true }
@@ -207,7 +216,8 @@ extension MeetingStore {
         var examples: [VoiceExample] = []
         for cluster in analysis.1.result.clusters {
             let speakerID = MeetingSpeakerConsolidation.speakerIdentity(
-                cluster: cluster, result: analysis.1.result, evidence: analysis.0, meeting: original)
+                cluster: cluster, result: analysis.1.result, evidence: analysis.0, meeting: original,
+                method: analysis.1.audit.method)
             guard updated.speakers.contains(where: { $0.id == speakerID }) else { continue }
             for sampleID in cluster.representativeSampleIDs {
                 guard let sample = byID[sampleID],
@@ -218,7 +228,7 @@ extension MeetingStore {
                 examples.append(
                     VoiceExample(
                         id: MeetingSpeakerConsolidation.identity(
-                            meetingID: id, clusterID: cluster.id + ":" + sample.id),
+                            meetingID: id, clusterID: cluster.id + ":" + sample.id, method: analysis.1.audit.method),
                         meetingID: id, speakerID: speakerID, source: sample.source,
                         audioFile: file, audioRevision: revision, start: sample.start, end: sample.end,
                         review: .unassigned, embeddings: [sample.embedding], groupID: speakerID, origin: .savedSpeaker))
@@ -235,7 +245,7 @@ extension MeetingStore {
             try artifact(
                 "speaker-consolidation-\(result.id).json",
                 JSONEncoder().encode(
-                    ConsolidationReceipt(input: analysis.2, configuration: .init(), analysis: analysis.1))),
+                    ConsolidationReceipt(input: analysis.2, configuration: configuration, analysis: analysis.1))),
         ]
         // Derive history from the same bytes used as the transaction baseline.
         var history = try artifact("transcript-revisions.json", Data())
