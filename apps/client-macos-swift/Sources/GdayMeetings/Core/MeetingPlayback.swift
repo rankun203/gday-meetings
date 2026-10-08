@@ -38,6 +38,8 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var isLoadingWaveforms = false
     @Published private(set) var mutedTracks: Set<Int> = []
     @Published private(set) var excerptRange: Range<Double>?
+    @Published private(set) var excerptRanges: [Range<Double>] = []
+    private var excerptIndex = 0
     var hasSelection: Bool { meetingID != nil }
 
     /// Original library file, independent of the currently browsed meeting or decoder temporaries.
@@ -119,6 +121,8 @@ final class MeetingPlayback: ObservableObject {
         playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
         excerptRange = nil
+        excerptRanges = []
+        excerptIndex = 0
         if meetingID == meeting.id, sourceFiles == files, errorMessage == nil, !transportNeedsReload {
             title = meeting.title
             sourceMeeting = meeting
@@ -133,6 +137,18 @@ final class MeetingPlayback: ObservableObject {
     /// Review an exact source excerpt through the shared player. The transport
     /// bounds decoding so speech beyond the excerpt never enters its audio ring.
     func playExcerpt(meeting: Meeting, directory: URL, audioFile: String, start: Double, end: Double) {
+        playExcerpts(
+            meeting: meeting, directory: directory, audioFile: audioFile,
+            spans: [.init(start: start, end: end)])
+    }
+
+    /// Each fragment has its own decoder bound. Intervening speech is never played.
+    func playExcerpts(meeting: Meeting, directory: URL, audioFile: String, spans: [SpeakerEvidenceSpan]) {
+        guard !spans.isEmpty, spans.allSatisfy(\.isValid),
+            zip(spans, spans.dropFirst()).allSatisfy({ $0.end <= $1.start })
+        else { return }
+        let start = spans[0].start
+        let end = spans[0].end
         playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
         guard start.isFinite, end.isFinite, start >= 0, end > start,
@@ -150,6 +166,8 @@ final class MeetingPlayback: ObservableObject {
             return
         }
         load(meeting: meeting, files: files, track: track, position: start, autoplay: true)
+        excerptRanges = spans.map { $0.start..<$0.end }
+        excerptIndex = 0
         excerptRange = start..<end
         progress.seek(to: start)
     }
@@ -160,14 +178,22 @@ final class MeetingPlayback: ObservableObject {
         if errorMessage != nil || transportNeedsReload {
             guard let meeting = sourceMeeting else { return }
             let range = excerptRange
+            let ranges = excerptRanges
+            let index = excerptIndex
             load(meeting: meeting, files: sourceFiles, track: selectedTrack, position: currentTime, autoplay: true)
             excerptRange = range
+            excerptRanges = ranges
+            excerptIndex = index
             return
         }
         wantsPlayback = true
         if isLoading { return }
         guard transport != nil else { return }
         if hasEnded || (duration > 0 && currentTime >= duration) {
+            if let first = excerptRanges.first {
+                excerptIndex = 0
+                excerptRange = first
+            }
             seek(to: excerptRange?.lowerBound ?? 0)
         }
         else {
@@ -197,6 +223,8 @@ final class MeetingPlayback: ObservableObject {
         guard hasSelection, seconds.isFinite else { return }
         if let range = excerptRange, seconds < range.lowerBound || seconds > range.upperBound {
             excerptRange = nil
+            excerptRanges = []
+            excerptIndex = 0
         }
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
         pendingPosition = target
@@ -318,6 +346,8 @@ final class MeetingPlayback: ObservableObject {
     func clear() {
         playbackIntent = UUID()
         excerptRange = nil
+        excerptRanges = []
+        excerptIndex = 0
         progress.scrub(to: nil)
         generation = UUID()
         seekGeneration = UUID()
@@ -363,6 +393,8 @@ final class MeetingPlayback: ObservableObject {
 
     private func load(meeting: Meeting, files: [URL], track: Int, position: Double, autoplay: Bool) {
         excerptRange = nil
+        excerptRanges = []
+        excerptIndex = 0
         progress.scrub(to: nil)
         generation = UUID()
         let operation = generation
@@ -448,8 +480,17 @@ final class MeetingPlayback: ObservableObject {
                         let playing = snapshot.playing && self.wantsPlayback && !self.isPlaybackBlocked
                         if self.isPlaying != playing { self.isPlaying = playing }
                         if snapshot.ended {
-                            self.hasEnded = true
-                            self.wantsPlayback = false
+                            if snapshot.error == nil, self.wantsPlayback, !self.isPlaybackBlocked,
+                                self.excerptIndex + 1 < self.excerptRanges.count
+                            {
+                                self.excerptIndex += 1
+                                self.excerptRange = self.excerptRanges[self.excerptIndex]
+                                self.seek(to: self.excerptRanges[self.excerptIndex].lowerBound)
+                            }
+                            else {
+                                self.hasEnded = true
+                                self.wantsPlayback = false
+                            }
                         }
                         if let error = snapshot.error {
                             self.pause()

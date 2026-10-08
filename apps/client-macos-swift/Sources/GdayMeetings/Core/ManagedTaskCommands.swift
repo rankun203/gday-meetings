@@ -36,12 +36,6 @@ extension MeetingStore {
         }
     }
 
-    @discardableResult func queueSpeakerConsolidation(id: UUID, automatically: Bool = false) async -> UUID? {
-        await enqueueCommand(kind: .diarization, meetingID: id) {
-            await self.queueSpeakerConsolidationCommand(id: id, automatically: automatically)
-        }
-    }
-
     @discardableResult func queueSearchIndex(id: UUID, revision: String, force: Bool = false) async -> UUID? {
         await enqueueCommand(kind: .searchIndex, meetingID: id) {
             await self.queueSearchIndexCommand(id: id, revision: revision, force: force)

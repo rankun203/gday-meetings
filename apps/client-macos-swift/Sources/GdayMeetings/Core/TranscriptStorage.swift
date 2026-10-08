@@ -118,7 +118,8 @@ extension TranscriptSegment {
             id: phrase.id, start: phrase.start, end: phrase.end, speaker: phrase.speakerLabel,
             text: phrase.text, speakerID: phrase.speakerIdentity ?? phrase.id,
             source: phrase.source, session: phrase.session,
-            sourcePlaceholder: !phrase.hasSpeakerIdentity, personID: phrase.personID)
+            sourcePlaceholder: !phrase.hasSpeakerIdentity, personID: phrase.personID,
+            associationUncertain: phrase.associationUncertain)
     }
 
     func livePhrase(meetingID: UUID) -> LiveTranscriptPhrase {
@@ -126,6 +127,6 @@ extension TranscriptSegment {
             id: id, session: session ?? meetingID, source: source ?? .system,
             start: start, end: end, text: text, personID: personID,
             speakerIdentity: sourcePlaceholder == true ? nil : speakerID,
-            diarizationLabel: speaker)
+            diarizationLabel: speaker, associationUncertain: associationUncertain)
     }
 }

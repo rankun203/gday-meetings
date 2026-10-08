@@ -20,7 +20,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: [], generation: cache.revision, showsSpeakers: true, editable: true, canPlay: false,
             liveRows: cache, followsLive: false, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         let table = ReloadTrackingTranscriptTable(frame: scroll.bounds)
@@ -72,7 +72,7 @@ import Testing
                     savedText = text
                 }
             }, followsLive: false, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable()
         coordinator.table = table
@@ -142,7 +142,7 @@ import Testing
         #expect(expanded.first { $0.id == replacement.id }?.speakerID == replacement.id)
         var view = NativeTranscriptView(
             rows: [original], generation: 1, showsSpeakers: true, editable: false, canPlay: false,
-            meetingID: UUID(), play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+            meetingID: UUID(), play: { _ in }, save: { _, _ in }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
@@ -288,7 +288,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: [row], generation: 1, showsSpeakers: false, editable: true, canPlay: false,
             followsLive: true, pauseLiveFollowing: { pauses += 1 }, play: { _ in },
-            save: { saves.append(($0, $1)) }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+            save: { saves.append(($0, $1)) }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable()
         coordinator.table = table
@@ -324,7 +324,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: false,
             editable: true, canPlay: false, followsLive: false, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = ReloadTrackingTranscriptTable()
         table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
@@ -353,7 +353,7 @@ import Testing
                     id: UUID(), start: Double($0), end: Double($0) + 1, speaker: "", speakerID: nil, text: "Line \($0)")
             }, generation: 1, showsSpeakers: false, editable: true, canPlay: false,
             followsLive: true, pauseLiveFollowing: { pauses += 1 }, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         let table = TranscriptNativeTable(frame: scroll.bounds)

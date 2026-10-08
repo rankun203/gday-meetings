@@ -26,6 +26,7 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     var voiceReviewExampleID: UUID?
     /// A meeting-local palette slot, independent of the assigned person's name.
     var colorSlot: Int?
+    var passageAssignmentOrigin: TranscriptPassageOrigin?
 
     func protectsManualAssignment(to row: TranscriptSegment) -> Bool {
         guard manuallyAssigned == true else { return false }
@@ -200,7 +201,11 @@ extension Meeting {
         compactProviderLabel: Bool = false
     ) -> String {
         if let speaker = speakers.first(where: { $0.id == segment.speakerID }) {
-            if let person = people.first(where: { $0.id == speaker.personID }) { return person.name }
+            if segment.allowsPersonAssociation(from: speaker),
+                let person = people.first(where: { $0.id == speaker.personID })
+            {
+                return person.name
+            }
             if speaker.sourcePlaceholder != nil { return speaker.displayLabel }
         }
         return compactProviderLabel ? SpeakerLabelPresentation.display(segment.speaker) : segment.speaker
@@ -220,19 +225,18 @@ extension Meeting {
 extension MeetingStore {
     /// Save the assignment and explicitly assigned sample together through the library's
     /// atomic save/rollback path. Reassignment removes its earlier training sample.
-    func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async {
-        invalidatePendingLiveVoiceEnrollment(meetingID: meetingID, speakerID: speakerID)
+    @discardableResult func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async -> Bool {
         guard await voiceLibrary.awaitReady() else {
             errorMessage = voiceLibrary.errorMessage
-            return
+            return false
         }
-        guard await ensureMeetingLoaded(id: meetingID) else { return }
-        guard await flushCanonicalWrites() else { return }
+        guard await ensureMeetingLoaded(id: meetingID) else { return false }
+        guard await flushCanonicalWrites() else { return false }
         guard libraryWritable, var meeting = self.meeting(id: meetingID),
             let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }),
             meeting.speakers[index].canAssignPerson || personID == nil,
             personID == nil || people.contains(where: { $0.id == personID })
-        else { return }
+        else { return false }
         var replacement = meeting.speakers
         replacement[index].personID = personID
         replacement[index].confidence = nil
@@ -247,7 +251,7 @@ extension MeetingStore {
                 exampleID: meeting.speakers[index].voiceReviewExampleID)
         else {
             errorMessage = voiceLibrary.errorMessage
-            return
+            return false
         }
         for i in people.indices {
             people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
@@ -265,8 +269,12 @@ extension MeetingStore {
             people[personIndex].voiceSamples.append(
                 PersonVoiceSample(meetingID: meetingID, speakerID: speakerID, scope: scope, embedding: embedding))
         }
+        for index in replacement.indices
+        where replacement[index].passageAssignmentOrigin?.speakerID == speakerID {
+            replacement[index].passageAssignmentOrigin?.labelDecisionChanged = true
+        }
         meeting.replaceSpeakers(replacement)
-        await updateMeeting(meeting)
+        return await updateMeeting(meeting)
     }
 }
 
@@ -281,5 +289,15 @@ enum SpeakerLabelPresentation {
             return source + "_" + number
         }
         return label
+    }
+}
+
+extension TranscriptSegment {
+    func allowsPersonAssociation(from speaker: MeetingSpeaker?) -> Bool {
+        guard associationUncertain == true else { return true }
+        guard let speaker, speaker.manuallyAssigned == true else { return false }
+        guard let through = speaker.manualReviewThrough else { return true }
+        guard let source, let end = through[source.rawValue] else { return false }
+        return self.end <= end
     }
 }

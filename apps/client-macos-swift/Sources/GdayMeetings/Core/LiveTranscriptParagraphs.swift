@@ -31,6 +31,7 @@ enum LiveTranscriptParagraphs {
                 previous.phrase.speakerIdentity == phrase.speakerIdentity,
                 previous.phrase.speakerLabel == phrase.speakerLabel,
                 previous.phrase.personID == phrase.personID,
+                previous.phrase.associationUncertain == phrase.associationUncertain,
                 phrase.start >= previous.phrase.end, phrase.start - previous.phrase.end <= 0.8,
                 phrase.end - previous.phrase.start <= 30,
                 previous.phrase.text.utf16.count + phrase.text.utf16.count <= 2000,

@@ -17,7 +17,7 @@ struct SpeakerLabelingHistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Speaker Labeling History").font(.headline)
+            Text("Speaker Diarization History").font(.headline)
             if !restoreChoices.isEmpty {
                 Menu("Restore Labels", systemImage: "arrow.uturn.backward") {
                     ForEach(restoreChoices) { revision in
@@ -41,7 +41,7 @@ struct SpeakerLabelingHistoryView: View {
             }
             if let history {
                 if history.entries.isEmpty {
-                    Text("No speaker labeling runs or saved analyses were found for this recording.")
+                    Text("No speaker diarization runs or saved analyses were found for this recording.")
                         .foregroundStyle(.secondary)
                     ListCountFooter(text: "0 Entries Shown")
                 }

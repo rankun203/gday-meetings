@@ -7,6 +7,7 @@ struct LocalSpeakerRange: Codable, Equatable, Sendable {
     var label: String
     var start: Double
     var end: Double
+    var associationUncertain: Bool?
 }
 
 struct UnresolvedSpeakerRange: Codable, Equatable, Sendable {
@@ -33,7 +34,7 @@ enum LocalDiarizationInputPolicy {
         var revisions: [URL: String] = [:]
         for file in files {
             guard let revision = VoiceLibraryStore.revision(url: file) else {
-                throw ServiceError("The source audio is unavailable. Restore it before labeling speakers.")
+                throw ServiceError("The source audio is unavailable. Restore it before diarizing speakers.")
             }
             revisions[file] = revision
         }
@@ -95,7 +96,7 @@ actor CommunityDiarizationWorker {
         for (index, file) in files.enumerated() {
             try Task.checkCancellation()
             guard let sourceRevision = VoiceLibraryStore.revision(url: file) else {
-                throw ServiceError("The source audio is unavailable. Restore it before labeling speakers.")
+                throw ServiceError("The source audio is unavailable. Restore it before diarizing speakers.")
             }
             await progress?("Preparing audio \(index + 1) of \(files.count)…")
             let preparedAudio = try await AudioPlaybackPreparation.prepare(file)
@@ -105,7 +106,7 @@ actor CommunityDiarizationWorker {
             defer { source.cleanup() }
             let result: DiarizationResult
             do {
-                await progress?("Labeling speakers in audio \(index + 1) of \(files.count)…")
+                await progress?("Diarizing audio \(index + 1) of \(files.count)…")
                 result = try await manager.process(audioSource: source, audioLoadingSeconds: loadSeconds)
             }
             catch OfflineDiarizationError.noSpeechDetected { continue }
@@ -164,7 +165,7 @@ actor CommunityDiarizationWorker {
                 output.speakers.append(speaker)
             }
             guard VoiceLibraryStore.revision(url: file) == sourceRevision else {
-                throw ServiceError("The source audio changed during analysis. Run speaker labeling again.")
+                throw ServiceError("The source audio changed during analysis. Run speaker diarization again.")
             }
         }
         return output
@@ -226,8 +227,19 @@ enum LocalDiarizationAssignment {
             if !speakers.contains(where: { $0.id == speaker.id }) { speakers.append(speaker) }
             updated.transcript[index].speakerID = speaker.id
             updated.transcript[index].speaker = speaker.label
+            updated.transcript[index].sourcePlaceholder = false
+            updated.transcript[index].personID = nil
+            updated.transcript[index].associationUncertain = nil
         }
-        let used = Set(updated.transcript.compactMap(\.speakerID))
+        // A real acoustic cluster can have a clean review example even when no
+        // whole transcript row has enough exclusive support to take its label.
+        let reviewable = result.speakers.filter {
+            $0.resolvedVoiceEmbedding?.isValid == true && $0.voiceSampleRange?.isValid == true
+        }
+        for speaker in reviewable where !speakers.contains(where: { $0.id == speaker.id }) {
+            speakers.append(speaker)
+        }
+        let used = Set(updated.transcript.compactMap(\.speakerID)).union(reviewable.map(\.id))
         updated.replaceSpeakers(speakers.filter { used.contains($0.id) })
         return updated
     }
@@ -235,34 +247,11 @@ enum LocalDiarizationAssignment {
 
 extension MeetingStore {
     func scheduleAutomaticSpeakerLabeling(id: UUID) async {
-        let folder = directory(for: id)
-        let files = meeting(id: id).map { audioURLs(for: $0) } ?? []
-        let retained: Bool
-        if settings.labelRecordedSpeakers {
-            retained = await Task.detached(priority: .utility) {
-                do {
-                    return try SpeakerEvidenceInputReceipt.hasConsolidationEvidence(directory: folder, files: files)
-                }
-                catch { return false }
-            }.value
-        }
-        else {
-            retained = false
-        }
-        if retained, settings.labelRecordedSpeakers {
-            _ = await queueSpeakerConsolidation(id: id, automatically: true)
-            return
-        }
-        await voiceLibrary.awaitLoaded()
-        if settings.recognizeSpeakers, let meeting = meeting(id: id) {
-            _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: id))
-            await voiceLibrary.suggestReviewedPeople(from: people)
-        }
-        guard settings.labelRecordedSpeakers,
-            settings.serviceProviders.contains(where: {
-                $0.id == settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
-            })
+        guard settings.labelRecordedSpeakers, recordingID != id,
+            let meeting = meeting(id: id), !meeting.audioFiles.isEmpty
         else { return }
+        // Always analyze the saved recording. A historical live evidence journal
+        // must not substitute for a complete post-recording speaker timeline.
         _ = await queueSpeakerLabeling(id: id, automatically: true)
     }
 
@@ -279,17 +268,17 @@ extension MeetingStore {
         guard libraryWritable, recordingID != id, let meeting = meeting(id: id),
             meeting.transcriptionAttempt == nil, !isJobRunning(.transcription, .meeting(id)),
             let provider = settings.serviceProviders.first(where: {
-                $0.id == settings.resolvedSpeakerProviderID(providerID)
+                $0.id == providerID
             }),
             provider.kind == .speakerLabeling, provider.supports(.diarization)
         else {
             throw ServiceError(
-                "Choose the Speaker Labeling provider in Settings before labeling a saved transcript.")
+                "Choose the Speaker Diarization provider in Settings before diarizing a saved transcript.")
         }
         let files = audioURLs(for: meeting)
         guard !files.isEmpty else { throw ServiceError("This meeting has no local audio to label.") }
         guard files.count == meeting.audioFiles.count else {
-            throw ServiceError("Some meeting audio is missing. Restore the audio files before labeling speakers.")
+            throw ServiceError("Some meeting audio is missing. Restore the audio files before diarizing speakers.")
         }
         let sourceRevisions = try LocalDiarizationInputPolicy.revisions(for: files)
         let recognize = settings.recognizeSpeakers
@@ -303,28 +292,26 @@ extension MeetingStore {
             dataFlow: .init(
                 location: .local, targetID: provider.id, targetName: provider.name,
                 startedAt: Date(),
-                bodies: recognize
-                    ? ["Saved audio", "Speaker activity", "Typed voice embeddings"]
-                    : ["Saved audio", "Speaker activity"],
+                bodies: ["Saved audio", "Speaker activity", "Typed voice embeddings"],
                 filePaths: meeting.audioFiles,
-                purpose: recognize ? "Saved speaker labeling and association" : "Saved speaker labels"))
+                purpose: recognize ? "Saved speaker diarization and association" : "Saved speaker labels"))
         try DataEventJournal.append(event, directory: journalDirectory)
         defer {
             event.dataFlow.endedAt = Date()
             do { try DataEventJournal.append(event, directory: journalDirectory) }
             catch { self.errorMessage = "Couldn’t save the speaker processing data event." }
         }
-        setJobProgress(.diarization, .meeting(id), "Labeling speakers…")
+        setJobProgress(.diarization, .meeting(id), "Diarizing speakers…")
         let report: @Sendable (String) async -> Void = { [weak self] progress in
             await self?.setJobProgress(.diarization, .meeting(id), progress)
         }
         let result = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
             try await CommunityDiarizationWorker().run(
-                files: files, lease: lease, recognize: recognize, progress: report)
+                files: files, lease: lease, recognize: true, progress: report)
         }
         try Task.checkCancellation()
         guard !result.ranges.isEmpty else {
-            throw ServiceError("No speech was found for speaker labeling. The current transcript was kept.")
+            throw ServiceError("No speech was found for speaker diarization. The current transcript was kept.")
         }
         let current = try await validatedMeetingForSpeakerLabeling(
             resultID: result.id, original: meeting, files: files, sourceRevisions: sourceRevisions)
@@ -333,7 +320,10 @@ extension MeetingStore {
             at: self.directory(for: id))
         guard self.preserveTranscript(current) else { throw ServiceError("Couldn’t preserve the current transcript.") }
         var updated = LocalDiarizationAssignment.applying(result, to: current, fileCount: files.count)
-        _ = self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id))
+        guard self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id)) else {
+            throw ServiceError(
+                self.voiceLibrary.errorMessage ?? "Couldn’t save the speaker examples for People review.")
+        }
         updated = self.voiceLibrary.applyingDecisions(to: updated)
         let savedRevisions = try TranscriptRevisions.read(at: self.directory(for: id)).revisions
         if let normalized = TranscriptRevisions.snapshots(savedRevisions, current: current)
@@ -364,7 +354,7 @@ extension MeetingStore {
             try LocalDiarizationInputPolicy.revisions(for: files) == sourceRevisions
         else {
             throw ServiceError(
-                "The meeting changed while speaker labeling was running. Run it again for the current transcript.")
+                "The meeting changed while speaker diarization was running. Run it again for the current transcript.")
         }
         return current
     }

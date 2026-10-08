@@ -23,6 +23,8 @@ final class LiveTranscriptStream {
     private var pending: [LiveTranscriptPhrase] = []
     private var partials: [LiveTranscriptPhrase] = []
     private var timeline = LiveSpeakerTimeline()
+    private var attributionIndex: LiveSpeakerIntervalIndex?
+    var hotSpeakerCount: Int { timeline.speakers.count }
     private var previous: [LiveAudioSource: LiveTranscriptPhrase] = [:]
     private struct RecognitionSource: Hashable {
         var source: LiveAudioSource
@@ -66,8 +68,7 @@ final class LiveTranscriptStream {
         draft.phrases = rows.map { original in
             var row = original
             if let id = row.speakerIdentity, let speaker = speakerMetadata[id] {
-                row.personID = speaker.personID
-                row.voiceEmbedding = speaker.voiceEmbedding
+                row = LiveSpeakerAliases.applyingMetadata(row, speaker: speaker)
             }
             return row
         }
@@ -91,6 +92,7 @@ final class LiveTranscriptStream {
         pending = []
         partials = []
         timeline = LiveSpeakerTimeline()
+        attributionIndex = nil
         observationIdentity = false
         previous = [:]
         sealedThrough = [:]
@@ -162,11 +164,19 @@ final class LiveTranscriptStream {
         refresh()
     }
 
-    func accept(_ gap: LiveTranscriptGap) {
-        timeline.gaps.append(gap)
-        carryReset[gap.source] = max(carryReset[gap.source] ?? 0, gap.end)
-        latestTime = max(latestTime, gap.end)
-        refresh()
+    func accept(_ gap: LiveTranscriptGap) { accept([gap]) }
+
+    /// A source batch changes attribution once; duplicate reports do not redraw it.
+    func accept(_ gaps: [LiveTranscriptGap]) {
+        var changed = false
+        for gap in gaps where gap.start.isFinite && gap.end.isFinite && gap.start >= 0 && gap.end > gap.start {
+            guard !timeline.gaps.contains(gap) else { continue }
+            timeline.gaps.append(gap)
+            carryReset[gap.source] = max(carryReset[gap.source] ?? 0, gap.end)
+            latestTime = max(latestTime, gap.end)
+            changed = true
+        }
+        if changed { refresh() }
     }
 
     func discardPartials() {
@@ -182,13 +192,21 @@ final class LiveTranscriptStream {
     var snapshot: LiveTranscriptEffectiveSnapshot {
         .init(
             head: snapshotHead, tail: snapshotTail + hotFinalized, identityAliases: identityAliases,
-            speakers: speakerMetadata)
+            speakers: speakerMetadata, personOverrides: overrides.filter(\.personWasAssigned))
     }
 
     private func refresh(finishing: Bool = false) {
         let interval = RecordingSignposts.signposter.beginInterval(
             "Refresh live transcript", id: RecordingSignposts.signposter.makeSignpostID())
         defer { RecordingSignposts.signposter.endInterval("Refresh live transcript", interval) }
+        if labeling {
+            if attributionIndex == nil {
+                attributionIndex = LiveSpeakerIntervalIndex(timeline)
+            }
+            else {
+                attributionIndex?.update(timeline)
+            }
+        }
         attributedPhraseCount = 0
         pending.sort(by: LiveTranscriptPhrase.ordered)
         var carry = previous
@@ -203,7 +221,12 @@ final class LiveTranscriptStream {
             {
                 carry.removeValue(forKey: phrase.source)
             }
-            let observed = labeling ? timeline.attributing(phrase, bridgeUnknownWords: false) : [phrase]
+            let observed =
+                attributionIndex.flatMap { index in
+                    labeling
+                        ? index.evidence(for: phrase, preceding: nil).attributing(phrase, bridgeUnknownWords: false)
+                        : nil
+                } ?? [phrase]
             attributedPhraseCount += 1
             var effective =
                 observationIdentity
@@ -260,7 +283,12 @@ final class LiveTranscriptStream {
                 carry.removeValue(forKey: phrase.source)
             }
             attributedPhraseCount += 1
-            let observed = labeling ? timeline.attributing(phrase, bridgeUnknownWords: false) : [phrase]
+            let observed =
+                attributionIndex.flatMap { index in
+                    labeling
+                        ? index.evidence(for: phrase, preceding: nil).attributing(phrase, bridgeUnknownWords: false)
+                        : nil
+                } ?? [phrase]
             return observationIdentity
                 ? observed : Self.carryForward(observed, previous: &carry, timeline: timeline, labeling: labeling)
         }
@@ -280,6 +308,18 @@ final class LiveTranscriptStream {
             min(pending.map(\.start).min() ?? latestTime, partials.map(\.start).min() ?? latestTime))
         timeline.intervals.removeAll { $0.end < oldest }
         timeline.gaps.removeAll { $0.end < oldest }
+        // The cold transcript owns historical assignments. Keep only metadata
+        // needed by hot activity, the carry boundary, and current model windows.
+        var liveIDs = Set(timeline.intervals.map(\.speakerID))
+        liveIDs.formUnion(previous.values.compactMap(\.speakerIdentity))
+        let currentGenerations = Set(timeline.cursors.map(\.generation))
+        var representedSources = Set<LiveAudioSource>()
+        timeline.speakers.removeAll { speaker in
+            let memberSources = LiveAudioSource.allCases.filter { speaker.includes($0) }
+            let firstForSource = memberSources.contains { !representedSources.contains($0) }
+            representedSources.formUnion(memberSources)
+            return !liveIDs.contains(speaker.id) && !currentGenerations.contains(speaker.generation) && !firstForSource
+        }
         revision += 1
     }
 
@@ -339,9 +379,11 @@ struct LiveTranscriptEffectiveSnapshot: Sendable {
     let tail: [LiveTranscriptPhrase]
     var identityAliases: [UUID: UUID] = [:]
     var speakers: [UUID: LiveSpeakerIdentity] = [:]
+    var personOverrides: [LiveTranscriptOverride] = []
 
     var phrases: [LiveTranscriptPhrase] {
         Self.materialize(head, tail: tail).map { row in
+            guard !personOverrides.contains(where: { row.overlaps($0.anchor) }) else { return row }
             return LiveSpeakerAliases.applying(row, aliases: identityAliases, speakers: speakers)
         }
     }

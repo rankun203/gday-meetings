@@ -216,23 +216,13 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         #expect(reopened.state(for: id).phase == .failed)
     }
 
-    @Test func allPresetsPinTheRuntimeLayoutAndRequiredSharedAssets() throws {
+    @Test func allModelsPinTheirRuntimeLayoutAndRequiredAssets() throws {
         for id in LocalModelID.allCases {
             let descriptor = LocalModelRegistry.descriptor(id)
             #expect(!descriptor.assets.isEmpty)
             #expect(Set(descriptor.assets.map(\.path)).count == descriptor.assets.count)
             #expect(descriptor.assets.allSatisfy { $0.bytes > 0 && [40, 64].contains($0.digest.count) })
-            if let preset = id.nemotronPreset {
-                let config = try #require(Nemotron3Config.preset(named: preset))
-                #expect(descriptor.modelNames == [String(config.modelFileName.dropLast(".mlmodelc".count))])
-                #expect(descriptor.inputBufferSeconds == config.latencySeconds)
-                #expect(descriptor.assets.contains { $0.path == "learnable_sil_emb.bin" })
-                #expect(descriptor.assets.contains { $0.path == "pre_encode_proj_t.bin" } == config.splitGraph)
-                #expect(
-                    descriptor.assets.filter { $0.path.contains(".mlmodelc/") }.allSatisfy {
-                        $0.remotePath == config.hubSubdirectory + "/" + $0.path
-                    })
-            }
+
         }
         let community = LocalModelRegistry.descriptor(.community1)
         #expect(Set(community.modelNames) == ["Segmentation", "FBank", "Embedding", "PldaRho"])

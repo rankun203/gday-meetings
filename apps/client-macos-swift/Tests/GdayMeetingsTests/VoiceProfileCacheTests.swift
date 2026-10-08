@@ -104,29 +104,6 @@ struct VoiceProfileCacheTests {
         #expect(try await second.value.profiles[0].voiceSamples.count == 1)
         #expect(await worker.profileBuildCount == 1)
     }
-    @Test func preparedCommitPublishesOnlyAgainstItsOriginalReviewRevision() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let backend = try VoiceLibraryPersistence(directory: root)
-        let person = Person(name: "Reviewed voice")
-        var original = VoiceLibraryDocument()
-        original.examples = [example(person: person)]
-        try backend.commit(previous: .init(), next: original)
-        _ = try backend.load()
-        var candidate = original
-        candidate.examples.append(example(person: person))
-        let prepared = try backend.prepare(previous: original, next: candidate)
-        #expect(try backend.load()?.examples.count == 1)
-        var reviewed = original
-        reviewed.examples[0].excluded = true
-        try backend.commit(previous: original, next: reviewed)
-        #expect(throws: (any Error).self) { try backend.commit(prepared) }
-        #expect(try backend.load()?.examples[0].excluded == true)
-        let retry = try backend.prepare(previous: reviewed, next: candidate)
-        try backend.commit(retry)
-        #expect(try backend.load()?.examples.count == 2)
-    }
-
     @Test func coldProfilesUseAtMostTwoWorkerPermits() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -149,28 +126,6 @@ struct VoiceProfileCacheTests {
         for _ in people { gate.release() }
         #expect(try await matching.value.profiles.count == people.count)
         #expect(await worker.maximumConcurrentProfileBuilds == 2)
-    }
-
-    @Test func preparedMetadataChangeRejectsExternallyChangedUnwrittenVector() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let backend = try VoiceLibraryPersistence(directory: root)
-        let person = Person(name: "Reviewed voice")
-        let voice = example(person: person)
-        var original = VoiceLibraryDocument()
-        original.examples = [voice]
-        try backend.commit(previous: .init(), next: original)
-        let metadata = try #require(try backend.load())
-        var next = metadata
-        next.examples[0].groupID = UUID()
-        next.examples[0].embeddings = voice.embeddings
-        let prepared = try backend.prepare(previous: metadata, next: next)
-        let path = root.appendingPathComponent("voice-library/representations/\(voice.id.uuidString).json")
-        try JSONEncoder().encode(VoiceLibraryRepresentations(embeddings: [])).write(to: path)
-        #expect(throws: (any Error).self) { try backend.commit(prepared) }
-        #expect(try backend.load()?.examples[0].groupID == voice.groupID)
-        let actual = try backend.loadRepresentations(exampleID: voice.id)
-        #expect(actual?.embeddings.isEmpty == true)
     }
 
     @Test func externalRepresentationEditCannotReuseCachedProfile() async throws {

@@ -79,8 +79,7 @@ extension MeetingStore {
         meeting.liveTranscriptAdopted = true
         meeting.replaceSpeakers(speakers)
         _ = voiceLibrary.ingest(
-            meeting: meeting, directory: directory(for: meeting.id),
-            finalizeLive: recordingID == meeting.id && isFinalizingRecording)
+            meeting: meeting, directory: directory(for: meeting.id))
         meeting = voiceLibrary.applyingDecisions(to: meeting)
         return await updateMeeting(meeting)
     }

@@ -31,9 +31,8 @@ struct LiveAudioTransportTests {
         labeling.finish()
         let packets = await drain(transcription)
         let speakerPackets = await drain(labeling)
-        #expect(packets.count == 3)
         #expect(speakerPackets.map(\.start) == packets.map(\.start))
-        #expect(packets.map(\.start) == [0, 0.3, 0.5])
+        #expect(speakerPackets.map(\.duration) == packets.map(\.duration))
         #expect(packets.allSatisfy { $0.buffer.format.sampleRate == 48_000 && $0.buffer.format.channelCount == 2 })
         #expect(transcription.takeDroppedRanges().isEmpty)
         #expect(labeling.takeDroppedRanges().isEmpty)
@@ -41,21 +40,48 @@ struct LiveAudioTransportTests {
         let end = try #require(sink.positions()[.microphone])
         let last = try #require(packets.last)
         #expect(end == last.start + last.duration)
-        // A fresh streaming resampler retains a short filter tail for its next
-        // input. The file still pads through the requested recording end below.
-        #expect(abs(end - 0.6) < 0.01)
+        #expect(abs(end - 0.6) < 1.0 / 48_000)
 
+        // Draining a route's converter may emit an extra short packet. These
+        // packets must complete that route's speech, not introduce a new gap.
         var timeline = LiveAudioInputTimeline(boundary: 0)
-        for (index, packet) in packets.enumerated() {
-            let gap = timeline.receive(start: packet.start, duration: packet.duration)
-            #expect(gap == (index > 0))
-            let start = timeline.convertedStart(frameCount: 1_600, sampleRate: 16_000)
-            #expect(start == Int64((packet.start * 16_000).rounded()))
+        var runs: [Range<Int64>] = []
+        var gapStarts: [Int64] = []
+        for packet in packets {
+            let packetStart = Int64((packet.start * 48_000).rounded())
+            let frameCount = Int(packet.buffer.frameLength)
+            let packetEnd = packetStart + Int64(frameCount)
+            if timeline.receive(start: packet.start, duration: packet.duration) {
+                gapStarts.append(packetStart)
+            }
+            #expect(timeline.convertedStart(frameCount: frameCount, sampleRate: 48_000) == packetStart)
+            if let last = runs.last, last.upperBound == packetStart {
+                runs[runs.count - 1] = last.lowerBound..<packetEnd
+            }
+            else {
+                runs.append(packetStart..<packetEnd)
+            }
         }
+        #expect(runs == [0..<4_800, 14_400..<19_200, 24_000..<28_800])
+        #expect(gapStarts == [14_400, 24_000])
+        #expect(packets.reduce(0) { $0 + Int($1.buffer.frameLength) } == 14_400)
         let file = try AVAudioFile(forReading: url)
         #expect(file.length == 36_000)
         #expect(file.processingFormat.sampleRate == 48_000)
         #expect(file.processingFormat.channelCount == 2)
+        let recorded = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 36_000))
+        try file.read(into: recorded)
+        for (packet, duplicate) in zip(packets, speakerPackets) {
+            let offset = Int((packet.start * 48_000).rounded())
+            for channel in 0..<2 {
+                let samples = try #require(packet.buffer.floatChannelData?[channel])
+                let other = try #require(duplicate.buffer.floatChannelData?[channel])
+                let saved = try #require(recorded.floatChannelData?[channel])
+                let count = Int(packet.buffer.frameLength)
+                #expect((0..<count).allSatisfy { abs(samples[$0] - other[$0]) < 0.000_001 })
+                #expect((0..<count).allSatisfy { abs(samples[$0] - saved[offset + $0]) < 0.000_1 })
+            }
+        }
         #expect(writer.profile.gaps.contains { abs($0.start - 0.1) < 0.001 && abs($0.duration - 0.2) < 0.001 })
     }
 

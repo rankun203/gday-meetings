@@ -57,13 +57,8 @@ struct GeneralSettingsView: View {
                             feature(
                                 "Automatically Transcribe", enabled: setting(\.showLiveTranscript),
                                 capability: .liveTranscription, provider: store.settings.liveTranscriptionProviderID)
-                            feature(
-                                "Automatically Label Speakers", enabled: setting(\.showLiveSpeakerLabels),
-                                capability: .liveDiarization, provider: store.settings.liveDiarizationProviderID)
-                            feature(
-                                "Automatically Associate People",
-                                enabled: setting(\.recognizeLiveSpeakers), status: .ready,
-                                prerequisite: liveAssociationPrerequisite)
+                            Text("Speaker labels are added after recording.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         group("After Recording") {
                             feature(
@@ -77,7 +72,7 @@ struct GeneralSettingsView: View {
                                 .font(.callout).padding(.leading, 16)
                             }
                             feature(
-                                "Automatically Label Speakers", enabled: setting(\.labelRecordedSpeakers),
+                                "Automatically Diarize", enabled: setting(\.labelRecordedSpeakers),
                                 capability: .diarization, provider: store.settings.diarizationProviderID,
                                 prerequisite: recordedLabelingPrerequisite)
                             feature(
@@ -106,13 +101,10 @@ struct GeneralSettingsView: View {
                                 "Live Transcription", capability: .liveTranscription,
                                 selected: store.settings.liveTranscriptionProviderID)
                             provider(
-                                "Live Speaker Labeling", capability: .liveDiarization,
-                                selected: store.settings.liveDiarizationProviderID)
-                            provider(
                                 "Recorded Transcription", capability: .transcription,
                                 selected: store.settings.transcriptionProviderID)
                             provider(
-                                "Recorded Speaker Labeling", capability: .diarization,
+                                "Speaker Diarization", capability: .diarization,
                                 selected: store.settings.diarizationProviderID)
                             provider(
                                 "Summarization", capability: .summarization, selected: store.settings.summaryProviderID)
@@ -124,7 +116,7 @@ struct GeneralSettingsView: View {
                             MeetingLanguagePicker(title: "Language", selection: setting(\.defaultLanguage))
                         }
                         Text(
-                            "Speaker labeling distinguishes voices. Speaker association matches them to the People Library."
+                            "Speaker diarization distinguishes voices. Speaker association matches them to the People Library."
                         )
                         .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .topLeading)
@@ -141,14 +133,6 @@ struct GeneralSettingsView: View {
             })
     }
 
-    private var liveAssociationPrerequisite: String? {
-        guard store.settings.showLiveSpeakerLabels else { return "Turn on Automatically Label Speakers." }
-        guard let id = store.settings.liveDiarizationProviderID,
-            health.state(providerID: id, capability: .liveDiarization).isReady
-        else { return "Live Speaker Labeling must be ready." }
-        return nil
-    }
-
     private var recordedLabelingPrerequisite: String? {
         guard
             let provider = store.settings.serviceProviders.first(where: {
@@ -158,7 +142,7 @@ struct GeneralSettingsView: View {
         else { return nil }
         guard store.settings.autoTranscribe else { return "Turn on Automatically Transcribe." }
         guard store.settings.transcriptionProviderID == provider.id else {
-            return "Choose the same provider for Recorded Transcription and Recorded Speaker Labeling."
+            return "Choose the same provider for Recorded Transcription and Speaker Diarization."
         }
         return nil
     }
@@ -177,7 +161,7 @@ struct GeneralSettingsView: View {
         HealthIdentity(
             configuration: .init(store.settings),
             selections: [
-                store.settings.liveTranscriptionProviderID, store.settings.liveDiarizationProviderID,
+                store.settings.liveTranscriptionProviderID,
                 store.settings.transcriptionProviderID,
                 store.settings.diarizationProviderID, store.settings.summaryProviderID, store.settings.searchProviderID,
             ])

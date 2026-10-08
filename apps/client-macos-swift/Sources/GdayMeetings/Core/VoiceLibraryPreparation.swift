@@ -318,6 +318,7 @@ final class VoiceLibraryPreparation: ObservableObject {
                     continue
                 }
                 guard current.audioFile == example.audioFile, current.start == example.start,
+                    current.spans == example.spans,
                     current.end == example.end, current.audioRevision == example.audioRevision,
                     library.audioIsCurrent(current)
                 else { throw ServiceError("The source audio changed during preparation. Review a new example.") }
@@ -417,7 +418,7 @@ final class VoiceLibraryPreparation: ObservableObject {
                     return .init(
                         id: identity, meetingID: input.meetingID, speakerID: identity, source: range.source,
                         audioFile: range.audioFile, audioRevision: revision, start: range.start, end: range.end,
-                        embeddings: [embedding], groupID: identity, origin: .discovery)
+                        embeddings: [embedding], groupID: identity, origin: .discovery, spans: range.spans)
                 }
                 guard library.upsert(candidates),
                     finishRecording(
@@ -457,7 +458,8 @@ final class VoiceLibraryPreparation: ObservableObject {
     private static func discoveryIdentity(meetingID: UUID, range: VoiceSampleRange, revision: String, model: String)
         -> UUID
     {
-        let key = "\(meetingID)|\(range.audioFile)|\(range.start)|\(range.end)|\(revision)|\(model)"
+        let support = range.spans.map { "|" + $0.map { "\($0.start):\($0.end)" }.joined(separator: ",") } ?? ""
+        let key = "\(meetingID)|\(range.audioFile)|\(range.start)|\(range.end)|\(revision)|\(model)\(support)"
         let hex = SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         let parts = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32].map {
             String(
@@ -492,7 +494,8 @@ final class VoiceLibraryPreparation: ObservableObject {
         defer { library.releaseRepresentations() }
         var groups: [[VoiceExample]] = []
         let candidates = library.hydratedExamples(ids: exampleIDs).filter {
-            exampleIDs.contains($0.id) && !$0.isReviewed && !$0.manuallyGrouped && $0.review == .unassigned
+            exampleIDs.contains($0.id) && $0.origin != .savedSpeaker
+                && !$0.isReviewed && !$0.manuallyGrouped && $0.review == .unassigned
                 && $0.rejectedPersonIDs.isEmpty && $0.personID == nil
                 && $0.voiceEmbeddings.contains(where: { $0.type == type && $0.isValid })
         }.sorted { $0.id.uuidString < $1.id.uuidString }

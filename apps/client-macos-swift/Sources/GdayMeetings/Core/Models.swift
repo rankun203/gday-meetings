@@ -11,8 +11,10 @@ struct TranscriptSegment: Codable, Identifiable, Equatable {
     var session: UUID?
     var sourcePlaceholder: Bool?
     var personID: UUID?
+    var associationUncertain: Bool?
     enum CodingKeys: String, CodingKey {
-        case id, start, end, speaker, text, speakerID, source, session, sourcePlaceholder, personID
+        case id, start, end, speaker, text, speakerID, source, session, sourcePlaceholder, personID,
+            associationUncertain
     }
 
 }
@@ -91,28 +93,17 @@ struct MicrophoneDeviceChoice: Codable, Equatable {
 
 struct AppSettings: Codable, Equatable {
     private static let defaultSearchProvider = ServiceProvider(kind: .localSearch)
-    var serviceProviders: [ServiceProvider] = [Self.defaultSearchProvider]
+    private static let defaultSpeakerProvider = ServiceProvider(kind: .speakerLabeling)
+    var serviceProviders: [ServiceProvider] = [Self.defaultSearchProvider, Self.defaultSpeakerProvider]
     var searchDefaultsVersion = 1
     var transcriptionProviderID: UUID?
     var summaryProviderID: UUID?
     var searchProviderID: UUID? = Self.defaultSearchProvider.id
-    var liveDiarizationProviderID: UUID?
-    var diarizationProviderID: UUID?
-    var showLiveSpeakerLabels = false
-    var labelRecordedSpeakers = false
+    var diarizationProviderID: UUID? = Self.defaultSpeakerProvider.id
+    var labelRecordedSpeakers = true
     var explicitlyDisabledFeatures: Set<String> = []
     var initializedProviderCapabilities: Set<ProviderCapability> = []
-    var speakerProviderAliases: [UUID: UUID] = [:]
-    var associationSettingsVersion = 1
     var recognizeSpeakers = false
-    var recognizeLiveSpeakers = false
-    var liveSpeakerRecognitionEnabled: Bool {
-        get { showLiveSpeakerLabels || recognizeLiveSpeakers }
-        set {
-            showLiveSpeakerLabels = newValue
-            recognizeLiveSpeakers = newValue
-        }
-    }
     var defaultLanguage = "en"
     var autoSummarize = false
     var autoExtractTodos = true
@@ -135,11 +126,11 @@ struct AppSettings: Codable, Equatable {
     /// `nil` records from the macOS default input.
     var microphoneDevice: MicrophoneDeviceChoice?
     enum CodingKeys: String, CodingKey {
+        case labelRecordedSpeakers = "autoDiarize"
+        case diarizationProviderID = "speakerDiarizationProviderID"
         case serviceProviders, transcriptionProviderID, summaryProviderID, searchProviderID,
             searchDefaultsVersion,
-            liveDiarizationProviderID, diarizationProviderID,
-            showLiveSpeakerLabels, recognizeSpeakers, recognizeLiveSpeakers, labelRecordedSpeakers,
-            associationSettingsVersion, speakerProviderAliases,
+            recognizeSpeakers,
             initializedProviderCapabilities, explicitlyDisabledFeatures,
             defaultLanguage, autoTranscribe, autoSummarize, autoExtractTodos,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
@@ -179,6 +170,7 @@ extension TranscriptSegment {
         session = try values.decodeIfPresent(UUID.self, forKey: .session)
         sourcePlaceholder = try values.decodeIfPresent(Bool.self, forKey: .sourcePlaceholder)
         personID = try values.decodeIfPresent(UUID.self, forKey: .personID)
+        associationUncertain = try values.decodeIfPresent(Bool.self, forKey: .associationUncertain)
     }
 }
 
@@ -277,22 +269,9 @@ extension AppSettings {
             searchDefaultsVersion = 1
         }
         selectSoleSearchProvider()
-        liveDiarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .liveDiarizationProviderID)
         diarizationProviderID = try values.decodeIfPresent(UUID.self, forKey: .diarizationProviderID)
-        showLiveSpeakerLabels = try values.decodeIfPresent(Bool.self, forKey: .showLiveSpeakerLabels) ?? false
         recognizeSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeSpeakers) ?? false
-        recognizeLiveSpeakers = try values.decodeIfPresent(Bool.self, forKey: .recognizeLiveSpeakers) ?? false
-        labelRecordedSpeakers =
-            try values.decodeIfPresent(Bool.self, forKey: .labelRecordedSpeakers) ?? recognizeSpeakers
-        if (try values.decodeIfPresent(Int.self, forKey: .associationSettingsVersion) ?? 0) < 1 {
-            let legacy = try LegacyAssociationSettings(from: decoder)
-            if !legacy.wasEnabled {
-                recognizeSpeakers = false
-                recognizeLiveSpeakers = false
-            }
-        }
-        associationSettingsVersion = 1
-        speakerProviderAliases = try values.decodeIfPresent([UUID: UUID].self, forKey: .speakerProviderAliases) ?? [:]
+        labelRecordedSpeakers = try values.decodeIfPresent(Bool.self, forKey: .labelRecordedSpeakers) ?? true
         explicitlyDisabledFeatures =
             try values.decodeIfPresent(Set<String>.self, forKey: .explicitlyDisabledFeatures) ?? []
         if values.contains(.initializedProviderCapabilities),
@@ -326,8 +305,6 @@ extension AppSettings {
         if !values.contains(.explicitlyDisabledFeatures) {
             let legacyFeatures: [(CodingKeys, WritableKeyPath<AppSettings, Bool>)] = [
                 (.showLiveTranscript, \.showLiveTranscript),
-                (.showLiveSpeakerLabels, \.showLiveSpeakerLabels),
-                (.recognizeLiveSpeakers, \.recognizeLiveSpeakers),
                 (.recognizeSpeakers, \.recognizeSpeakers),
                 (.autoTranscribe, \.autoTranscribe),
                 (.autoSummarize, \.autoSummarize),
@@ -345,7 +322,15 @@ extension AppSettings {
                 initializedProviderCapabilities.insert(capability)
             }
         }
-        consolidateSpeakerProviders()
+        if diarizationProviderID == nil,
+            !values.contains(.labelRecordedSpeakers) || !initializedProviderCapabilities.contains(.diarization)
+        {
+            let local = serviceProviders.first { $0.kind == .speakerLabeling }
+                ?? ServiceProvider(kind: .speakerLabeling)
+            if !serviceProviders.contains(where: { $0.id == local.id }) { serviceProviders.append(local) }
+            diarizationProviderID = local.id
+            initializedProviderCapabilities.insert(.diarization)
+        }
 
     }
 }
@@ -377,25 +362,5 @@ extension Meeting {
         try values.encode(todos, forKey: .todos)
         try values.encodeIfPresent(recordingProfile, forKey: .recordingProfile)
         try values.encodeIfPresent(transcriptionAttempt, forKey: .transcriptionAttempt)
-    }
-}
-
-/// Preserve the effective opt-in when retiring the provider selection.
-private struct LegacyAssociationSettings: Decodable {
-    struct Provider: Decodable {
-        let id: UUID
-        let kind: String
-        let isEnabled: Bool
-        let enabledCapabilities: Set<String>
-        let capabilityVersion: Int?
-    }
-    let speakerRecognitionProviderID: UUID?
-    let serviceProviders: [Provider]?
-    var wasEnabled: Bool {
-        guard let provider = serviceProviders?.first(where: { $0.id == speakerRecognitionProviderID }),
-            provider.isEnabled, ["nemotron", "community1", "speakerLabeling"].contains(provider.kind)
-        else { return false }
-        return provider.enabledCapabilities.contains("speakerRecognition")
-            || (provider.kind == "nemotron" && (provider.capabilityVersion ?? 1) < 2)
     }
 }

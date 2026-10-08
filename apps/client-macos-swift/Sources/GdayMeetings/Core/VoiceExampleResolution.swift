@@ -74,7 +74,9 @@ enum VoiceExampleResolution {
         }
         if var exact = speaker.voiceSampleRange, exact.isValid, exact.audioFile == file {
             exact.source = source
-            exact.end = min(exact.end, exact.start + 10)
+            // Disjoint physical support already bounds actual speech. Clamping
+            // its envelope would leave the later fragments outside that envelope.
+            if exact.spans == nil { exact.end = min(exact.end, exact.start + 10) }
             return .init(speakerID: speaker.id, range: exact, firstPassage: first)
         }
         let clear = rows.filter { $0.end - $0.start >= 2 }.sorted { $0.end - $0.start > $1.end - $1.start }.first {

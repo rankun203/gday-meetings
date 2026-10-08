@@ -40,6 +40,12 @@ struct PersonMerge {
     func apply(to meeting: inout Meeting) {
         meeting.personIDs = replacing(meeting.personIDs)
         for index in meeting.speakers.indices {
+            if meeting.speakers[index].passageAssignmentOrigin?.personID.map(sourceIDs.contains) == true {
+                meeting.speakers[index].passageAssignmentOrigin?.personID = targetID
+            }
+            if meeting.speakers[index].passageAssignmentOrigin?.speakerPersonID.map(sourceIDs.contains) == true {
+                meeting.speakers[index].passageAssignmentOrigin?.speakerPersonID = targetID
+            }
             if meeting.speakers[index].personID.map(sourceIDs.contains) == true {
                 meeting.speakers[index].personID = targetID
             }
@@ -51,10 +57,15 @@ struct PersonMerge {
 
     /// Scan small metadata/content documents, including hidden review origins.
     /// Transcripts, recordings, notes, and summaries are neither loaded nor rewritten.
-    func rewriteStoredMeeting(id: UUID, directory: URL, transaction: inout LibraryFileTransaction) throws
+    func rewriteStoredMeeting(id: UUID, directory: URL, folder: URL? = nil, transaction: inout LibraryFileTransaction)
+        throws
         -> MeetingListEntry?
     {
-        let folder = try MeetingFolderLocation.resolve(id: id, directory: directory)
+        let folder = try folder ?? MeetingFolderLocation.resolve(id: id, directory: directory)
+        try MeetingFolderLocation.validate(folder, directory: directory)
+        guard MeetingFolderLocation.identity(folder.lastPathComponent) == id else {
+            throw MeetingFolderLocation.AccessError.invalidPath
+        }
         let metadataURL = folder.appendingPathComponent("metadata.json")
         let contentURL = folder.appendingPathComponent("content.json")
         let metadataBytes = try Data(contentsOf: metadataURL)

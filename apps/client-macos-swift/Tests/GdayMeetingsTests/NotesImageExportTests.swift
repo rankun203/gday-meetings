@@ -30,7 +30,7 @@ import Testing
                 personID: person, voiceSampleRevision: "private-revision", voiceReviewExampleID: UUID())
         ]
         let privateFiles = [
-            SpeakerEvidenceStore.fileName, SpeakerEvidenceInputReceipt.fileName,
+            "speaker-evidence.jsonl", "speaker-evidence-source.json",
             "speaker-consolidation-synthetic.json",
         ]
         for name in privateFiles {

@@ -8,8 +8,9 @@ import Testing
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["GDAY_NATIVE_SCROLL_PERFORMANCE"] == "1"))
 struct NativeScrollingPerformanceTests {
-    @Test(arguments: [1000, 10000], ["idle", "playback", "live"])
+    @Test(arguments: [1000, 10000], ["idle", "playback", "live", "live-speakers"])
     func nativeScrolling(count: Int, mode: String) async throws {
+        if let selected = ProcessInfo.processInfo.environment["GDAY_NATIVE_SCROLL_MODE"], selected != mode { return }
         PerformanceResourceMetrics.prepareApplication()
         let model = ScrollFixture(count: count, mode: mode)
         let window = NSWindow(
@@ -61,7 +62,7 @@ struct NativeScrollingPerformanceTests {
                 model.playback.progress.update(Double(count) * position)
                 delivered += 1
             }
-            if mode == "live", tick % 30 == 0 {
+            if model.isLive, tick % 30 == 0 {
                 model.appendLive(index: delivered)
                 delivered += 1
             }
@@ -71,15 +72,15 @@ struct NativeScrollingPerformanceTests {
             if tick % 60 == 59 {
                 try metrics.record(
                     phase: "scrolling", payload: "", updates: delivered, skipped: 0, insertedBytes: 0,
-                    lineCount: count + (mode == "live" ? delivered : 0))
+                    lineCount: count + (model.isLive ? delivered : 0))
             }
         }
         #expect(mode != "playback" || delivered == 1800)
-        #expect(mode != "live" || delivered == 60)
-        #expect(mode != "live" || model.stream.frozenCount + model.stream.hotFinalized.count == count + 60)
+        #expect(!model.isLive || delivered == 60)
+        #expect(!model.isLive || model.stream.frozenCount + model.stream.hotFinalized.count == count + 60)
         try metrics.record(
             event: "end", phase: "complete", payload: "", updates: delivered, skipped: 0, insertedBytes: 0,
-            lineCount: count + (mode == "live" ? delivered : 0))
+            lineCount: count + (model.isLive ? delivered : 0))
         func p95(_ values: [Double]) -> Double { values.sorted()[Int(Double(values.count - 1) * 0.95)] }
         let report: [String: Any] = [
             "measurement": "callback-and-synchronous-layout-proxy", "presented_frames_measured": false,
@@ -110,6 +111,7 @@ struct NativeScrollingPerformanceTests {
     let liveRows = LiveTranscriptStreamDisplayCache()
     let session = UUID()
     let mode: String
+    var isLive: Bool { mode == "live" || mode == "live-speakers" }
     @Published var revision = 1
     @Published var selection: UUID?
 
@@ -127,14 +129,31 @@ struct NativeScrollingPerformanceTests {
                 text: "Synthetic passage \(index). This text checks wrapping and scrolling across a long transcript.")
         }
         if mode == "playback" { playback.select(meeting: meeting, files: []) }
-        if mode == "live" {
-            stream.reset(labeling: false)
+        if isLive {
+            stream.reset(labeling: mode == "live-speakers")
             for index in 0..<count { acceptLive(index: index) }
             refreshLive()
         }
     }
 
     func appendLive(index: Int) {
+        if mode == "live-speakers" {
+            let start = Double(rows.count + index) * 3
+            let source: LiveAudioSource = index.isMultiple(of: 2) ? .microphone : .system
+            let generation = UUID()
+            let speakers = (0..<8).map {
+                LiveSpeakerIdentity(
+                    id: UUID(), source: source, generation: generation, slot: $0,
+                    model: "synthetic", revision: "1")
+            }
+            stream.accept(
+                .init(
+                    source: source, generation: generation, sequence: 0, speakers: speakers,
+                    intervals: [.init(speakerID: speakers[0].id, start: start, end: start + 2)],
+                    start: start, end: start + 2))
+            stream.accept(
+                .init(source: source, start: start + 2, end: start + 3, reason: "Synthetic labeling gap"))
+        }
         acceptLive(index: rows.count + index)
         refreshLive()
     }
@@ -142,10 +161,12 @@ struct NativeScrollingPerformanceTests {
         stream.accept(
             .init(
                 session: session, source: index.isMultiple(of: 2) ? .microphone : .system,
-                start: Double(index), end: Double(index) + 2, text: "Synthetic live passage \(index)."), final: true)
+                start: Double(index) * (mode == "live-speakers" ? 3 : 1),
+                end: Double(index) * (mode == "live-speakers" ? 3 : 1) + 2,
+                text: "Synthetic live passage \(index)."), final: true)
     }
     private func refreshLive() {
-        liveRows.update(stream, people: [], enabled: false, recognitionEnabled: true)
+        liveRows.update(stream, people: [], enabled: mode == "live-speakers", recognitionEnabled: true)
         revision = liveRows.revision
     }
 }
@@ -161,11 +182,11 @@ private struct ScrollFixtureView: View {
             )
             .frame(width: 360)
             NativeTranscriptView(
-                rows: model.mode == "live" ? [] : model.rows, generation: model.revision,
+                rows: model.isLive ? [] : model.rows, generation: model.revision,
                 showsSpeakers: true, editable: false, canPlay: false,
                 playback: model.playback, meetingID: model.meeting.id,
-                liveRows: model.mode == "live" ? model.liveRows : nil, followsLive: false,
-                play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+                liveRows: model.isLive ? model.liveRows : nil, followsLive: false,
+                play: { _ in }, save: { _, _ in }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         }
     }
 }

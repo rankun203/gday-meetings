@@ -1,22 +1,19 @@
-# Observation identity regression evaluation
+---
+title: Historical observation speaker identity evaluation
+status: archived after removal of live diarization
+scope: retained results and independent audio review utilities
+---
 
-Compile a source-hashed standalone runner and score the five existing private replay documents without re-running models or modifying the meeting library:
+# Historical evaluation
 
-```sh
-python3 experiments/observation-speaker-identity/build.py --output tmp/observation-evaluation/candidate
-python3 experiments/observation-speaker-identity/evaluate.py \
-  --manifest tmp/speaker-consolidation-trusted-20261008/manifest.json \
-  --runner tmp/observation-evaluation/candidate --output tmp/observation-evaluation/candidate-results
-```
+The user replaced the experimental live observation pipeline with post-recording Speaker Diarization. Its live runtime, retained-evidence consolidation engines and dependent experiment runners/tests have been removed. Historical results and policy documents remain evidence of measured successes, failures and the decision; they are not instructions for the current production pipeline.
 
-Pass `--baseline` to the builder and a different output path to compile the current trusted-channel policy. The candidate configuration is explicit in `Consolidate.swift`: cosine admission 0.72, runner-up margin 0.08, at most 12 matching representatives, 15 seconds maximum local continuity. These parameters are a frozen experimental starting point, not independently calibrated settings. The output includes exact configuration and clustering wall time. Build receipts bind every Swift source and binary; evaluation verifies evidence and reference receipts and records their hashes.
+[RESULTS.md](RESULTS.md) preserves the frozen comparisons, including the unresolved fragmentation regression. Historical source/binary/model/input receipts and private audio remain in ignored `tmp/`. Do not mistake those results for validation of the replacement post-recording pipeline.
 
-The scorer keeps unresolved activity under anonymous local labels and reports its duration. Random human-reviewed excerpts establish a limited accuracy view; speaker-coverage-selected excerpts are selection-biased. Saved RunPod worker references measure disagreement, not truth. Existing recordings are regression/development diagnostics and cannot establish new held-out generalization. The batch sorts samples by acoustic end, so it does not validate asynchronous causal publication or live latency. No projection coordinates enter identity decisions.
+Three independent utilities remain useful without the removed Swift APIs:
 
-Run harness safety checks:
+- `prepare_user_sources.py` prepares source-hashed full PCM inputs from explicitly authorized meeting directories, without editing originals.
+- `make_review_shortlist.py` creates playable review clips from saved acoustic-output JSON, including deterministic random controls and optional bound provider disagreements. Clips are not human truth labels.
+- `audit_capture_timing.py` correlates a saved journal with recorded PCM loudness and a recorded inference trace. It can investigate past capture problems but cannot establish AGC causation.
 
-```sh
-python3 -m unittest discover -s experiments/observation-speaker-identity -p 'test_*.py'
-```
-
-All audio, embeddings, names, raw results, and receipts remain in ignored `tmp/`. See the [worklog](../../docs/worklogs/2026-10-08-observation-speaker-identity.md) for design, acceptance, findings, and remaining work.
+Use each script's `--help` for arguments. Their outputs belong under ignored private `tmp/`; no recording is uploaded. The current architecture and product behavior are documented in the new post-recording diarization worklog, not these archived experiments.

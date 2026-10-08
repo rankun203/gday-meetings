@@ -111,6 +111,7 @@ import Testing
         let unused = ServiceProvider(kind: .openAICompatible)
         var settings = AppSettings()
         settings.liveTranscriptionProviderID = nil
+        settings.diarizationProviderID = nil
         settings.serviceProviders = [selected, unused]
         settings.summaryProviderID = selected.id
         await health.checkSelected(settings: settings)
@@ -160,13 +161,7 @@ import Testing
         try FileManager.default.createDirectory(at: community, withIntermediateDirectories: true)
         try data.write(to: community.appendingPathComponent("data"))
         #expect(await provider.health(for: .diarization, settings: .init(), models: manager) == .ready)
-        #expect(!(await provider.health(for: .liveDiarization, settings: .init(), models: manager)).isReady)
-        let nemotron = manager.modelDirectory(for: .nemotronLow)
-        try FileManager.default.createDirectory(at: nemotron, withIntermediateDirectories: true)
-        try data.write(to: nemotron.appendingPathComponent("data"))
-        #expect(await provider.health(for: .liveDiarization, settings: .init(), models: manager) == .ready)
         try await manager.remove(.community1)
-        #expect(!(await provider.health(for: .liveDiarization, settings: .init(), models: manager)).isReady)
         #expect(!(await provider.health(for: .diarization, settings: .init(), models: manager)).isReady)
     }
 

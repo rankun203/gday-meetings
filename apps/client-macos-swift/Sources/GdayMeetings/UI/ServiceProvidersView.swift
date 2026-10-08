@@ -197,7 +197,6 @@ struct ServiceProvidersView: View {
             if store.settings.transcriptionProviderID == selection { store.settings.transcriptionProviderID = nil }
             if store.settings.summaryProviderID == selection { store.settings.summaryProviderID = nil }
             if store.settings.searchProviderID == selection { store.settings.searchProviderID = nil }
-            if store.settings.liveDiarizationProviderID == selection { store.settings.liveDiarizationProviderID = nil }
             if store.settings.diarizationProviderID == selection { store.settings.diarizationProviderID = nil }
             guard store.saveSettings() else {
                 store.settings = previous
@@ -561,7 +560,6 @@ private struct ServiceProviderPanel: View {
     private func disclosure(_ capability: ProviderCapability) -> String {
         switch capability {
         case .liveTranscription: "Transcribes audio during recording."
-        case .liveDiarization: "Labels speakers during recording on this Mac."
         case .transcription: "Transcription sends recording audio to this provider."
         case .diarization: "Speaker labels use recording audio to identify when each speaker talks."
         case .summarization:

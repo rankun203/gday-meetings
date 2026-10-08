@@ -13,8 +13,8 @@ extension AppSettings {
 
     private static var featureNames: [WritableKeyPath<AppSettings, Bool>: String] {
         [
-            \.showLiveTranscript: "liveTranscription", \.showLiveSpeakerLabels: "liveLabeling",
-            \.recognizeLiveSpeakers: "liveAssociation", \.labelRecordedSpeakers: "recordedLabeling",
+            \.showLiveTranscript: "liveTranscription",
+            \.labelRecordedSpeakers: "recordedLabeling",
             \.recognizeSpeakers: "recordedAssociation", \.autoTranscribe: "recordedTranscription",
             \.autoSummarize: "summary", \.autoExtractTodos: "todos",
         ]
@@ -29,7 +29,6 @@ extension AppSettings {
         switch capability {
         case .liveTranscription: liveTranscriptionProviderID
         case .transcription: transcriptionProviderID
-        case .liveDiarization: liveDiarizationProviderID
         case .diarization: diarizationProviderID
         case .summarization: summaryProviderID
         case .search: searchProviderID
@@ -48,7 +47,6 @@ extension AppSettings {
         switch capability {
         case .liveTranscription: liveTranscriptionProviderID = id
         case .transcription: transcriptionProviderID = id
-        case .liveDiarization: liveDiarizationProviderID = id
         case .diarization: diarizationProviderID = id
         case .summarization: summaryProviderID = id
         case .search: searchProviderID = id
@@ -65,7 +63,7 @@ extension AppSettings {
             else { continue }
             guard
                 [
-                    .liveTranscription, .transcription, .liveDiarization, .diarization,
+                    .liveTranscription, .transcription, .diarization,
                     .summarization,
                 ].contains(capability)
             else { continue }
@@ -79,7 +77,6 @@ extension AppSettings {
         switch capability {
         case .liveTranscription: enableInitially(\.showLiveTranscript)
         case .transcription: enableInitially(\.autoTranscribe)
-        case .liveDiarization: enableInitially(\.showLiveSpeakerLabels)
         case .diarization: enableInitially(\.labelRecordedSpeakers)
         case .summarization:
             enableInitially(\.autoSummarize)

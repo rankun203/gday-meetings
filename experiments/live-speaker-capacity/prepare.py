@@ -56,13 +56,18 @@ def schedules():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--source-dir", type=Path, help="Reuse pinned downloaded archive/checksums without copying")
+    parser.add_argument("--confirmatory-after", type=Path, help="Prior frozen selection; reserve next twelve disjoint speakers, never select by outcomes")
     args = parser.parse_args()
     out = private_output(args.output)
     out.mkdir(parents=True, exist_ok=True)
-    archive = out / ARCHIVE
-    checksums = out / "md5sum.txt"
+    source_dir = args.source_dir or out
+    archive = source_dir / ARCHIVE
+    checksums = source_dir / "md5sum.txt"
     for name, path in (("md5sum.txt", checksums), (ARCHIVE, archive)):
         if not path.exists():
+            if args.source_dir:
+                raise ValueError("Pinned source cache is incomplete")
             partial = path.with_suffix(path.suffix + ".partial")
             urllib.request.urlretrieve(BASE + name, partial)
             partial.replace(path)
@@ -81,6 +86,18 @@ def main():
         if len(speakers) < 24:
             raise ValueError("The source must contain 24 distinct speaker IDs")
         cohorts = {"development": speakers[:12], "validation": speakers[12:24]}
+        prior = None
+        if args.confirmatory_after:
+            prior = json.loads(args.confirmatory_after.read_text())
+            if (prior['seed'] != SEED or prior['archiveSHA256'] != digest(archive)
+                    or prior['cohorts'] != cohorts or prior['schedules'] != json.loads(json.dumps(schedules()))):
+                raise ValueError('Prior selection is not the unchanged original development/validation plan')
+            if len(speakers) < 36:
+                raise ValueError('Need twelve unused speakers after original twenty-four')
+            cohorts = {'validation': speakers[24:36]}
+            if set(cohorts['validation']) & set(sum(prior['cohorts'].values(), [])):
+                raise ValueError('Confirmatory speakers overlap prior selection')
+
         # This immutable metadata selection precedes decoding, rendering, and all model scores.
         selection = {
             "schemaVersion": 1, "seed": SEED, "sourceURL": BASE + ARCHIVE,
@@ -89,13 +106,16 @@ def main():
             "cohorts": cohorts, "schedules": schedules(),
             "selection": "SHA256(seed:speaker_id), first 12 development, next 12 validation",
         }
+        if prior is not None:
+            selection.update(purpose="new-confirmatory-after-spent-validation", priorSelectionSHA256=digest(args.confirmatory_after),
+                             selection="SHA256(seed:speaker_id), positions 24:36; unchanged schedules; no outcome selection")
         selection_path = out / "selection.json"
         if selection_path.exists():
             if json.loads(selection_path.read_text()) != json.loads(json.dumps(selection)):
                 raise ValueError("Existing frozen selection differs")
         else:
             write_json(selection_path, selection)
-        chosen = set(speakers[:24])
+        chosen = set(sum(cohorts.values(), []))
         candidates = {speaker: [] for speaker in chosen}
         for member in audio:
             speaker = PurePosixPath(member.name).parts[2]

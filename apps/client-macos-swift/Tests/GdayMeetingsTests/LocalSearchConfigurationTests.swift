@@ -42,7 +42,9 @@ struct LocalSearchConfigurationTests {
             AppSettings.self, from: Data(#"{"defaultSearchMode":"text"}"#.utf8))
         let restored = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(migrated))
         #expect(restored.selectedSearchProvider?.kind == .localSearch)
-        #expect(restored.serviceProviders.count == 1)
+        #expect(restored.serviceProviders.count == 2)
+        #expect(Set(restored.serviceProviders.map(\.kind)) == [.localSearch, .speakerLabeling])
+        #expect(restored.serviceProviders.first { $0.id == restored.diarizationProviderID }?.kind == .speakerLabeling)
         migrated.serviceProviders = []
         let removed = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(migrated))
         #expect(removed.serviceProviders.isEmpty)

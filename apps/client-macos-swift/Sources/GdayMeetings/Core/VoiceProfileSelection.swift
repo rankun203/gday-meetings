@@ -4,7 +4,7 @@ import Foundation
 /// model and person; this never changes the durable sample-to-person decisions.
 enum VoiceProfileSelection {
     private static func quality(_ sample: SpeakerEvidenceSample) -> Double {
-        let duration = sample.end - sample.start
+        let duration = sample.speechDuration
         let durationScore = duration.isFinite ? min(1, max(0, duration / 3)) : 0
         return min(1, max(0, sample.quality)) * durationScore
     }
@@ -18,8 +18,10 @@ enum VoiceProfileSelection {
     ) rethrows -> [SpeakerEvidenceSample] {
         try cancellationCheck()
         guard limit > 0 else { return [] }
-        let candidates = samples.filter { $0.embedding.isValid && $0.quality.isFinite }
-            .sorted { $0.id < $1.id }
+        let candidates = samples.filter {
+            $0.embedding.isValid && $0.quality.isFinite && ($0.spans == nil || $0.hasValidSupport)
+        }
+        .sorted { $0.id < $1.id }
         guard !candidates.isEmpty else { return [] }
         let vectors = candidates.map { VoiceEmbeddingMath.normalized($0.vector)! }
         // The first example is a quality-weighted medoid, not simply the newest excerpt.

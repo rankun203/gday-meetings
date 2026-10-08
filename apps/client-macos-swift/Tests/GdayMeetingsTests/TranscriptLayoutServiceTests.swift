@@ -84,7 +84,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: rows, layoutService: service, generation: 1, showsSpeakers: true,
             editable: true, canPlay: true, meetingID: meeting, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         func tablePage() -> (NSScrollView, TranscriptNativeTable, NativeTranscriptView.Coordinator) {
             let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
             let table = TranscriptNativeTable(frame: scroll.bounds)

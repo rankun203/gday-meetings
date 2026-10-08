@@ -12,26 +12,13 @@ struct GeneralSettingsPolicyTests {
         settings.selectProvider(UUID(), for: .transcription)
         #expect(!settings.autoTranscribe)
     }
-    @Test func firstHealthyProviderEnablesOnlyRelatedFeatures() {
-        var settings = AppSettings()
-        let provider = UUID()
-        let assigned = settings.assignInitiallyHealthyProvider(provider, capabilities: [.liveDiarization])
-        #expect(assigned)
-        #expect(settings.liveDiarizationProviderID == provider)
-        #expect(settings.showLiveSpeakerLabels)
-        #expect(!settings.recognizeLiveSpeakers)
-        #expect(!settings.labelRecordedSpeakers)
-    }
-
     @Test func initialAssignmentRespectsIndependentExplicitFeatureChoices() throws {
         var settings = AppSettings()
-        settings.recordExplicitFeatureChoice(\.recognizeLiveSpeakers, enabled: false)
         settings.recordExplicitFeatureChoice(\.autoSummarize, enabled: false)
         settings = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
         let provider = UUID()
         settings.assignInitiallyHealthyProvider(provider, capabilities: [.summarization])
         #expect(settings.summaryProviderID == provider)
-        #expect(!settings.recognizeLiveSpeakers)
         #expect(!settings.recognizeSpeakers)
         #expect(!settings.autoSummarize)
         #expect(settings.autoExtractTodos)
@@ -77,8 +64,7 @@ struct GeneralSettingsPolicyTests {
         #expect(!settings.autoSummarize)
         #expect(!settings.autoExtractTodos)
         #expect(!settings.recognizeSpeakers)
-        #expect(!settings.labelRecordedSpeakers)
-        #expect(!settings.recognizeLiveSpeakers)
+        #expect(settings.labelRecordedSpeakers)
     }
 
     @Test func missingLegacyPreferencesAllowInitialSetup() throws {
@@ -88,23 +74,11 @@ struct GeneralSettingsPolicyTests {
         #expect(settings.labelRecordedSpeakers)
     }
 
-    @Test func legacyAssociationRetainsLabelingButCannotEnableMatchingWithoutAnOldProvider() throws {
-        let settings = try JSONDecoder().decode(
-            AppSettings.self,
-            from: Data(
-                """
-                {"recognizeSpeakers":true,"showLiveSpeakerLabels":false,"recognizeLiveSpeakers":true}
-                """.utf8))
-        #expect(settings.labelRecordedSpeakers)
-        #expect(!settings.recognizeSpeakers)
-        #expect(!settings.showLiveSpeakerLabels)
-        #expect(!settings.recognizeLiveSpeakers)
-    }
-
     @Test func remoteLabelingRequiresDesiredSwitchAndSelectedProvider() {
         var settings = AppSettings()
         let provider = UUID()
         settings.diarizationProviderID = provider
+        settings.labelRecordedSpeakers = false
         #expect(!settings.shouldLabelDuringTranscription(providerID: provider))
         settings.labelRecordedSpeakers = true
         #expect(settings.shouldLabelDuringTranscription(providerID: provider))

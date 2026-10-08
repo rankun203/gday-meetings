@@ -12,6 +12,9 @@ struct VoiceExampleDetailsView: View {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                     detail("Audio", library.availabilityReason(for: example) ?? "Current recorded excerpt")
                     detail("Audio File", example.audioFile ?? "Not recorded")
+                    if let range = example.range, range.supportSpans.count > 1 {
+                        detail("Playback", "\(range.supportSpans.count) short excerpts; gaps are skipped")
+                    }
                     detail("Review", review)
                 }
                 if hydrated == nil {

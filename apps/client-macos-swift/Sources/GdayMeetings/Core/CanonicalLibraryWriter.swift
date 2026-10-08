@@ -156,21 +156,44 @@ enum CanonicalLibraryWriter {
                 try JSONEncoder().encode(contextualChats).write(
                     to: dataDirectory.appendingPathComponent("context-chats.json"), options: .atomic)
             }
-            if let personMerge, let libraryIndex {
-                var cursor: MeetingListEntry?
+            if let personMerge {
+                // The index is derived and may lag an acknowledged canonical save.
+                // Relationship changes must visit every canonical folder, including
+                // meetings absent from the current index during monitor catch-up.
+                let root = dataDirectory.appendingPathComponent("meetings")
+                try MeetingFolderLocation.validate(root.appendingPathComponent("check"), directory: dataDirectory)
+                var scanError: Error?
+                guard
+                    let folders = FileManager.default.enumerator(
+                        at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                        options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants],
+                        errorHandler: { _, error in
+                            scanError = error
+                            return false
+                        })
+                else { throw CocoaError(.fileReadNoPermission) }
                 let loadedIDs = Set(meetings.map(\.id))
-                while true {
-                    let page = try libraryIndex.page(after: cursor, limit: 20)
-                    guard !page.isEmpty else { break }
-                    for entry in page where !loadedIDs.contains(entry.id) {
+                var seen = Set<UUID>()
+                for case let folder as URL in folders {
+                    try autoreleasepool {
+                        guard let id = MeetingFolderLocation.identity(folder.lastPathComponent) else { return }
+                        try MeetingFolderLocation.validate(folder, directory: dataDirectory)
+                        guard try folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { return }
+                        guard seen.insert(id).inserted else { throw MeetingFolderLocation.AccessError.duplicate }
+                        guard !loadedIDs.contains(id) else { return }
+                        // Enumeration may normalize a /var root to /private/var.
+                        // Keep the transaction's original root spelling after
+                        // validating the enumerated immediate child and symlinks.
+                        let canonicalFolder = root.appendingPathComponent(folder.lastPathComponent)
+                        try MeetingFolderLocation.validate(canonicalFolder, directory: dataDirectory)
                         if let updated = try personMerge.rewriteStoredMeeting(
-                            id: entry.id, directory: dataDirectory, transaction: &transaction)
+                            id: id, directory: dataDirectory, folder: canonicalFolder, transaction: &transaction)
                         {
                             mergedEntries.append(updated)
                         }
                     }
-                    cursor = page.last
                 }
+                if let scanError { throw scanError }
             }
             // Artifacts and review examples become durable with the same meeting
             // completion receipt. A crash before commit restores all of them.

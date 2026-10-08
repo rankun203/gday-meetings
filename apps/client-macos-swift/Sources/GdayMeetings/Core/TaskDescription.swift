@@ -68,7 +68,7 @@ extension ManagedTaskRecord {
     }
     var needsAttention: Bool { attentionReason != nil }
     var operationTitle: String {
-        consolidatesRetainedVoiceEvidence == true ? "Speaker Consolidation" : TaskDescription.operation(kind)
+        TaskDescription.operation(kind)
     }
     var isMaintenance: Bool { kind == .searchIndex && isAutomatic }
     mutating func recordTransition(from previous: Self?, now: Date = Date()) {
@@ -183,7 +183,7 @@ struct TaskDescription {
         case .transcription: "Transcription"
         case .summary: "Summary"
         case .searchIndex: "Search Index"
-        case .diarization: "Speaker Labeling"
+        case .diarization: "Speaker Diarization"
         case .chat, .contextChat: "Chat"
         case .archive: "Archive"
         case .importAudio: "Audio Import"

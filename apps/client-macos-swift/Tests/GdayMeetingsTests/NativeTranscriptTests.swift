@@ -16,7 +16,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: false, editable: true, canPlay: true,
             playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         let table = TranscriptNativeTable(frame: scroll.bounds)
@@ -54,7 +54,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: true, editable: true, canPlay: true,
             meetingID: meetingID, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable()
         coordinator.table = table
@@ -84,7 +84,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
             playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable()
         coordinator.table = table
@@ -116,7 +116,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: true, editable: true, canPlay: true,
             playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let table = TranscriptNativeTable()
         table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
@@ -204,7 +204,7 @@ import Testing
         var view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: true, editable: true, canPlay: true,
             playback: playback, meetingID: meeting.id, play: { _ in }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
         let table = TranscriptNativeTable(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
@@ -258,7 +258,7 @@ import Testing
             rows: [], generation: 1, showsSpeakers: true, editable: false, canPlay: true,
             playback: playback, meetingID: UUID(), initialRowID: rows[100].id,
             play: { _ in playbackRequests += 1 }, save: { _, _ in },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
         let table = TranscriptNativeTable(frame: scroll.bounds)
@@ -336,7 +336,7 @@ import Testing
         }
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
-            meetingID: id, play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+            meetingID: id, play: { _ in }, save: { _, _ in }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         let table = TranscriptNativeTable(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
@@ -373,7 +373,7 @@ import Testing
         }
         let view = NativeTranscriptView(
             rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
-            meetingID: id, play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+            meetingID: id, play: { _ in }, save: { _, _ in }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         defer { coordinator.tearDown() }
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
@@ -453,7 +453,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: [first, second], generation: 1, showsSpeakers: true,
             editable: true, canPlay: false, play: { _ in }, save: { saved.append(($0, $1)) },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         coordinator.rows = [first, second]
         let cell = TranscriptNativeCell()
@@ -476,7 +476,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: [row], generation: 1, showsSpeakers: true,
             editable: true, canPlay: false, play: { _ in }, save: { _, text in saved.append(text) },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         coordinator.rows = [row]
         let window = NSWindow(
@@ -509,7 +509,7 @@ import Testing
         let view = NativeTranscriptView(
             rows: [row], generation: 1, showsSpeakers: true,
             editable: true, canPlay: false, play: { _ in }, save: { _, text in saved.append(text) },
-            speakerPicker: { _, _ in AnyView(EmptyView()) })
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         coordinator.rows = [row]
         let cell = TranscriptNativeCell()

@@ -102,7 +102,7 @@ actor VoiceMatchingWorker {
                 SpeakerEvidenceSample(
                     id: example.id.uuidString, source: example.source,
                     localSpeakerID: example.groupID.uuidString, start: example.start ?? 0,
-                    end: example.end ?? 0, embedding: $0)
+                    end: example.end ?? 0, embedding: $0, spans: example.spans)
             }
         }
         let selected = try Dictionary(grouping: evidence, by: \.model).values.flatMap {

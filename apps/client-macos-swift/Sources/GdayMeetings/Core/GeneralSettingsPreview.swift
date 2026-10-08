@@ -16,11 +16,8 @@ extension UIPreview {
         let speakers = ServiceProvider(kind: .speakerLabeling)
         settings.serviceProviders.append(speakers)
         settings.liveTranscriptionProviderID = ThisMacProvider.id
-        settings.liveDiarizationProviderID = speakers.id
         settings.diarizationProviderID = speakers.id
         settings.showLiveTranscript = true
-        settings.showLiveSpeakerLabels = true
-        settings.recognizeLiveSpeakers = true
         settings.labelRecordedSpeakers = true
         settings.recognizeSpeakers = true
         settings.autoSummarize = true
@@ -36,8 +33,6 @@ extension UIPreview {
         case 1: break  // All features and providers are ready.
         case 2:
             settings.showLiveTranscript = false
-            settings.showLiveSpeakerLabels = false
-            settings.recognizeLiveSpeakers = false
             settings.autoTranscribe = false
             settings.labelRecordedSpeakers = false
             settings.recognizeSpeakers = false
@@ -47,14 +42,14 @@ extension UIPreview {
             settings.liveTranscriptionProviderID = nil
         case 4:
             health.seed(
-                providerID: speakers.id, capability: .liveDiarization,
+                providerID: speakers.id, capability: .diarization,
                 health: .notReady("Required files are missing."))
         case 5:
             health.seed(providerID: ThisMacProvider.id, capability: .liveTranscription, health: .checking)
-            health.seed(providerID: speakers.id, capability: .liveDiarization, health: .checking)
+            health.seed(providerID: speakers.id, capability: .diarization, health: .checking)
         case 6:
             health.seed(
-                providerID: speakers.id, capability: .liveDiarization,
+                providerID: speakers.id, capability: .diarization,
                 health: .notReady("Provider is turned off."))
         case 7:
             health.seed(
@@ -70,7 +65,6 @@ extension UIPreview {
             settings.recognizeSpeakers = false
             settings.autoExtractTodos = false
         case 10:
-            settings.showLiveSpeakerLabels = false
             health.seed(
                 providerID: ThisMacProvider.id, capability: .liveTranscription,
                 health: .notReady("Choose a supported transcription language."))

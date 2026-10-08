@@ -11,7 +11,7 @@ enum ProviderConfigurationEligibility {
             return true
         }
         if provider.kind.isLocalSpeaker {
-            return capability == .diarization || LocalModelID(rawValue: provider.model)?.nemotronPreset != nil
+            return capability == .diarization
         }
         guard
             (try? ProviderEndpoint.base(provider.endpoint)) != nil

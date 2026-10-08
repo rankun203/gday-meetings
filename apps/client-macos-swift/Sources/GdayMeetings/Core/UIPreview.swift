@@ -175,7 +175,7 @@ enum UIPreview {
                 live.complete = true
                 try live.save(at: store.directory(for: conversation.id))
                 try await seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
-                try await seedSpeakerConsolidation(store: store, meeting: conversation)
+                try await seedSpeakerIdentityReview(store: store, meeting: conversation)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
@@ -220,7 +220,6 @@ enum UIPreview {
             if UIPreviewPerformanceFixtures.flag("--synthetic-local-speakers", infoKey: "GdaySyntheticLocalSpeakers") {
                 let provider = ServiceProvider(kind: .speakerLabeling)
                 store.settings.serviceProviders.append(provider)
-                store.settings.liveDiarizationProviderID = provider.id
                 store.settings.diarizationProviderID = provider.id
             }
             if ProcessInfo.processInfo.arguments.contains("--synthetic-multiple-transcription-providers") {
@@ -415,7 +414,7 @@ enum UIPreview {
             ManagedTaskRecord(
                 kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,
                 providerName: "Synthetic Community-1", state: .completed,
-                progress: "Speaker labeling completed.", createdAt: now.addingTimeInterval(-500),
+                progress: "Speaker diarization completed.", createdAt: now.addingTimeInterval(-500),
                 finishedAt: now.addingTimeInterval(-450), isPreview: true),
             ManagedTaskRecord(
                 kind: .diarization, meetingID: conversation.id, meetingTitle: conversation.title,

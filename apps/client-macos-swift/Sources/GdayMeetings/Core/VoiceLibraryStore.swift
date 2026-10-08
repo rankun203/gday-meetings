@@ -59,8 +59,10 @@ enum VoiceReviewConflicts {
             guard let range = example.range else { continue }
             let recording = Recording(
                 meetingID: example.meetingID, audioRevision: example.audioRevision, audioFile: range.audioFile)
-            recordings[recording, default: []].append(
-                .init(id: example.id, personID: example.personID, start: range.start, end: range.end))
+            for span in range.supportSpans {
+                recordings[recording, default: []].append(
+                    .init(id: example.id, personID: example.personID, start: span.start, end: span.end))
+            }
         }
         var conflicts = Set<UUID>()
         for spans in recordings.values {
@@ -91,24 +93,6 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var isLoaded = false
     private(set) var decisions: [VoiceSpeakerDecision] = []
     private var document = VoiceLibraryDocument()
-    private var scheduledSuggestions: Task<Void, Never>?
-    private struct ObservationSelection: Equatable {
-        var id: UUID
-        var observationID: String?
-        var speakerID: UUID
-        var groupID: UUID
-        var range: VoiceSampleRange?
-        var embeddings: [TypedVoiceEmbedding]
-        init(_ value: VoiceExample) {
-            id = value.id
-            observationID = value.observationID
-            speakerID = value.speakerID
-            groupID = value.groupID
-            range = value.range
-            embeddings = value.embeddings
-        }
-    }
-    private var lastObservationSelection: (meetingID: UUID, revision: Int, values: [ObservationSelection])?
     private let url: URL
     private let canWrite: () -> Bool
     private var persistence: VoiceLibraryPersistence?
@@ -366,153 +350,6 @@ final class VoiceLibraryStore: ObservableObject {
         return commit(next)
     }
 
-    /// New capture evidence supersedes older suggestions without blocking the
-    /// live identity actor on profile matching. The worker validates revisions.
-    func scheduleReviewedPeopleSuggestions(from people: [Person]) {
-        scheduledSuggestions?.cancel()
-        scheduledSuggestions = Task { [weak self] in
-            await self?.suggestReviewedPeople(from: people)
-        }
-    }
-
-    /// Replace the current unreviewed representative selection atomically. Human
-    /// reviews remain attached to their exact audio even when clustering changes.
-    private func observationReconciliation(meetingID: UUID, representatives: [VoiceExample])
-        -> (next: VoiceLibraryDocument, selection: [ObservationSelection])?
-    {
-        guard admitVoiceWrite(), canWrite(), persistence != nil else { return nil }
-        guard
-            representatives.allSatisfy({
-                $0.meetingID == meetingID && $0.observationID?.isEmpty == false && $0.range != nil
-                    && !$0.isReviewed && !$0.manuallyGrouped && $0.personID == nil
-                    && !$0.embeddings.isEmpty && $0.embeddings.allSatisfy(\.isValid)
-            }), Set(representatives.map(\.id)).count == representatives.count
-        else { return nil }
-        let selection = representatives.map(ObservationSelection.init).sorted { $0.id.uuidString < $1.id.uuidString }
-        if let previous = lastObservationSelection, previous.meetingID == meetingID,
-            previous.revision == representationsRevision, previous.values == selection,
-            representatives.allSatisfy({ exampleIndices[$0.id] != nil })
-        {
-            return (document, selection)
-        }
-        // Desired vectors come from the durable recording observations. The
-        // preparation worker reads prior vectors for comparison; capture must
-        // never wait for a voice-library file lock on the UI actor.
-        let desired = Dictionary(uniqueKeysWithValues: representatives.map { ($0.id, $0) })
-        var next = document
-        for value in representatives {
-            guard let index = exampleIndices[value.id] else { continue }
-            let old = next.examples[index]
-            guard old.meetingID == meetingID, old.observationID == value.observationID,
-                old.range == value.range
-            else { return nil }
-        }
-        let undoEvidence = Set(next.undo.flatMap { $0.examples.map(\.id) })
-        next.examples.removeAll {
-            $0.meetingID == meetingID && $0.observationID != nil && desired[$0.id] == nil
-                && !$0.isReviewed && !$0.manuallyGrouped && !undoEvidence.contains($0.id)
-        }
-        let retainedIndices = Dictionary(
-            uniqueKeysWithValues: next.examples.enumerated().map { ($0.element.id, $0.offset) })
-        for value in representatives {
-            if let index = retainedIndices[value.id] {
-                let old = next.examples[index]
-                // A confirmed voice, explicit rejection/removal, or user grouping
-                // cannot be undone by a delayed clustering callback.
-                guard !old.isReviewed && !old.manuallyGrouped else { continue }
-                if old.speakerID != value.speakerID || old.groupID != value.groupID {
-                    next.examples[index].speakerID = value.speakerID
-                    next.examples[index].groupID = value.groupID
-                    next.examples[index].suggestedPersonID = nil
-                    next.examples[index].review = .unassigned
-                }
-                next.examples[index].embeddings = value.embeddings
-            }
-            else {
-                next.examples.append(value)
-            }
-        }
-        return (next, selection)
-    }
-
-    @discardableResult
-    func reconcileObservationExamples(meetingID: UUID, representatives: [VoiceExample]) -> Bool {
-        guard let plan = observationReconciliation(meetingID: meetingID, representatives: representatives),
-            plan.next.examples == document.examples || commit(plan.next)
-        else { return false }
-        lastObservationSelection = (meetingID, representationsRevision, plan.selection)
-        return true
-    }
-
-    /// Prepare the library-wide diff away from the UI actor. Human reviews stay
-    /// available while preparation runs; a changed revision rebuilds the plan.
-    func reconcileObservationExamplesForCapture(meetingID: UUID, representatives: [VoiceExample]) async -> Bool {
-        while !Task.isCancelled {
-            guard let plan = observationReconciliation(meetingID: meetingID, representatives: representatives),
-                let persistence
-            else { return false }
-            if plan.next.examples == document.examples {
-                lastObservationSelection = (meetingID, representationsRevision, plan.selection)
-                return true
-            }
-            let previous = document
-            let snapshot = persistence.snapshot()
-            let directory = url.deletingLastPathComponent()
-            let beforePreparation = beforeObservationPreparation
-            let preparation = Task.detached(priority: .utility) {
-                try Task.checkCancellation()
-                try beforePreparation?()
-                let backend = try VoiceLibraryPersistence(directory: directory, writable: false)
-                backend.adopt(snapshot)
-                let result = try backend.prepare(previous: previous, next: plan.next)
-                try Task.checkCancellation()
-                return result
-            }
-            do {
-                let prepared = try await withTaskCancellationHandler {
-                    try await preparation.value
-                } onCancel: {
-                    preparation.cancel()
-                }
-                try Task.checkCancellation()
-                guard persistence.snapshot().revision == snapshot.revision else { continue }
-                guard admitVoiceWrite(), canWrite() else { return false }
-                // Reserve mutation only after preparation has been rebased. The
-                // canonical queue orders human reviews behind this transaction;
-                // filesystem locks and materialization never run on the UI actor.
-                canonicalCommitInFlight = true
-                defer { canonicalCommitInFlight = false }
-                let beforeCommit = beforeObservationCommit
-                let committed = try await Task.detached(priority: .utility) {
-                    let backend = try VoiceLibraryPersistence(directory: directory, write: snapshot.write)
-                    backend.adopt(snapshot)
-                    backend.beforeCommit = beforeCommit
-                    try backend.commit(prepared)
-                    return (backend.snapshot(), backend.maintenanceWarning)
-                }.value
-                // Once writing starts, observe its atomic outcome even if capture
-                // was cancelled. Abandoning a committed result would stale the
-                // in-memory revision and could lose a subsequent human review.
-                persistence.adopt(committed.0)
-                publishCommittedVoiceDocument(plan.next, warning: committed.1)
-                lastObservationSelection = (meetingID, representationsRevision, plan.selection)
-                return true
-            }
-            catch is CancellationError {
-                return false
-            }
-            catch {
-                // A human review can invalidate a snapshot while the worker is
-                // reading prior vectors. Rebase local changes; report genuine
-                // external conflicts instead of retrying those indefinitely.
-                if !Task.isCancelled, persistence.snapshot().revision != snapshot.revision { continue }
-                errorMessage = "Couldn’t save speaker review examples. \(error.localizedDescription)"
-                return false
-            }
-        }
-        return false
-    }
-
     @discardableResult
     func addRepresentation(exampleID: UUID, embedding: TypedVoiceEmbedding) -> Bool {
         guard embedding.isValid, var example = examples.first(where: { $0.id == exampleID }), audioIsCurrent(example)
@@ -526,18 +363,43 @@ final class VoiceLibraryStore: ObservableObject {
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    private func edit(ids: Set<UUID>, _ change: (inout VoiceExample) -> Void) -> Bool {
+    private func edit(
+        ids: Set<UUID>, clusterPersonID: UUID? = nil, _ change: (inout VoiceExample) -> Void
+    ) -> Bool {
         guard !ids.isEmpty else { return false }
         var next = document
+        var previousDecisions = document.decisions
+        if clusterPersonID != nil {
+            for example in document.examples where ids.contains(example.id) && example.origin == .savedSpeaker {
+                if !previousDecisions.contains(where: {
+                    $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
+                }) {
+                    previousDecisions.append(.init(
+                        meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
+                }
+            }
+        }
         next.undo.append(
             .init(
                 examples: document.examples.filter { ids.contains($0.id) }.map(VoiceExampleReviewSnapshot.init),
-                decisions: document.decisions))
+                decisions: previousDecisions))
         next.undo = Array(next.undo.suffix(20))
         var changed = Set<UUID>()
         for index in next.examples.indices where ids.contains(next.examples[index].id) {
+            let previous = next.examples[index]
             change(&next.examples[index])
-            changed.insert(next.examples[index].meetingID)
+            let example = next.examples[index]
+            if example.origin == .savedSpeaker,
+                clusterPersonID != nil || previous.personID != example.personID
+                    || (example.manuallyCleared && !previous.manuallyCleared)
+            {
+                next.decisions.removeAll {
+                    $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
+                }
+                next.decisions.append(.init(
+                    meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
+            }
+            changed.insert(example.meetingID)
         }
         guard !changed.isEmpty else { return false }
         return commit(next, changed: changed)
@@ -546,7 +408,7 @@ final class VoiceLibraryStore: ObservableObject {
     @discardableResult
     func confirm(ids: Set<UUID>, personID: UUID) -> Bool {
         guard !document.deletedPersonIDs.contains(personID) else { return false }
-        return edit(ids: ids) {
+        return edit(ids: ids, clusterPersonID: personID) {
             $0.personID = personID
             $0.suggestedPersonID = nil
             $0.review = .confirmed
@@ -747,8 +609,7 @@ final class VoiceLibraryStore: ObservableObject {
                 other.audioRevision == example.audioRevision, other.review == .confirmed,
                 other.personID != example.personID, !other.excluded, let otherRange = other.range
             else { return false }
-            return otherRange.audioFile == range.audioFile && otherRange.start < range.end
-                && otherRange.end > range.start
+            return otherRange.overlaps(range)
         }
     }
 
@@ -840,6 +701,7 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].audioRevision = revision
                 next.examples[index].start = range.start
                 next.examples[index].end = range.end
+                next.examples[index].spans = range.spans
                 next.examples[index].source = range.source
                 next.examples[index].speakerID = resolved.speakerID
             }
@@ -922,37 +784,10 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func ingest(meeting: Meeting, directory: URL, finalizeLive: Bool = false) -> Bool {
+    func ingest(meeting: Meeting, directory: URL) -> Bool {
         for example in examples
         where example.meetingID == meeting.id && example.range == nil {
             _ = resolveLegacyExample(exampleID: example.id, meeting: meeting, directory: directory, reportError: false)
-        }
-        // Finalize every retained live example, including reviewed evidence for a
-        // retired cluster that no longer appears in the transcript's speaker list.
-        if finalizeLive {
-            let pending = examples.filter {
-                $0.meetingID == meeting.id && $0.origin == .liveSpeech
-                    && $0.isPlayable && $0.audioRevision == nil
-            }
-            for example in pending { guard hydratedExample(id: example.id) != nil else { return false } }
-            var next = document
-            for example in pending {
-                guard let index = next.examples.firstIndex(where: { $0.id == example.id }),
-                    let original = example.audioFile
-                else { continue }
-                let candidates =
-                    meeting.audioFiles.contains(original)
-                    ? [original]
-                    : meeting.audioFiles.filter {
-                        LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == example.source
-                    }
-                guard candidates.count == 1, let file = candidates.first,
-                    let revision = Self.revision(url: directory.appendingPathComponent(file))
-                else { continue }
-                next.examples[index].audioFile = file
-                next.examples[index].audioRevision = revision
-            }
-            if next != document, !commit(next) { return false }
         }
         var additions: [VoiceExample] = []
         for speaker in meeting.speakers where speaker.canAssignPerson && speaker.voiceReviewOrigin == nil {
@@ -968,17 +803,8 @@ final class VoiceLibraryStore: ObservableObject {
                 for value in pending { guard hydratedExample(id: value.id) != nil else { return false } }
                 var next = document
                 for value in pending {
-                    guard let index = next.examples.firstIndex(where: { $0.id == value.id }), var file = value.audioFile
+                    guard let index = next.examples.firstIndex(where: { $0.id == value.id }), let file = value.audioFile
                     else { continue }
-                    if finalizeLive, !meeting.audioFiles.contains(file) {
-                        let candidates = meeting.audioFiles.filter {
-                            LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: $0)) == value.source
-                        }
-                        if candidates.count == 1 {
-                            file = candidates[0]
-                            next.examples[index].audioFile = file
-                        }
-                    }
                     next.examples[index].audioRevision = Self.revision(url: directory.appendingPathComponent(file))
                 }
                 guard commit(next) else { return false }
@@ -1011,37 +837,11 @@ final class VoiceLibraryStore: ObservableObject {
                     start: range?.start, end: range?.end,
                     suggestedPersonID: speaker.personID ?? prior?.suggestedPersonID,
                     review: (speaker.personID ?? prior?.suggestedPersonID) == nil ? .unassigned : .suggested,
-                    embeddings: embedding.map { [$0] } ?? [], groupID: prior?.groupID ?? UUID(),
-                    origin: .savedSpeaker, firstPassage: resolved?.firstPassage))
+                    embeddings: embedding.map { [$0] } ?? [],
+                    groupID: prior.flatMap { $0.manuallyGrouped ? $0.groupID : nil } ?? speaker.id,
+                    origin: .savedSpeaker, firstPassage: resolved?.firstPassage, spans: range?.spans))
         }
         return upsert(additions)
-    }
-
-    /// Capture keeps a few independent excerpts, not every inference window.
-    /// New evidence never inherits human confirmation from an earlier excerpt.
-    @discardableResult
-    func recordSample(
-        meetingID: UUID, speakerID: UUID, range: VoiceSampleRange,
-        embedding: TypedVoiceEmbedding, suggestion: UUID?
-    ) -> Bool {
-        guard range.isValid, embedding.isValid else { return false }
-        let existing = examples.filter { $0.meetingID == meetingID && $0.speakerID == speakerID && $0.isPlayable }
-        guard existing.count < 3 else { return true }
-        guard
-            !existing.contains(where: {
-                $0.audioFile == range.audioFile && ($0.start ?? 0) < range.end && ($0.end ?? 0) > range.start
-            })
-        else { return true }
-        let rejected = rejectedPeople(meetingID: meetingID, speakerID: speakerID)
-        let suggestion = suggestion.flatMap { rejected.contains($0) ? nil : $0 }
-        var example = VoiceExample(
-            meetingID: meetingID, speakerID: speakerID, source: range.source,
-            audioFile: range.audioFile, start: range.start, end: range.end,
-            suggestedPersonID: suggestion, review: suggestion == nil ? .unassigned : .suggested,
-            embeddings: [embedding], groupID: existing.first?.groupID ?? UUID(), origin: .liveSpeech)
-        example.suggestedPersonID = allowedSuggestion(for: example, personID: suggestion)
-        example.review = example.suggestedPersonID == nil ? .unassigned : .suggested
-        return upsert([example])
     }
 
     @discardableResult
@@ -1228,7 +1028,7 @@ final class VoiceLibraryStore: ObservableObject {
             }
             let relevant = evidence.filter {
                 guard let range = $0.range else { return false }
-                return range.audioFile == file && row.start >= range.start && row.end <= range.end
+                return range.audioFile == file && range.contains(start: row.start, end: row.end)
             }
             guard let first = relevant.first else { continue }
             let people = Set(relevant.map { $0.review == .confirmed ? $0.personID : nil })

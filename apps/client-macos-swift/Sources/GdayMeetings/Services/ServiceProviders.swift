@@ -26,28 +26,18 @@ enum TranscriptionLanguage {
 
 /// App capability contracts are documented in docs/protocols/.
 enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
-    case transcription, liveTranscription, liveDiarization, diarization, summarization, search,
+    case transcription, liveTranscription, diarization, summarization, search,
         playback, fileTransfer
-    /// Retired association entries must not prevent older settings from opening.
     static func decodeActive(from decoder: Decoder) throws -> Set<Self> {
-        let container = try decoder.singleValueContainer()
-        let values = try container.decode([String].self)
-        return try Set(
-            values.filter { $0 != "speakerRecognition" }.map { value in
-                guard let capability = Self(rawValue: value) else {
-                    throw DecodingError.dataCorruptedError(
-                        in: container, debugDescription: "Unknown provider capability.")
-                }
-                return capability
-            })
+        let values = try decoder.singleValueContainer().decode([String].self)
+        return Set(values.compactMap(Self.init(rawValue:)))
     }
     var id: String { rawValue }
     var title: String {
         switch self {
         case .transcription: return "Transcription"
         case .liveTranscription: return "Live Transcription"
-        case .liveDiarization: return "Live Speaker Labeling"
-        case .diarization: return "Speaker Labeling"
+        case .diarization: return "Speaker Diarization"
         case .summarization: return "Summarization"
         case .search: return "Search"
         case .playback: return "Playback"
@@ -58,19 +48,6 @@ enum ProviderCapability: String, Codable, CaseIterable, Identifiable {
 
 enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
     case runpod, openAICompatible, gdayWebsite, filedrop, speakerLabeling, localSearch, appleSpeech
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let value = try container.decode(String.self)
-        if value == "nemotron" || value == "community1" {
-            self = .speakerLabeling
-        }
-        else if let kind = Self(rawValue: value) {
-            self = kind
-        }
-        else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown service provider.")
-        }
-    }
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -79,7 +56,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .filedrop: return "Filedrop"
         case .openAICompatible: return "OpenAI-Compatible LLM"
         case .gdayWebsite: return "Gday Meetings Website"
-        case .speakerLabeling: return "Speaker Labeling"
+        case .speakerLabeling: return "Speaker Diarization"
         case .localSearch: return "Local Search"
         }
     }
@@ -100,7 +77,7 @@ enum ServiceProviderKind: String, Codable, CaseIterable, Identifiable {
         case .openAICompatible: return [.summarization]
         // Search and remote playback have no app adapters. Do not advertise them as available.
         case .gdayWebsite: return [.transcription, .diarization]
-        case .speakerLabeling: return [.liveDiarization, .diarization]
+        case .speakerLabeling: return [.diarization]
         case .localSearch: return [.search]
         }
     }
@@ -130,7 +107,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         self.kind = kind
         name = kind.title
         enabledCapabilities = kind.capabilities
-        if kind == .speakerLabeling { model = "nemotronLow" }
+        if kind == .speakerLabeling { model = "community1" }
         if kind == .localSearch { localSearch = LocalSearchConfiguration() }
     }
     enum CodingKeys: String, CodingKey {
@@ -142,14 +119,8 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         kind = try values.decode(ServiceProviderKind.self, forKey: .kind)
         id = try values.decode(UUID.self, forKey: .id)
         name = try values.decode(String.self, forKey: .name)
-        if kind == .speakerLabeling,
-            ["Live Speaker Labeling (Nemotron)", "Speaker Labeling (Community-1)"].contains(name)
-        {
-            name = kind.title
-        }
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = try values.decode(String.self, forKey: .model)
-        if kind == .speakerLabeling, model == "community1" { model = "nemotronLow" }
         localSearch = try values.decodeIfPresent(LocalSearchConfiguration.self, forKey: .localSearch)
         if kind == .localSearch, ["Local Voice Search (CLSP)", "Local Voice Search"].contains(name) {
             name = "Local Search"
@@ -277,7 +248,7 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
             throw ServiceError("Enable Transcription for this RunPod provider before submitting audio.")
         }
         guard !diarize || provider.supports(.diarization) else {
-            throw ServiceError("Enable Speaker Labeling for this provider before requesting them.")
+            throw ServiceError("Enable Speaker Diarization for this provider before requesting it.")
         }
         guard !provider.apiKey.isEmpty else { throw ServiceError("Enter the RunPod API key.") }
         guard !tracks.isEmpty else { throw ServiceError("Add an audio recording before transcribing.") }

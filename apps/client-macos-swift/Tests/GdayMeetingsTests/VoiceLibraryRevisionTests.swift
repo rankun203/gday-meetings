@@ -28,32 +28,4 @@ struct VoiceLibraryRevisionTests {
         try FileManager.default.removeItem(at: file)
         #expect(VoiceLibraryStore.revision(url: file) == nil)
     }
-    @Test func preparedMetadataMoveComparesPersistedVectorsWithoutRewritingThem() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let backend = try VoiceLibraryPersistence(directory: root)
-        let type = EmbeddingType(
-            modelID: "fixture", revision: "1", compatibilityVersion: "1",
-            dimension: 2, normalization: "unitL2")
-        let example = VoiceExample(
-            meetingID: UUID(), speakerID: UUID(), source: "microphone",
-            audioFile: "microphone.wav", start: 0, end: 3,
-            embeddings: [.init(type: type, values: [1, 0])])
-        var original = VoiceLibraryDocument()
-        original.examples = [example]
-        try backend.commit(previous: .init(), next: original)
-        let metadata = try #require(try backend.load())
-        #expect(metadata.examples[0].embeddings.isEmpty)
-        let file = root.appendingPathComponent("voice-library/representations/\(example.id.uuidString).json")
-        let priorRevision = try #require(VoiceLibraryStore.revision(url: file))
-        var next = metadata
-        next.examples[0].groupID = UUID()
-        next.examples[0].embeddings = example.embeddings
-        try backend.commit(try backend.prepare(previous: metadata, next: next))
-        #expect(VoiceLibraryStore.revision(url: file) == priorRevision)
-        let saved = try #require(try backend.load(includeRepresentations: true))
-        #expect(saved.examples[0].groupID == next.examples[0].groupID)
-        #expect(saved.examples[0].embeddings == example.embeddings)
-    }
-
 }

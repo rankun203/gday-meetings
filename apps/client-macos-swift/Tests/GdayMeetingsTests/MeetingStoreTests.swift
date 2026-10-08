@@ -49,7 +49,9 @@ import Testing
     @Test func defaultsAndCredentialsDoNotPersist() throws {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         #expect(settings.captureMicrophone)
-        #expect(settings.serviceProviders.count == 1)
+        #expect(settings.serviceProviders.count == 2)
+        #expect(Set(settings.serviceProviders.map(\.kind)) == [.localSearch, .speakerLabeling])
+        #expect(settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.kind == .speakerLabeling)
         #expect(settings.serviceProviders.first?.kind == .localSearch)
         #expect(settings.searchProviderID == settings.serviceProviders.first?.id)
         var secret = settings

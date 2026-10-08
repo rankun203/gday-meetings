@@ -28,7 +28,7 @@ struct VoiceLibraryView: View {
     @ViewState private var recoveryErrors: [UUID: String] = [:]
 
     private enum VoiceFilter: String, CaseIterable, Identifiable {
-        case review = "Review"
+        case review = "Needs Review"
         case unnamed = "Unnamed"
         case named = "Named"
         case all = "All"
@@ -47,8 +47,7 @@ struct VoiceLibraryView: View {
             }
             switch filter {
             case .review:
-                return example.review == .suggested
-                    && !example.excluded && example.review != .rejected && !example.manuallyCleared
+                return example.needsReview
             case .unnamed: return example.personID == nil && example.review != .suggested
             case .named: return example.personID != nil
             case .all: return true
@@ -80,7 +79,7 @@ struct VoiceLibraryView: View {
                     if personID == nil {
                         Picker("Voices", selection: $filter) {
                             ForEach(VoiceFilter.allCases) { Text($0.rawValue).tag($0) }
-                        }.pickerStyle(.segmented).padding(.horizontal, 12).padding(.top, 12)
+                        }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).padding(.top, 12)
                     }
                     List(selection: $selectedGroup) {
                         ForEach(groups) { group in
@@ -567,7 +566,7 @@ private struct VoicePreparationControls: View {
                     Button("Find Voices in Recordings") { start(discover: true) }
                         .disabled(!canStart)
                 }
-                Text("Recordings without voice examples need the Community-1 Speaker Labeling model.")
+                Text("Recordings without voice examples need the Community-1 Speaker Diarization model.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let provider {
                     if let reason = VoiceLibraryPreparation.capability(for: provider).unavailableReason {
@@ -660,8 +659,9 @@ private struct VoiceExamplePlaybackButton: View {
     @EnvironmentObject private var playback: MeetingPlayback
     let example: VoiceExample
     private var playing: Bool {
-        guard let start = example.start, let end = example.end else { return false }
-        return playback.meetingID == example.meetingID && playback.excerptRange == start..<end && playback.isPlaying
+        guard let range = example.range else { return false }
+        return playback.meetingID == example.meetingID
+            && playback.excerptRanges == range.supportSpans.map { $0.start..<$0.end } && playback.isPlaying
             && playback.audioURL(forTrack: playback.selectedTrack)?.lastPathComponent == example.audioFile
     }
     private var available: Bool {
@@ -685,10 +685,10 @@ private struct VoiceExamplePlaybackButton: View {
                     return meeting
                 },
                 play: { meeting in
-                    guard let file = example.audioFile, let start = example.start, let end = example.end else { return }
-                    playback.playExcerpt(
-                        meeting: meeting, directory: store.directory(for: meeting.id), audioFile: file,
-                        start: start, end: end)
+                    guard let range = example.range else { return }
+                    playback.playExcerpts(
+                        meeting: meeting, directory: store.directory(for: meeting.id), audioFile: range.audioFile,
+                        spans: range.supportSpans)
                 })
         } label: {
             Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 44, height: 44)

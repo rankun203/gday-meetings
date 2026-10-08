@@ -65,6 +65,47 @@ struct LocalDiarizationTests {
         #expect(revised.transcript[1].speakerID == detected.id)
     }
 
+    @Test func recordedSpeakerReplacesSourcePlaceholderAndBecomesAssociable() {
+        var meeting = Meeting()
+        let placeholder = MeetingSpeaker(
+            label: "mic", track: "microphone", providerName: "This Mac", sourcePlaceholder: .microphone)
+        let detected = MeetingSpeaker(label: "mic_01", track: "track0", providerName: "Community-1")
+        meeting.speakers = [placeholder]
+        var row = TranscriptSegment(start: 0, end: 3, speaker: "mic", text: "Preserve these words.")
+        row.speakerID = placeholder.id
+        row.source = .microphone
+        row.sourcePlaceholder = true
+        row.associationUncertain = true
+        meeting.transcript = [row]
+        let result = LocalDiarizationResult(
+            modelRevision: "fixture", ranges: [.init(track: "track0", label: detected.label, start: 0, end: 3)],
+            speakers: [detected], trackSources: ["track0": "microphone"])
+        let updated = LocalDiarizationAssignment.applying(result, to: meeting, fileCount: 1)
+        #expect(updated.transcript[0].id == row.id)
+        #expect(updated.transcript[0].text == row.text)
+        #expect(updated.transcript[0].source == .microphone)
+        #expect(updated.transcript[0].sourcePlaceholder == false)
+        #expect(updated.transcript[0].associationUncertain == nil)
+        #expect(updated.transcript[0].speakerID == detected.id)
+        #expect(updated.speakers.map(\.id) == [detected.id])
+    }
+
+    @Test func reviewableAcousticClusterSurvivesWithoutDominatingATranscriptRow() {
+        var meeting = Meeting()
+        meeting.transcript = [.init(start: 0, end: 10, text: "A long mixed passage.")]
+        var speaker = MeetingSpeaker(label: "mic_01", track: "track0", providerName: "Community-1")
+        speaker.voiceEmbedding = .init(
+            type: .community1, values: [1] + [Double](repeating: 0, count: 255))
+        speaker.voiceSampleRange = .init(audioFile: "microphone.wav", source: "microphone", start: 0, end: 3)
+        let result = LocalDiarizationResult(
+            modelRevision: "fixture", ranges: [.init(track: "track0", label: speaker.label, start: 0, end: 3)],
+            speakers: [speaker], trackSources: ["track0": "microphone"])
+        let updated = LocalDiarizationAssignment.applying(result, to: meeting, fileCount: 1)
+        #expect(updated.transcript == meeting.transcript)
+        #expect(updated.speakers.map(\.id) == [speaker.id])
+        #expect(updated.speakers.first?.voiceSampleRange == speaker.voiceSampleRange)
+    }
+
     @Test func overlapAndUnknownTrackDoNotGuessOneSpeaker() {
         let first = MeetingSpeaker(label: "sys_01", track: "track0", providerName: "Community-1")
         let second = MeetingSpeaker(label: "sys_02", track: "track0", providerName: "Community-1")

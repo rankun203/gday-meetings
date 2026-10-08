@@ -35,9 +35,6 @@ extension ServiceProvider {
             return await (models ?? .shared).health(for: (localSearch ?? .init()).selectedModel.localID)
         }
         if kind.isLocalSpeaker {
-            guard capability == .diarization || LocalModelID(rawValue: model)?.nemotronPreset != nil else {
-                return .notReady("Choose a supported Nemotron preset.")
-            }
             for id in localModelIDs(for: capability) {
                 let result = await (models ?? .shared).health(for: id)
                 if !result.isReady {
@@ -203,7 +200,7 @@ extension ThisMacProvider {
         let pairs: [(ProviderCapability, UUID?)] = [
             (.liveTranscription, settings.liveTranscriptionProviderID),
             (.transcription, settings.transcriptionProviderID),
-            (.liveDiarization, settings.liveDiarizationProviderID), (.diarization, settings.diarizationProviderID),
+            (.diarization, settings.diarizationProviderID),
             (.summarization, settings.summaryProviderID),
         ]
         await withTaskGroup(of: Void.self) { group in
@@ -330,8 +327,6 @@ extension ServiceProvider {
         if kind == .localSearch, capability == .search { return [(localSearch ?? .init()).selectedModel.localID] }
         guard kind.isLocalSpeaker else { return [] }
         if capability == .diarization { return [.community1] }
-        guard capability == .liveDiarization, let model = LocalModelID(rawValue: model), model.nemotronPreset != nil
-        else { return [] }
-        return [model, .community1]
+        return []
     }
 }

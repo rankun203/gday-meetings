@@ -18,7 +18,8 @@ import Testing
         #expect(cache.row(at: 0).speaker == person.name)
         #expect(!cache.row(at: 0).canAssignPerson)
         let source = try #require(cache.phrase(id: cache.row(at: 1).id))
-        controller.assignPerson(phrase: source, personID: person.id)
+        #expect(!source.hasSpeakerIdentity)
+        #expect(!cache.row(at: 1).canAssignPerson)
         #expect(controller.draft?.overrides?.isEmpty != false)
     }
     @Test func legacySpeakerWithoutSourceMarkerRemainsAssignable() throws {
@@ -46,7 +47,7 @@ import Testing
 
         let view = NativeTranscriptView(
             rows: [source, detected], generation: 1, showsSpeakers: true, editable: true, canPlay: false,
-            play: { _ in }, save: { _, _ in }, speakerPicker: { _, _ in AnyView(EmptyView()) })
+            play: { _ in }, save: { _, _ in }, speakerPicker: { _, _, _ in AnyView(EmptyView()) })
         let coordinator = NativeTranscriptView.Coordinator(view)
         let cell = TranscriptNativeCell()
         let event = try #require(
@@ -104,6 +105,7 @@ import Testing
         meeting.speakers[0].personID = person
         await store.updateMeeting(meeting)
         await store.recoverUnadoptedLiveTranscript(meeting)
+        await store.liveSourceRecovery.tasks[id]?.value
         let restored = try #require(store.meeting(id: id))
         #expect(restored.speakers[0].sourcePlaceholder == .system)
         #expect(restored.speakers[0].personID == person)

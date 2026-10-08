@@ -23,8 +23,24 @@ enum LiveSpeakerAliases {
         value.speakerIdentity = id
         value.diarizationLabel = speaker.label
         value.speakerColorSlot = speaker.colorSlot
-        value.voiceEmbedding = speaker.voiceEmbedding
-        value.personID = speaker.personID
+        return applyingMetadata(value, speaker: speaker)
+    }
+    static func applyingMetadata(_ phrase: LiveTranscriptPhrase, speaker: LiveSpeakerIdentity) -> LiveTranscriptPhrase {
+        var value = phrase
+        let reviewed =
+            speaker.manuallyAssigned
+            && (speaker.manualReviewThrough == nil
+                || (speaker.manualReviewThrough?[phrase.source.rawValue].map { $0 >= phrase.end } ?? false))
+        if phrase.associationUncertain == true && !reviewed {
+            value.personID = nil
+            value.voiceEmbedding = nil
+        }
+        else {
+            value.personID = speaker.personID
+            value.voiceEmbedding = speaker.voiceEmbedding
+            if reviewed { value.associationUncertain = nil }
+        }
         return value
     }
+
 }

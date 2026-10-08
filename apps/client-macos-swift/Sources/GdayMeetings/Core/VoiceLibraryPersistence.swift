@@ -241,73 +241,8 @@ final class VoiceLibraryPersistence {
         }
     }
 
-    struct PreparedCommit: Sendable {
-        fileprivate var transaction: Transaction
-        fileprivate var encoded: Data
-        fileprivate var fileRevisions: [String: String]
-        fileprivate var readPaths: Set<String>
-    }
-
-    /// Read-only preparation against this backend's adopted snapshot. Run on a
-    /// worker; it creates no files and acquires no writer reservation.
-    func prepare(previous: VoiceLibraryDocument, next: VoiceLibraryDocument) throws -> PreparedCommit {
-        try Task.checkCancellation()
-        var previous = previous
-        let desired = Dictionary(uniqueKeysWithValues: next.examples.map { ($0.id, $0) })
-        let readPaths = Set(
-            previous.examples.compactMap { value in
-                desired[value.id]?.embeddings.isEmpty == false ? representationPath(value.id) : nil
-            })
-        // Metadata-only callers need not synchronously load selected vectors.
-        // Read only prior representations that the desired document supplies,
-        // so an unchanged vector does not get rewritten on every live update.
-        for index in previous.examples.indices
-        where previous.examples[index].embeddings.isEmpty
-            && desired[previous.examples[index].id]?.embeddings.isEmpty == false
-        {
-            try Task.checkCancellation()
-            previous.examples[index].embeddings =
-                try loadRepresentations(exampleID: previous.examples[index].id)?.embeddings ?? []
-        }
-        let changes = try changes(previous: previous, next: next)
-        let transaction = Transaction(previousRevision: revision, revision: UUID(), changes: changes)
-        let data = try encode(transaction)
-        guard data.count <= 64 * 1024 * 1024 else {
-            throw ServiceError("This voice-library change is too large. Save fewer examples at a time.")
-        }
-        try Task.checkCancellation()
-        return PreparedCommit(
-            transaction: transaction, encoded: data, fileRevisions: fileRevisions, readPaths: readPaths)
-    }
-
-    /// Caller must also validate its in-memory review document before publishing.
-    func commit(_ prepared: PreparedCommit) throws {
-        guard writable else { throw ServiceError("The voice library is read-only.") }
-        try locked {
-            let transaction = prepared.transaction
-            guard revision == transaction.previousRevision else { throw changedError() }
-            for path in Set(transaction.changes.map(\.path)).union(prepared.readPaths) {
-                guard fileRevisions[path] == prepared.fileRevisions[path] else { throw changedError() }
-            }
-            try validateRevision()
-            if let pending = try pendingTransaction() {
-                try apply(pending)
-                try refreshFileRevisions(pending.changes.map(\.path))
-            }
-            try validateFiles(transaction.changes)
-            // A vector read during preparation can suppress a representation
-            // write. It remains a dependency even when only metadata changes.
-            let writtenPaths = Set(transaction.changes.map(\.path))
-            try validateFiles(prepared.readPaths.subtracting(writtenPaths).map { Change(path: $0, data: nil) })
-            guard !transaction.changes.isEmpty || revision == nil else { return }
-            try beforeCommit?()
-            do { try atomicWrite(prepared.encoded, to: directory.appendingPathComponent("transaction.json")) }
-            catch {
-                guard (try? pendingTransaction()?.revision) == transaction.revision else { throw error }
-            }
-            revision = transaction.revision
-            materializeCommitted(transaction)
-        }
+    private func requiredVersion(_ document: VoiceLibraryDocument) -> Int {
+        document.examples.contains { $0.spans != nil || $0.firstPassage?.spans != nil } ? 2 : 1
     }
 
     func commit(previous: VoiceLibraryDocument, next: VoiceLibraryDocument) throws {
@@ -321,7 +256,8 @@ final class VoiceLibraryPersistence {
             let changes = try changes(previous: previous, next: next)
             try validateFiles(changes)
             guard !changes.isEmpty || revision == nil else { return }
-            let transaction = Transaction(previousRevision: revision, revision: UUID(), changes: changes)
+            let transaction = Transaction(
+                version: requiredVersion(next), previousRevision: revision, revision: UUID(), changes: changes)
             let data = try encode(transaction)
             guard data.count <= 64 * 1024 * 1024 else {
                 throw ServiceError("This voice-library change is too large. Save fewer examples at a time.")
@@ -414,7 +350,10 @@ final class VoiceLibraryPersistence {
                     try FileManager.default.removeItem(at: url)
                 }
             }
-            try atomicWrite(try encode(Header(revision: nextRevision)), to: header)
+            try atomicWrite(
+                try encode(
+                    Header(version: max(try readHeader()?.version ?? 1, requiredVersion(next)), revision: nextRevision)),
+                to: header)
             revision = nextRevision
             try refreshFileRevisions(externalPaths)
         }
@@ -516,7 +455,9 @@ final class VoiceLibraryPersistence {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         try rejectSymbolicLink(url)
         let transaction = try JSONDecoder().decode(Transaction.self, from: limitedData(url))
-        guard transaction.version == 1, Set(transaction.changes.map(\.path)).count == transaction.changes.count else {
+        guard (1...2).contains(transaction.version),
+            Set(transaction.changes.map(\.path)).count == transaction.changes.count
+        else {
             throw ServiceError("The voice-library transaction format is unsupported or invalid.")
         }
         let current = try readHeader()?.revision
@@ -530,7 +471,7 @@ final class VoiceLibraryPersistence {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         try rejectSymbolicLink(url)
         let header = try JSONDecoder().decode(Header.self, from: limitedData(url))
-        guard header.version == 1 else {
+        guard (1...2).contains(header.version) else {
             throw ServiceError("This voice library needs a newer version of Gday Meetings.")
         }
         return header
@@ -566,7 +507,10 @@ final class VoiceLibraryPersistence {
             }
         }
         try atomicWrite(
-            try encode(Header(revision: transaction.revision)), to: directory.appendingPathComponent("state.json"))
+            try encode(
+                Header(
+                    version: max(try readHeader()?.version ?? 1, transaction.version), revision: transaction.revision)),
+            to: directory.appendingPathComponent("state.json"))
         let marker = directory.appendingPathComponent("transaction.json")
         try FileManager.default.removeItem(at: marker)
         try syncDirectory(directory)

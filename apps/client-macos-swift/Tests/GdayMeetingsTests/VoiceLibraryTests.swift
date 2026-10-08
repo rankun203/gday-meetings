@@ -53,11 +53,11 @@ struct VoiceLibraryTests {
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
         #expect(library.confirm(ids: [first.id], personID: person.id))
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
-        #expect(
-            library.recordSample(
-                meetingID: first.meetingID, speakerID: first.speakerID,
-                range: .init(audioFile: "system.wav", source: "system", start: 5, end: 9),
-                embedding: first.embeddings[0], suggestion: person.id))
+        var later = try example(
+            root: directory, meetingID: first.meetingID, speakerID: first.speakerID, start: 5, end: 9)
+        later.suggestedPersonID = person.id
+        later.review = .suggested
+        #expect(library.upsert([later]))
         #expect(library.examples.count == 2)
         #expect(library.examples.filter { $0.review == .confirmed }.count == 1)
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
@@ -175,27 +175,36 @@ struct VoiceLibraryTests {
         #expect(VoiceLibraryStore(loading: .immediate, directory: directory).hydratedExample(id: sample.id) == sample)
     }
 
-    @Test func newLiveSampleKeepsSuggestionUnlessReviewedEvidenceRejectsIt() throws {
+    @Test func recordedClustersAppearOnceInNeedsReviewAndAssignmentUpdatesTheMeeting() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
-        let sample = try example(root: directory)
+        var meeting = Meeting()
+        let speaker = MeetingSpeaker(
+            label: "Speaker 1", track: "system", providerName: "Speaker Diarization",
+            voiceEmbedding: .init(type: type, values: [1, 0]))
+        meeting.speakers = [speaker]
+        #expect(library.ingest(meeting: meeting, directory: directory))
+        #expect(library.ingest(meeting: meeting, directory: directory))
+        let example = try #require(library.examples.first)
+        #expect(library.examples.count == 1)
+        #expect(example.groupID == speaker.id)
+        #expect(example.needsReview)
         let personID = UUID()
-        let range = try #require(sample.range)
-        #expect(
-            library.recordSample(
-                meetingID: sample.meetingID, speakerID: sample.speakerID,
-                range: range, embedding: sample.embeddings[0], suggestion: personID))
-        let recorded = try #require(library.examples.first)
-        #expect(recorded.suggestedPersonID == personID && recorded.review == .suggested)
-        #expect(library.reject(ids: [recorded.id], personID: personID))
-        let nextSpeakerID = UUID()
-        #expect(
-            library.recordSample(
-                meetingID: sample.meetingID, speakerID: nextSpeakerID,
-                range: range, embedding: sample.embeddings[0], suggestion: personID))
-        let next = try #require(library.examples.first { $0.speakerID == nextSpeakerID })
-        #expect(next.suggestedPersonID == nil && next.review == .unassigned)
+        #expect(library.confirm(ids: [example.id], personID: personID))
+        #expect(library.examples.allSatisfy { !$0.needsReview })
+        let assigned = library.applyingDecisions(to: meeting)
+        #expect(assigned.speakers.first?.personID == personID)
+        #expect(library.undo())
+        #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
+        #expect(library.examples.first?.needsReview == true)
+        #expect(library.confirm(ids: [example.id], personID: personID))
+        #expect(library.clear(ids: [example.id]))
+        #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
+        #expect(library.undo())
+        #expect(library.applyingDecisions(to: meeting).speakers.first?.personID == personID)
+        #expect(library.reject(ids: [example.id], personID: personID))
+        #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
     }
 
     @Test func ingestKeepsCompatibleRunPodVectorWithoutAudioAndDoesNotInventConfirmation() async throws {
@@ -219,7 +228,10 @@ struct VoiceLibraryTests {
         #expect(library.examples.count == 1)
         #expect(library.confirm(ids: [sample.id], personID: person.id))
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
-        #expect(library.applyingDecisions(to: meeting) == meeting)
+        let reviewed = library.applyingDecisions(to: meeting)
+        #expect(reviewed.speakers.first?.id == speaker.id)
+        #expect(reviewed.speakers.first?.personID == person.id)
+        #expect(reviewed.speakers.first?.manuallyAssigned == true)
     }
 
     @Test func attachingAudioRevisionPreservesExistingModelRepresentations() throws {

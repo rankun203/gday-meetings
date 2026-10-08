@@ -27,8 +27,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                     segment.livePhrase(meetingID: meetingID),
                     aliases: speakerTimeline?.identityAliases ?? [:], speakers: speakers)
                 if let id = row.speakerIdentity, let speaker = speakers[id] {
-                    row.personID = speaker.personID
-                    row.voiceEmbedding = speaker.voiceEmbedding
+                    row = LiveSpeakerAliases.applyingMetadata(row, speaker: speaker)
                     row.speakerColorSlot = speaker.colorSlot
                 }
                 return row
@@ -52,7 +51,10 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 var value = original
                 value.speakerID = id
                 value.speaker = speaker.label
-                value.personID = speaker.personID
+                let attributed = LiveSpeakerAliases.applyingMetadata(
+                    value.livePhrase(meetingID: meetingID), speaker: speaker)
+                value.personID = attributed.personID
+                value.associationUncertain = attributed.associationUncertain
                 return value
             }
         }
@@ -74,8 +76,10 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 return MeetingSpeaker(
                     id: identity, label: $0.speakerLabel,
                     track: speaker?.additionalSources?.isEmpty == false ? "multiple" : $0.source.rawValue,
-                    providerName: provider, voiceEmbedding: $0.voiceEmbedding,
-                    personID: $0.personID, confirmed: $0.personID != nil,
+                    providerName: provider,
+                    voiceEmbedding: speaker?.voiceEmbedding ?? $0.voiceEmbedding,
+                    personID: speaker?.personID ?? $0.personID,
+                    confirmed: (speaker?.personID ?? $0.personID) != nil,
                     sourcePlaceholder: $0.hasSpeakerIdentity ? nil : $0.source,
                     manuallyAssigned: speaker?.manuallyAssigned,
                     manualReviewThrough: speaker?.manualReviewThrough,
@@ -139,8 +143,7 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                     original,
                     aliases: speakerTimeline?.identityAliases ?? [:], speakers: speakers)
                 if let identity = row.speakerIdentity, let speaker = speakers[identity] {
-                    row.personID = speaker.personID
-                    row.voiceEmbedding = speaker.voiceEmbedding
+                    row = LiveSpeakerAliases.applyingMetadata(row, speaker: speaker)
                 }
                 return row
             }
@@ -265,14 +268,14 @@ struct LiveTranscriptDraft: Codable, Equatable, Sendable {
                 row.unresolvedTiming = true
             }
             if change.personWasAssigned {
+                row.associationUncertain = nil
                 row.personID = change.personID
                 // A range correction must not rename a later, different model identity.
                 row.speakerIdentity = change.scopedSpeakerIdentity
                 if let id = change.scopedSpeakerIdentity,
                     let speaker = speakerTimeline?.speakers.first(where: { $0.id == id })
                 {
-                    row.personID = speaker.personID
-                    row.voiceEmbedding = speaker.voiceEmbedding
+                    row = LiveSpeakerAliases.applyingMetadata(row, speaker: speaker)
                     row.diarizationLabel = speaker.label
                     row.speakerColorSlot = speaker.colorSlot
                 }
@@ -368,6 +371,7 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var diarizationLabel: String?
     var voiceEmbedding: TypedVoiceEmbedding?
     var speakerColorSlot: Int?
+    var associationUncertain: Bool?
     var resolvedSpeakerColorSlot: Int? {
         if let speakerColorSlot { return speakerColorSlot }
         return hasSpeakerIdentity ? nil : (source == .microphone ? 0 : 1)

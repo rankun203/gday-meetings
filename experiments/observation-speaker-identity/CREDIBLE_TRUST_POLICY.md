@@ -1,0 +1,13 @@
+# Credible capacity as an identity trust boundary
+
+Preregistered diagnostic, 2026-10-08, before this comparison's outcomes. Preserve the original v1 frontend states, activity, embeddings, windows, and handoffs. Do not re-run audio or reset the model. Compute a separate identity-continuity cutoff when eight local channels accumulate at least three seconds each from activity runs lasting at least 300 ms, using the already preregistered credible-run counter semantics. A run first receives credit once 300 ms is observed; smaller runs never count. Existing earlier model capacity cutoffs remain in force.
+
+This isolates identity trust expiry from model rollover. Earlier rollover previously worsened raw local activity; the diagnostic must not inherit that change. Derive evidence only from retained published activity. Bootstrap activity before publication is unavailable here, so do not reconstruct or invent it; use an existing earlier capacity boundary if present.
+
+Before the separate cutoff, retain the current trusted epoch continuity. Afterward, permit independent clean observations but no channel-based identity propagation, preserving anonymous local fallback for unsampled time. Keep every interval in scoring. No reference speaker labels, future voice vectors, cosine threshold tuning, or new heldout results determine the cutoff.
+
+The first test is a source-hashed batch counterfactual using the explicit-pending core. It can use later observations and is **not actual causal app acceptance**. Record original evidence hashes, derived cutoffs, and code/binary hashes separately; do not relabel modified evidence as a production replay. Evaluate all four public development schedules (both two- and three-second retained samples) and all five already examined private recordings. A promising result must subsequently pass the actual adapter with causal cutoff availability and bounded publication; leave the disjoint validation cohort untouched.
+
+## Continuous-run support extension
+
+After the first trust-cutoff-only outcome, test one structural extension without tuning numeric thresholds: preserve trusted continuity before the cutoff and assign each continuous post-cut local activity run a temporary association epoch. Multiple clean embeddings in that run can denoise and confirm its identity using the existing epoch policy; no continuity or shell aliases span later runs. Restore original local anonymous IDs on unresolved output so missing samples do not create extra synthetic fallback identities or disappear from scoring. This remains an explicit batch counterfactual with no new segmentation inference; causal mutable-tail behavior needs its own later test.

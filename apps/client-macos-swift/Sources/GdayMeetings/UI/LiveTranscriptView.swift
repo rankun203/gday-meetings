@@ -16,14 +16,8 @@ struct LiveTranscriptView: View {
         let displayedMeetingID = controller.draft?.meetingID
         VStack(alignment: .leading, spacing: 8) {
             LiveTranscriptHeader(
-                enabled: Binding(get: { controller.enabled }, set: controller.setEnabled),
-                recognizesSpeakers: Binding(
-                    get: { controller.speakerLabelsEnabled },
-                    set: { enabled in
-                        controller.setSpeakerLabelsEnabled(enabled)
-                    }),
                 followsLive: followsLive, hasRows: displayCache.count > 0,
-                issues: headerIssues, showsProviderSettings: controller.canOpenProviderSettings,
+                issues: headerIssues, showsProviderSettings: false,
                 follow: { followsLive = true },
                 openProviders: {
                     settingsTab = "providers"
@@ -38,14 +32,14 @@ struct LiveTranscriptView: View {
                     Text(
                         controller.enabled
                             ? "Recording continues. You can transcribe the saved audio after recording."
-                            : "Turn on Transcribe to see text here. You can also transcribe the saved audio after recording."
+                            : "Enable live transcription in Settings to show text in future recordings. You can also transcribe the saved audio after recording."
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else {
                 NativeTranscriptView(
-                    rows: [], layoutService: layoutService, generation: displayCache.revision, showsSpeakers: true,
+                    rows: [], layoutService: layoutService, generation: displayCache.revision, showsSpeakers: false,
                     editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
                     liveRows: displayCache,
                     captureSave: { id in
@@ -65,46 +59,12 @@ struct LiveTranscriptView: View {
                         followsLive = false
                         controller.updateText(phrase: phrase, text: text)
                     },
-                    speakerPicker: { id, completed in
-                        if let meetingID = controller.draft?.meetingID,
-                            let phrase = displayCache.phrase(id: id)
-                        {
-                            return AnyView(
-                                TranscriptSpeakerPicker(
-                                    meetingID: meetingID,
-                                    speaker: MeetingSpeaker(
-                                        id: id, label: phrase.speakerLabel, track: phrase.source.rawValue,
-                                        providerName: controller.draft?.provider ?? "This Mac",
-                                        personID: phrase.personID),
-                                    completed: completed,
-                                    assignment: { personID in
-                                        guard store.libraryWritable,
-                                            controller.draft?.meetingID == displayedMeetingID,
-                                            personID == nil || store.people.contains(where: { $0.id == personID })
-                                        else { return }
-                                        followsLive = false
-                                        controller.assignPerson(phrase: phrase, personID: personID)
-                                    },
-                                    lineAssignment: phrase.speakerIdentity == nil
-                                        ? nil
-                                        : { personID in
-                                            guard store.libraryWritable,
-                                                controller.draft?.meetingID == displayedMeetingID,
-                                                personID == nil || store.people.contains(where: { $0.id == personID })
-                                            else { return }
-                                            followsLive = false
-                                            controller.assignPersonToLine(phrase: phrase, personID: personID)
-                                        }
-                                ).environmentObject(store))
-                        }
-                        return AnyView(Text("Speaker is unavailable."))
-                    })
+                    speakerPicker: { _, _, _ in AnyView(EmptyView()) })
             }
         }
         .onAppear { refreshRows() }
         .onChange(of: controller.streamRevision) { _, _ in refreshRows() }
         .onChange(of: controller.enabled) { _, _ in refreshRows() }
-        .onChange(of: controller.speakerLabelsEnabled) { _, _ in refreshRows() }
         .onChange(of: store.people.map { PersonDisplayIdentity(id: $0.id, name: $0.name) }) { _, _ in refreshRows() }
     }
 
@@ -117,7 +77,7 @@ struct LiveTranscriptView: View {
     private func refreshRows() {
         displayCache.update(
             controller.presentedStream, people: store.people,
-            enabled: controller.speakerLabelsEnabled, recognitionEnabled: controller.enabled)
+            enabled: false, recognitionEnabled: controller.enabled)
         hasUnresolvedTiming = displayCache.hasUnresolvedTiming
     }
 }
@@ -182,8 +142,6 @@ private struct PersonDisplayIdentity: Equatable {
 
 /// Compact controls stay separate from volatile transcript rows.
 struct LiveTranscriptHeader: View {
-    @Binding var enabled: Bool
-    @Binding var recognizesSpeakers: Bool
     let followsLive: Bool
     let hasRows: Bool
     let issues: [String]
@@ -194,10 +152,6 @@ struct LiveTranscriptHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Toggle("Transcribe", isOn: $enabled)
-                .toggleStyle(.switch).controlSize(.small).fixedSize()
-            Toggle("Label Speakers", isOn: $recognizesSpeakers)
-                .toggleStyle(.switch).controlSize(.small).fixedSize()
             if !issues.isEmpty {
                 Button {
                     showsIssues.toggle()

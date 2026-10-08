@@ -68,7 +68,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     var pauseLiveFollowing: (() -> Void)? = nil
     var play: (Double) -> Void
     var save: (UUID, String) -> Void
-    var speakerPicker: (UUID, @escaping () -> Void) -> AnyView
+    var speakerPicker: (UUID, UUID, @escaping () -> Void) -> AnyView
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -840,7 +840,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             popover.behavior = .transient
             popover.delegate = self
             popover.contentViewController = NSHostingController(
-                rootView: parent.speakerPicker(speakerID) { [weak popover] in popover?.close() })
+                rootView: parent.speakerPicker(row.id, speakerID) { [weak popover] in popover?.close() })
             self.popover = popover
             popover.show(relativeTo: cell.badge.bounds, of: cell.badge, preferredEdge: .maxY)
         }

@@ -28,6 +28,7 @@ struct LiveSpeakerInterval: Codable, Equatable, Sendable {
     var start: Double
     var end: Double
     var localTrackID: UUID?
+    var associationUncertain: Bool?
 }
 
 struct LiveSpeakerEvent: Codable, Sendable {
@@ -39,7 +40,6 @@ struct LiveSpeakerEvent: Codable, Sendable {
     var start: Double
     var end: Double
     var final = false
-    var continuity: SpeakerEvidenceWindow?
 }
 
 struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
@@ -74,13 +74,6 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
             return false
         }
         let ids = Set(event.speakers.map(\.id))
-        if let continuity = event.continuity {
-            guard continuity.isValid, continuity.source == event.source.rawValue,
-                continuity.generation == event.generation.uuidString,
-                Set(continuity.localSpeakerIDs) == Set(ids.map(\.uuidString)),
-                continuity.publicationStart <= event.start, continuity.observedEnd == event.end
-            else { return false }
-        }
         guard event.speakers.allSatisfy({ $0.source == event.source && $0.generation == event.generation }),
             event.intervals.allSatisfy({
                 ids.contains($0.speakerID) && $0.start.isFinite && $0.end.isFinite
@@ -136,7 +129,10 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
     func attributing(
         _ phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase? = nil, bridgeUnknownWords: Bool = true
     ) -> [LiveTranscriptPhrase] {
-        let ids = Set(speakers.filter { $0.includes(phrase.source) }.map(\.id))
+        let identities = Dictionary(
+            speakers.filter { $0.includes(phrase.source) }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let ids = Set(identities.keys)
         let sourceIntervals = intervals.filter {
             ids.contains($0.speakerID) && ($0.source == nil || $0.source == phrase.source)
         }
@@ -195,15 +191,21 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
                         || (leading + tolerance >= supportMinimum && trailing + tolerance >= supportMinimum)
                 else { return nil }
             }
-            return speakers.first { $0.id == speaker }
+            return identities[speaker]
+        }
+        func uncertain(_ start: Double, _ end: Double, _ identity: LiveSpeakerIdentity?) -> Bool {
+            guard let identity else { return false }
+            return sourceIntervals.contains {
+                $0.speakerID == identity.id && $0.associationUncertain == true && $0.start < end && $0.end > start
+            }
         }
         func apply(_ identity: LiveSpeakerIdentity?, to row: LiveTranscriptPhrase) -> LiveTranscriptPhrase {
             var row = row
             if let identity {
                 row.speakerIdentity = identity.id
                 row.diarizationLabel = identity.label
-                row.personID = identity.personID
-                row.voiceEmbedding = identity.voiceEmbedding
+                row.associationUncertain = uncertain(row.start, row.end, identity) ? true : nil
+                row = LiveSpeakerAliases.applyingMetadata(row, speaker: identity)
                 row.speakerColorSlot = identity.colorSlot
             }
             else if !ids.isEmpty {
@@ -244,7 +246,9 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
         var groups: [(Double, Double, LiveSpeakerIdentity?)] = []
         for word in phrase.words {
             let speaker = identity(word.start, word.end, activity: relevant, timedWord: true)
-            if let last = groups.last, last.2?.id == speaker?.id {
+            if let last = groups.last, last.2?.id == speaker?.id,
+                uncertain(last.0, last.1, last.2) == uncertain(word.start, word.end, speaker)
+            {
                 groups[groups.count - 1].1 = word.end
             }
             else {
@@ -310,7 +314,9 @@ struct LiveSpeakerTimeline: Codable, Equatable, Sendable {
         }
         var joined: [(Double, Double, LiveSpeakerIdentity?)] = []
         for group in groups {
-            if let previous = joined.last, previous.2?.id == group.2?.id {
+            if let previous = joined.last, previous.2?.id == group.2?.id,
+                uncertain(previous.0, previous.1, previous.2) == uncertain(group.0, group.1, group.2)
+            {
                 joined[joined.count - 1].1 = group.1
             }
             else {
@@ -392,7 +398,8 @@ struct LiveSpeakerIntervalIndex {
 
     private var sources: [LiveAudioSource: RangeIndex<LiveSpeakerInterval>] = [:]
     private var gapsBySource: [LiveAudioSource: RangeIndex<LiveTranscriptGap>] = [:]
-    private var speakersBySource: [LiveAudioSource: [LiveSpeakerIdentity]] = [:]
+    private var speakersByID: [UUID: LiveSpeakerIdentity] = [:]
+    private var firstSpeakerBySource: [LiveAudioSource: LiveSpeakerIdentity] = [:]
     private var timeline: LiveSpeakerTimeline
 
     init(_ timeline: LiveSpeakerTimeline) {
@@ -400,7 +407,7 @@ struct LiveSpeakerIntervalIndex {
         gapsBySource = Dictionary(grouping: timeline.gaps, by: \.source).mapValues {
             RangeIndex($0, start: { $0.start }, end: { $0.end })
         }
-        speakersBySource = Self.groupSpeakers(timeline.speakers)
+        indexSpeakers(timeline.speakers)
         let sourcesByID = Dictionary(grouping: timeline.speakers, by: \.id).mapValues {
             Set($0.flatMap { [$0.source] + ($0.additionalSources ?? []) })
         }
@@ -429,7 +436,7 @@ struct LiveSpeakerIntervalIndex {
                 }
             }
             if self.timeline.speakers != timeline.speakers {
-                speakersBySource = Self.groupSpeakers(timeline.speakers)
+                indexSpeakers(timeline.speakers)
             }
             self.timeline = timeline
         }
@@ -438,11 +445,15 @@ struct LiveSpeakerIntervalIndex {
         }
     }
 
-    private static func groupSpeakers(_ speakers: [LiveSpeakerIdentity]) -> [LiveAudioSource: [LiveSpeakerIdentity]] {
-        Dictionary(
-            uniqueKeysWithValues: LiveAudioSource.allCases.map { source in
-                (source, speakers.filter { $0.includes(source) })
-            })
+    private mutating func indexSpeakers(_ speakers: [LiveSpeakerIdentity]) {
+        speakersByID = Dictionary(speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        firstSpeakerBySource = [:]
+        for speaker in speakers {
+            for source in LiveAudioSource.allCases where speaker.includes(source) && firstSpeakerBySource[source] == nil
+            {
+                firstSpeakerBySource[source] = speaker
+            }
+        }
     }
 
     func evidence(for phrase: LiveTranscriptPhrase, preceding: LiveTranscriptPhrase?) -> LiveSpeakerTimeline {
@@ -453,8 +464,18 @@ struct LiveSpeakerIntervalIndex {
             } ?? false
         let start = usesPreceding ? min(phrase.start, preceding!.start) : phrase.start
         var evidence = LiveSpeakerTimeline()
-        evidence.speakers = speakersBySource[phrase.source] ?? []
         evidence.intervals = sources[phrase.source]?.overlapping(start: start, end: phrase.end) ?? []
+        // Attribution only needs identities with overlapping evidence. Keeping
+        // every historical channel here made each word scan the whole meeting.
+        var seen = Set<UUID>()
+        evidence.speakers = evidence.intervals.compactMap { interval in
+            guard seen.insert(interval.speakerID).inserted else { return nil }
+            return speakersByID[interval.speakerID]
+        }
+        // Preserve labeled-source unknown speech without copying its history.
+        if evidence.speakers.isEmpty, let first = firstSpeakerBySource[phrase.source] {
+            evidence.speakers = [first]
+        }
         evidence.gaps = gapsBySource[phrase.source]?.overlapping(start: start, end: phrase.end) ?? []
         evidence.cursors = timeline.cursors.filter { $0.source == phrase.source }.map {
             // Sequence and finality do not affect attribution. Once coverage has

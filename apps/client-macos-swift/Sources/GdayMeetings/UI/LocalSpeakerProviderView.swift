@@ -10,15 +10,9 @@ struct LocalSpeakerProviderView: View {
     @Binding var draft: ServiceProvider
     @ViewState private var failure: String?
 
-    private var choices: [LocalModelID] {
-        LocalModelID.allCases.filter { $0.nemotronPreset != nil }
-    }
-    private var modelID: LocalModelID? { LocalModelID(rawValue: draft.model) }
     private var changed: Bool { store.settings.serviceProviders.first { $0.id == draft.id } != draft }
     private var modelHealthIdentity: [LocalModelID: LocalModelState.HealthIdentity] {
-        let savedModel = store.settings.serviceProviders.first { $0.id == draft.id }
-            .flatMap { LocalModelID(rawValue: $0.model) }
-        return localModels.states.filter { $0.key == savedModel || $0.key == .community1 }
+        return localModels.states.filter { $0.key == .community1 }
             .mapValues(\.healthIdentity)
     }
 
@@ -35,7 +29,7 @@ struct LocalSpeakerProviderView: View {
             Section("Capabilities") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     Toggle(
-                        capability == .diarization ? "Recorded Speaker Labeling" : capability.title,
+                        capability == .diarization ? "Speaker Diarization" : capability.title,
                         isOn: Binding(
                             get: { draft.enabledCapabilities.contains(capability) },
                             set: { enabled in
@@ -47,44 +41,21 @@ struct LocalSpeakerProviderView: View {
                                 }
                             }))
                 }
-                Text("Live labeling uses Nemotron and Community-1. Recorded labeling uses Community-1.")
+                Text("Speaker diarization runs after recording using Community-1.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Readiness") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     let result = health.validationState(providerID: draft.id, capability: capability)
                     ProviderHealthSummary(
-                        title: capability == .diarization ? "Recorded Speaker Labeling" : capability.title,
+                        title: capability == .diarization ? "Speaker Diarization" : capability.title,
                         health: result)
                 }
-            }
-            Section("Nemotron") {
-                Picker("Preset", selection: $draft.model) {
-                    ForEach(choices) { id in Text(LocalModelRegistry.descriptor(id).title).tag(id.rawValue) }
-                }
-                if let modelID {
-                    let descriptor = LocalModelRegistry.descriptor(modelID)
-                    if let seconds = descriptor.inputBufferSeconds {
-                        Text(
-                            "Requires \(seconds.formatted(.number.precision(.fractionLength(2)))) seconds of audio before processing. Speaker labels can arrive later."
-                        )
-                        .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let capacity = descriptor.speakerCapacity {
-                        Text(
-                            "Up to \(capacity) speaker channels per audio source. Additional speakers may share a label."
-                        )
-                        .font(.caption).foregroundStyle(.secondary)
-                    }
-                    LocalModelDownloadView(modelID: modelID).id(modelID)
-                }
-                Text("Changes apply to the next recording or labeling job.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Community-1") {
                 LocalModelDownloadView(modelID: .community1)
                 Text(
-                    "Used for recorded speaker labeling and voice samples. Required with Nemotron for live speaker labeling."
+                    "Used for recorded speaker diarization and voice samples."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
