@@ -51,6 +51,7 @@ actor LiveTranscriptProjectionStorage {
     private var carry: [LiveTranscriptPhrase] = []
     private var bytes: UInt64 = 0
     private var rowCount = 0
+    private var committedSpeakerIDs = Set<UUID>()
     private var initialized = false
     private var lastOverrides: [LiveTranscriptOverride] = []
 
@@ -90,6 +91,9 @@ actor LiveTranscriptProjectionStorage {
             let nextCarry = stable.isEmpty ? [] : [stable.removeLast()]
             let recent = paragraphs(nextCarry + snapshot.tail, metadata: metadata)
             let committed = (stable + (finished ? recent : [])).map { TranscriptSegment(live: $0) }
+            var nextSpeakerIDs = rewriting ? Set<UUID>() : committedSpeakerIDs
+            nextSpeakerIDs.formUnion(committed.compactMap(\.speakerID))
+            let checkpointSpeakerIDs = nextSpeakerIDs.union(recent.compactMap(\.speakerIdentity))
             let added = try TranscriptStorage.encoded(committed)
             var nextBytes = rewriting ? 0 : bytes
             var nextCount = rewriting ? 0 : rowCount
@@ -119,7 +123,11 @@ actor LiveTranscriptProjectionStorage {
                 draft.effectivePhrases = nil
                 draft.savedSegments = nil
                 draft.overrides = nil
-                draft.speakerTimeline?.intervals = []
+                if let timeline = draft.speakerTimeline {
+                    draft.speakerTimeline = LiveCheckpointSpeakerHistory.compact(
+                        timeline, referenced: checkpointSpeakerIDs,
+                        overrides: metadata.overrides ?? [], finished: finished)
+                }
                 if !finished { draft.complete = false }
                 let checkpoint = LiveTranscriptProjection.Checkpoint(
                     bytes: nextBytes, rows: nextCount,
@@ -132,6 +140,7 @@ actor LiveTranscriptProjectionStorage {
                 carry = finished ? [] : nextCarry
                 bytes = nextBytes
                 rowCount = nextCount
+                committedSpeakerIDs = nextSpeakerIDs
                 initialized = true
                 lastOverrides = metadata.overrides ?? []
             }
