@@ -8,6 +8,11 @@ struct ExternalLibraryChanges: OptionSet, Sendable {
     static let tasks = Self(rawValue: 8)
     static let all: Self = [.meetings, .people, .tags, .tasks]
 
+    static let meetingDocuments: Set<String> = [
+        "metadata.json", "content.json", "notes.md", "summary.md", TranscriptStorage.filename,
+        LiveTranscriptProjection.checkpointName,
+    ]
+
     init(rawValue: Int) { self.rawValue = rawValue }
     init(paths: [URL], root: URL, rebuild: Bool) {
         self = rebuild ? .all : []
@@ -19,8 +24,14 @@ struct ExternalLibraryChanges: OptionSet, Sendable {
                 return
             }
             guard let prefix = roots.first(where: { path.hasPrefix($0 + "/") }) else { continue }
-            switch path.dropFirst(prefix.count + 1).split(separator: "/").first {
-            case "meetings": insert(.meetings)
+            let components = path.dropFirst(prefix.count + 1).split(separator: "/")
+            switch components.first {
+            case "meetings":
+                if components.count <= 2
+                    || (components.count == 3 && Self.meetingDocuments.contains(String(components[2])))
+                {
+                    insert(.meetings)
+                }
             case "people": insert(.people)
             case "tags": insert(.tags)
             case "tasks.jsonl": insert(.tasks)
@@ -51,7 +62,11 @@ struct ExternalLibraryChangeBatch: Sendable {
             }
             guard let prefix = roots.first(where: { path.hasPrefix($0 + "/") }) else { continue }
             let components = path.dropFirst(prefix.count + 1).split(separator: "/")
-            guard components.first == "meetings" else { continue }
+            guard components.first == "meetings",
+                components.count <= 2
+                    || (components.count == 3
+                        && ExternalLibraryChanges.meetingDocuments.contains(String(components[2])))
+            else { continue }
             guard components.count > 1, let id = MeetingFolderLocation.identity(String(components[1])) else {
                 meetingIDs = nil
                 return

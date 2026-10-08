@@ -241,17 +241,21 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
                     self.process(.init(paths: Array(self.pendingImports), requiresScan: scan, eventID: batch.eventID))
                 }
             }
+            var indexChanged = batch.requiresScan
             if batch.requiresScan {
                 self.report(nil, self.indexSize(), true, 0, nil)
-                try index.rebuild { [weak self] count in
+                indexChanged = try index.rebuild { [weak self] count in
                     guard let self else { return }
                     self.report(index.lastCommittedCount ?? existingCount, self.indexSize(), true, count, nil)
                 }
             }
             else if !paths.isEmpty {
-                try index.reconcile(paths: paths)
+                indexChanged = try index.reconcile(paths: paths)
             }
-            directoryChanged(paths, batch.requiresScan)
+            let documentChanges = ExternalLibraryChanges(paths: paths, root: root, rebuild: batch.requiresScan)
+            if indexChanged || !documentChanges.intersection([.people, .tags]).isEmpty {
+                directoryChanged(paths, batch.requiresScan)
+            }
             if batch.eventID > 0 && pendingImports.isEmpty && !unsettledOverflow {
                 try JSONEncoder().encode(batch.eventID).write(to: self.cursor, options: .atomic)
             }
@@ -264,10 +268,8 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
                 importErrorCount > 0
                 ? "\(importErrorCount) folders need attention. " + importErrors.joined(separator: " ") : nil
             self.refreshCounts(error: importError)
-            if batch.requiresScan || !paths.isEmpty {
-                self.changed(batch.requiresScan)
-                self.documentsChanged(paths, batch.requiresScan)
-            }
+            if indexChanged { self.changed(batch.requiresScan) }
+            if !documentChanges.isEmpty { self.documentsChanged(paths, batch.requiresScan) }
         }
         catch {
             needsRecoveryScan = true
@@ -303,15 +305,17 @@ extension MeetingStore {
                     guard let self else { return }
                     if let count {
                         let previous = self.libraryDataStatus.meetingCount
-                        self.libraryDataStatus.meetingCount = count
+                        if previous != count { self.libraryDataStatus.meetingCount = count }
                         if building && count > previous { self.refreshMeetingPageAvailabilityAfterIndexCommit() }
                         if !building && error == nil { self.indexNeedsInitialRebuild = false }
                     }
-                    if let bytes { self.libraryDataStatus.indexBytes = bytes }
-                    self.libraryDataStatus.isBuilding = building
-                    self.libraryDataStatus.isDiscovering = false
-                    self.libraryDataStatus.processed = processed
-                    self.libraryDataStatus.error = error
+                    if let bytes, self.libraryDataStatus.indexBytes != bytes {
+                        self.libraryDataStatus.indexBytes = bytes
+                    }
+                    if self.libraryDataStatus.isBuilding != building { self.libraryDataStatus.isBuilding = building }
+                    if self.libraryDataStatus.isDiscovering != false { self.libraryDataStatus.isDiscovering = false }
+                    if self.libraryDataStatus.processed != processed { self.libraryDataStatus.processed = processed }
+                    if self.libraryDataStatus.error != error { self.libraryDataStatus.error = error }
                 }
             },
             changed: { [weak self] rebuilt in

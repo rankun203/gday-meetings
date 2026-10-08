@@ -9,6 +9,7 @@ final class LibraryIndex: @unchecked Sendable {
     private(set) var lastCommittedCount: Int?
     private(set) var recoveredCorruptIndex = false
     private(set) var requiresRebuild = false
+    private var mutationRevision = 0
     private var lastPageSQL: String?
     private let locationConnection: IndexDatabase.Connection
     private let locationLock = NSLock()
@@ -70,6 +71,7 @@ final class LibraryIndex: @unchecked Sendable {
             guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
             MeetingFolderLocation.block(id: id, directory: directory)
             try execute("RELEASE quarantine_row")
+            mutationRevision += 1
         }
         catch {
             try execute("ROLLBACK TO quarantine_row; RELEASE quarantine_row")
@@ -106,6 +108,15 @@ final class LibraryIndex: @unchecked Sendable {
         }
         let passages =
             refreshSearch ? try MeetingFolderStorage.searchPassages(folder: folder, directory: directory) : []
+        if try self.entry(id: entry.id) == entry,
+            try folderName(id: entry.id) == folder.lastPathComponent,
+            try indexedRelationsMatch(entry),
+            try !refreshSearch
+                || indexedPassages(id: entry.id)
+                    == Set([LibrarySearchPassage(kind: .title, text: entry.title)] + passages)
+        {
+            return
+        }
         try execute("SAVEPOINT upsert_row")
         do {
             let location = try statement(
@@ -183,6 +194,7 @@ final class LibraryIndex: @unchecked Sendable {
                 }
             }
             try execute("RELEASE upsert_row")
+            mutationRevision += 1
             if !connection.isStaging {
                 MeetingFolderLocation.remember(folder, id: entry.id, directory: directory)
             }
@@ -194,9 +206,60 @@ final class LibraryIndex: @unchecked Sendable {
         }
     }
 
+    private func folderCount() throws -> Int {
+        let query = try statement("SELECT count(*) FROM meeting_folders")
+        defer { release(query) }
+        guard sqlite3_step(query) == SQLITE_ROW else { throw failure() }
+        return Int(sqlite3_column_int64(query, 0))
+    }
+
+    private func indexedRelationsMatch(_ entry: MeetingListEntry) throws -> Bool {
+        let query = try statement("SELECT kind,target,sortTime FROM relations WHERE meeting=?")
+        defer { release(query) }
+        bind(entry.id.uuidString, 1, query)
+        var people = Set(entry.personIDs.map(\.uuidString))
+        var tags = Set(entry.tagIDs.map(\.uuidString))
+        while true {
+            let status = sqlite3_step(query)
+            if status == SQLITE_DONE { return people.isEmpty && tags.isEmpty }
+            guard status == SQLITE_ROW else { throw failure() }
+            guard sqlite3_column_double(query, 2) == -entry.createdAt.timeIntervalSince1970 else { return false }
+            let target = String(cString: sqlite3_column_text(query, 1))
+            switch String(cString: sqlite3_column_text(query, 0)) {
+            case "person": guard people.remove(target) != nil else { return false }
+            case "tag": guard tags.remove(target) != nil else { return false }
+            default: return false
+            }
+        }
+    }
+
+    /// Compare search content too: a document edit need not change its list entry.
+    private func indexedPassages(id: UUID) throws -> Set<LibrarySearchPassage> {
+        let query = try statement(
+            "SELECT kind,segment,start,text,end FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting=?)"
+        )
+        defer { release(query) }
+        bind(id.uuidString, 1, query)
+        var passages = Set<LibrarySearchPassage>()
+        while true {
+            let status = sqlite3_step(query)
+            if status == SQLITE_DONE { return passages }
+            guard status == SQLITE_ROW,
+                let kind = LibrarySearchKind(rawValue: String(cString: sqlite3_column_text(query, 0)))
+            else { throw failure() }
+            passages.insert(
+                LibrarySearchPassage(
+                    kind: kind, segmentID: UUID(uuidString: String(cString: sqlite3_column_text(query, 1))),
+                    start: sqlite3_column_type(query, 2) == SQLITE_NULL ? nil : sqlite3_column_double(query, 2),
+                    text: String(cString: sqlite3_column_text(query, 3)),
+                    end: sqlite3_column_type(query, 4) == SQLITE_NULL ? nil : sqlite3_column_double(query, 4)))
+        }
+    }
+
     func remove(id: UUID) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard try entry(id: id) != nil || folderName(id: id) != nil else { return }
         try execute("SAVEPOINT remove_row")
         do {
             MeetingFolderLocation.forget(id: id, directory: directory)
@@ -216,6 +279,7 @@ final class LibraryIndex: @unchecked Sendable {
                 guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
             }
             try execute("RELEASE remove_row")
+            mutationRevision += 1
         }
         catch {
             try execute("ROLLBACK TO remove_row; RELEASE remove_row")
@@ -431,12 +495,16 @@ final class LibraryIndex: @unchecked Sendable {
         }
         return details
     }
-    func rebuild(progress: @Sendable (Int) -> Void = { _ in }) throws {
+    @discardableResult func rebuild(progress: @Sendable (Int) -> Void = { _ in }) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         lastRebuildErrorCount = 0
         lastCommittedCount = nil
-        let publishBatches = try count() == 0
+        let previousRevision = mutationRevision
+        let previousCount = try count()
+        let previousFolderCount = try folderCount()
+        let wasIncomplete = requiresRebuild
+        let publishBatches = previousCount == 0
         if !publishBatches { try connection.beginStaging(.library, preservingRows: true) }
         try execute(
             "CREATE TEMP TABLE IF NOT EXISTS rebuild_seen(id TEXT PRIMARY KEY); DELETE FROM rebuild_seen; CREATE TEMP TABLE IF NOT EXISTS rebuild_folder_counts(id TEXT PRIMARY KEY, occurrences INTEGER NOT NULL); DELETE FROM rebuild_folder_counts;"
@@ -518,10 +586,23 @@ final class LibraryIndex: @unchecked Sendable {
             try execute(
                 "DELETE FROM meetings WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM meeting_folders WHERE id NOT IN (SELECT id FROM rebuild_seen); DELETE FROM relations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); DELETE FROM search_passages WHERE rowid IN (SELECT id FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen)); DELETE FROM search_locations WHERE meeting NOT IN (SELECT id FROM rebuild_seen); UPDATE index_state SET complete=1 WHERE id=1"
             )
-            if !publishBatches { try connection.publishStaging() }
+            let currentCount = try self.count()
+            let currentFolderCount = try folderCount()
+            let changed =
+                wasIncomplete || mutationRevision != previousRevision || currentCount != previousCount
+                || currentFolderCount != previousFolderCount
+            if !publishBatches {
+                if changed {
+                    try connection.publishStaging()
+                }
+                else {
+                    connection.discardStaging()
+                }
+            }
             requiresRebuild = false
             lastCommittedCount = try self.count()
             progress(count)
+            return changed
         }
         catch {
             connection.discardStaging()
@@ -549,9 +630,10 @@ final class LibraryIndex: @unchecked Sendable {
         }
     }
 
-    func reconcile(paths: [URL]) throws {
+    @discardableResult func reconcile(paths: [URL]) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        let previousRevision = mutationRevision
         // File URL standardization rewrites existing /private paths but not deleted paths.
         // Normalize syntax only so removal events retain the watcher’s physical root spelling.
         let root = directory.standardized
@@ -559,8 +641,7 @@ final class LibraryIndex: @unchecked Sendable {
         let normalized = paths.map(\.standardized)
         // A coalesced ancestor event may be the only notice of removed meeting folders.
         if normalized.contains(where: { $0.path == root.path || $0.path == meetings.path }) {
-            try rebuild()
-            return
+            return try rebuild()
         }
         let indexedFiles: Set<String> = [
             "metadata.json", "notes.md", "summary.md", TranscriptStorage.filename,
@@ -624,5 +705,6 @@ final class LibraryIndex: @unchecked Sendable {
                 folder.deleteLastPathComponent()
             }
         }
+        return mutationRevision != previousRevision
     }
 }

@@ -38,7 +38,9 @@ final class DirectoryIndex: @unchecked Sendable {
     private var pending: Set<URL> = []
     private var needsScan = false
     private var scheduled = false
-    private var completion: (@Sendable (String?) -> Void)?
+    private var completion: (@Sendable (Bool, String?) -> Void)?
+    private var libraryRevision: Int64?
+    private var relationshipCounts: [String: Int64] = [:]
 
     init(root: URL, indexDirectory: URL) throws {
         self.root = root.standardizedFileURL.resolvingSymlinksInPath()
@@ -60,7 +62,7 @@ final class DirectoryIndex: @unchecked Sendable {
     }
 
     /// Coalesces file events and app writes on one background queue.
-    func enqueue(paths: [URL] = [], rebuild: Bool = false, completion: @escaping @Sendable (String?) -> Void) {
+    func enqueue(paths: [URL] = [], rebuild: Bool = false, completion: @escaping @Sendable (Bool, String?) -> Void) {
         pendingLock.lock()
         pending.formUnion(paths)
         needsScan = needsScan || rebuild
@@ -82,15 +84,15 @@ final class DirectoryIndex: @unchecked Sendable {
                 pendingLock.unlock()
                 guard let callback else { return }
                 do {
-                    try reconcile(paths: paths, rebuild: scan)
-                    callback(nil)
+                    let changed = try reconcile(paths: paths, rebuild: scan)
+                    callback(changed, nil)
                 }
-                catch { callback(error.localizedDescription) }
+                catch { callback(false, error.localizedDescription) }
             }
         }
     }
 
-    func reconcile(paths: [URL], rebuild: Bool = false) throws {
+    @discardableResult func reconcile(paths: [URL], rebuild: Bool = false) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         let state = try prepare("SELECT complete FROM state WHERE id=1")
@@ -117,7 +119,8 @@ final class DirectoryIndex: @unchecked Sendable {
         }
         if full.isEmpty {
             let mutations = try changed.flatMap { kind, ids in try ids.map { try load(kind: kind, id: $0) } }
-            guard !mutations.isEmpty else { return }
+                .filter { try differsFromIndex($0) }
+            guard !mutations.isEmpty else { return try refreshRelationshipCounts() }
             try execute("BEGIN IMMEDIATE")
             do {
                 for mutation in mutations { try apply(mutation) }
@@ -127,7 +130,8 @@ final class DirectoryIndex: @unchecked Sendable {
                 try? execute("ROLLBACK")
                 throw error
             }
-            return
+            _ = try refreshRelationshipCounts()
+            return true
         }
         try connection.beginStaging(.directory, preservingRows: true)
         do {
@@ -160,13 +164,83 @@ final class DirectoryIndex: @unchecked Sendable {
                 for id in ids { try reconcile(kind: kind, id: id) }
             }
             try execute("UPDATE state SET complete=1 WHERE id=1")
-            try connection.publishStaging()
+            let changed = try stagedContentsDiffer()
+            if changed {
+                try connection.publishStaging()
+            }
+            else {
+                connection.discardStaging()
+            }
+            let countsChanged = try refreshRelationshipCounts()
+            return changed || countsChanged
         }
         catch {
             connection.discardStaging()
             throw error
         }
     }
+    /// Compare complete projections before publishing a staged scan, including removals.
+    private func stagedContentsDiffer() throws -> Bool {
+        for table in IndexDatabase.Module.directory.tables {
+            let query = try prepare(
+                "SELECT EXISTS(SELECT * FROM temp.\(table.name) EXCEPT SELECT * FROM main.\(table.name)) OR EXISTS(SELECT * FROM main.\(table.name) EXCEPT SELECT * FROM temp.\(table.name))"
+            )
+            defer { sqlite3_finalize(query) }
+            guard sqlite3_step(query) == SQLITE_ROW else { throw failure() }
+            if sqlite3_column_int(query, 0) != 0 { return true }
+        }
+        return false
+    }
+
+    /// Meeting writes commit on another connection before directory reconciliation.
+    /// A module revision avoids recounting relationships for repeated directory events.
+    private func refreshRelationshipCounts() throws -> Bool {
+        let revisionQuery = try prepare("SELECT revision FROM index_modules WHERE namespace='core_library'")
+        defer { sqlite3_finalize(revisionQuery) }
+        guard sqlite3_step(revisionQuery) == SQLITE_ROW else { throw failure() }
+        let revision = sqlite3_column_int64(revisionQuery, 0)
+        guard revision != libraryRevision else { return false }
+        let query = try prepare(
+            "SELECT kind,target,count(*) FROM relations WHERE kind IN ('person','tag') GROUP BY kind,target")
+        defer { sqlite3_finalize(query) }
+        var counts: [String: Int64] = [:]
+        while true {
+            let status = sqlite3_step(query)
+            if status == SQLITE_DONE { break }
+            guard status == SQLITE_ROW else { throw failure() }
+            counts[text(query, 0) + ":" + text(query, 1)] = sqlite3_column_int64(query, 2)
+        }
+        let changed = libraryRevision == nil || counts != relationshipCounts
+        relationshipCounts = counts
+        libraryRevision = revision
+        return changed
+    }
+
+    private func differsFromIndex(_ mutation: Mutation) throws -> Bool {
+        let query = try prepare("SELECT name,excluded FROM entities WHERE kind=? AND id=?")
+        defer { sqlite3_finalize(query) }
+        bind(mutation.kind.rawValue, at: 1, to: query)
+        bind(mutation.id.uuidString, at: 2, to: query)
+        let status = sqlite3_step(query)
+        guard status == SQLITE_ROW || status == SQLITE_DONE else { throw failure() }
+        if status == SQLITE_DONE { return mutation.name != nil }
+        guard mutation.name == text(query, 0), mutation.excluded == (sqlite3_column_int(query, 1) != 0) else {
+            return true
+        }
+        guard mutation.kind == .people else { return false }
+        let tags = try prepare("SELECT tag FROM person_tags WHERE person=?")
+        defer { sqlite3_finalize(tags) }
+        bind(mutation.id.uuidString, at: 1, to: tags)
+        var existing = Set<String>()
+        while true {
+            let status = sqlite3_step(tags)
+            if status == SQLITE_DONE { break }
+            guard status == SQLITE_ROW else { throw failure() }
+            existing.insert(text(tags, 0))
+        }
+        return existing != Set(mutation.tags.map(\.uuidString))
+    }
+
     private func validateDirectory(_ kind: DirectoryKind) throws {
         let directory = root.appendingPathComponent(kind.rawValue)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }

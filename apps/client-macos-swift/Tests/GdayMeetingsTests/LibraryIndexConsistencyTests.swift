@@ -118,6 +118,7 @@ import Testing
             "metadata.json", "notes.md", "summary.md", TranscriptStorage.filename,
             LiveTranscriptProjection.checkpointName, "metadata.json",
         ]
+        try Data("Changed note".utf8).write(to: folder.appendingPathComponent("notes.md"))
         try index.reconcile(paths: names.map { folder.appendingPathComponent($0) } + [folder])
         #expect(try sql("SELECT 1", root: root, countUpdates: true) == 1)
         try index.reconcile(
@@ -126,7 +127,7 @@ import Testing
             })
         #expect(try sql("SELECT 1", root: root, countUpdates: true) == 1)
         try index.reconcile(paths: [folder.appendingPathComponent(LiveTranscriptProjection.checkpointName)])
-        #expect(try sql("SELECT 1", root: root, countUpdates: true) == 2)
+        #expect(try sql("SELECT 1", root: root, countUpdates: true) == 1)
     }
 
     private final class ReconciliationResult: @unchecked Sendable {
@@ -211,13 +212,76 @@ import Testing
             root: root, report: { _, _, _, _, error in result.report(error) },
             changed: { result.append($0) })
         coordinator.process(.init(paths: [artifact, nested, looseFile], requiresScan: false, eventID: 0))
-        let reconciled = try await waitForMainActorTestCondition(timeout: .seconds(5)) { result.first != nil }
         await coordinator.stop()
-        #expect(reconciled)
-        #expect(result.first == false)
+        #expect(result.first == nil)
         #expect(result.reportedErrors.isEmpty)
         #expect(try index.page().map(\.id) == [meeting.id])
         #expect(FileManager.default.fileExists(atPath: artifact.path))
+    }
+
+    @Test func rebuildRepairsRelationsEvenWhenDocumentsMatch() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = Meeting(title: "Relation fixture")
+        let tag = UUID()
+        meeting.tagIDs = [tag]
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        _ = try sql("DELETE FROM relations", root: root)
+        #expect(try index.count(tagID: tag) == 0)
+        #expect(try index.rebuild())
+        #expect(try index.count(tagID: tag) == 1)
+        #expect(try !index.rebuild())
+    }
+
+    @Test func recordingAudioEventDoesNotNotifyIndexOrDocumentConsumers() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let root = LibraryFileMonitor.canonicalRoot(temporary)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Recording fixture")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        try index.rebuild()
+        try JSONEncoder().encode(FSEventsGetCurrentEventId()).write(
+            to: root.appendingPathComponent(".index-events.json"))
+        let callbacks = ReconciliationResult()
+        let coordinator = LibraryMonitorCoordinator(
+            root: root, report: { _, _, _, _, error in callbacks.report(error) },
+            changed: { callbacks.append($0) },
+            directoryChanged: { _, _ in callbacks.append(false) },
+            documentsChanged: { _, _ in callbacks.append(false) })
+        let audio = MeetingFolderStorage.folder(id: meeting.id, directory: root).appendingPathComponent("audio.wav")
+        coordinator.process(.init(paths: [audio], requiresScan: false, eventID: 0))
+        await coordinator.stop()
+        #expect(callbacks.first == nil)
+        #expect(callbacks.reportedErrors.isEmpty)
+    }
+
+    @Test func reconciliationSkipsIdenticalMetadataButIndexesChangedSearchContent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = Meeting(title: "Unchanged fixture")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try LibraryIndex(directory: root)
+        #expect(try index.rebuild())
+        let folder = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+        let metadata = folder.appendingPathComponent("metadata.json")
+        #expect(try !index.reconcile(paths: [metadata]))
+        #expect(try !index.rebuild())
+        #expect(try !index.reconcile(paths: [folder.appendingPathComponent("audio.wav")]))
+        let notes = folder.appendingPathComponent("notes.md")
+        try Data("Changed search text".utf8).write(to: notes)
+        #expect(try index.reconcile(paths: [notes]))
+        #expect(try !index.reconcile(paths: [notes]))
+        meeting.duration = 15
+        try MeetingFolderStorage.write(meeting, directory: root)
+        #expect(try index.reconcile(paths: [metadata]))
+        #expect(try index.entry(id: meeting.id)?.duration == 15)
+        try FileManager.default.removeItem(at: folder)
+        #expect(try index.reconcile(paths: [folder]))
+        #expect(try !index.reconcile(paths: [folder]))
     }
 
     @Test func deletedFolderEventPreservesPhysicalRootSpelling() throws {

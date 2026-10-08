@@ -670,7 +670,9 @@ final class MeetingStore: ObservableObject {
         guard !Task.isCancelled, generation == externalReloadGeneration, root == dataDirectory, !isChangingLibrary
         else { return true }
         guard let catalogs = result.0, let snapshot = result.1 else { return false }
-        if let error = result.2 ?? snapshot.errors.first { libraryDataStatus.error = error }
+        if let error = result.2 ?? snapshot.errors.first, libraryDataStatus.error != error {
+            libraryDataStatus.error = error
+        }
         if let fresh = catalogs.people, peopleMutationRevision == originalPeopleRevision,
             people == originalPeople, lastSavedLibrary.people == originalPeople
         {
@@ -709,7 +711,7 @@ final class MeetingStore: ObservableObject {
             resetMeetingPages()
         }
         else {
-            await refreshMeetingPagesAfterSave(previousIDs: [])
+            await refreshMeetingPagesAfterSave(previousIDs: [], quiet: true)
         }
         refreshMeetingPageAvailabilityAfterIndexCommit()
         return true

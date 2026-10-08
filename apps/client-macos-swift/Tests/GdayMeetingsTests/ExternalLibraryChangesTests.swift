@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 
@@ -21,6 +22,61 @@ import Testing
             ).isEmpty)
         #expect(ExternalLibraryChanges(paths: [root], root: root, rebuild: false) == .all)
         #expect(ExternalLibraryChanges(paths: [], root: root, rebuild: true) == .all)
+    }
+
+    @Test func recordingAndProviderWritesDoNotReloadDocuments() {
+        let root = URL(fileURLWithPath: "/tmp/synthetic-library")
+        let id = UUID()
+        let folder = root.appendingPathComponent("meetings/" + MeetingFolderLocation.name(id: id, date: Date()))
+        let paths = ["audio.wav", "providers/local/result.json", "waveform.json"].map {
+            folder.appendingPathComponent($0)
+        }
+        #expect(ExternalLibraryChanges(paths: paths, root: root, rebuild: false).isEmpty)
+        let batch = ExternalLibraryChangeBatch(
+            paths: paths + [folder.appendingPathComponent("content.json")], root: root)
+        #expect(batch.changes == .meetings)
+        #expect(batch.meetingIDs == [id])
+    }
+
+    @MainActor @Test func unchangedOwnSaveDoesNotPublishStoreOrPageState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        let initialDirectoryRevision = store.directoryRevision
+        await store.libraryMonitor?.stop()
+        let id = await store.createMeeting(title: "Saved meeting")
+        let directoryReady = try await waitForMainActorTestCondition(timeout: .seconds(3)) {
+            store.directoryRevision != initialDirectoryRevision
+        }
+        #expect(directoryReady)
+        let revision = store.meetingIndexRevision
+        let directoryRevision = store.directoryRevision
+        let entries = store.visibleMeetingEntries
+        var publications = 0
+        let subscription = store.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        #expect(await store.reloadExternalLibraryDocuments())
+        #expect(publications == 0)
+        #expect(store.meetingIndexRevision == revision)
+        #expect(store.directoryRevision == directoryRevision)
+        #expect(store.visibleMeetingEntries == entries)
+        store.recordingID = id
+        publications = 0
+        store.requestExternalLibraryReload(
+            paths: [store.directory(for: id).appendingPathComponent("audio.wav")], rebuild: false)
+        #expect(publications == 0)
+        store.recordingID = nil
+        var meeting = try #require(store.meeting(id: id))
+        meeting.duration = 12
+        meeting.notes = "External note"
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try Data(meeting.notes.utf8).write(to: store.directory(for: id).appendingPathComponent("notes.md"))
+        try store.libraryIndex?.reconcile(paths: [store.directory(for: id).appendingPathComponent("metadata.json")])
+        #expect(await store.reloadExternalLibraryDocuments())
+        #expect(store.meeting(id: id)?.duration == 12)
+        #expect(store.meeting(id: id)?.notes == "External note")
+        #expect(store.visibleMeetingEntries.first?.duration == 12)
+        #expect(publications > 0)
     }
 
     @MainActor @Test func meetingChangesDoNotReadUnrelatedCatalogs() async throws {

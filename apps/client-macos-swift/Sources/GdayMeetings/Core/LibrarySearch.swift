@@ -4,7 +4,7 @@ import Foundation
 /// Indexed source locations let search open content without starting playback.
 enum LibrarySearchKind: String, Codable, Sendable { case title, notes, summary, transcript }
 
-struct LibrarySearchPassage: Sendable {
+struct LibrarySearchPassage: Hashable, Sendable {
     var kind: LibrarySearchKind
     var segmentID: UUID? = nil
     var start: Double? = nil

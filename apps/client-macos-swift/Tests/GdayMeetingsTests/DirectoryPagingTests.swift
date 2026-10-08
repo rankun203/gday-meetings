@@ -13,6 +13,77 @@ import Testing
         try index.reconcile(paths: [], rebuild: true)
         return (root, index, people)
     }
+    private func persistedDirectoryRevision(at root: URL) throws -> Int64 {
+        let connection = try IndexDatabase.open(at: root.appendingPathComponent("index.db"))
+        let query = try connection.prepare("SELECT revision FROM index_modules WHERE namespace='core_directory'")
+        defer { sqlite3_finalize(query) }
+        #expect(sqlite3_step(query) == SQLITE_ROW)
+        return sqlite3_column_int64(query, 0)
+    }
+
+    @Test func repeatedEventsAndScansDoNotChangeDirectoryProjection() throws {
+        let (root, index, people) = try fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("people/\(people[0].id.uuidString).json")
+        let originalRevision = try persistedDirectoryRevision(at: root)
+        #expect(try !index.reconcile(paths: [file]))
+        #expect(try !index.reconcile(paths: [], rebuild: true))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(people[0]).write(to: file)
+        #expect(try !index.reconcile(paths: [file]))
+        #expect(try persistedDirectoryRevision(at: root) == originalRevision)
+        var renamed = people[0]
+        renamed.name = "Updated person"
+        try encoder.encode(renamed).write(to: file)
+        #expect(try index.reconcile(paths: [file]))
+        #expect(try !index.reconcile(paths: [file]))
+        try FileManager.default.removeItem(at: file)
+        #expect(try index.reconcile(paths: [], rebuild: true))
+        #expect(try !index.reconcile(paths: [file]))
+    }
+
+    @Test func tagRelationshipsAndExclusionChangesPublishOnce() throws {
+        let (root, index, people) = try fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var tag = MeetingTag(name: "Example tag")
+        let tagFile = root.appendingPathComponent("tags/\(tag.id.uuidString).json")
+        try FileEntityStorage.save([tag], previous: [], kind: "tags", directory: root)
+        #expect(try index.reconcile(paths: [tagFile]))
+        var person = people[0]
+        person.tagIDs = [tag.id]
+        let personFile = root.appendingPathComponent("people/\(person.id.uuidString).json")
+        try JSONEncoder().encode(person).write(to: personFile)
+        #expect(try index.reconcile(paths: [personFile]))
+        #expect(try !index.reconcile(paths: [personFile, tagFile]))
+        tag.isExcluded = true
+        try JSONEncoder().encode(tag).write(to: tagFile)
+        #expect(try index.reconcile(paths: [tagFile]))
+        #expect(try index.page(kind: .people).total == 0)
+        #expect(try !index.reconcile(paths: [], rebuild: true))
+    }
+
+    @Test func meetingRelationshipCountsDetectCommittedWritesWithoutEntityChanges() throws {
+        let (root, index, people) = try fixture(count: 1)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try LibraryIndex(directory: root)
+        var meeting = Meeting(title: "Example meeting")
+        meeting.personIDs = [people[0].id]
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try library.rebuild()
+        #expect(try index.reconcile(paths: []))
+        #expect(try index.page(kind: .people).entries.first?.meetingCount == 1)
+        #expect(try !index.reconcile(paths: []))
+        meeting.title = "Updated meeting"
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try library.rebuild()
+        #expect(try !index.reconcile(paths: []))
+        try library.remove(id: meeting.id)
+        #expect(try index.reconcile(paths: []))
+        #expect(try index.page(kind: .people).entries.first?.meetingCount == 0)
+        #expect(try !index.reconcile(paths: []))
+    }
+
     @Test(arguments: [DirectoryKind.people, .tags])
     func unavailableIndexCancelsLoadingAndCanRecover(kind: DirectoryKind) async throws {
         let (root, index, _) = try fixture(count: 125)

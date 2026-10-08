@@ -6,16 +6,18 @@ extension MeetingStore {
         if directoryIndex == nil {
             do { directoryIndex = try DirectoryIndex(root: dataDirectory, indexDirectory: indexDirectory) }
             catch {
-                directoryIndexError = error.localizedDescription
+                if directoryIndexError != error.localizedDescription {
+                    directoryIndexError = error.localizedDescription
+                }
                 return
             }
         }
         guard let index = directoryIndex else { return }
-        index.enqueue(paths: paths, rebuild: rebuild) { [weak self, weak index] error in
+        index.enqueue(paths: paths, rebuild: rebuild) { [weak self, weak index] changed, error in
             Task { @MainActor in
                 guard let self, self.directoryIndex === index else { return }
-                self.directoryIndexError = error
-                self.directoryRevision = UUID()
+                if self.directoryIndexError != error { self.directoryIndexError = error }
+                if changed { self.directoryRevision = UUID() }
             }
         }
     }
