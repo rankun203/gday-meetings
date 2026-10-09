@@ -1,0 +1,943 @@
+<!doctype html>
+<!--
+---
+title: Portable meeting viewer template
+date: 2026-10-09
+status: active
+scope: swift-meeting-export
+---
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src 'self' file:; img-src 'self' file: data:; base-uri 'none'; form-action 'none'">
+<title>{{TITLE}}</title>
+<style>
+      :root {
+        color-scheme: light dark;
+        --background: #fff;
+        --surface: #f5f6f8;
+        --text: #25282e;
+        --muted: #606773;
+        --border: #d9dce1;
+        --accent: #0069c7;
+        --link: #005eaf;
+        --hover: #00000008;
+        --selected: #e4f1ff;
+        --selected-hover: #d7eaff;
+        --tab: #fff;
+        --control: #f0f2f5;
+        --play: #253242;
+        --play-text: #fff;
+        --mark: #ffe49a;
+        --mark-text: #493300;
+        --error: #a52c18;
+        --scrollbar: #b0b6bf;
+        --speaker-0: #77531b;
+        --speaker-bg-0: #f5ead5;
+        --speaker-1: #425e79;
+        --speaker-bg-1: #e7edf4;
+        --speaker-2: #85319c;
+        --speaker-bg-2: #f4e5f8;
+        --speaker-3: #25654d;
+        --speaker-bg-3: #e0f1e9;
+        --speaker-4: #51499b;
+        --speaker-bg-4: #eceafb;
+        --speaker-5: #245e93;
+        --speaker-bg-5: #e2eef9;
+        --speaker-6: #873c73;
+        --speaker-bg-6: #f5e5f0;
+        --player-height: 112px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #1d1e20;
+          --surface: #252628;
+          --text: #e4e4e7;
+          --muted: #95979c;
+          --border: #363739;
+          --accent: #0a91ff;
+          --link: #9dceff;
+          --hover: #ffffff0c;
+          --selected: #213146;
+          --selected-hover: #263b55;
+          --tab: #484a4c;
+          --control: #323437;
+          --play: #e8e9eb;
+          --play-text: #1d1e20;
+          --mark: #715c20;
+          --mark-text: #fff;
+          --error: #f4af9b;
+          --scrollbar: #505256;
+          --speaker-0: #d5bb8b;
+          --speaker-bg-0: #3c3429;
+          --speaker-1: #b5c6d8;
+          --speaker-bg-1: #303944;
+          --speaker-2: #e3a0f3;
+          --speaker-bg-2: #3b2844;
+          --speaker-3: #93cbb6;
+          --speaker-bg-3: #263d35;
+          --speaker-4: #b7b5fa;
+          --speaker-bg-4: #2e2e48;
+          --speaker-5: #99c4ed;
+          --speaker-bg-5: #273849;
+          --speaker-6: #dfacd1;
+          --speaker-bg-6: #3f2b3c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--text);
+        font:
+          15px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+        color: inherit;
+        background: none;
+        border: 0;
+      }
+      button:hover {
+        background: var(--hover);
+      }
+      :where(button, a, input, select, summary, [tabindex]):focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 4px;
+      }
+      a {
+        color: var(--link);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .app {
+        height: calc(100dvh - var(--player-height));
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-width: 0;
+        overflow: hidden;
+      }
+      /* The toolbar is outside the only scrolling region. */
+      .toolbar {
+        flex-shrink: 0;
+        height: 74px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 15px;
+        padding: 0 35px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+      }
+      .tabs {
+        display: flex;
+        flex-shrink: 0;
+        gap: 3px;
+        padding: 4px;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+      }
+      .tab {
+        border-radius: 20px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 600;
+        padding: 5px 16px;
+      }
+      .tab[aria-selected="true"] {
+        background: var(--tab);
+        color: var(--text);
+      }
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 45%;
+        max-width: 380px;
+        padding: 8px 14px;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        color: var(--muted);
+      }
+      .search:focus-within {
+        border-color: var(--accent);
+      }
+      .search input {
+        width: 100%;
+        min-width: 0;
+        background: none;
+        border: 0;
+        color: var(--text);
+        font-size: 14px;
+      }
+      .search input::placeholder {
+        color: var(--muted);
+        opacity: 1;
+      }
+      .count {
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .meeting-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        scroll-behavior: smooth;
+        scrollbar-color: var(--scrollbar) transparent;
+      }
+      .heading {
+        padding: 30px 40px 18px;
+      }
+      .heading h1 {
+        font-size: 27px;
+        letter-spacing: -0.7px;
+        margin: 0 0 8px;
+        line-height: 1.3;
+      }
+      .summary-title {
+        color: var(--muted);
+        margin: 0 0 12px;
+        font-size: 14px;
+      }
+      .meta {
+        color: var(--muted);
+        display: flex;
+        gap: 15px;
+        flex-wrap: wrap;
+      }
+      .tools {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 24px;
+        gap: 16px;
+      }
+      .live,
+      .small {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .dot {
+        display: inline-block;
+        background: #398654;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        margin-right: 6px;
+      }
+      .follow {
+        background: var(--control);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+      .follow[aria-pressed="true"] {
+        color: var(--link);
+        border-color: var(--accent);
+        background: var(--selected);
+      }
+      .column-labels,
+      .segment {
+        display: grid;
+        grid-template-columns: 72px 155px minmax(0, 1fr);
+        gap: 20px;
+        padding: 8px 26px;
+      }
+      .column-labels {
+        margin: 0 20px;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 1.3px;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--border);
+      }
+      .transcript {
+        padding: 12px 20px 160px;
+      }
+      .segment {
+        align-items: baseline;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .segment:hover {
+        background: var(--hover);
+      }
+      .segment.active {
+        background: var(--selected);
+      }
+      .segment.active:hover {
+        background: var(--selected-hover);
+      }
+      .segment.active .timestamp {
+        color: var(--accent);
+      }
+      .timestamp {
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        text-align: right;
+        padding: 0;
+        font-size: 14px;
+      }
+      .speaker {
+        font-size: 12px;
+        line-height: 1.5;
+        border-radius: 20px;
+        padding: 3px 10px;
+        max-width: 100%;
+        width: fit-content;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-weight: 600;
+        align-self: start;
+        margin-top: 1px;
+      }
+      .c0 {
+        color: var(--speaker-0);
+        background: var(--speaker-bg-0);
+      }
+      .c1 {
+        color: var(--speaker-1);
+        background: var(--speaker-bg-1);
+      }
+      .c2 {
+        color: var(--speaker-2);
+        background: var(--speaker-bg-2);
+      }
+      .c3 {
+        color: var(--speaker-3);
+        background: var(--speaker-bg-3);
+      }
+      .c4 {
+        color: var(--speaker-4);
+        background: var(--speaker-bg-4);
+      }
+      .c5 {
+        color: var(--speaker-5);
+        background: var(--speaker-bg-5);
+      }
+      .c6 {
+        color: var(--speaker-6);
+        background: var(--speaker-bg-6);
+      }
+      .segment p {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+      }
+      #empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 40px;
+      }
+      mark {
+        background: var(--mark);
+        color: var(--mark-text);
+        border-radius: 2px;
+      }
+      .summary-panel {
+        padding: 8px 40px 160px;
+      }
+      .summary-panel > h2 {
+        font-size: 25px;
+        line-height: 1.3;
+        max-width: 850px;
+        letter-spacing: -0.5px;
+      }
+      .summary-panel h3 {
+        font-size: 18px;
+        margin: 30px 0 12px;
+      }
+      .summary-panel p,
+      .summary-panel ul {
+        max-width: 920px;
+      }
+      .summary-panel ul {
+        padding-left: 22px;
+      }
+      .summary-panel li {
+        margin: 10px 0;
+        line-height: 1.7;
+      }
+      .summary-time {
+        font-size: 11px;
+        color: var(--link);
+        background: var(--selected);
+        padding: 1px 6px;
+        border-radius: 5px;
+        margin: 0 2px;
+        white-space: nowrap;
+      }
+      .summary-time:hover {
+        background: var(--selected-hover);
+      }
+      .task {
+        list-style: none;
+      }
+      .task input {
+        margin-left: -20px;
+        accent-color: var(--accent);
+      }
+      .player {
+        height: var(--player-height);
+        position: fixed;
+        inset: auto 0 0;
+        display: grid;
+        grid-template-columns: 240px 175px minmax(0, 1fr) 150px;
+        gap: 25px;
+        align-items: center;
+        padding: 20px 30px;
+        border-top: 1px solid var(--border);
+        background: var(--surface);
+        z-index: 5;
+      }
+      .now {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+      .audio-icon {
+        color: var(--accent);
+        font-size: 27px;
+      }
+      .now strong {
+        display: block;
+        font-size: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .now, .now > div { min-width: 0; }
+      .transport {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+      .skip {
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        white-space: nowrap;
+        flex-shrink: 0;
+        border-radius: 50%;
+        font-size: 12px;
+      }
+      .play {
+        background: var(--play);
+        color: var(--play-text);
+        border-radius: 50%;
+        height: 44px;
+        width: 44px;
+        font-size: 19px;
+      }
+      .play:hover {
+        background: var(--play);
+        filter: brightness(0.9);
+      }
+      .timeline {
+        min-width: 0;
+      }
+      .time-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        margin-top: 2px;
+      }
+      input[type="range"] {
+        accent-color: var(--accent);
+        width: 100%;
+        cursor: pointer;
+      }
+      .settings {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      select {
+        background: var(--background);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px;
+        font-size: 12px;
+      }
+      .track-menu {
+        position: relative;
+        font-size: 12px;
+      }
+      .track-menu summary {
+        list-style: none;
+        padding: 5px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        background: var(--background);
+      }
+      .track-menu summary::-webkit-details-marker {
+        display: none;
+      }
+      .track-menu summary::after {
+        content: " ▴";
+        color: var(--muted);
+      }
+      .track-options {
+        position: absolute;
+        bottom: calc(100% + 14px);
+        right: 0;
+        min-width: 175px;
+        padding: 10px;
+        background: var(--background);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 8px 30px #0003;
+      }
+      .track-options label {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 8px;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .track-options input {
+        accent-color: var(--accent);
+        width: 16px;
+        height: 16px;
+      }
+      #error {
+        color: var(--error);
+        font-size: 12px;
+      }
+      @media (min-width: 1500px) {
+        .heading {
+          padding-left: 60px;
+        }
+        .transcript,
+        .column-labels {
+          padding-left: 40px;
+          padding-right: 40px;
+        }
+        .segment p {
+          font-size: 18px;
+        }
+        .segment {
+          padding-top: 10px;
+          padding-bottom: 10px;
+        }
+      }
+      @media (max-width: 1000px) {
+        .player {
+          grid-template-columns: 160px 140px minmax(0, 1fr) 125px;
+          gap: 12px;
+          padding: 15px 20px;
+        }
+        .segment,
+        .column-labels {
+          grid-template-columns: 55px 115px minmax(0, 1fr);
+          gap: 14px;
+          padding-left: 10px;
+          padding-right: 10px;
+        }
+        .heading {
+          padding: 24px;
+        }
+        .toolbar {
+          padding: 0 24px;
+        }
+        .search {
+          width: 60%;
+        }
+      }
+      @media (max-width: 700px) {
+        :root {
+          --player-height: 144px;
+        }
+        .toolbar {
+          height: 62px;
+          padding: 0 16px;
+          gap: 10px;
+        }
+        .tab {
+          padding: 5px 10px;
+          font-size: 12px;
+        }
+        .search {
+          flex: 1;
+          min-width: 0;
+          padding: 7px 10px;
+        }
+        .search input {
+          font-size: 12px;
+        }
+        .heading {
+          padding: 20px 16px 12px;
+        }
+        .heading h1 {
+          font-size: 23px;
+        }
+        .summary-title,
+        .meta {
+          font-size: 12px;
+        }
+        .column-labels,
+        .audio-icon,
+        .count {
+          display: none;
+        }
+        .segment {
+          grid-template-columns: 50px minmax(0, 1fr);
+          gap: 6px 12px;
+          margin-bottom: 13px;
+          padding: 8px;
+        }
+        .segment p {
+          grid-column: 2;
+          font-size: 15px;
+        }
+        .speaker {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .transcript {
+          padding: 8px 8px 184px;
+        }
+        .summary-panel {
+          padding: 8px 20px 184px;
+        }
+        .summary-panel > h2 {
+          font-size: 21px;
+        }
+        .tools {
+          margin-top: 16px;
+        }
+        .live {
+          font-size: 11px;
+        }
+        .player {
+          grid-template-columns: minmax(0, 1fr) 120px 110px;
+          grid-template-rows: 50px 40px;
+          gap: 6px;
+          padding: 12px 16px;
+        }
+        .now {
+          gap: 8px;
+        }
+        .now strong {
+          font-size: 12px;
+        }
+        .timeline {
+          grid-row: 2;
+          grid-column: 1 / -1;
+        }
+        .settings {
+          grid-row: 1;
+          grid-column: 3;
+          gap: 5px;
+        }
+        .settings select {
+          padding: 4px 1px;
+        }
+        .transport {
+          grid-row: 1;
+          grid-column: 2;
+          gap: 3px;
+        }
+        .skip {
+          width: 34px;
+        }
+        .track-menu summary {
+          padding: 5px;
+          white-space: nowrap;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .meeting-scroll {
+          scroll-behavior: auto;
+        }
+      }
+      @media print {
+        body {
+          background: white;
+          color: black;
+        }
+        .app,
+        main {
+          height: auto;
+        }
+        main,
+        .meeting-scroll {
+          overflow: visible;
+        }
+        .toolbar,
+        .player,
+        .tools,
+        .column-labels {
+          display: none;
+        }
+        .heading,
+        .transcript,
+        .summary-panel {
+          padding: 0;
+        }
+        .segment {
+          break-inside: avoid;
+        }
+        .segment[hidden] {
+          display: grid !important;
+        }
+        .speaker,
+        .summary-time,
+        .timestamp {
+          background: none;
+          color: black;
+        }
+      }
+
+.summary-panel table { border-collapse: collapse; width: 100%; }
+.summary-panel th, .summary-panel td { padding: 8px; border: 1px solid var(--border); }
+.summary-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.summary-panel img { max-width: 100%; height: auto; }
+.summary-panel .list-item { margin: 4px 0; }
+.summary-panel blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid var(--border); }
+.segment p { white-space: pre-wrap; overflow-wrap: anywhere; }
+button:disabled, input:disabled, select:disabled { opacity: .5; cursor: default; }
+.track-options { max-height: 240px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="app"><main>
+<header class="toolbar">
+<div class="tabs" role="tablist" aria-label="Meeting content">
+<button type="button" class="tab" id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript">Transcript</button>
+<button type="button" class="tab" id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1">Summary</button>
+</div>
+<label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search transcript…" aria-label="Search transcript"><span class="count" id="count"></span></label>
+</header>
+<div class="meeting-scroll">
+<section class="heading">
+<h1>{{TITLE}}</h1><div class="meta"><span>{{DATE}}</span><span>{{DURATION_LABEL}}</span></div>
+<div class="tools"><span class="live">Recorded transcript</span><button type="button" id="follow" class="follow" aria-pressed="true">Follow Audio</button></div>
+<div id="error" role="alert"></div>
+</section>
+<section class="content-panel" id="panel-transcript" tabindex="0" role="tabpanel" aria-labelledby="tab-transcript">
+<div class="column-labels"><span>Time</span><span>Speaker</span><span>Transcript</span></div>
+<div class="transcript" id="transcript" aria-label="Meeting transcript">{{TRANSCRIPT}}<p id="empty" hidden>No matching transcript rows.</p></div>
+</section>
+<section class="summary-panel" id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" tabindex="0" hidden>{{SUMMARY}}</section>
+</div></main></div>
+<footer class="player" aria-label="Audio player">
+<div class="now"><span class="audio-icon" aria-hidden="true">≋</span><div><strong>{{TITLE}}</strong><span class="small" id="status" aria-live="polite">Ready to play</span></div></div>
+<div class="transport"><button type="button" class="skip" id="back" aria-label="Skip back 15 seconds">↶ 15</button><button type="button" class="play" id="play" aria-label="Play">▶</button><button type="button" class="skip" id="forward" aria-label="Skip forward 15 seconds">15 ↷</button></div>
+<div class="timeline"><input id="seek" type="range" min="0" max="{{DURATION}}" step="0.1" value="0" aria-label="Playback position"><div class="time-labels"><span id="elapsed">0:00</span><span id="remaining">−{{DURATION_LABEL}}</span></div></div>
+<div class="settings"><details class="track-menu"><summary>Tracks</summary><div class="track-options">{{TRACK_CONTROLS}}</div></details><select id="speed" aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></div>
+</footer>
+{{AUDIO}}
+<script>
+// Playback and navigation for the offline meeting viewer. No network requests.
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const tracks = [...document.querySelectorAll('audio')];
+  const segments = [...document.querySelectorAll('.segment')];
+  const original = segments.map((row) => row.querySelector('p').textContent);
+  let follow = true, currentTab = 'transcript', playing = false, position = 0;
+  let request = 0, timer, lastTick = 0, active = new Set();
+  const unavailable = new Set();
+  const duration = () => Math.max(Number($('seek').max) || 0,
+    ...tracks.map((track) => Number.isFinite(track.duration) ? track.duration : 0));
+  const format = (time) => {
+    const seconds = Math.max(0, Math.floor(time || 0));
+    return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  };
+  const playable = () => tracks.filter((track) => !unavailable.has(track) &&
+    (!Number.isFinite(track.duration) || position < track.duration));
+  function highlight() {
+    const next = new Set(segments.filter((row) =>
+      Number(row.dataset.start) <= position && position < Number(row.dataset.end)));
+    for (const row of active) if (!next.has(row)) row.classList.remove('active');
+    for (const row of next) if (!active.has(row)) row.classList.add('active');
+    const first = [...next].find((row) => !row.hidden && !active.has(row));
+    if (first && follow && currentTab === 'transcript') first.scrollIntoView({block: 'center'});
+    active = next;
+  }
+  function update() {
+    $('seek').max = duration();
+    $('seek').value = position;
+    $('seek').setAttribute('aria-valuetext', format(position) + ' of ' + format(duration()));
+    $('elapsed').textContent = format(position);
+    $('remaining').textContent = '−' + format(duration() - position);
+    $('play').textContent = playing ? 'Ⅱ' : '▶';
+    $('play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    $('status').textContent = !tracks.length ? 'No audio tracks' : playing ? 'Playing' :
+      position >= duration() && position > 0 ? 'Finished' : 'Paused';
+    highlight();
+  }
+  function pause() {
+    request++;
+    playing = false;
+    clearInterval(timer);
+    tracks.forEach((track) => track.pause());
+    update();
+  }
+  function align(track) {
+    const target = Number.isFinite(track.duration) ? Math.min(position, track.duration) : position;
+    if (Math.abs(track.currentTime - target) > 0.12) track.currentTime = target;
+  }
+  function tick() {
+    const now = performance.now();
+    const running = playable();
+    const leader = running.find((track) => !track.paused && !track.seeking && track.readyState >= 3);
+    // The monotonic clock carries the timeline through gaps and unequal track endings.
+    // While a remaining track buffers, hold position rather than skipping its audio.
+    if (leader) position = leader.currentTime;
+    else if (!running.length) position += (now - lastTick) / 1000 * Number($('speed').value);
+    lastTick = now;
+    for (const track of running) {
+      if (!track.seeking && track.readyState >= 3) align(track);
+    }
+    if (position >= duration()) { position = duration(); pause(); }
+    else update();
+  }
+  async function play() {
+    if (!tracks.length || unavailable.size === tracks.length) return;
+    if (position >= duration()) position = 0;
+    const token = ++request;
+    tracks.forEach(align);
+    playing = true;
+    lastTick = performance.now();
+    clearInterval(timer);
+    timer = setInterval(tick, 100);
+    update();
+    const results = await Promise.allSettled(playable().map((track) => track.play()));
+    if (token !== request) return;
+    if (results.some((result) => result.status === 'rejected')) {
+      pause();
+      $('error').textContent = 'Audio could not play. Extract the entire ZIP and open index.html in a browser that supports these audio files.';
+    }
+  }
+  function seek(time) {
+    const resume = playing;
+    pause();
+    position = Math.max(0, Math.min(time, duration()));
+    tracks.forEach(align);
+    update();
+    if (resume) void play();
+  }
+  function playFrom(time) { seek(time); if (!playing) void play(); }
+  $('play').onclick = () => playing ? pause() : void play();
+  $('seek').oninput = (event) => seek(Number(event.target.value));
+  $('back').onclick = () => seek(position - 15);
+  $('forward').onclick = () => seek(position + 15);
+  $('speed').onchange = (event) => tracks.forEach((track) => track.playbackRate = Number(event.target.value));
+  document.querySelectorAll('[data-track]').forEach((control) => {
+    control.onchange = () => { $(control.dataset.track).muted = !control.checked; };
+  });
+  tracks.forEach((track) => {
+    track.addEventListener('loadedmetadata', () => { align(track); update(); });
+    track.addEventListener('error', () => {
+      unavailable.add(track);
+      if (unavailable.size === tracks.length) pause();
+      $('error').textContent = 'An audio track is unavailable. Keep all extracted files together and use a browser that supports the audio format.';
+    });
+  });
+  $('transcript').addEventListener('click', (event) => {
+    const row = event.target.closest('.segment');
+    if (row && !window.getSelection().toString()) playFrom(Number(row.dataset.start));
+  });
+  document.querySelectorAll('[data-seek]').forEach((button) => {
+    button.onclick = () => playFrom(Number(button.dataset.seek));
+  });
+  $('follow').onclick = () => {
+    follow = !follow;
+    $('follow').setAttribute('aria-pressed', String(follow));
+    if (follow && currentTab === 'transcript') [...active].find((row) => !row.hidden)?.scrollIntoView({block: 'center'});
+  };
+  function search() {
+    const query = $('search').value.trim().toLowerCase();
+    let count = 0;
+    segments.forEach((row, index) => {
+      const text = original[index], paragraph = row.querySelector('p');
+      row.hidden = !(text + ' ' + row.querySelector('.speaker').textContent).toLowerCase().includes(query);
+      if (!row.hidden) count++;
+      paragraph.replaceChildren();
+      if (!query) { paragraph.textContent = text; return; }
+      let start = 0, match;
+      while ((match = text.toLowerCase().indexOf(query, start)) !== -1) {
+        paragraph.append(document.createTextNode(text.slice(start, match)));
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(match, match + query.length);
+        paragraph.append(mark);
+        start = match + query.length;
+      }
+      paragraph.append(document.createTextNode(text.slice(start)));
+    });
+    $('count').textContent = count + (count === 1 ? ' row' : ' rows');
+    $('empty').hidden = count > 0;
+    $('empty').textContent = segments.length ? 'No matching transcript rows.' : 'No transcript available.';
+  }
+  $('search').oninput = search;
+  function setTab(name) {
+    currentTab = name;
+    for (const key of ['transcript', 'summary']) {
+      const selected = key === name;
+      $('tab-' + key).setAttribute('aria-selected', String(selected));
+      $('tab-' + key).tabIndex = selected ? 0 : -1;
+      $('panel-' + key).hidden = !selected;
+    }
+    document.querySelector('.search').hidden = name !== 'transcript';
+    document.querySelector('.tools').hidden = name !== 'transcript';
+  }
+  for (const key of ['transcript', 'summary']) {
+    $('tab-' + key).onclick = () => setTab(key);
+    $('tab-' + key).onkeydown = (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 'transcript' : event.key === 'End' ? 'summary' :
+        key === 'transcript' ? 'summary' : 'transcript';
+      setTab(next); $('tab-' + next).focus();
+    };
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.target.closest('input,select,button,a,summary') || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.code === 'Space') { event.preventDefault(); playing ? pause() : void play(); }
+    if (event.code === 'ArrowLeft') { event.preventDefault(); seek(position - 15); }
+    if (event.code === 'ArrowRight') { event.preventDefault(); seek(position + 15); }
+  });
+  if (!tracks.length) {
+    for (const id of ['play', 'seek', 'back', 'forward', 'speed', 'follow']) $(id).disabled = true;
+    document.querySelectorAll('.timestamp, [data-seek]').forEach((button) => { button.disabled = true; });
+  }
+  document.querySelector('.live').hidden = !segments.length;
+  document.querySelector('.track-menu').hidden = !tracks.length;
+  search(); update();
+})();
+
+</script>
+</body>
+</html>

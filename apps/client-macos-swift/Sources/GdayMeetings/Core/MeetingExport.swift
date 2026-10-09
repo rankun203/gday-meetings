@@ -20,6 +20,12 @@ enum MeetingExportFormat: String, CaseIterable {
 
 extension MeetingStore {
     func exportMeeting(id: UUID, to url: URL) async throws {
+        if url.pathExtension.lowercased() == "zip",
+            recordingID == id || isJobRunning(.importAudio, .meeting(id))
+        {
+            throw MeetingError.message(
+                "Wait for this meeting’s recording or audio import to finish, then export again.")
+        }
         guard await ensureMeetingLoaded(id: id) else {
             throw MeetingError.message(meetingPageError ?? "Couldn’t open the meeting for export.")
         }
@@ -66,6 +72,10 @@ enum MeetingExport {
     }
 
     static func write(_ meeting: Meeting, directory: URL, to url: URL) throws {
+        if url.pathExtension.lowercased() == "zip" {
+            try MeetingArchiveExport.write(meeting, directory: directory, to: url)
+            return
+        }
         let meeting = MeetingVoicePrivacy.removingFingerprints(from: meeting)
         let started = Date()
         let replacing = FileManager.default.fileExists(atPath: url.path)

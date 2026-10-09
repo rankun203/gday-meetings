@@ -345,9 +345,10 @@ struct MeetingActionsMenu: View {
                 showsDataPrivacy = true
             }
             Divider()
-            Button("Export Meeting Text…", systemImage: "square.and.arrow.up") {
+            Button("Export Meeting…", systemImage: "square.and.arrow.up") {
                 MeetingPanels.export(meeting, store: store)
             }
+            .disabled(store.recordingID == meeting.id || store.isJobRunning(.importAudio, .meeting(meeting.id)))
             Button("Archive to Server", systemImage: "icloud.and.arrow.up") {
                 Task { await store.archiveToServer(id: meeting.id) }
             }

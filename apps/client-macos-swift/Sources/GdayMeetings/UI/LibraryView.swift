@@ -870,9 +870,9 @@ enum MeetingPanels {
     }
     static func export(_ meeting: Meeting, store: MeetingStore) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = meeting.title + ".json"
-        let formats = MeetingExportPanel(panel: panel)
-        if withExtendedLifetime(formats, { panel.runModal() }) == .OK, let url = panel.url {
+        panel.nameFieldStringValue = MeetingArchiveExport.filename(for: meeting.title)
+        let exportPanel = MeetingExportPanel(panel: panel)
+        if withExtendedLifetime(exportPanel, { panel.runModal() }) == .OK, let url = panel.url {
             Task {
                 do { try await store.exportMeeting(id: meeting.id, to: url) }
                 catch { store.errorMessage = error.localizedDescription }

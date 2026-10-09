@@ -27,8 +27,17 @@ actor NotesFileWorker {
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         return try String(contentsOf: file, encoding: .utf8)
     }
-    func export(_ meeting: Meeting, to destination: URL) throws {
-        try MeetingExport.write(meeting, directory: folder(meeting.id), to: destination)
+    func export(_ meeting: Meeting, to destination: URL) async throws {
+        let directory = try folder(meeting.id)
+        if destination.pathExtension.lowercased() == "zip" {
+            // Audio archives can be large. Let notes saves continue while packaging.
+            try await Task.detached(priority: .utility) {
+                try MeetingExport.write(meeting, directory: directory, to: destination)
+            }.value
+        }
+        else {
+            try MeetingExport.write(meeting, directory: directory, to: destination)
+        }
     }
     func write(_ id: UUID, text: String, previous: String?) throws -> WriteResult {
         try beforeWrite?(id, text)
