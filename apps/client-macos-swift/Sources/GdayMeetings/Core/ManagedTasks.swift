@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum ManagedTaskState: String, Codable, CaseIterable, Sendable {
@@ -18,6 +19,9 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var providerName: String?
     var summaryInstructions: String?
     var searchIndexRevision: String?
+    /// Committed input identity for automatic downstream admission.
+    var sourceRevision: String?
+    var batchID: UUID?
     var state: ManagedTaskState = .queued
     var progress = "Waiting to start"
     var errorMessage: String?
@@ -94,7 +98,8 @@ extension MeetingStore {
         }
         return await enqueueManagedTask(
             kind: .summary, meeting: meeting, providerID: providerID ?? settings.summaryProviderID,
-            automatically: automatically, summaryInstructions: instructions)
+            automatically: automatically, summaryInstructions: instructions,
+            sourceRevision: Self.automaticTaskSource(meeting, kind: .summary))
     }
 
     @discardableResult func queueSpeakerLabelingCommand(
@@ -112,12 +117,16 @@ extension MeetingStore {
             return nil
         }
         return await enqueueManagedTask(
-            kind: .diarization, meeting: meeting, providerID: selectedID, automatically: automatically)
+            kind: .diarization, meeting: meeting, providerID: selectedID, automatically: automatically,
+            sourceRevision: Self.automaticTaskSource(meeting, kind: .diarization))
     }
 
-    @discardableResult func queueSearchIndexCommand(id: UUID, revision: String? = nil, force: Bool = false) async
+    @discardableResult func queueSearchIndexCommand(
+        id: UUID, revision: String? = nil, force: Bool = false, batchID: UUID? = nil
+    ) async
         -> UUID?
     {
+        guard !notesStorage.isEditing(id), batchID.map(isSearchRebuildActive) ?? true else { return nil }
         if recordingID != nil || isStartingRecording || isFinalizingRecording {
             localSearch.deferredRecordingChanges = true
             guard force else { return nil }
@@ -144,15 +153,56 @@ extension MeetingStore {
         }
         return await enqueueManagedTask(
             kind: .searchIndex, meeting: meeting, providerID: selected.id, automatically: !force,
-            searchIndexRevision: source, retryStopped: force)
+            searchIndexRevision: source, retryStopped: force, batchID: batchID)
     }
 
     private func enqueueManagedTask(
         kind: BackgroundJob.Kind, meeting: Meeting, providerID: UUID?, automatically: Bool = false,
-        summaryInstructions: String? = nil, searchIndexRevision: String? = nil, retryStopped: Bool = false
+        summaryInstructions: String? = nil, sourceRevision: String? = nil,
+        searchIndexRevision: String? = nil, retryStopped: Bool = false, batchID: UUID? = nil
     ) async -> UUID? {
         let key = BackgroundJob.Key(kind: kind, scope: .meeting(meeting.id))
-        guard !isChangingLibrary, !isPreparingToQuit, !managedTasksLoading,
+        guard batchID.map(isSearchRebuildActive) ?? true,
+            kind != .searchIndex || !notesStorage.isEditing(meeting.id)
+        else { return nil }
+        guard !isChangingLibrary, !isPreparingToQuit, !managedTasksLoading else { return nil }
+        if kind == .searchIndex,
+            let active = managedTasks.first(where: { $0.key == key && $0.state.isActive })
+        {
+            // A stopped operation must release its key before another rebuild can
+            // adopt the revision; otherwise its completion cancels the new batch.
+            guard !active.userStopped, !managedTaskStopRequests.contains(active.id),
+                managedTaskOperations[active.id]?.isCancelled != true
+            else { return nil }
+            if active.searchIndexRevision == searchIndexRevision {
+                if let batchID, active.batchID != batchID {
+                    var joined = active
+                    joined.batchID = batchID
+                    joined.isAutomatic = false
+                    guard await saveManagedTask(joined) else { return nil }
+                }
+                return active.id
+            }
+            // Finish cancellation before a replacement can use the same background-job key.
+            // Completion requests a fresh scan, which admits the newest saved source.
+            await cancelManagedTaskCommand(id: active.id, userInitiated: false)
+            scheduleSearchIndexing()
+            return nil
+        }
+        if automatically, let sourceRevision {
+            do {
+                if let existing = try await automaticTaskForSource(
+                    kind: kind, meetingID: meeting.id, revision: sourceRevision)
+                {
+                    return existing.id
+                }
+            }
+            catch {
+                managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+                return nil
+            }
+        }
+        guard
             managedTaskActiveCounts[key, default: 0] == 0,
             !backgroundJobs.contains(where: { $0.key == key })
         else { return nil }
@@ -189,6 +239,8 @@ extension MeetingStore {
             if task.userStopped, task.searchIndexRevision == searchIndexRevision, !retryStopped { return nil }
             task.searchIndexRevision = searchIndexRevision
         }
+        task.batchID = batchID
+        task.sourceRevision = sourceRevision
         task.providerID = providerID
         if kind == .summary {
             let instructions = summaryInstructions?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -211,9 +263,44 @@ extension MeetingStore {
         task.interrupted = false
         if kind == .diarization { task.speakerLabelingResultID = nil }
         if kind == .transcription, let attempt = meeting.transcriptionAttempt { task.capture(attempt) }
+        guard batchID.map(isSearchRebuildActive) ?? true,
+            kind != .searchIndex || !notesStorage.isEditing(meeting.id)
+        else { return nil }
         guard await saveManagedTask(task) else { return nil }
         await startManagedTasks()
         return task.id
+    }
+
+    /// Speaker assignment changes do not create a new transcription result.
+    /// For live/imported text without a provider receipt, hash the committed words.
+    static func automaticTaskSource(_ meeting: Meeting, kind: BackgroundJob.Kind) -> String {
+        let text = meeting.transcript.map(\.text).joined(separator: " ")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var fields = [meeting.transcriptSource?.id.uuidString ?? "", text]
+        if kind == .summary { fields.append(meeting.notes) }
+        if kind == .diarization { fields += meeting.audioFiles }
+        // Length prefixes keep field boundaries unambiguous without comparing whole meetings.
+        let source = fields.map { "\($0.utf8.count):\($0)" }.joined()
+        return SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func automaticTaskForSource(
+        kind: BackgroundJob.Kind, meetingID: UUID, revision: String
+    ) async throws -> ManagedTaskRecord? {
+        let journal = managedTaskJournal
+        let predicate =
+            "meeting=" + ManagedTaskIndex.literal(meetingID.uuidString)
+            + " AND kind=" + ManagedTaskIndex.literal(kind.rawValue)
+        return try await managedTaskIO.perform {
+            var cursor: ManagedTaskJournal.Cursor?
+            while true {
+                let page = journal.page(after: cursor, limit: 50, predicate: predicate)
+                if let failure = journal.readFailure { throw failure }
+                if let task = page.first(where: { $0.sourceRevision == revision }) { return task }
+                guard page.count == 50, let last = page.last else { return nil }
+                cursor = .init(createdAt: last.createdAt, id: last.id)
+            }
+        }
     }
 
     private func previousManagedIntent(kind: BackgroundJob.Kind, meeting: Meeting) async throws -> ManagedTaskRecord? {
@@ -374,6 +461,7 @@ extension MeetingStore {
                     var task = candidate
                     cacheManagedTask(task)
                     if managedTaskStopRequests.contains(id)
+                        || task.batchID.map({ !isSearchRebuildActive($0) }) == true
                         || (task.kind == .summary && task.isAutomatic && !settings.autoSummarize)
                         || (task.kind == .diarization && task.isAutomatic && !settings.labelRecordedSpeakers)
                     {
@@ -429,6 +517,7 @@ extension MeetingStore {
                 throw ServiceError("This meeting no longer exists.")
             }
             try Task.checkCancellation()
+            if let batchID = task.batchID, !isSearchRebuildActive(batchID) { throw CancellationError() }
             if meeting.completedTaskIDs[task.kind.rawValue] == task.id {
                 await completeManagedTask(id, state: .completed, recovery: .none)
                 return
@@ -474,7 +563,7 @@ extension MeetingStore {
                 else if isPreparingToQuit && !managedTaskStopRequests.contains(id) {
                     await completeManagedTask(
                         id, state: .failed,
-                        recovery: task.kind == .transcription ? .automatic : .manual,
+                        recovery: [.transcription, .searchIndex].contains(task.kind) ? .automatic : .manual,
                         message: "Interrupted when the app closed.")
                 }
                 else {
@@ -553,6 +642,7 @@ extension MeetingStore {
         await reloadExternalManagedTasksCommand()
         await startManagedTasks()
         if task.kind == .summary { startPendingAutomaticSummary(id: task.meetingID) }
+        if task.kind == .searchIndex, !isPreparingToQuit, !isChangingLibrary { scheduleSearchIndexing() }
     }
 
     private func failUncommittedTask(_ task: ManagedTaskRecord) {
@@ -565,13 +655,13 @@ extension MeetingStore {
         for waiter in managedTaskWaiters.removeValue(forKey: task.id) ?? [] { waiter.resume() }
     }
 
-    func cancelManagedTaskCommand(id: UUID) async {
+    func cancelManagedTaskCommand(id: UUID, userInitiated: Bool = true) async {
         guard var task = managedTask(id: id), task.state.isActive || task.state == .paused else {
             managedTaskStopRequests.remove(id)
             return
         }
         if task.kind == .summary { pendingAutomaticSummaries.remove(task.meetingID) }
-        task.userStopped = true
+        task.userStopped = userInitiated
         task.recovery = .manual
         task.progress = "Stopping…"
         guard await saveManagedTask(task) else {
@@ -892,6 +982,12 @@ extension MeetingStore {
                 continue
             }
             guard original.state != .completed else { continue }
+            if let batchID = original.batchID, !isSearchRebuildActive(batchID),
+                original.state.isActive || original.state == .paused
+            {
+                await cancelManagedTaskCommand(id: original.id)
+                continue
+            }
             guard await ensureMeetingLoaded(id: original.meetingID),
                 let meeting = meetings.first(where: { $0.id == original.meetingID })
             else {

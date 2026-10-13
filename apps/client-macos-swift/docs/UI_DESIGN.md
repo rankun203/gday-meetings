@@ -44,7 +44,7 @@ Leaving Meetings for another library destination or Search Results reveals the n
 
 - Place the compact play/pause control immediately before the title, vertically centered in one row.
 - Show the title as one line of plain text with tail truncation. For a stored multiline title, show its first line followed by an ellipsis; retain the complete saved title and expose it to accessibility and help.
-- Double-click the title to edit. Enter commits, Escape cancels, and leaving the field commits. Keep edits in a local draft until completion rather than saving each keystroke. Provide **Edit Title** through the context menu and accessibility action.
+- Double-click the title to edit. Show native **Save** and **Cancel** actions beside the field. Return saves and Escape cancels. Changing focus keeps the draft; leaving the meeting discards an unsubmitted title. Keep edits in a local draft until Save or Return rather than saving each keystroke. Provide **Edit Title** through the context menu and accessibility action.
 - Command-click the title to open that meeting's folder in Finder. Provide **Open Meeting Folder** through the context menu and accessibility action. Keep ordinary clicks and the title layout unchanged.
 - Normal reading must not expand header height for long titles. Show date and duration below the title; place language, tags, and archive details in **Details**. An incomplete archive must remain visible as an issue indicator on that control.
 
@@ -167,3 +167,11 @@ Notes has a compact native segmented Edit/Read icon control aligned to the right
 Local Search uses the same managed model controls as other local providers. Show model selection, download size, progress, verification, cancellation, removal, and manual installation in **Search Model**. Use Core ML models. Readiness checks installed model files without running inference. A selected model has its own index; model changes and new meeting content schedule background indexing. Show progress and **Rebuild** in Data, alongside the separate **Library Index**.
 
 Local Search is the default search provider. The provider selected in General controls search and model preparation. Obsolete saved Text or Fusion mode settings do not override that choice. When search is activated without an installed model, explain that search requires an additional download and link to the selected provider's settings. General controls automatic background loading of the model and index. When it is off, load them when search is activated. Show loading progress within the search field.
+
+## Editing and search maintenance
+
+Meeting notes save to disk after 500 milliseconds of inactivity. Search indexing waits until leaving the notes editor or switching to Read Notes; it does not start after a typing pause. Quitting flushes pending text to disk, and the next launch indexes any saved source that differs from the index.
+
+Person and tag names and person email fields keep local drafts. Return or leaving the field commits; Escape discards that field’s unsubmitted draft. Person notes retain autosave with a 500-millisecond delay and flush when closing the editor, changing libraries, or quitting. Relationship toggles and tag associations remain immediate actions.
+
+Data settings shows an explicit search-index rebuild as one request with aggregate meeting progress and **Cancel Rebuild**. Cancellation covers queued and running children and survives relaunch. Completed, failed, and cancelled outcomes remain distinct; the existing task history retains individual attempts.

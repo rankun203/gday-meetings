@@ -156,6 +156,8 @@ final class MeetingStore: ObservableObject {
             && !managedTasks.contains(where: { $0.state.isActive })
     }
     lazy var notesStorage = NotesStorage(directory: dataDirectory)
+    var profileNotesSaveTask: Task<Void, Never>?
+    var profileNotesSavePending = false
     private var voiceAssignmentRefresh: Task<Void, Never>?
     private var voiceAssignmentRefreshRevision = UUID()
     @Published private var voiceAssignmentRefreshCount = 0
@@ -384,6 +386,9 @@ final class MeetingStore: ObservableObject {
             try LocalModelManager.shared.suspendForLibraryChange()
             writableBeforeFolderChange = canSave
             previousFolderPreference = folderPreferences.data
+            guard await flushProfileNotes() else {
+                throw MeetingError.message("Save profile notes before changing the data folder.")
+            }
             canSave = false
             externalReloadGeneration = UUID()
             isCopyingLibrary = true
@@ -1378,6 +1383,7 @@ final class MeetingStore: ObservableObject {
             return false
         }
         await flushVoiceAssignmentRefresh()
+        let profileNotesSaved = await flushProfileNotes()
         let wasWritable = canSave
         canSave = false
         let saved = await flushCanonicalWrites()
@@ -1390,12 +1396,12 @@ final class MeetingStore: ObservableObject {
             errorMessage = "Couldn’t save meeting notes before quitting. \(error.localizedDescription)"
             notesSaved = false
         }
-        if !saved || !notesSaved {
+        if !saved || !notesSaved || !profileNotesSaved {
             canSave = wasWritable && !canonicalRecoveryRequired
             isPreparingToQuit = false
             await recoverUnfinishedManagedTasks()
         }
-        return notesSaved && saved
+        return notesSaved && saved && profileNotesSaved
     }
     /// A list drop creates one meeting per file; a detail drop appends aligned
     /// tracks to one meeting. Commit metadata once, or remove all new copies.
@@ -1604,5 +1610,32 @@ extension MeetingStore {
             revision = voiceAssignmentRefreshRevision
             await voiceAssignmentRefresh?.value
         } while revision != voiceAssignmentRefreshRevision
+    }
+}
+
+extension MeetingStore {
+    /// Preserve the draft immediately while coalescing canonical file writes.
+    func editPersonNotes(id: UUID, text: String) {
+        guard canSave, let index = people.firstIndex(where: { $0.id == id }), people[index].notes != text else {
+            return
+        }
+        people[index].notes = text
+        profileNotesSavePending = true
+        profileNotesSaveTask?.cancel()
+        profileNotesSaveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)) }
+            catch { return }
+            _ = await self?.flushProfileNotes()
+        }
+    }
+
+    @discardableResult func flushProfileNotes() async -> Bool {
+        profileNotesSaveTask?.cancel()
+        profileNotesSaveTask = nil
+        guard profileNotesSavePending else { return true }
+        profileNotesSavePending = false
+        let saved = await save()
+        if !saved { profileNotesSavePending = true }
+        return saved
     }
 }

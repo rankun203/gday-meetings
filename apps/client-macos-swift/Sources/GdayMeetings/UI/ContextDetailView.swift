@@ -112,9 +112,16 @@ struct ContextDetailView: View {
                 Text(personID == nil ? "Edit Tag" : "Edit Profile").font(.headline)
                 if let person {
                     Form {
-                        TextField("Name", text: personBinding(person, \.name))
-                        TextField("Email", text: personBinding(person, \.email))
-                        TextField("Notes", text: personBinding(person, \.notes), axis: .vertical).lineLimit(2...6)
+                        CommittedProfileField("Name", value: person.name) { savePersonField(person.id, \.name, $0) }
+                        CommittedProfileField("Email", value: person.email) { savePersonField(person.id, \.email, $0) }
+                        TextField(
+                            "Notes",
+                            text: Binding(
+                                get: { self.person?.notes ?? "" },
+                                set: { store.editPersonNotes(id: person.id, text: $0) }), axis: .vertical
+                        )
+                        .lineLimit(2...6)
+                        .onDisappear { Task { await store.flushProfileNotes() } }
                     }
                     PersonTagsView(personID: person.id)
                     PersonVoiceSamplesView(library: store.voiceLibrary, personID: person.id) {
@@ -123,17 +130,13 @@ struct ContextDetailView: View {
                     }
                 }
                 if let tag {
-                    TextField(
-                        "Name",
-                        text: Binding(
-                            get: { self.tag?.name ?? tag.name },
-                            set: { value in
-                                Task {
-                                    guard var updated = self.tag else { return }
-                                    updated.name = value
-                                    await store.updateTag(updated)
-                                }
-                            }))
+                    CommittedProfileField("Name", value: tag.name) { value in
+                        Task {
+                            guard var updated = self.tag else { return }
+                            updated.name = value
+                            await store.updateTag(updated)
+                        }
+                    }
                     Toggle(
                         "Exclude from Main Lists",
                         isOn: Binding(
@@ -244,16 +247,14 @@ struct ContextDetailView: View {
     private func open(_ id: UUID) {
         selectedMeeting = id
     }
-    private func personBinding(_ person: Person, _ path: WritableKeyPath<Person, String>) -> Binding<String> {
-        Binding(
-            get: { self.person?[keyPath: path] ?? "" },
-            set: { value in
-                Task {
-                    guard var updated = self.person else { return }
-                    updated[keyPath: path] = value
-                    await store.updatePerson(updated)
-                }
-            })
+    private func savePersonField(_ id: UUID, _ path: WritableKeyPath<Person, String>, _ value: String) {
+        Task {
+            guard var updated = store.people.first(where: { $0.id == id }), updated[keyPath: path] != value else {
+                return
+            }
+            updated[keyPath: path] = value
+            await store.updatePerson(updated)
+        }
     }
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && loader.window.page.total > 0
@@ -266,5 +267,45 @@ struct ContextDetailView: View {
         draft = ""
         showsConversation = true
         Task { _ = await store.sendContextChat(personID: personID, tagID: tagID, message: question) }
+    }
+}
+
+/// Short profile fields retain a local draft until submission or focus loss.
+private struct CommittedProfileField: View {
+    let label: String
+    let value: String
+    let save: (String) -> Void
+    @ViewState private var draft: String
+    @ViewState private var committed: String
+    @FocusState private var focused: Bool
+
+    init(_ label: String, value: String, save: @escaping (String) -> Void) {
+        self.label = label
+        self.value = value
+        self.save = save
+        _draft = ViewState(initialValue: value)
+        _committed = ViewState(initialValue: value)
+    }
+    var body: some View {
+        TextField(label, text: $draft)
+            .focused($focused)
+            .onSubmit { commit() }
+            .onChange(of: focused) { _, active in
+                if !active { commit() }
+            }
+            .onChange(of: value) { _, value in
+                committed = value
+                if !focused { draft = value }
+            }
+            .onExitCommand {
+                draft = committed
+                focused = false
+            }
+            .onDisappear { commit() }
+    }
+    private func commit() {
+        guard draft != committed else { return }
+        committed = draft
+        save(draft)
     }
 }

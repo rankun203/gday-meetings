@@ -54,6 +54,7 @@ struct LibraryView: View {
     @StateObject private var sidebarFocus = LibrarySidebarFocusRequest()
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var sidebarNavigation = LibrarySidebarNavigation()
     @ViewState private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
     @ViewState private var sidebarTransition = UUID()
     private let sidebarControl: LibrarySidebarControl?
@@ -253,6 +254,7 @@ struct LibraryView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
                 .navigationTitle(showsSearchResults ? "Search Results" : destination == .tasks ? "Tasks" : "Agents")
             }
         }
@@ -266,6 +268,7 @@ struct LibraryView: View {
                 selectedDetail
                     .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
                     .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+                    .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
             }
         }
     }
@@ -538,8 +541,9 @@ struct LibraryView: View {
             if openedSearchResult?.meetingID != id { openedSearchResult = nil }
         }
         .onChange(of: showsSearchResults ? nil : destination) { previous, selection in
+            sidebarNavigation.cancelReveal()
             if previous == .meetings && selection != .meetings && !sidebarExpanded {
-                columnVisibility = .all
+                sidebarNavigation.reveal(twoColumn: showsSearchResults || destination?.usesTwoColumns == true)
             }
             // The navigation owner observes current intent; a departing native
             // column can still receive its old selection during replacement.

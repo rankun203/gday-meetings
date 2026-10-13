@@ -45,4 +45,17 @@ import Testing
         cancelled.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
         #expect(completions == [true])
     }
+
+    @Test func typingAndFocusLossDoNotSubmitTitle() {
+        var draft = "Original"
+        var completions: [Bool] = []
+        let coordinator = MeetingTitleEditor.Coordinator(
+            MeetingTitleEditor(text: Binding(get: { draft }, set: { draft = $0 }), finish: { completions.append($0) }))
+        let field = NSTextField()
+        field.stringValue = "Draft"
+        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        coordinator.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
+        #expect(draft == "Draft")
+        #expect(completions.isEmpty)
+    }
 }

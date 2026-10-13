@@ -27,21 +27,37 @@ final class LocalSearchController: ObservableObject {
     var deferredRecordingChanges = false
     fileprivate var scanGeneration = UUID()
     var scanTask: Task<Void, Never>?
+    let fingerprintCache = SemanticFingerprintCache()
     var scanRequested = false
-    var forceRebuild = false
+    var scanRequestedAt = ContinuousClock.now
+    var observedSearchConfiguration: String?
+    @Published var rebuildRequest: SearchIndexRebuild?
+    let rebuildURL: URL
     private let directory: URL
     private let indexDirectory: URL
     private let makeEncoder: @MainActor (SemanticModelID, CoreMLSemanticEmbedding.Usage) -> any SemanticEmbedding
+    let modelReady: @MainActor (SemanticModelID) async -> Bool
 
     init(
         directory: URL, indexDirectory: URL,
         makeEncoder: @escaping @MainActor (SemanticModelID, CoreMLSemanticEmbedding.Usage) -> any SemanticEmbedding = {
             CoreMLSemanticEmbedding(modelID: $0, manager: .shared, usage: $1)
+        },
+        modelReady: @escaping @MainActor (SemanticModelID) async -> Bool = {
+            await LocalModelManager.shared.health(for: $0.localID).isReady
         }
     ) {
         self.makeEncoder = makeEncoder
+        self.modelReady = modelReady
         self.directory = directory
         self.indexDirectory = indexDirectory
+        rebuildURL = directory.appendingPathComponent("search-index-rebuild.json")
+        if FileManager.default.fileExists(atPath: rebuildURL.path) {
+            do {
+                rebuildRequest = try JSONDecoder().decode(SearchIndexRebuild.self, from: Data(contentsOf: rebuildURL))
+            }
+            catch { self.error = error.localizedDescription }
+        }
     }
     func previewLoading() async {
         guard UIPreview.enabled else { return }
@@ -349,15 +365,31 @@ extension MeetingStore {
         settings.selectSoleSearchProvider()
         guard let provider = selectedSearchProvider else {
             localSearch.configurationChanged(nil)
+            localSearch.observedSearchConfiguration = nil
             return
         }
         localSearch.configurationChanged(provider)
+        let model = (provider.localSearch ?? .init()).selectedModel
+        let ready = LocalModelManager.shared.states[model.localID]?.phase == .ready
+        let configuration = "\(provider.id):\(model.space):\(ready)"
+        guard localSearch.observedSearchConfiguration != configuration else { return }
+        localSearch.observedSearchConfiguration = configuration
         scheduleSearchIndexing()
     }
     func scheduleSearchIndexing(rebuild: Bool = false) {
         let controller = localSearch
         controller.scanRequested = true
-        controller.forceRebuild = controller.forceRebuild || rebuild
+        controller.scanRequestedAt = .now
+        if rebuild, controller.rebuildRequest?.isActive != true {
+            do {
+                try controller.saveRebuild(.init())
+                controller.status = "Preparing rebuild…"
+            }
+            catch {
+                controller.error = error.localizedDescription
+                return
+            }
+        }
         guard recordingID == nil, !isStartingRecording, !isFinalizingRecording else {
             controller.deferredRecordingChanges = true
             if rebuild { controller.status = "Rebuild queued until recording finishes." }
@@ -370,11 +402,17 @@ extension MeetingStore {
         controller.scanGeneration = scanGeneration
         controller.scanTask = Task { [weak self] in
             defer { if controller.scanGeneration == scanGeneration { controller.scanTask = nil } }
-            // Coalesce file notifications and finalized live-transcript checkpoints.
-            do { try await Task.sleep(for: .seconds(2)) }
-            catch { return }
             while controller.scanRequested, !Task.isCancelled {
+                // Wait for a quiet interval on every pass, including notifications
+                // received during the previous scan. Active editors are gated below.
+                do {
+                    while controller.scanRequestedAt.duration(to: .now) < .seconds(2) {
+                        try await Task.sleep(until: controller.scanRequestedAt.advanced(by: .seconds(2)))
+                    }
+                }
+                catch { return }
                 controller.scanRequested = false
+                let sourceRequest = controller.scanRequestedAt
                 guard let self, !self.isPreparingToQuit, !self.isChangingLibrary,
                     let selected = self.selectedSearchProvider
                 else { return }
@@ -383,18 +421,42 @@ extension MeetingStore {
                     controller.deferredRecordingChanges = true
                     return
                 }
-                let rebuild = controller.forceRebuild
-                controller.forceRebuild = false
                 let model = (selected.localSearch ?? .init()).selectedModel
-                let health = await LocalModelManager.shared.health(for: model.localID)
+                let ready = await controller.modelReady(model)
                 guard !Task.isCancelled else { return }
-                guard health.isReady else {
+                guard ready else {
                     controller.status = "Waiting for \(model.title). Download or verify it in Service Providers."
                     return
                 }
                 do {
                     let provider = try await controller.indexingProvider(selected, retainingResources: false)
-                    if rebuild { try await provider.resetIndex() }
+                    try await self.refreshSearchIndexRebuild()
+                    if var request = controller.rebuildRequest, request.isActive {
+                        if let space = request.modelSpace, space != model.space {
+                            await self.cancelSearchIndexRebuild()
+                        }
+                        else {
+                            request.modelSpace = model.space
+                            if request.meetings == nil {
+                                request.meetings = try await Task.detached(priority: .utility) {
+                                    var ids: [UUID] = []
+                                    var cursor: MeetingListEntry?
+                                    while true {
+                                        let page = try libraryIndex.page(after: cursor, limit: 200)
+                                        guard !page.isEmpty else { return ids }
+                                        ids.append(contentsOf: page.map(\.id))
+                                        cursor = page.last
+                                    }
+                                }.value
+                            }
+                            if controller.rebuildRequest?.id == request.id,
+                                controller.rebuildRequest?.isActive == true
+                            {
+                                request.state = .running
+                                try controller.saveRebuild(request)
+                            }
+                        }
+                    }
                     var cursor: MeetingListEntry?
                     var pending = 0
                     scan: while !Task.isCancelled {
@@ -413,25 +475,53 @@ extension MeetingStore {
                                 controller.scanRequested = true
                                 break scan
                             }
+                            if controller.scanRequestedAt != sourceRequest {
+                                controller.scanRequested = true
+                                break scan
+                            }
+                            guard !self.notesStorage.isEditing(entry.id) else { continue }
                             let directory = self.dataDirectory
-                            let fingerprint = try await Task.detached(priority: .utility) {
-                                try SemanticSource.fingerprint(
-                                    folder: MeetingFolderLocation.resolve(id: entry.id, directory: directory))
+                            let folder = try await Task.detached(priority: .utility) {
+                                try MeetingFolderLocation.resolve(id: entry.id, directory: directory)
                             }.value
+                            let fingerprint = try await controller.fingerprintCache.fingerprint(folder: folder)
+                            guard !self.notesStorage.isEditing(entry.id) else { continue }
+                            let batch = controller.rebuildRequest.flatMap {
+                                $0.isActive && $0.meetings?.contains(entry.id) == true && $0.children[entry.id] == nil
+                                    ? $0.id : nil
+                            }
                             if try await !provider.index.isCurrent(
-                                entry.id, space: model.space, fingerprint: fingerprint)
+                                entry.id, space: model.space, fingerprint: fingerprint) || batch != nil
                             {
                                 pending += 1
-                                _ = await self.queueSearchIndex(
-                                    id: entry.id, revision: model.space + ":" + fingerprint, force: rebuild)
+                                let taskID = await self.queueSearchIndex(
+                                    id: entry.id, revision: model.space + ":" + fingerprint,
+                                    force: batch != nil, batchID: batch)
+                                if let batch, let taskID, var request = controller.rebuildRequest,
+                                    request.id == batch, request.isActive
+                                {
+                                    request.children[entry.id] = taskID
+                                    try controller.saveRebuild(request)
+                                }
                             }
                         }
                         cursor = entries.last
                     }
-                    controller.status =
-                        pending > 0
-                        ? "\(pending) meetings need indexing. See Tasks for progress." : "Search index is up to date."
+                    try await self.refreshSearchIndexRebuild()
+                    if let request = controller.rebuildRequest, request.isActive {
+                        controller.status = request.progress
+                    }
+                    else {
+                        controller.status =
+                            pending > 0
+                            ? "\(pending) meetings need indexing. See Tasks for progress."
+                            : "Search index is up to date."
+                    }
                     controller.error = nil
+                }
+                catch SearchProviderError.sourceChanged {
+                    controller.scanRequested = true
+                    controller.scanRequestedAt = .now
                 }
                 catch {
                     if !Task.isCancelled { controller.error = error.localizedDescription }
@@ -441,19 +531,28 @@ extension MeetingStore {
     }
     func performSearchIndex(id: UUID, providerID: UUID?) async throws {
         guard let selected = selectedSearchProvider, selected.id == providerID else { throw CancellationError() }
+        guard !notesStorage.isEditing(id) else { throw CancellationError() }
         guard recordingID == nil, !isStartingRecording, !isFinalizingRecording else { throw CancellationError() }
         let provider = try await localSearch.indexingProvider(selected)
         defer {
             localSearch.progress = nil
             localSearch.indexingFinished()
         }
-        try await provider.updateIndex(meetingID: id, rebuild: false) { [weak self] progress in
+        let progress: @Sendable (SearchIndexProgress) -> Void = { [weak self] progress in
             Task { @MainActor in
                 guard let self, self.selectedSearchProvider == selected else { return }
                 self.localSearch.progress = progress
                 self.setJobProgress(
                     .searchIndex, .meeting(id), "Indexing passages: \(progress.completed) of \(progress.total)")
             }
+        }
+        if managedTasks.contains(where: {
+            $0.kind == .searchIndex && $0.meetingID == id && $0.state == .running && $0.batchID != nil
+        }) {
+            try await provider.refreshIndex(meetingID: id, progress: progress)
+        }
+        else {
+            try await provider.updateIndex(meetingID: id, rebuild: false, progress: progress)
         }
     }
 }

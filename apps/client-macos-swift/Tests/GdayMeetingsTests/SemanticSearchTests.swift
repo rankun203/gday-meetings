@@ -214,3 +214,79 @@ struct SemanticSearchTests {
         }
     }
 }
+
+extension SemanticSearchTests {
+    @Test func fingerprintUsesSearchContentRatherThanPersistenceNoise() throws {
+        var meeting = Meeting(title: "Synthetic discussion")
+        meeting.summary = "- [ ] Send the report"
+        let original = try SemanticSource.fingerprint(meeting)
+        meeting.language = "fr"
+        meeting.chat.append(.init(content: "A separate chat message"))
+        meeting.summary = "- [x] Send the report"
+        #expect(try SemanticSource.fingerprint(meeting) == original)
+        meeting.title = "Revised discussion"
+        #expect(try SemanticSource.fingerprint(meeting) != original)
+        let updated = try SemanticSource.fingerprint(meeting)
+        meeting.tagIDs = [UUID(), UUID()]
+        #expect(try SemanticSource.fingerprint(meeting) != updated)
+        let tagged = try SemanticSource.fingerprint(meeting)
+        meeting.tagIDs.reverse()
+        #expect(try SemanticSource.fingerprint(meeting) == tagged)
+    }
+
+    @Test func transcriptWindowsKeepWholeSegmentsWithoutOverlap() {
+        var meeting = Meeting(title: "Synthetic discussion")
+        meeting.transcript = [
+            .init(start: 0, end: 15, text: "First turn"),
+            .init(start: 15, end: 30, text: "Second turn"),
+            .init(start: 30, end: 31, text: "Third turn"),
+            .init(start: 40, end: 90, text: "A long turn"),
+        ]
+        let windows = SemanticSource.windows(meeting).filter { $0.kind == "transcript" }
+        #expect(windows.map(\.text) == ["First turn Second turn", "Third turn", "A long turn"])
+        #expect(windows.map(\.start) == [0, 30, 40])
+        #expect(windows.map(\.end) == [30, 31, 90])
+    }
+
+    @Test func irrelevantWritesSkipEmbeddingAndRebuildReusesPassages() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var meeting = Meeting(title: "Synthetic discussion")
+        meeting.summary = "- [ ] Send the report"
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let index = try SemanticSearchIndex(directory: root, indexDirectory: root)
+        let encoder = FixtureSemanticEncoder()
+        let provider = SemanticSearchProvider(
+            id: UUID(), configuration: .init(), directory: root, index: index, encoder: encoder)
+        try await provider.updateIndex(meetingID: meeting.id) { _ in }
+        let count = await encoder.passages
+        meeting.summary = "- [x] Send the report"
+        meeting.chat.append(.init(content: "A separate chat message"))
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try await provider.updateIndex(meetingID: meeting.id) { _ in }
+        #expect(await encoder.passages == count)
+        meeting.tagIDs = [UUID()]
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try await provider.updateIndex(meetingID: meeting.id) { _ in }
+        #expect(await encoder.passages == count)
+        try await provider.refreshIndex(meetingID: meeting.id) { _ in }
+        #expect(await encoder.passages == count)
+        meeting.title = "Changed discussion"
+        try MeetingFolderStorage.write(meeting, directory: root)
+        try await provider.updateIndex(meetingID: meeting.id) { _ in }
+        #expect(await encoder.passages == count + 1)
+    }
+
+    @Test func fingerprintRejectsLinkedSourceFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let meeting = Meeting(title: "Synthetic discussion")
+        try MeetingFolderStorage.write(meeting, directory: root)
+        let folder = MeetingFolderStorage.folder(id: meeting.id, directory: root)
+        let external = root.appendingPathComponent("external.md")
+        try Data("External text".utf8).write(to: external)
+        try FileManager.default.createSymbolicLink(
+            at: folder.appendingPathComponent("notes.md"), withDestinationURL: external)
+        #expect(throws: (any Error).self) { try SemanticSource.fingerprint(folder: folder) }
+    }
+}

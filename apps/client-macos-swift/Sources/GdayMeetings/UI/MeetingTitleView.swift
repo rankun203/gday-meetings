@@ -11,7 +11,14 @@ struct MeetingTitleView: View {
     var body: some View {
         Group {
             if isEditing {
-                MeetingTitleEditor(text: $draft, finish: { finish(cancel: $0) })
+                HStack(spacing: 8) {
+                    MeetingTitleEditor(text: $draft, finish: { finish(cancel: $0) })
+                    Button("Cancel") { finish(cancel: true) }
+                        .font(.body)
+                    Button("Save") { finish() }
+                        .font(.body)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             else {
                 Text(Self.displayTitle(title))
@@ -35,7 +42,7 @@ struct MeetingTitleView: View {
         .lineLimit(1)
         .truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onDisappear { finish() }
+        .onDisappear { finish(cancel: true) }
     }
     static func displayTitle(_ title: String) -> String {
         guard let newline = title.firstIndex(where: \.isNewline) else { return title }
@@ -84,7 +91,9 @@ struct MeetingTitleEditor: NSViewRepresentable {
             guard let field = notification.object as? NSTextField else { return }
             parent.text = field.stringValue
         }
-        func controlTextDidEndEditing(_ notification: Notification) { complete(cancel: false) }
+        // Moving focus does not submit the form. The visible Save action and
+        // Return are the only commit boundaries.
+        func controlTextDidEndEditing(_ notification: Notification) {}
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 parent.text = textView.string

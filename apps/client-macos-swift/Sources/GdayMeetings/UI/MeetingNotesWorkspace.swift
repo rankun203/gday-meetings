@@ -6,6 +6,7 @@ struct MeetingNotesWorkspace: View {
     let meetingID: UUID
     @ViewState private var reading = false
     @ViewState private var viewRequest = UUID()
+    @ViewState private var editingSession = UUID()
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -23,8 +24,21 @@ struct MeetingNotesWorkspace: View {
                         set: { value in
                             let request = UUID()
                             viewRequest = request
+                            let session = editingSession
                             Task {
-                                if await store.flushNotes(), viewRequest == request { reading = value }
+                                if value {
+                                    guard await store.finishNotesEditing(id: meetingID, session: session) else {
+                                        return
+                                    }
+                                }
+                                else {
+                                    let nextSession = UUID()
+                                    editingSession = nextSession
+                                    store.notesStorage.beginEditing(meetingID, session: nextSession)
+                                    await store.suspendSearchIndexForEditing(id: meetingID)
+                                }
+                                guard viewRequest == request else { return }
+                                reading = value
                             }
                         }
                     )
@@ -56,10 +70,11 @@ struct MeetingNotesWorkspace: View {
             .modifier(AppContentSurface())
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
         }
-        .task(id: meetingID) { await store.openNotes(id: meetingID) }
+        .task(id: meetingID) { await store.openNotes(id: meetingID, session: editingSession) }
         .onDisappear {
             viewRequest = UUID()
-            Task { await store.closeNotes(id: meetingID) }
+            let session = editingSession
+            Task { await store.closeNotes(id: meetingID, session: session) }
         }
         .id(meetingID)
     }

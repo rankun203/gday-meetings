@@ -47,15 +47,23 @@ struct LibrarySidebarTests {
         for width in [1200.0, 900.0] {
             window.setContentSize(NSSize(width: width, height: 800))
             _ = await SidebarPerformanceTests.run(seconds: 0.5, rate: 0, window: window) { _ in }
-            for _ in 0..<2 {
+            for programmatic in [true, true, false, false] {
                 let split = try #require(splits(in: host).first)
                 let controller = try #require(split.delegate as? NSSplitViewController)
-                controller.toggleSidebar(nil)
+                let originalWindowWidth = window.frame.width
+                if programmatic {
+                    control.toggle(reduceMotion: true)
+                }
+                else {
+                    controller.toggleSidebar(nil)
+                }
+                var windowWidthChange: CGFloat = 0
                 var overflow: CGFloat = 0
                 var samples = 0
                 let deadline = ContinuousClock.now.advanced(by: .seconds(1))
                 while ContinuousClock.now < deadline {
                     host.layoutSubtreeIfNeeded()
+                    windowWidthChange = max(windowWidthChange, abs(window.frame.width - originalWindowWidth))
                     for split in splits(in: host) {
                         let bounds = split.convert(split.bounds, to: host)
                         overflow = max(overflow, max(-bounds.minX, bounds.maxX - host.bounds.width))
@@ -77,13 +85,17 @@ struct LibrarySidebarTests {
                     }
                     try await Task.sleep(for: .milliseconds(4))
                 }
+                #expect(
+                    windowWidthChange <= 1,
+                    "Window width changed by \(windowWidthChange) points")
                 #expect(samples > 1)
                 #expect(overflow <= 1, "Workspace overflow at width \(width): \(overflow) points")
             }
         }
     }
 
-    @Test func selectingAcrossSplitShapesKeepsSidebarKeyboardFocus() async throws {
+    @Test(arguments: [false, true])
+    func selectingAcrossSplitShapesKeepsWindowAndSidebarStable(startCollapsed: Bool) async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-sidebar-focus-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -123,17 +135,23 @@ struct LibrarySidebarTests {
         for target in [3, 0] {  // Meetings → Tasks → Meetings replaces the split shape twice.
             let original = try #require(sidebar())
             #expect(window.makeFirstResponder(original))
-            if target == LibraryDestination.tasks.rawValue {
+            let revealsSidebar = startCollapsed && target == LibraryDestination.tasks.rawValue
+            if revealsSidebar {
                 control.toggle(reduceMotion: true)
                 let collapsed = try await waitForMainActorTestCondition { !control.expanded }
                 #expect(collapsed)
             }
+            let originalWindowWidth = window.frame.width
             original.selectRowIndexes(IndexSet(integer: target), byExtendingSelection: false)
             let retained = try await waitForMainActorTestCondition {
                 window.contentView?.layoutSubtreeIfNeeded()
-                guard let replacement = sidebar(), replacement !== original, replacement.selectedRow == target,
-                    let responder = window.firstResponder as? NSView
+                guard control.expanded, let replacement = sidebar(), replacement !== original,
+                    replacement.selectedRow == target
                 else { return false }
+                // A hidden sidebar cannot originate a keyboard selection. This
+                // case models programmatic navigation and must not steal focus.
+                if revealsSidebar { return true }
+                guard let responder = window.firstResponder as? NSView else { return false }
                 return responder === replacement || responder.isDescendant(of: replacement)
             }
             #expect(
@@ -141,6 +159,7 @@ struct LibrarySidebarTests {
                 "Target \(target), selected \(sidebar()?.selectedRow ?? -1), replaced \(sidebar() !== original), responder \(String(describing: window.firstResponder))"
             )
             #expect(control.expanded, "Leaving Meetings reveals the sidebar; returning keeps it open")
+            #expect(abs(window.frame.width - originalWindowWidth) <= 1)
         }
     }
 

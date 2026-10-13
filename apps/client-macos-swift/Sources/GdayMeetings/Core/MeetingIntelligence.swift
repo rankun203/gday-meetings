@@ -69,8 +69,7 @@ extension MeetingStore {
             pendingAutomaticSummaries.remove(id)
             return
         }
-        guard pendingAutomaticSummaries.contains(id), !scheduledAutomaticSummaries.contains(id),
-            !isJobRunning(.summary, .meeting(id))
+        guard pendingAutomaticSummaries.contains(id), !scheduledAutomaticSummaries.contains(id)
         else { return }
         scheduledAutomaticSummaries.insert(id)
         Task { [weak self] in
@@ -80,10 +79,8 @@ extension MeetingStore {
                 self.pendingAutomaticSummaries.remove(id)
                 return
             }
-            // A manual summary may have started before this task received its turn.
-            // Leave pending work for that request's completion in that case.
-            guard !self.isJobRunning(.summary, .meeting(id)),
-                self.pendingAutomaticSummaries.remove(id) != nil
+            // Admission reuses this committed source or cancels an obsolete one.
+            guard self.pendingAutomaticSummaries.remove(id) != nil
             else { return }
             await self.queueSummary(id: id, automatically: true)
         }

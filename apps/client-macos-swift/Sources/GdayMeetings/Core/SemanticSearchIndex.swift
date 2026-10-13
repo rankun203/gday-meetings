@@ -25,25 +25,61 @@ struct SemanticMeetingArtifact: Codable, Sendable {
 enum SemanticSource {
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     static func fingerprint(folder: URL) throws -> String {
+        try fingerprint(read(folder: folder))
+    }
+
+    static func read(folder: URL) throws -> Meeting {
         try MeetingFolderLocation.validate(
             folder, directory: folder.deletingLastPathComponent().deletingLastPathComponent())
-        let names = [
-            "metadata.json", "content.json", "transcript.jsonl", "transcript.json", "live-transcript.json", "notes.md",
-            "summary.md",
-            LiveTranscriptProjection.checkpointName,
-        ]
-        var fields: [String] = []
-        for name in names {
+        // Preserve the source-file boundary before loading the canonical snapshot.
+        for name in [
+            "metadata.json", "content.json", "transcript.jsonl", "transcript.json",
+            "live-transcript.json", "notes.md", "summary.md", LiveTranscriptProjection.checkpointName,
+        ] {
             let url = folder.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: url.path) {
-                fields.append(name + ":missing")
-                continue
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                throw SearchProviderError.invalidResponse
             }
-            let value = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isSymbolicLinkKey])
-            guard value.isSymbolicLink != true else { throw SearchProviderError.invalidResponse }
-            fields.append("\(name):\(value.fileSize ?? 0):\(value.contentModificationDate?.timeIntervalSince1970 ?? 0)")
         }
-        return hash(Data(fields.joined(separator: "|").utf8))
+        guard let id = MeetingFolderLocation.identity(folder.lastPathComponent) else {
+            throw SearchProviderError.invalidResponse
+        }
+        return try MeetingFolderStorage.read(
+            id: id, directory: folder.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
+    /// Hash the actual search projection, not filesystem timestamps or unrelated
+    /// persistence fields. Sorted IDs make association ordering immaterial.
+    static func fingerprint(_ meeting: Meeting) throws -> String {
+        struct Projection: Encodable {
+            struct Passage: Encodable {
+                let id: String
+                let text: String
+                let start: Double?
+                let end: Double?
+                let track: String?
+                let people: [String]
+            }
+            let version: Int
+            let createdAt: Date
+            let duration: Double
+            let people: [String]
+            let tags: [String]
+            let passages: [Passage]
+        }
+        let projection = Projection(
+            version: 1, createdAt: meeting.createdAt, duration: meeting.duration,
+            people: MeetingListEntry(meeting).personIDs.map(\.uuidString).sorted(),
+            tags: meeting.tagIDs.map(\.uuidString).sorted(),
+            passages: windows(meeting).map {
+                .init(
+                    id: $0.id, text: $0.text, start: $0.start, end: $0.end,
+                    track: $0.track, people: $0.people.map(\.uuidString).sorted())
+            })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return hash(try encoder.encode(projection))
     }
     static func windows(_ meeting: Meeting) -> [SemanticWindow] {
         var windows: [SemanticWindow] = []

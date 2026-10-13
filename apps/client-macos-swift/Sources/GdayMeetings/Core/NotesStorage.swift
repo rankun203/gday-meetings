@@ -90,6 +90,7 @@ final class NotesStorage {
     private var watcher: NotesFileWatcher?
     private var watchedID: UUID?
     private var watchGeneration = UUID()
+    private var editingSessions: [UUID: Set<UUID>] = [:]
 
     init(directory: URL, worker: NotesFileWorker? = nil) {
         self.directory = directory
@@ -99,6 +100,14 @@ final class NotesStorage {
         MeetingFolderStorage.folder(id: id, directory: directory).appendingPathComponent("notes.md")
     }
     func revision(_ id: UUID) -> UInt64 { revisions[id, default: 0] }
+    func isEditing(_ id: UUID) -> Bool { !(editingSessions[id]?.isEmpty ?? true) }
+    func beginEditing(_ id: UUID, session: UUID? = nil) {
+        editingSessions[id, default: []].insert(session ?? id)
+    }
+    func endEditing(_ id: UUID, session: UUID? = nil) {
+        editingSessions[id]?.remove(session ?? id)
+        if editingSessions[id]?.isEmpty == true { editingSessions.removeValue(forKey: id) }
+    }
     func isDeleting(_ id: UUID) -> Bool { deletions.contains(id) }
     func reserveDeletion(_ id: UUID) -> Bool { deletions.insert(id).inserted }
     func releaseDeletion(_ id: UUID) { deletions.remove(id) }
@@ -241,9 +250,18 @@ extension MeetingStore {
             return false
         }
     }
-    func openNotes(id: UUID) async {
-        guard let value = meetings.first(where: { $0.id == id }) else { return }
+    func openNotes(id: UUID, session: UUID? = nil) async {
+        guard !Task.isCancelled, let value = meetings.first(where: { $0.id == id }) else { return }
         let storage = notesStorage
+        storage.beginEditing(id, session: session)
+        var opened = false
+        defer {
+            if !opened {
+                storage.endEditing(id, session: session)
+                if !storage.isEditing(id) { storage.stopWatching(id) }
+            }
+        }
+        await suspendSearchIndexForEditing(id: id)
         do {
             let text = try await storage.load(id, fallback: value.notes)
             guard !Task.isCancelled, notesStorage === storage,
@@ -256,11 +274,20 @@ extension MeetingStore {
                 else { return }
                 self.meetings[index].notes = text
             }
+            opened = !Task.isCancelled
         }
         catch { errorMessage = "Couldn’t open meeting notes. \(error.localizedDescription)" }
     }
-    func closeNotes(id: UUID) async {
-        notesStorage.stopWatching(id)
-        _ = await flushNotes()
+    func closeNotes(id: UUID, session: UUID? = nil) async {
+        await finishNotesEditing(id: id, session: session)
+        if !notesStorage.isEditing(id) { notesStorage.stopWatching(id) }
+    }
+    @discardableResult func finishNotesEditing(id: UUID, session: UUID? = nil) async -> Bool {
+        // Autosave remains independent of semantic maintenance. Release the
+        // editing boundary only after its latest source is durable.
+        guard await flushNotes() else { return false }
+        notesStorage.endEditing(id, session: session)
+        scheduleSearchIndexing()
+        return true
     }
 }

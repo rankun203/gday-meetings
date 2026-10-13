@@ -23,15 +23,29 @@ struct SemanticSearchProvider: SearchIndexProvider {
     func updateIndex(
         meetingID: UUID, rebuild: Bool = false, progress: @escaping @Sendable (SearchIndexProgress) -> Void
     ) async throws {
+        try await updateIndex(meetingID: meetingID, rebuild: rebuild, refresh: false, progress: progress)
+    }
+
+    /// Rebuild stored index rows while retaining vectors for unchanged passages.
+    func refreshIndex(meetingID: UUID, progress: @escaping @Sendable (SearchIndexProgress) -> Void) async throws {
+        try await updateIndex(meetingID: meetingID, rebuild: false, refresh: true, progress: progress)
+    }
+
+    private func updateIndex(
+        meetingID: UUID, rebuild: Bool, refresh: Bool,
+        progress: @escaping @Sendable (SearchIndexProgress) -> Void
+    ) async throws {
         let directory = directory
         let model = configuration.selectedModel
         let (folder, fingerprint, meeting) = try await Task.detached(priority: .utility) {
             let folder = try MeetingFolderLocation.resolve(id: meetingID, directory: directory)
-            let fingerprint = try SemanticSource.fingerprint(folder: folder)
-            return (folder, fingerprint, try MeetingFolderStorage.read(id: meetingID, directory: directory))
+            let meeting = try SemanticSource.read(folder: folder)
+            return (folder, try SemanticSource.fingerprint(meeting), meeting)
         }.value
         try Task.checkCancellation()
-        if !rebuild, try await index.isCurrent(meetingID, space: model.space, fingerprint: fingerprint) { return }
+        if !rebuild, !refresh, try await index.isCurrent(meetingID, space: model.space, fingerprint: fingerprint) {
+            return
+        }
         var windows: [SemanticWindow] = []
         for window in SemanticSource.windows(meeting) {
             for (part, text) in (try await encoder.passageParts(window.text)).enumerated() {

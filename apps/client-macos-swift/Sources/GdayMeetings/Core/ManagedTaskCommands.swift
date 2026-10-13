@@ -6,7 +6,9 @@ extension MeetingStore {
         operation: @escaping @MainActor () async -> UUID?
     ) async -> UUID? {
         let key = BackgroundJob.Key(kind: kind, scope: .meeting(meetingID))
-        guard !isChangingLibrary, !isPreparingToQuit, !isJobRunning(kind, .meeting(meetingID)) else { return nil }
+        guard !isChangingLibrary, !isPreparingToQuit,
+            kind == .searchIndex || !isJobRunning(kind, .meeting(meetingID))
+        else { return nil }
         managedTaskReservations.insert(key)
         defer { managedTaskReservations.remove(key) }
         await managedTaskPreparation?.value
@@ -22,7 +24,19 @@ extension MeetingStore {
     @discardableResult func queueSummary(
         id: UUID, providerID: UUID? = nil, automatically: Bool = false, instructions: String? = nil
     ) async -> UUID? {
-        await enqueueCommand(kind: .summary, meetingID: id) {
+        let key = BackgroundJob.Key(kind: .summary, scope: .meeting(id))
+        guard !managedTaskReservations.contains(key), !isChangingLibrary, !isPreparingToQuit else { return nil }
+        // Reserve the replacement while cancellation releases the previous operation.
+        // A pending automatic callback must not take its place during that await.
+        managedTaskReservations.insert(key)
+        if !automatically { pendingAutomaticSummaries.remove(id) }
+        defer { managedTaskReservations.remove(key) }
+        await supersedeObsoleteTask(
+            kind: .summary, meetingID: id, explicitSummary: !automatically,
+            providerID: providerID ?? settings.summaryProviderID, instructions: instructions)
+        // enqueueCommand installs its reservation synchronously before it first awaits.
+        managedTaskReservations.remove(key)
+        return await enqueueCommand(kind: .summary, meetingID: id) {
             await self.queueSummaryCommand(
                 id: id, providerID: providerID, automatically: automatically, instructions: instructions)
         }
@@ -31,15 +45,93 @@ extension MeetingStore {
     @discardableResult func queueSpeakerLabeling(
         id: UUID, providerID: UUID? = nil, automatically: Bool = false
     ) async -> UUID? {
-        await enqueueCommand(kind: .diarization, meetingID: id) {
+        await supersedeObsoleteTask(kind: .diarization, meetingID: id)
+        return await enqueueCommand(kind: .diarization, meetingID: id) {
             await self.queueSpeakerLabelingCommand(id: id, providerID: providerID, automatically: automatically)
         }
     }
 
-    @discardableResult func queueSearchIndex(id: UUID, revision: String, force: Bool = false) async -> UUID? {
+    @discardableResult func queueSearchIndex(id: UUID, revision: String, force: Bool = false, batchID: UUID? = nil)
+        async -> UUID?
+    {
         await enqueueCommand(kind: .searchIndex, meetingID: id) {
-            await self.queueSearchIndexCommand(id: id, revision: revision, force: force)
+            await self.queueSearchIndexCommand(id: id, revision: revision, force: force, batchID: batchID)
         }
+    }
+
+    /// Editing suspends obsolete work without recording a user cancellation.
+    func suspendSearchIndexForEditing(id: UUID) async {
+        await managedTaskPreparation?.value
+        guard
+            let active = managedTasks.first(where: {
+                $0.kind == .searchIndex && $0.meetingID == id && $0.state.isActive
+            })
+        else { return }
+        await taskCommand(id: active.id) {
+            await self.cancelManagedTaskCommand(id: active.id, userInitiated: false)
+        }
+    }
+
+    func isSearchRebuildActive(_ batchID: UUID) -> Bool {
+        localSearch.rebuildRequest?.id == batchID && localSearch.rebuildRequest?.isActive == true
+    }
+
+    func managedTasksForBatch(_ batchID: UUID) async throws -> [ManagedTaskRecord] {
+        await managedTaskPreparation?.value
+        let journal = managedTaskJournal
+        return try await managedTaskIO.perform {
+            var result: [ManagedTaskRecord] = []
+            var cursor: ManagedTaskJournal.Cursor?
+            while true {
+                let page = journal.page(after: cursor, limit: 100, predicate: "kind='searchIndex'")
+                if let failure = journal.readFailure { throw failure }
+                result += page.filter { $0.batchID == batchID }
+                guard page.count == 100, let last = page.last else { return result }
+                cursor = .init(createdAt: last.createdAt, id: last.id)
+            }
+        }
+    }
+
+    @discardableResult func cancelManagedTaskBatch(_ batchID: UUID) async -> Bool {
+        do {
+            for record in try await managedTasksForBatch(batchID)
+            where record.state.isActive || record.state == .paused {
+                await cancelManagedTask(id: record.id)
+                if let latest = managedTask(id: record.id), latest.state.isActive && !latest.userStopped {
+                    return false
+                }
+            }
+            return true
+        }
+        catch {
+            managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Wait outside the serialized command queue: completion must enter that queue
+    /// to release the old operation before its replacement can start.
+    private func supersedeObsoleteTask(
+        kind: BackgroundJob.Kind, meetingID: UUID, explicitSummary: Bool = false,
+        providerID: UUID? = nil, instructions: String? = nil
+    ) async {
+        await managedTaskPreparation?.value
+        guard await ensureMeetingLoaded(id: meetingID), let meeting = meeting(id: meetingID),
+            let active = managedTasks.first(where: {
+                $0.kind == kind && $0.meetingID == meetingID && $0.state.isActive
+            })
+        else { return }
+        let sourceChanged = active.sourceRevision.map { $0 != Self.automaticTaskSource(meeting, kind: kind) } ?? false
+        let normalizedInstructions = instructions?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedInstructions = normalizedInstructions?.isEmpty == false ? normalizedInstructions : nil
+        let requestChanged =
+            explicitSummary
+            && (active.providerID != providerID || active.summaryInstructions != requestedInstructions)
+        guard sourceChanged || requestChanged else { return }
+        await taskCommand(id: active.id) {
+            await self.cancelManagedTaskCommand(id: active.id, userInitiated: false)
+        }
+        await waitForManagedTask(active.id)
     }
 
     func loadManagedTask(id: UUID) async -> ManagedTaskRecord? {

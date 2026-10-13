@@ -258,3 +258,48 @@ extension NotesStorageTests {
         #expect(store.notesStorage.pending.isEmpty)
     }
 }
+
+extension NotesStorageTests {
+    @Test func autosaveRetainsEditingBoundaryUntilEditorExit() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MeetingStore(dataDirectory: folder)
+        let id = await store.createMeeting(title: "Editing boundary")
+        await store.openNotes(id: id)
+        store.editNotes(id: id, text: "Durable draft")
+        #expect(await store.flushNotes())
+        #expect(store.notesStorage.isEditing(id))
+        #expect(try String(contentsOf: store.notesStorage.url(id), encoding: .utf8) == "Durable draft")
+        await store.closeNotes(id: id)
+        #expect(!store.notesStorage.isEditing(id))
+    }
+
+    @Test func profileNotesAreFlushedWhenQuitting() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MeetingStore(dataDirectory: folder)
+        let id = await store.addPerson(name: "Example Person")
+        store.editPersonNotes(id: id, text: "Latest draft")
+        #expect(store.profileNotesSavePending)
+        #expect(await store.finalizeForQuit())
+        let restored = MeetingStore(dataDirectory: folder)
+        #expect(restored.people.first(where: { $0.id == id })?.notes == "Latest draft")
+    }
+}
+
+extension NotesStorageTests {
+    @Test func departingEditorDoesNotReleaseReopenedMeeting() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MeetingStore(dataDirectory: folder)
+        let id = await store.createMeeting(title: "Reopened notes")
+        let departing = UUID()
+        let reopened = UUID()
+        await store.openNotes(id: id, session: departing)
+        await store.openNotes(id: id, session: reopened)
+        await store.closeNotes(id: id, session: departing)
+        #expect(store.notesStorage.isEditing(id))
+        await store.closeNotes(id: id, session: reopened)
+        #expect(!store.notesStorage.isEditing(id))
+    }
+}

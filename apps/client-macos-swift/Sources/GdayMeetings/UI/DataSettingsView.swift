@@ -157,8 +157,21 @@ private struct SearchIndexSettings: View {
                 if let error = controller.error {
                     AppInlineMessage(text: error, systemImage: "exclamationmark.circle", tint: .orange)
                 }
-                Button("Rebuild Search Index") { store.scheduleSearchIndexing(rebuild: true) }
-                    .disabled(!store.libraryWritable || store.isChangingLibrary || controller.scanTask != nil)
+                if let rebuild = controller.rebuildRequest {
+                    if rebuild.isActive {
+                        if let meetings = rebuild.meetings {
+                            ProgressView(value: Double(rebuild.finished), total: Double(max(1, meetings.count)))
+                        }
+                        Button("Cancel Rebuild") { Task { await store.cancelSearchIndexRebuild() } }
+                    }
+                    else {
+                        Text(rebuild.progress).font(.callout)
+                    }
+                }
+                if controller.rebuildRequest?.isActive != true {
+                    Button("Rebuild Search Index") { store.scheduleSearchIndexing(rebuild: true) }
+                        .disabled(!store.libraryWritable || store.isChangingLibrary || controller.scanTask != nil)
+                }
             }
             else {
                 Text("Add Local Search in Service Providers to search by meaning.")
