@@ -325,7 +325,8 @@ extension AppSettings {
         if diarizationProviderID == nil,
             !values.contains(.labelRecordedSpeakers) || !initializedProviderCapabilities.contains(.diarization)
         {
-            let local = serviceProviders.first { $0.kind == .speakerLabeling }
+            let local =
+                serviceProviders.first { $0.kind == .speakerLabeling }
                 ?? ServiceProvider(kind: .speakerLabeling)
             if !serviceProviders.contains(where: { $0.id == local.id }) { serviceProviders.append(local) }
             diarizationProviderID = local.id

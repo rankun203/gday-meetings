@@ -62,8 +62,9 @@ struct LiveTranscriptView: View {
                 openProviders: {
                     settingsTab = "providers"
                     openSettings()
-                })
-                .padding(12)
+                }
+            )
+            .padding(12)
         }
         .onAppear { refreshRows() }
         .onChange(of: controller.streamRevision) { _, _ in refreshRows() }

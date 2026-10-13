@@ -374,8 +374,9 @@ final class VoiceLibraryStore: ObservableObject {
                 if !previousDecisions.contains(where: {
                     $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
                 }) {
-                    previousDecisions.append(.init(
-                        meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
+                    previousDecisions.append(
+                        .init(
+                            meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
                 }
             }
         }
@@ -396,8 +397,9 @@ final class VoiceLibraryStore: ObservableObject {
                 next.decisions.removeAll {
                     $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
                 }
-                next.decisions.append(.init(
-                    meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
+                next.decisions.append(
+                    .init(
+                        meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
             }
             changed.insert(example.meetingID)
         }
