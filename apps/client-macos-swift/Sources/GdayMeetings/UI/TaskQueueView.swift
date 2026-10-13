@@ -191,14 +191,16 @@ struct TaskQueueView: View {
                     Picker("Show Tasks", selection: $session.scope) {
                         ForEach(TaskHistoryScope.allCases) { Text($0.rawValue).tag($0) }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                 } label: {
                     Label(scope.rawValue, systemImage: "line.3.horizontal.decrease")
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 Spacer()
-                if scope == .attention {
-                    Button("Dismiss All Alerts") { Task { await store.dismissAllTaskAlerts() } }
-                        .disabled(store.taskAttentionCount == 0)
+                if scope == .attention && store.taskAttentionCount > 0 {
+                    Button("Dismiss Alerts") { Task { await store.dismissAllTaskAlerts() } }
+                        .fixedSize()
                 }
             }.padding(16)
             Divider()
@@ -230,7 +232,15 @@ struct TaskQueueView: View {
                         ProgressView("Loading Tasks…")
                     }
                     else {
-                        Text("No tasks in this view").foregroundStyle(.secondary)
+                        VStack(spacing: 12) {
+                            Text(store.hasTaskHistory ? scope.emptyMessage : "No tasks yet")
+                                .foregroundStyle(.secondary)
+                            if scope != .all && store.taskHistoryCount(scope: .all) > 0 {
+                                Button("Show All Tasks") { scope = .all }
+                            }
+                        }
+                        .multilineTextAlignment(.center)
+                        .padding(16)
                     }
                 }
             }
@@ -658,6 +668,11 @@ struct TaskQueueStatusButton: View {
 }
 
 extension MeetingStore {
+    var hasTaskHistory: Bool {
+        managedTaskStateCounts.values.contains { $0 > 0 }
+            || !managedTasks.isEmpty || !voiceLibrary.jobs.isEmpty
+    }
+
     var voiceTasksNewestFirst: [VoicePreparationJob] { voiceLibrary.jobs.sorted { $0.createdAt > $1.createdAt } }
     var taskAttentionCount: Int {
         managedTaskAttentionCount + managedTasks.filter { $0.isPreview && $0.needsAttention }.count

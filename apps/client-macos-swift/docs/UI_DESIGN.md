@@ -40,6 +40,8 @@ The compact play/pause button beside the meeting title shows an accent-tinted ci
 
 ## Meeting title header
 
+Leaving Meetings for another library destination or Search Results reveals the native sidebar if it was hidden. Returning to Meetings preserves the current visibility. Tag chip names open the corresponding Tags page; only the separate × button removes a tag association. Tag navigation closes the meeting details popover or sheet and reveals the selected tag even when the tag directory had a filter.
+
 - Place the compact play/pause control immediately before the title, vertically centered in one row.
 - Show the title as one line of plain text with tail truncation. For a stored multiline title, show its first line followed by an ellipsis; retain the complete saved title and expose it to accessibility and help.
 - Double-click the title to edit. Enter commits, Escape cancels, and leaving the field commits. Keep edits in a local draft until completion rather than saving each keystroke. Provide **Edit Title** through the context menu and accessibility action.

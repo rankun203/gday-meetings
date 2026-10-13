@@ -83,6 +83,9 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             if table.selectedRowIndexes != selected { table.selectRowIndexes(selected, byExtendingSelection: false) }
         }
         func numberOfRows(in tableView: NSTableView) -> Int { LibraryDestination.allCases.count }
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            LibrarySidebarRow()
+        }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard let destination = LibraryDestination(rawValue: row) else { return nil }
             let id = NSUserInterfaceItemIdentifier("sidebarDestination")
@@ -93,7 +96,15 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             return cell
         }
         func tableViewSelectionDidChange(_ notification: Notification) {
-            guard !updating, let table, let destination = LibraryDestination(rawValue: table.selectedRow) else {
+            // Changing the split shape replaces this table. Wait until native
+            // selection tracking finishes so the departing table cannot publish
+            // its restored selection while the same click is still in progress.
+            publishSelection()
+        }
+        private func publishSelection() {
+            guard !updating, let table, let destination = LibraryDestination(rawValue: table.selectedRow),
+                parent.selection != destination
+            else {
                 return
             }
             if parent.twoColumn != destination.usesTwoColumns {
@@ -135,6 +146,41 @@ struct NativeLibrarySidebar: NSViewRepresentable {
                 request.cancel()
             }
         }
+    }
+}
+
+@MainActor final class LibrarySidebarRow: NSTableRowView {
+    private var hoverTracking: NSTrackingArea?
+    private(set) var isHovered = false {
+        didSet { if oldValue != isHovered { needsDisplay = true } }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTracking = area
+        isHovered =
+            window.map {
+                $0.isKeyWindow && visibleRect.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
+            } ?? false
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        isHovered = false
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard isHovered, !isSelected, window?.isKeyWindow == true else { return }
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 10, dy: 0), xRadius: 8, yRadius: 8).fill()
     }
 }
 

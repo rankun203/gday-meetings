@@ -4,6 +4,8 @@ target/
 # Swift Package Manager and locally packaged apps
 .build/
 .swiftpm/
+# Locally packaged production and UI validation bundles
+*.app/
 # Native compilation outputs (vendored source archives remain tracked)
 *.o
 *.a

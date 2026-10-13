@@ -6,6 +6,7 @@ struct MeetingDetailSheet: View {
     var initialContentTab: MeetingContentTab? = nil
     var close: () -> Void
     @Environment(\.showManagedTask) private var showManagedTask
+    @Environment(\.showTag) private var showTag
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +23,10 @@ struct MeetingDetailSheet: View {
             .environment(\.showManagedTask) { id in
                 close()
                 showManagedTask(id)
+            }
+            .environment(\.showTag) { id in
+                close()
+                showTag(id)
             }
     }
 }

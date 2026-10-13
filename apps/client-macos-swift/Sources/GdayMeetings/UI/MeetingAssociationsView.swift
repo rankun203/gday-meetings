@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MeetingTagsView: View {
     @EnvironmentObject private var store: MeetingStore
+    @Environment(\.showTag) private var showTag
     let meetingID: UUID
     @ViewState private var addingTag = false
     @ViewState private var tagName = ""
@@ -14,17 +15,9 @@ struct MeetingTagsView: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     ForEach(store.tags.filter { meeting?.tagIDs.contains($0.id) ?? false }) { tag in
-                        Button {
-                            setTag(tag.id, selected: false)
-                        } label: {
-                            Label(tag.name, systemImage: "xmark.circle.fill")
-                                .font(.callout).padding(.horizontal, 8).padding(.vertical, 4)
-                                .frame(minHeight: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .background(.quaternary, in: Capsule())
-                        .help("Remove \(tag.name) from this meeting")
-                        .accessibilityLabel("Remove tag \(tag.name)")
+                        TagAssociationChip(
+                            name: tag.name, removalHelp: "Remove \(tag.name) from this meeting",
+                            open: { showTag(tag.id) }, remove: { setTag(tag.id, selected: false) })
                     }
                     Menu {
                         ForEach(store.tags) { tag in

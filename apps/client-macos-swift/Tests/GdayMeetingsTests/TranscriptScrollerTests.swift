@@ -4,14 +4,13 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct TranscriptScrollerTests {
-    @Test func nativeScrollerAcceptsBothSystemStyles() {
+    @Test func nativeScrollerAcceptsBothSystemStyles() throws {
         let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        let scroller = TranscriptNativeScroller()
-        scroll.verticalScroller = scroller
         scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 1_000))
         scroll.tile()
+        let scroller = try #require(scroll.verticalScroller)
         #expect(scroll.scrollerStyle == NSScroller.preferredScrollerStyle)
         for style in [NSScroller.Style.overlay, .legacy] {
             scroll.scrollerStyle = style
@@ -19,22 +18,37 @@ import Testing
             #expect(scroll.scrollerStyle == style)
             #expect(scroller.scrollerStyle == style)
             #expect(scroll.hasVerticalScroller)
+            #expect(scroller.bounds.contains(scroller.rect(for: .knob)))
         }
     }
 
-    @Test func nativeActionStillNotifiesPlaybackFollowingBeforeAndAfterScrolling() {
-        _ = NSApplication.shared
+    @Test func nativeScrollNotificationsPauseFollowingAndBracketTracking() {
+        let scroll = TranscriptNativeScrollView()
         var events: [String] = []
-        let target = TranscriptScrollerActionTarget { events.append("scroll") }
-        let scroller = TranscriptNativeScroller()
-        scroller.userScrolled = { events.append("interaction") }
-        #expect(scroller.sendAction(#selector(TranscriptScrollerActionTarget.scroll(_:)), to: target))
-        #expect(events == ["interaction", "scroll", "interaction"])
+        scroll.willScroll = { events.append("interaction") }
+        scroll.trackingChanged = { events.append($0 ? "start" : "end") }
+        let center = NotificationCenter.default
+        center.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        center.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        center.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        #expect(events == ["start", "interaction", "interaction", "interaction", "end"])
     }
-}
 
-@MainActor private final class TranscriptScrollerActionTarget: NSObject {
-    let action: () -> Void
-    init(action: @escaping () -> Void) { self.action = action }
-    @objc func scroll(_ sender: Any?) { action() }
+    @Test func otherScrollViewsAndProgrammaticScrollingDoNotPauseFollowing() {
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 1_000))
+        var interactions = 0
+        scroll.willScroll = { interactions += 1 }
+        scroll.trackingChanged = { _ in interactions += 1 }
+        let other = NSScrollView()
+        for name in [
+            NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification,
+            NSScrollView.didEndLiveScrollNotification,
+        ] {
+            NotificationCenter.default.post(name: name, object: other)
+        }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #expect(interactions == 0)
+    }
 }

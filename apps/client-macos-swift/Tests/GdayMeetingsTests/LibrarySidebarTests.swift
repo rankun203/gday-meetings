@@ -7,6 +7,82 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct LibrarySidebarTests {
+    @Test func sidebarTransitionKeepsWorkspaceInsideWindow() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-sidebar-bounds-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let control = LibrarySidebarControl()
+        let store = MeetingStore(dataDirectory: directory)
+        let meetingID = await store.createMeeting(title: "Synthetic meeting")
+        store.managedTasks = [
+            ManagedTaskRecord(
+                kind: .summary, meetingID: meetingID, meetingTitle: "Synthetic meeting",
+                providerName: "Synthetic provider", state: .failed,
+                errorMessage: "The summary could not be created.", isPreview: true)
+        ]
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(
+            rootView: LibraryView(sidebar: control)
+                .environmentObject(store).environmentObject(MeetingPlayback()))
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            window.close()
+            control.disconnect()
+        }
+        func splits(in view: NSView) -> [NSSplitView] {
+            (view as? NSSplitView).map { [$0] } ?? view.subviews.flatMap { splits(in: $0) }
+        }
+        func descendants(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap { descendants(in: $0) }
+        }
+        let connected = try await waitForMainActorTestCondition {
+            host.layoutSubtreeIfNeeded()
+            return control.isConnected && !splits(in: host).isEmpty
+        }
+        #expect(connected)
+        for width in [1200.0, 900.0] {
+            window.setContentSize(NSSize(width: width, height: 800))
+            _ = await SidebarPerformanceTests.run(seconds: 0.5, rate: 0, window: window) { _ in }
+            for _ in 0..<2 {
+                let split = try #require(splits(in: host).first)
+                let controller = try #require(split.delegate as? NSSplitViewController)
+                controller.toggleSidebar(nil)
+                var overflow: CGFloat = 0
+                var samples = 0
+                let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+                while ContinuousClock.now < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    for split in splits(in: host) {
+                        let bounds = split.convert(split.bounds, to: host)
+                        overflow = max(overflow, max(-bounds.minX, bounds.maxX - host.bounds.width))
+                        for column in split.arrangedSubviews where !column.isHidden {
+                            let columnBounds = column.convert(column.bounds, to: host)
+                            overflow = max(overflow, columnBounds.maxX - host.bounds.width)
+                        }
+                        if let detail = split.arrangedSubviews.last {
+                            for view in descendants(in: detail) where !view.isHiddenOrHasHiddenAncestor {
+                                let rect = view.convert(view.bounds, to: host)
+                                overflow = max(overflow, rect.maxX - host.bounds.width)
+                                if let layer = view.layer?.presentation(), let root = host.layer?.presentation() {
+                                    let displayed = layer.convert(layer.bounds, to: root)
+                                    overflow = max(overflow, displayed.maxX - host.bounds.width)
+                                }
+                            }
+                        }
+                        samples += 1
+                    }
+                    try await Task.sleep(for: .milliseconds(4))
+                }
+                #expect(samples > 1)
+                #expect(overflow <= 1, "Workspace overflow at width \(width): \(overflow) points")
+            }
+        }
+    }
+
     @Test func selectingAcrossSplitShapesKeepsSidebarKeyboardFocus() async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-sidebar-focus-\(UUID())")
@@ -47,6 +123,11 @@ struct LibrarySidebarTests {
         for target in [3, 0] {  // Meetings → Tasks → Meetings replaces the split shape twice.
             let original = try #require(sidebar())
             #expect(window.makeFirstResponder(original))
+            if target == LibraryDestination.tasks.rawValue {
+                control.toggle(reduceMotion: true)
+                let collapsed = try await waitForMainActorTestCondition { !control.expanded }
+                #expect(collapsed)
+            }
             original.selectRowIndexes(IndexSet(integer: target), byExtendingSelection: false)
             let retained = try await waitForMainActorTestCondition {
                 window.contentView?.layoutSubtreeIfNeeded()
@@ -59,6 +140,7 @@ struct LibrarySidebarTests {
                 retained,
                 "Target \(target), selected \(sidebar()?.selectedRow ?? -1), replaced \(sidebar() !== original), responder \(String(describing: window.firstResponder))"
             )
+            #expect(control.expanded, "Leaving Meetings reveals the sidebar; returning keeps it open")
         }
     }
 

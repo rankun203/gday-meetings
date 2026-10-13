@@ -7,6 +7,7 @@ enum MeetingContentTab: Int {
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
+    @Environment(\.showTag) private var showTag
     let meetingID: UUID
     var initialTranscriptRowID: UUID? = nil
     var initialContentTab: MeetingContentTab? = nil
@@ -134,6 +135,10 @@ struct MeetingDetailView: View {
                             Text("Meeting Details").font(.headline)
                             MeetingLanguagePicker(selection: text(\.language))
                             MeetingTagsView(meetingID: meetingID)
+                                .environment(\.showTag) { id in
+                                    showsDetails = false
+                                    showTag(id)
+                                }
                             MeetingArchiveStatusView(meetingID: meetingID)
                         }
                         .padding(AppTheme.contentInset).frame(width: 360)

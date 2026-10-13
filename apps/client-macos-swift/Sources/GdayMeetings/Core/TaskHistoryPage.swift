@@ -1,7 +1,7 @@
 import Foundation
 
 enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
-    case all = "All"
+    case all = "All Tasks"
     case active = "Active"
     case attention = "Needs Attention"
     case paused = "Paused"
@@ -9,6 +9,17 @@ enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
     case history = "History"
     case maintenance = "Search Index Maintenance"
     var id: String { rawValue }
+    var emptyMessage: String {
+        switch self {
+        case .all: "No tasks in All Tasks"
+        case .active: "No active tasks"
+        case .attention: "No tasks need attention"
+        case .paused: "No paused tasks"
+        case .failed: "No failed tasks"
+        case .history: "No completed or cancelled tasks"
+        case .maintenance: "No search index maintenance tasks"
+        }
+    }
     var predicate: String {
         switch self {
         case .all: "(kind!='searchIndex' OR automatic=0 OR attention=1)"

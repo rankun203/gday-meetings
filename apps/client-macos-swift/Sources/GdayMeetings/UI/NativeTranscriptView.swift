@@ -82,12 +82,9 @@ struct NativeTranscriptView: NSViewRepresentable {
             table?.delayHover()
             coordinator?.userScrolled()
         }
-        let scroller = TranscriptNativeScroller()
-        scroller.trackingChanged = { [weak coordinator = context.coordinator] in
+        scroll.trackingChanged = { [weak coordinator = context.coordinator] in
             coordinator?.scrollerTrackingChanged($0)
         }
-        scroller.userScrolled = { [weak coordinator = context.coordinator] in coordinator?.userScrolled() }
-        scroll.verticalScroller = scroller
         table.autoresizingMask = [.width]
         table.headerView = nil
         table.backgroundColor = .clear
@@ -932,28 +929,40 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
 }
 
-@MainActor final class TranscriptNativeScroller: NSScroller {
-    // Native drawing and action tracking support either system scroller style.
-    override class var isCompatibleWithOverlayScrollers: Bool { true }
-    var userScrolled: (() -> Void)?
-    var trackingChanged: ((Bool) -> Void)?
-    override func mouseDown(with event: NSEvent) {
-        trackingChanged?(true)
-        defer { trackingChanged?(false) }
-        super.mouseDown(with: event)
-    }
-    override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
-        userScrolled?()
-        let sent = super.sendAction(action, to: target)
-        userScrolled?()
-        return sent
-    }
-}
-
 @MainActor final class TranscriptNativeScrollView: NSScrollView {
     var willScroll: (() -> Void)?
+    var trackingChanged: ((Bool) -> Void)?
     var viewportChanged: (() -> Void)?
     private var previousViewportSize = NSSize.zero
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        observeLiveScrolling()
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        observeLiveScrolling()
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    private func observeLiveScrolling() {
+        // Keep AppKit's scroller drawing intact; its notifications also cover thumb dragging.
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification,
+            object: self)
+        center.addObserver(
+            self, selector: #selector(liveScrollChanged), name: NSScrollView.didLiveScrollNotification, object: self)
+        center.addObserver(
+            self, selector: #selector(liveScrollEnded), name: NSScrollView.didEndLiveScrollNotification, object: self)
+    }
+    @objc private func liveScrollStarted(_ notification: Notification) {
+        trackingChanged?(true)
+        willScroll?()
+    }
+    @objc private func liveScrollChanged(_ notification: Notification) { willScroll?() }
+    @objc private func liveScrollEnded(_ notification: Notification) {
+        willScroll?()
+        trackingChanged?(false)
+    }
     override func layout() {
         super.layout()
         let size = contentView.bounds.size

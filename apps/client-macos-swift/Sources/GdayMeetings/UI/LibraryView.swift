@@ -74,6 +74,19 @@ struct LibraryView: View {
         destination = .meetings
     }
 
+    private func showTag(_ id: UUID) {
+        guard let tag = store.tags.first(where: { $0.id == id }) else { return }
+        workspace.tags.query = ""
+        workspace.tags.viewport.reset()
+        workspace.tags.refresh(index: store.directoryIndex, kind: .tags, revision: store.directoryRevision)
+        workspace.tags.page.reveal(id, query: "", expectedName: tag.name)
+        showsSearchResults = false
+        openedSearchResult = nil
+        focusedTaskID = nil
+        selectedTag = id
+        destination = .tags
+    }
+
     private var filteredMeetings: [MeetingListEntry] { store.visibleMeetingEntries }
 
     private struct MeetingCountRequest: Equatable, Sendable {
@@ -497,6 +510,7 @@ struct LibraryView: View {
         .background(PlaybackSpaceKey(playback: playback))
         .focusedSceneValue(\.librarySearchAction, focusLibrarySearch)
         .focusedSceneValue(\.newMeetingNotesAction, createMeetingNotes)
+        .environment(\.showTag, showTag)
         .environment(\.showManagedTask) { id in
             focusedTaskID = id
             showsSearchResults = false
@@ -523,7 +537,10 @@ struct LibraryView: View {
             workspace.selectMeeting(id)
             if openedSearchResult?.meetingID != id { openedSearchResult = nil }
         }
-        .onChange(of: showsSearchResults ? nil : destination) { _, selection in
+        .onChange(of: showsSearchResults ? nil : destination) { previous, selection in
+            if previous == .meetings && selection != .meetings && !sidebarExpanded {
+                columnVisibility = .all
+            }
             // The navigation owner observes current intent; a departing native
             // column can still receive its old selection during replacement.
             sidebarFocus.cancelIfDestinationChanged(to: selection)
