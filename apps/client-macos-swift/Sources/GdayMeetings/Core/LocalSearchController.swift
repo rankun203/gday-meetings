@@ -26,7 +26,10 @@ final class LocalSearchController: ObservableObject {
     private var indexingRelease: Task<Void, Never>?
     var deferredRecordingChanges = false
     fileprivate var scanGeneration = UUID()
-    var scanTask: Task<Void, Never>?
+    var scanTask: Task<Void, Never>? {
+        didSet { scanActivityChanged(scanTask != nil) }
+    }
+    private let scanActivityChanged: @MainActor (Bool) -> Void
     let fingerprintCache = SemanticFingerprintCache()
     var scanRequested = false
     var scanRequestedAt = ContinuousClock.now
@@ -40,6 +43,7 @@ final class LocalSearchController: ObservableObject {
 
     init(
         directory: URL, indexDirectory: URL,
+        scanActivityChanged: @escaping @MainActor (Bool) -> Void = { _ in },
         makeEncoder: @escaping @MainActor (SemanticModelID, CoreMLSemanticEmbedding.Usage) -> any SemanticEmbedding = {
             CoreMLSemanticEmbedding(modelID: $0, manager: .shared, usage: $1)
         },
@@ -47,6 +51,7 @@ final class LocalSearchController: ObservableObject {
             await LocalModelManager.shared.health(for: $0.localID).isReady
         }
     ) {
+        self.scanActivityChanged = scanActivityChanged
         self.makeEncoder = makeEncoder
         self.modelReady = modelReady
         self.directory = directory

@@ -7,7 +7,6 @@ final class LibrarySidebarControl {
     private var expandedBinding: Binding<Bool>?
     private var rowsBinding: Binding<Bool>?
     private var toggleAction: ((Bool) -> Void)?
-    var completed: ((Bool) -> Void)?
     var isConnected: Bool { toggleAction != nil }
     var expanded: Bool { expandedBinding?.wrappedValue ?? true }
     var rowsVisible: Bool { rowsBinding?.wrappedValue ?? true }
@@ -22,24 +21,29 @@ final class LibrarySidebarControl {
         expandedBinding = nil
         rowsBinding = nil
         toggleAction = nil
-        completed = nil
     }
 }
 
 /// The window's native sidebar action owns expansion layout and animation.
 @MainActor final class LibrarySidebarNavigation: ObservableObject {
     weak var controller: NSSplitViewController?
-    private(set) var requestedColumnCount: Int?
-    func cancelReveal() { requestedColumnCount = nil }
-    func reveal(twoColumn: Bool) {
-        requestedColumnCount = twoColumn ? 2 : 3
+    private(set) var revealPending = false
+    func cancelReveal() { revealPending = false }
+    func reveal() {
+        revealPending = true
         revealIfReady()
     }
+    func toggle(reduceMotion: Bool) {
+        guard let controller else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            if reduceMotion { context.duration = 0 }
+            controller.toggleSidebar(nil)
+        }
+    }
     func revealIfReady() {
-        guard let controller, controller.view.window != nil,
-            controller.splitViewItems.count == requestedColumnCount
+        guard revealPending, let controller, controller.view.window != nil
         else { return }
-        requestedColumnCount = nil
+        revealPending = false
         if controller.splitViewItems.contains(where: { $0.behavior == .sidebar && $0.isCollapsed }) {
             controller.toggleSidebar(nil)
         }
@@ -71,9 +75,7 @@ struct LibrarySidebarActionTarget: NSViewRepresentable {
             func sidebarController(in view: NSView) -> NSSplitViewController? {
                 if let split = view as? NSSplitView,
                     let controller = split.delegate as? NSSplitViewController,
-                    controller.splitViewItems.contains(where: { $0.behavior == .sidebar }),
-                    navigation.requestedColumnCount == nil
-                        || controller.splitViewItems.count == navigation.requestedColumnCount
+                    controller.splitViewItems.contains(where: { $0.behavior == .sidebar })
                 {
                     return controller
                 }
@@ -83,9 +85,8 @@ struct LibrarySidebarActionTarget: NSViewRepresentable {
                 return nil
             }
             navigation.controller = sidebarController(in: root)
-            if navigation.requestedColumnCount != nil {
-                // A destination can replace the split during this SwiftUI update.
-                // Run its native action after the new controller finishes mounting.
+            if navigation.revealPending {
+                // Finish mounting before invoking the native sidebar action.
                 DispatchQueue.main.async { [weak navigation] in navigation?.revealIfReady() }
             }
         }

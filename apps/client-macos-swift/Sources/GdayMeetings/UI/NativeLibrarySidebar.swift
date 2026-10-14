@@ -7,35 +7,10 @@ enum LibraryDestination: Int, CaseIterable, Hashable {
     var symbol: String {
         ["waveform", "person.2", "tag", "list.bullet.rectangle", "bubble.left.and.text.bubble.right"][rawValue]
     }
-    var usesTwoColumns: Bool { self == .tasks || self == .agents }
-}
-
-/// An explicit user selection may replace the split's sidebar. Only its new
-/// native table can consume this request; ordinary updates never request focus.
-@MainActor final class LibrarySidebarFocusRequest: ObservableObject {
-    private var pending: (destination: LibraryDestination, origin: UUID)?
-    func request(_ destination: LibraryDestination, origin: UUID) { pending = (destination, origin) }
-    func cancel() { pending = nil }
-    func cancelIfDestinationChanged(to destination: LibraryDestination?, instance: UUID? = nil) {
-        // SwiftUI may update the departing column with its old selection while
-        // building the replacement. That origin cannot cancel its own transfer.
-        if let pending, pending.origin != instance, pending.destination != destination { self.pending = nil }
-    }
-    func matches(_ destination: LibraryDestination?, instance: UUID) -> Bool {
-        guard let pending else { return false }
-        return pending.origin != instance && pending.destination == destination
-    }
-    func consume(for destination: LibraryDestination?, instance: UUID) -> Bool {
-        guard let pending, pending.origin != instance else { return false }
-        self.pending = nil
-        return pending.destination == destination
-    }
 }
 
 struct NativeLibrarySidebar: NSViewRepresentable {
     @Binding var selection: LibraryDestination?
-    let twoColumn: Bool
-    let focusRequest: LibrarySidebarFocusRequest
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -43,7 +18,7 @@ struct NativeLibrarySidebar: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        let table = LibrarySidebarTable()
+        let table = NSTableView()
         table.style = .sourceList
         table.headerView = nil
         table.backgroundColor = .clear
@@ -57,8 +32,6 @@ struct NativeLibrarySidebar: NSViewRepresentable {
         table.addTableColumn(NSTableColumn(identifier: .init("destination")))
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
-        table.focusRequest = focusRequest
-        table.destination = selection
         scroll.documentView = table
         context.coordinator.table = table
         table.reloadData()
@@ -69,7 +42,7 @@ struct NativeLibrarySidebar: NSViewRepresentable {
 
     @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         var parent: NativeLibrarySidebar
-        weak var table: LibrarySidebarTable?
+        weak var table: NSTableView?
         private var updating = false
         init(_ parent: NativeLibrarySidebar) { self.parent = parent }
         func update(_ parent: NativeLibrarySidebar) {
@@ -77,8 +50,6 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             guard let table else { return }
             updating = true
             defer { updating = false }
-            parent.focusRequest.cancelIfDestinationChanged(to: parent.selection, instance: table.instanceID)
-            table.destination = parent.selection
             let selected = parent.selection.map { IndexSet(integer: $0.rawValue) } ?? IndexSet()
             if table.selectedRowIndexes != selected { table.selectRowIndexes(selected, byExtendingSelection: false) }
         }
@@ -96,9 +67,6 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             return cell
         }
         func tableViewSelectionDidChange(_ notification: Notification) {
-            // Changing the split shape replaces this table. Wait until native
-            // selection tracking finishes so the departing table cannot publish
-            // its restored selection while the same click is still in progress.
             publishSelection()
         }
         private func publishSelection() {
@@ -107,44 +75,7 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             else {
                 return
             }
-            if parent.twoColumn != destination.usesTwoColumns {
-                parent.focusRequest.request(destination, origin: table.instanceID)
-            }
-            else {
-                parent.focusRequest.cancel()
-            }
             parent.selection = destination
-        }
-    }
-}
-
-@MainActor final class LibrarySidebarTable: NSTableView {
-    let instanceID = UUID()
-    var destination: LibraryDestination?
-    weak var focusRequest: LibrarySidebarFocusRequest?
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        let previousResponder = window.firstResponder
-        // The split finishes dismantling its old column after mounting this
-        // table. Transfer once after that transaction, not during the mount.
-        DispatchQueue.main.async { [weak self, weak window, weak previousResponder] in
-            guard let self, let window, self.window === window,
-                let request = self.focusRequest, request.matches(self.destination, instance: self.instanceID)
-            else { return }
-            guard !self.isHiddenOrHasHiddenAncestor,
-                window.firstResponder === window || window.firstResponder === previousResponder
-                    || window.firstResponder === self
-            else {
-                request.cancel()
-                return
-            }
-            if window.makeFirstResponder(self) {
-                _ = request.consume(for: self.destination, instance: self.instanceID)
-            }
-            else {
-                request.cancel()
-            }
         }
     }
 }

@@ -164,7 +164,7 @@ extension TaskAttentionTimingTests {
         #expect(TaskHistoryScope.active.includes(task))
         #expect(!TaskHistoryScope.maintenance.includes(task))
         task.isAutomatic = true
-        #expect(!TaskHistoryScope.all.includes(task))
+        #expect(TaskHistoryScope.all.includes(task))
         #expect(TaskHistoryScope.maintenance.includes(task))
         task.state = .failed
         task.recovery = .manual

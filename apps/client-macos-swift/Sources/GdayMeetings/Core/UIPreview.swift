@@ -252,6 +252,7 @@ enum UIPreview {
                 || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTasks") as? Bool == true
             {
                 await seedTasks(store)
+                startTaskRefreshPreview(store)
             }
             if UIPreviewPerformanceFixtures.librarySize == nil,
                 UIPreviewPerformanceFixtures.flag("--synthetic-pagination", infoKey: "GdaySyntheticPagination")

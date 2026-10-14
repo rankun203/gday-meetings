@@ -77,22 +77,12 @@ struct SidebarPerformanceTests {
         }
         let idle = await Self.run(seconds: 2, rate: 0, window: window) { _ in }
         RecordingPerformanceTests.report("sidebar idle", idle)
-        var expansionStarted: TimeInterval?
-        var expansionDurations: [TimeInterval] = []
-        sidebar.completed = { expanded in
-            if expanded, let expansionStarted {
-                expansionDurations.append(ProcessInfo.processInfo.systemUptime - expansionStarted)
-            }
-        }
         let animated = await Self.run(seconds: 6, rate: 2, window: window) { _ in
-            expansionStarted = sidebar.expanded ? nil : ProcessInfo.processInfo.systemUptime
             sidebar.toggle(reduceMotion: false)
         }
         RecordingPerformanceTests.report("sidebar 12 animated toggles", animated)
-        print("PERF sidebar expansion completion seconds: \(expansionDurations)")
-        // Native split transitions can complete independently of SwiftUI animation
-        // callbacks; these optional samples are diagnostics, not completion counts.
-        expansionStarted = nil
+        // Native AppKit owns animation completion; measure frame pacing above
+        // and settle visibility rather than timing SwiftUI callbacks.
         _ = await Self.run(seconds: 0.5, rate: 0, window: window) { _ in }
         #expect(sidebar.expanded && sidebar.rowsVisible)
         let immediate = await Self.run(seconds: 6, rate: 2, window: window) { _ in

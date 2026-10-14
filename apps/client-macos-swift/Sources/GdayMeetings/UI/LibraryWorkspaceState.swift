@@ -78,6 +78,10 @@ import Foundation
     private(set) var pendingFocusID: UUID?
     private var refreshAfterFocus = false
 
+    func footerCount(total: Int, historyLoading: Bool, hasHistoryError: Bool) -> Int? {
+        !hasOlder && !historyLoading && !hasHistoryError && !rows.isEmpty ? total : nil
+    }
+
     func beginPageLoad() -> UUID {
         pageLoadTask?.cancel()
         pageLoadTask = nil
@@ -126,8 +130,8 @@ import Foundation
 
     func select(_ row: TaskHistoryRow?) {
         if selectedRow?.id != row?.id { failureOffset = 0 }
-        selection = row?.id
-        selectedRow = row
+        if selection != row?.id { selection = row?.id }
+        if selectedRow != row { selectedRow = row }
     }
 
     func resetPagePresentation() {
@@ -137,7 +141,7 @@ import Foundation
 
     func applyPage(_ page: [TaskHistoryRow], token: UUID, preferredPosition: Int = 0) {
         guard generation == token else { return }
-        rows = page
+        if rows != page { rows = page }
         let retained = page.first { $0.id == selection }
         let replacement = page.isEmpty ? nil : page[min(max(0, preferredPosition), page.count - 1)]
         select(retained ?? replacement)

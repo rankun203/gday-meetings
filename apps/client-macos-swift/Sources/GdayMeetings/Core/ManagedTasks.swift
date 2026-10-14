@@ -325,9 +325,31 @@ extension MeetingStore {
         }
     }
 
+    func updateSearchMaintenanceBatch(scanActive: Bool? = nil) {
+        let pending = [ManagedTaskState.queued, .running, .paused].contains { state in
+            managedMaintenanceStateCounts[state, default: 0] > 0
+                || managedTasks.contains { $0.isPreview && $0.isMaintenance && $0.state == state }
+        }
+        if pending {
+            searchMaintenanceBatchActive = true
+        }
+        else if scanActive == false {
+            searchMaintenanceBatchActive = false
+        }
+    }
+
+    func invalidateTaskHistory(previous: ManagedTaskRecord?, current: ManagedTaskRecord?) {
+        guard previous != current else { return }
+        for scope in TaskHistoryScope.allCases
+        where previous.map(scope.includes) == true || current.map(scope.includes) == true {
+            managedTaskScopeRevisions[scope, default: 0] += 1
+        }
+    }
+
     /// Journal first: provider work must not start from an uncommitted intent.
     @discardableResult private func saveManagedTask(_ proposed: ManagedTaskRecord) async -> Bool {
         var task = proposed
+        var previous = managedTask(id: proposed.id)
         if task.isPreview { task.recordTransition(from: managedTask(id: proposed.id)) }
         do {
             guard libraryWritable else { throw ServiceError("The meeting library is read-only.") }
@@ -343,6 +365,7 @@ extension MeetingStore {
                     return (previous, transitioned)
                 }
                 task = result.1
+                previous = result.0
                 if let previous = result.0 {
                     managedTaskStateCounts[previous.state, default: 0] -= 1
                     if previous.needsAttention { managedTaskAttentionCount -= 1 }
@@ -369,6 +392,8 @@ extension MeetingStore {
                 if task.state.isActive { managedTaskActiveCounts[task.key, default: 0] += 1 }
             }
             cacheManagedTask(task)
+            updateSearchMaintenanceBatch()
+            invalidateTaskHistory(previous: previous, current: task)
             managedTaskRevision += 1
             if !task.state.isActive && managedTaskOperations[task.id] == nil {
                 for waiter in managedTaskWaiters.removeValue(forKey: task.id) ?? [] { waiter.resume() }
@@ -415,7 +440,7 @@ extension MeetingStore {
         }
     }
 
-    private func startManagedTasks() async {
+    func startManagedTasks() async {
         guard !isChangingLibrary, !isPreparingToQuit, !isSchedulingManagedTasks, !managedTasksLoading else { return }
         isSchedulingManagedTasks = true
         defer { isSchedulingManagedTasks = false }
@@ -434,11 +459,15 @@ extension MeetingStore {
                 let running = managedTasks.filter { $0.kind == kind && $0.state == .running && !$0.isPreview }.count
                 guard running < limit else { break }
                 let journal = managedTaskJournal
+                let excludedMeetings = deletingMeetingIDs.map { ManagedTaskIndex.literal($0.uuidString) }.joined(
+                    separator: ",")
+                let deletionPredicate = excludedMeetings.isEmpty ? "" : " AND meeting NOT IN (\(excludedMeetings))"
                 let candidates: [ManagedTaskRecord]
                 do {
                     candidates = try await managedTaskIO.perform {
                         try journal.query(
-                            where: "kind=" + ManagedTaskIndex.literal(kind.rawValue) + " AND state='queued'",
+                            where: "kind=" + ManagedTaskIndex.literal(kind.rawValue) + " AND state='queued'"
+                                + deletionPredicate,
                             order: "priority DESC,created,id", limit: limit - running)
                     }
                 }
@@ -452,6 +481,7 @@ extension MeetingStore {
                 guard !isPreparingToQuit else { return }
                 guard !candidates.isEmpty else { break }
                 for candidate in candidates {
+                    guard !deletingMeetingIDs.contains(candidate.meetingID) else { continue }
                     if [.searchIndex, .diarization].contains(kind),
                         recordingID != nil || isStartingRecording || isFinalizingRecording
                     {
@@ -487,11 +517,14 @@ extension MeetingStore {
                         _ = await saveManagedTask(task)
                         return
                     }
-                    if [.searchIndex, .diarization].contains(kind),
-                        recordingID != nil || isStartingRecording || isFinalizingRecording
+                    if deletingMeetingIDs.contains(task.meetingID)
+                        || ([.searchIndex, .diarization].contains(kind)
+                            && (recordingID != nil || isStartingRecording || isFinalizingRecording))
                     {
                         task.state = .queued
-                        task.progress = "Waiting for recording to finish"
+                        task.progress =
+                            deletingMeetingIDs.contains(task.meetingID)
+                            ? "Waiting to start" : "Waiting for recording to finish"
                         _ = await saveManagedTask(task)
                         return
                     }
@@ -514,7 +547,9 @@ extension MeetingStore {
             guard await ensureMeetingLoaded(id: task.meetingID),
                 let meeting = meetings.first(where: { $0.id == task.meetingID })
             else {
-                throw ServiceError("This meeting no longer exists.")
+                try Task.checkCancellation()
+                if await managedTaskMeetingIsMissing(task.meetingID) { throw MissingManagedTaskMeeting() }
+                throw ServiceError("Couldn’t read this meeting. Check that the library is available, then retry.")
             }
             try Task.checkCancellation()
             if let batchID = task.batchID, !isSearchRebuildActive(batchID) { throw CancellationError() }
@@ -546,7 +581,19 @@ extension MeetingStore {
             if task.kind == .searchIndex { scheduleSearchIndexing() }
         }
         catch {
-            if Task.isCancelled || error is CancellationError {
+            let missingMeeting: Bool
+            if error is MissingManagedTaskMeeting {
+                missingMeeting = true
+            }
+            else {
+                missingMeeting = await managedTaskMeetingIsMissing(task.meetingID)
+            }
+            if missingMeeting, !hasCommittedTaskReceipt(task) {
+                await completeManagedTask(
+                    id, state: .cancelled, recovery: .none,
+                    message: MissingManagedTaskMeeting().localizedDescription)
+            }
+            else if Task.isCancelled || error is CancellationError {
                 let hasReceipt = hasCommittedTaskReceipt(task)
                 if hasReceipt {
                     // Cancellation cannot undo a result already committed with its receipt.
@@ -598,10 +645,28 @@ extension MeetingStore {
         }
     }
 
-    private func completeManagedTask(
+    func completeManagedTask(
         _ id: UUID, state: ManagedTaskState, recovery: ManagedTaskRecovery, message: String? = nil
     ) async {
         await managedTaskCommands.run {
+            let journal = self.managedTaskJournal
+            do {
+                let latest = try await self.managedTaskIO.perform {
+                    try journal.query(where: "id=" + ManagedTaskIndex.literal(id.uuidString), limit: 1).first
+                }
+                if let latest, latest.state == .cancelled, latest.recovery == .none {
+                    self.cacheManagedTask(latest)
+                    // A delayed worker cannot undo a terminal cancellation. A result
+                    // already committed to the meeting still takes precedence.
+                    guard self.hasCommittedTaskReceipt(latest) else { return }
+                    await self.finishManagedTask(id, state: .completed, recovery: .none)
+                    return
+                }
+            }
+            catch {
+                self.managedTaskJournalError = "Couldn’t read tasks. \(error.localizedDescription)"
+                return
+            }
             await self.finishManagedTask(id, state: state, recovery: recovery, message: message)
         }
     }
@@ -678,10 +743,41 @@ extension MeetingStore {
         }
     }
 
+    func cancelTasksForDeletedMeeting(_ meetingID: UUID) async {
+        await managedTaskCommands.run {
+            let journal = self.managedTaskJournal
+            let wasScheduling = self.isSchedulingManagedTasks
+            self.isSchedulingManagedTasks = true
+            defer { self.isSchedulingManagedTasks = wasScheduling }
+            do {
+                var cursor: ManagedTaskJournal.Cursor?
+                while true {
+                    let after = cursor
+                    let tasks = try await self.managedTaskIO.perform {
+                        let records = journal.page(
+                            after: after, limit: 50,
+                            predicate: "meeting=" + ManagedTaskIndex.literal(meetingID.uuidString)
+                                + " AND state NOT IN ('completed','cancelled')")
+                        if let error = journal.readFailure { throw error }
+                        return records
+                    }
+                    guard let last = tasks.last else { break }
+                    for task in tasks {
+                        self.cacheManagedTask(task)
+                        await self.finishManagedTask(
+                            task.id, state: .cancelled, recovery: .none, message: "Meeting was deleted.")
+                    }
+                    cursor = .init(createdAt: last.createdAt, id: last.id)
+                }
+            }
+            catch { self.managedTaskJournalError = "Couldn’t update tasks. \(error.localizedDescription)" }
+        }
+    }
+
     func canRetryManagedTask(_ task: ManagedTaskRecord) -> Bool {
         guard task.state == .failed || task.state == .cancelled || task.state == .paused,
             !isJobRunning(task.kind, .meeting(task.meetingID)), !task.dismissRequested, !task.restartRequested,
-            task.recovery != .restartRequired && task.recovery != .blocked
+            task.recovery != .restartRequired && task.recovery != .blocked && task.recovery != .none
         else { return false }
         if task.isPreview || task.kind == .summary { return true }
         if task.kind == .searchIndex { return selectedSearchProvider != nil }
@@ -830,6 +926,8 @@ extension MeetingStore {
             }
             managedTasks.removeAll { $0.id == task.id }
             managedTaskStopRequests.remove(task.id)
+            updateSearchMaintenanceBatch(scanActive: localSearch.scanTask != nil)
+            invalidateTaskHistory(previous: task, current: nil)
             managedTaskRevision += 1
         }
         catch { managedTaskJournalError = "Couldn’t discard this task. \(error.localizedDescription)" }
@@ -907,11 +1005,13 @@ extension MeetingStore {
         managedTaskAttentionCount = snapshot.attentionCount
         managedTaskScopeCounts = snapshot.scopeCounts
         managedMaintenanceStateCounts = snapshot.maintenanceCounts
+        updateSearchMaintenanceBatch(scanActive: localSearch.scanTask != nil)
         managedTaskActiveCounts = snapshot.activeCounts
         for id in Array(managedTaskWaiters.keys)
         where !snapshot.activeIDs.contains(id) && managedTaskOperations[id] == nil {
             for waiter in managedTaskWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         }
+        for scope in TaskHistoryScope.allCases { managedTaskScopeRevisions[scope, default: 0] += 1 }
         managedTaskRevision += 1
     }
 
@@ -981,7 +1081,9 @@ extension MeetingStore {
                 await finishRequestedRestart(original)
                 continue
             }
-            guard original.state != .completed else { continue }
+            guard original.state != .completed,
+                !(original.state == .cancelled && original.recovery == .none)
+            else { continue }
             if let batchID = original.batchID, !isSearchRebuildActive(batchID),
                 original.state.isActive || original.state == .paused
             {
@@ -991,8 +1093,16 @@ extension MeetingStore {
             guard await ensureMeetingLoaded(id: original.meetingID),
                 let meeting = meetings.first(where: { $0.id == original.meetingID })
             else {
-                await finishManagedTask(
-                    original.id, state: .failed, recovery: .blocked, message: "This meeting no longer exists.")
+                if await managedTaskMeetingIsMissing(original.meetingID) {
+                    await finishManagedTask(
+                        original.id, state: .cancelled, recovery: .none,
+                        message: MissingManagedTaskMeeting().localizedDescription)
+                }
+                else if original.state.isActive || original.state == .paused {
+                    await finishManagedTask(
+                        original.id, state: .failed, recovery: .manual,
+                        message: "Couldn’t read this meeting. Check that the library is available, then retry.")
+                }
                 continue
             }
             if meeting.completedTaskIDs[original.kind.rawValue] == original.id {

@@ -112,7 +112,10 @@ struct TaskQueueView: View {
                     }
                     return row
                 }
-                if rows != updated { rows = updated }
+                if rows != updated {
+                    rows = updated
+                    if let selected = updated.first(where: { $0.id == selection }) { session.select(selected) }
+                }
             }
             .onReceive(store.voiceLibrary.$jobs) { cached in
                 let current = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
@@ -120,23 +123,22 @@ struct TaskQueueView: View {
                     if case .voice(let job) = row, let replacement = current[job.id] { return .voice(replacement) }
                     return row
                 }
-                if rows != updated { rows = updated }
+                if rows != updated {
+                    rows = updated
+                    if let selected = updated.first(where: { $0.id == selection }) { session.select(selected) }
+                }
             }
     }
 
     private var observedContent: some View {
         lifecycleContent
-            .onChange(of: store.managedTaskRevision) { _, _ in scheduleRevisionRefresh() }
+            .onChange(of: store.managedTaskScopeRevisions[scope, default: 0]) { _, _ in scheduleRevisionRefresh() }
             .onChange(of: store.settings.serviceProviders) { _, _ in refreshSelectedActions() }
             .onChange(of: store.meetingIndexRevision) { _, _ in refreshSelectedActions() }
             .onChange(of: store.recordingID) { _, _ in refreshSelectedActions() }
             .onChange(of: store.backgroundJobs.map(\.key)) { _, _ in refreshSelectedActions() }
-            .onChange(
-                of: store.voiceLibrary.jobs.map {
-                    $0.id.uuidString + ":" + $0.state.rawValue + ":" + String($0.needsAttention)
-                }
-            ) { _, _ in
-                refreshRows()
+            .onChange(of: store.voiceLibrary.jobs.filter(scope.includes)) { _, _ in
+                scheduleRevisionRefresh()
             }
             .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
     }
@@ -210,9 +212,9 @@ struct TaskQueueView: View {
                     || store.isFinalizingRecording, revealID: session.revealID,
                 revealToken: session.revealToken,
                 retainedViewport: session.viewport,
-                totalCount: !hasOlder && !loadingPage && !store.managedTasksLoading
-                    && store.managedTaskJournalError == nil && !rows.isEmpty
-                    ? store.taskHistoryCount(scope: scope) : nil
+                totalCount: session.footerCount(
+                    total: store.taskHistoryCount(scope: scope), historyLoading: store.managedTasksLoading,
+                    hasHistoryError: store.managedTaskJournalError != nil)
             ) { first, last, newer in
                 visibleFirst = first
                 visibleLast = last
@@ -646,7 +648,8 @@ struct TaskQueueStatusButton: View {
     private var activityButton: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if store.managedTasks.contains(where: { $0.state == .running }) || !store.taskQueueOtherJobs.isEmpty
+                if store.searchMaintenanceBatchActive || store.managedTasks.contains(where: { $0.state == .running })
+                    || !store.taskQueueOtherJobs.isEmpty
                     || store.voiceLibrary.jobs.contains(where: { $0.state == .running })
                 {
                     ProgressView().controlSize(.small)
@@ -683,6 +686,7 @@ extension MeetingStore {
         (managedTaskStateCounts[.queued, default: 0] + managedTaskStateCounts[.running, default: 0]
             + managedTaskAttentionCount > 0)
             || managedTasks.contains { $0.isPreview && ($0.state.isActive || $0.needsAttention) }
+            || searchMaintenanceBatchActive
             || !taskQueueOtherJobs.isEmpty
             || voiceLibrary.jobs.contains { $0.state == .running || $0.state == .queued || $0.needsAttention }
     }
@@ -706,8 +710,9 @@ extension MeetingStore {
     var taskQueueActivitySummary: String {
         let indexQueued = managedMaintenanceStateCounts[.queued, default: 0]
         let maintenance =
-            indexQueued + managedMaintenanceStateCounts[.running, default: 0]
-            + managedMaintenanceStateCounts[.paused, default: 0] > 0
+            searchMaintenanceBatchActive
+            || indexQueued + managedMaintenanceStateCounts[.running, default: 0]
+                + managedMaintenanceStateCounts[.paused, default: 0] > 0
             || managedTasks.contains { $0.isPreview && $0.isMaintenance && ($0.state.isActive || $0.state == .paused) }
         let running =
             managedTasks.filter { $0.state == .running && !$0.isMaintenance }.count + taskQueueOtherJobs.count

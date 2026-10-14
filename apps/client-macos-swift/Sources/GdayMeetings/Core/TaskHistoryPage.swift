@@ -22,7 +22,7 @@ enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
     }
     var predicate: String {
         switch self {
-        case .all: "(kind!='searchIndex' OR automatic=0 OR attention=1)"
+        case .all: "1=1"
         case .active: "state IN ('queued','running') AND (kind!='searchIndex' OR automatic=0)"
         case .attention: "attention=1"
         case .history: "state IN ('completed','cancelled') AND (kind!='searchIndex' OR automatic=0)"
@@ -34,9 +34,7 @@ enum TaskHistoryScope: String, CaseIterable, Identifiable, Sendable {
     func includes(_ task: ManagedTaskRecord) -> Bool {
         if self == .maintenance { return task.isMaintenance }
         if self == .attention { return task.needsAttention }
-        if task.isMaintenance && [.all, .active, .history].contains(self) {
-            return self == .all && task.needsAttention
-        }
+        if task.isMaintenance && [.active, .history].contains(self) { return false }
         return includes(task.state)
     }
     func includes(_ state: ManagedTaskState) -> Bool {

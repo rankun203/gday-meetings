@@ -169,3 +169,48 @@ struct TaskQueueSessionTests {
         #expect(empty.entries.isEmpty)
     }
 }
+
+extension TaskQueueSessionTests {
+    @MainActor @Test func maintenanceInvalidatesOnlyMatchingScopes() {
+        let store = MeetingStore(
+            dataDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        var maintenance = ManagedTaskRecord(
+            kind: .searchIndex, meetingID: UUID(), meetingTitle: "Synthetic meeting", isPreview: true, isAutomatic: true
+        )
+        store.invalidateTaskHistory(previous: nil, current: maintenance)
+        #expect(store.managedTaskScopeRevisions[.attention, default: 0] == 0)
+        #expect(store.managedTaskScopeRevisions[.all] == 1)
+        #expect(store.managedTaskScopeRevisions[.maintenance] == 1)
+        let before = maintenance
+        maintenance.state = .failed
+        maintenance.recovery = .manual
+        store.invalidateTaskHistory(previous: before, current: maintenance)
+        #expect(store.managedTaskScopeRevisions[.attention] == 1)
+        store.invalidateTaskHistory(previous: maintenance, current: maintenance)
+        #expect(store.managedTaskScopeRevisions[.attention] == 1)
+        let failed = maintenance
+        maintenance.attentionAcknowledged = true
+        store.invalidateTaskHistory(previous: failed, current: maintenance)
+        #expect(store.managedTaskScopeRevisions[.attention] == 2)
+    }
+
+    @MainActor @Test func maintenanceBatchSurvivesGapsAndEndsAfterFinalScan() {
+        let store = MeetingStore(
+            dataDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        store.updateSearchMaintenanceBatch(scanActive: true)
+        #expect(!store.searchMaintenanceBatchActive)
+        store.managedMaintenanceStateCounts[.queued] = 1
+        store.updateSearchMaintenanceBatch()
+        #expect(store.searchMaintenanceBatchActive)
+        store.managedMaintenanceStateCounts[.queued] = 0
+        store.updateSearchMaintenanceBatch()
+        #expect(store.searchMaintenanceBatchActive)
+        store.updateSearchMaintenanceBatch(scanActive: true)
+        #expect(store.searchMaintenanceBatchActive)
+        store.updateSearchMaintenanceBatch(scanActive: false)
+        #expect(!store.searchMaintenanceBatchActive)
+        store.managedMaintenanceStateCounts[.paused] = 1
+        store.updateSearchMaintenanceBatch(scanActive: false)
+        #expect(store.searchMaintenanceBatchActive)
+    }
+}

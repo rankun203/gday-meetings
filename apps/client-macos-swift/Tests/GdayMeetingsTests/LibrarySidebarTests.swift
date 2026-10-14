@@ -34,7 +34,7 @@ struct LibrarySidebarTests {
             control.disconnect()
         }
         func splits(in view: NSView) -> [NSSplitView] {
-            (view as? NSSplitView).map { [$0] } ?? view.subviews.flatMap { splits(in: $0) }
+            ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap { splits(in: $0) }
         }
         func descendants(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap { descendants(in: $0) }
@@ -87,15 +87,39 @@ struct LibrarySidebarTests {
                 }
                 #expect(
                     windowWidthChange <= 1,
-                    "Window width changed by \(windowWidthChange) points")
+                    "Window width changed by \(windowWidthChange) points at width \(width), programmatic \(programmatic)"
+                )
                 #expect(samples > 1)
                 #expect(overflow <= 1, "Workspace overflow at width \(width): \(overflow) points")
+                let workspaceSplit = try #require(splits(in: host).first { $0 !== split })
+                let directoryPane = try #require(workspaceSplit.arrangedSubviews.first)
+                let detailPane = try #require(workspaceSplit.arrangedSubviews.last)
+                // The native host extends beneath the floating sidebar. Measure
+                // visible content, while the divider uses the full host width.
+                func contentWidth(_ view: NSView) -> CGFloat {
+                    view.bounds.width - view.safeAreaInsets.left - view.safeAreaInsets.right
+                }
+                let originalHostWidth = directoryPane.frame.width
+                let originalDirectoryWidth = contentWidth(directoryPane)
+                let targetWidth: CGFloat = originalDirectoryWidth > 270 ? 250 : 300
+                let horizontalInset = directoryPane.safeAreaInsets.left + directoryPane.safeAreaInsets.right
+                workspaceSplit.setPosition(targetWidth + horizontalInset, ofDividerAt: 0)
+                _ = await SidebarPerformanceTests.run(seconds: 0.2, rate: 0, window: window) { _ in }
+                if width == 1200 {
+                    #expect(abs(contentWidth(directoryPane) - originalDirectoryWidth) > 1)
+                }
+                #expect(contentWidth(directoryPane) >= 249 && contentWidth(directoryPane) <= 361)
+                #expect(contentWidth(detailPane) >= AppTheme.minimumDetailWidth - 1)
+                #expect(abs(window.frame.width - originalWindowWidth) <= 1)
+                let workspaceBounds = workspaceSplit.convert(workspaceSplit.bounds, to: host)
+                #expect(workspaceBounds.minX >= -1 && workspaceBounds.maxX <= host.bounds.width + 1)
+                workspaceSplit.setPosition(originalHostWidth, ofDividerAt: 0)
             }
         }
     }
 
     @Test(arguments: [false, true])
-    func selectingAcrossSplitShapesKeepsWindowAndSidebarStable(startCollapsed: Bool) async throws {
+    func selectingDestinationsRetainsSidebarIdentityAndFocus(startCollapsed: Bool) async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-sidebar-focus-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -132,7 +156,22 @@ struct LibrarySidebarTests {
             return sidebar() != nil
         }
         #expect(appeared)
-        for target in [3, 0] {  // Meetings → Tasks → Meetings replaces the split shape twice.
+        _ = await SidebarPerformanceTests.run(seconds: 0.5, rate: 0, window: window) { _ in }
+        func outerController() -> NSSplitViewController? {
+            func find(in view: NSView) -> NSSplitViewController? {
+                if let split = view as? NSSplitView,
+                    let controller = split.delegate as? NSSplitViewController,
+                    controller.splitViewItems.contains(where: { $0.behavior == .sidebar })
+                {
+                    return controller
+                }
+                return view.subviews.lazy.compactMap { find(in: $0) }.first
+            }
+            return window.contentView.flatMap { find(in: $0) }
+        }
+        let persistentSidebar = try #require(sidebar())
+        let persistentController = try #require(outerController())
+        for target in [3, 4, 1, 2, 0, 3, 0] {
             let original = try #require(sidebar())
             #expect(window.makeFirstResponder(original))
             let revealsSidebar = startCollapsed && target == LibraryDestination.tasks.rawValue
@@ -143,9 +182,12 @@ struct LibrarySidebarTests {
             }
             let originalWindowWidth = window.frame.width
             original.selectRowIndexes(IndexSet(integer: target), byExtendingSelection: false)
+            // Drain the SwiftUI navigation transaction before checking identity;
+            // native selection changes synchronously, before workspace updates.
+            _ = await SidebarPerformanceTests.run(seconds: 0.2, rate: 0, window: window) { _ in }
             let retained = try await waitForMainActorTestCondition {
                 window.contentView?.layoutSubtreeIfNeeded()
-                guard control.expanded, let replacement = sidebar(), replacement !== original,
+                guard control.expanded, let replacement = sidebar(), replacement === persistentSidebar,
                     replacement.selectedRow == target
                 else { return false }
                 // A hidden sidebar cannot originate a keyboard selection. This
@@ -156,8 +198,9 @@ struct LibrarySidebarTests {
             }
             #expect(
                 retained,
-                "Target \(target), selected \(sidebar()?.selectedRow ?? -1), replaced \(sidebar() !== original), responder \(String(describing: window.firstResponder))"
+                "Target \(target), selected \(sidebar()?.selectedRow ?? -1), retained \(sidebar() === persistentSidebar), responder \(String(describing: window.firstResponder))"
             )
+            #expect(outerController() === persistentController)
             #expect(control.expanded, "Leaving Meetings reveals the sidebar; returning keeps it open")
             #expect(abs(window.frame.width - originalWindowWidth) <= 1)
         }

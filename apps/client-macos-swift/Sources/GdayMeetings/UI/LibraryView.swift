@@ -51,12 +51,10 @@ struct LibraryView: View {
     @ViewState private var searchFocused = false
     @ViewState private var searchModelNotice: ServiceProvider?
     @ViewState private var promptedSearchModels: Set<String> = []
-    @StateObject private var sidebarFocus = LibrarySidebarFocusRequest()
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var sidebarNavigation = LibrarySidebarNavigation()
-    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .doubleColumn
-    @ViewState private var sidebarTransition = UUID()
+    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     private let sidebarControl: LibrarySidebarControl?
 
     init(sidebar: LibrarySidebarControl? = nil, selectedMeetingID: UUID? = nil) {
@@ -213,67 +211,68 @@ struct LibraryView: View {
         }
     }
 
-    @ViewBuilder private var navigationWorkspace: some View {
-        if showsSearchResults || destination == .tasks || destination == .agents {
-            NavigationSplitView(columnVisibility: twoColumnVisibility) {
-                librarySidebar(twoColumn: true)
-            } detail: {
-                Group {
-                    if showsSearchResults {
-                        LibrarySearchResultsView(
-                            session: searchSession,
-                            open: openSearchResult, retry: retrySearch,
-                            openPerson: { id in
-                                workspace.people.query = ""
-                                workspace.people.viewport.reset()
-                                let person = store.people.first { $0.id == id }
-                                if let person, !store.excludedTagIDs.isDisjoint(with: person.tagIDs) {
-                                    workspace.people.showExcluded = true
-                                }
-                                workspace.people.refresh(
-                                    index: store.directoryIndex, kind: .people, revision: store.directoryRevision)
-                                workspace.people.page.reveal(id, query: "", expectedName: person?.name)
-                                showsSearchResults = false
-                                destination = .people
-                                selectedPeople = [id]
-                                search = ""
-                            },
-                            play: openSearchResult, navigate: navigateToSearchResult, selectMatch: playSearchResult,
-                            canPlay: !recordingActive, index: store.libraryIndex
-                        )
-                        .onExitCommand {
+    private var navigationWorkspace: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            librarySidebar
+        } detail: {
+            Group {
+                if showsSearchResults {
+                    LibrarySearchResultsView(
+                        session: searchSession,
+                        open: openSearchResult, retry: retrySearch,
+                        openPerson: { id in
+                            workspace.people.query = ""
+                            workspace.people.viewport.reset()
+                            let person = store.people.first { $0.id == id }
+                            if let person, !store.excludedTagIDs.isDisjoint(with: person.tagIDs) {
+                                workspace.people.showExcluded = true
+                            }
+                            workspace.people.refresh(
+                                index: store.directoryIndex, kind: .people, revision: store.directoryRevision)
+                            workspace.people.page.reveal(id, query: "", expectedName: person?.name)
                             showsSearchResults = false
+                            destination = .people
+                            selectedPeople = [id]
                             search = ""
-                        }
-                    }
-                    else if destination == .tasks {
-                        TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID, session: workspace.tasks)
-                    }
-                    else {
-                        AgentsView()
+                        },
+                        play: openSearchResult, navigate: navigateToSearchResult, selectMatch: playSearchResult,
+                        canPlay: !recordingActive, index: store.libraryIndex
+                    )
+                    .navigationTitle("Search Results")
+                    .onExitCommand {
+                        showsSearchResults = false
+                        search = ""
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
-                .navigationTitle(showsSearchResults ? "Search Results" : destination == .tasks ? "Tasks" : "Agents")
+                else if destination == .tasks {
+                    TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID, session: workspace.tasks)
+                        .navigationTitle("Tasks")
+                }
+                else if destination == .agents {
+                    AgentsView().navigationTitle("Agents")
+                }
+                else {
+                    // Resolve the navigation pane's safe area once before the
+                    // native split measures its list and detail hosting views.
+                    GeometryReader { geometry in
+                        HSplitView {
+                            directoryColumn
+                                .frame(minWidth: 250, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
+                            selectedDetail
+                                .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
+                                .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+                        }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                    .frame(minWidth: 250 + 1 + AppTheme.minimumDetailWidth)
+                }
             }
-        }
-        else {
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                librarySidebar(twoColumn: false)
-            } content: {
-                directoryColumn
-                    .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 360)
-            } detail: {
-                selectedDetail
-                    .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
-                    .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
-                    .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
         }
     }
 
-    private func librarySidebar(twoColumn: Bool) -> some View {
+    private var librarySidebar: some View {
         NativeLibrarySidebar(
             selection: Binding(
                 get: { showsSearchResults ? nil : destination },
@@ -284,8 +283,7 @@ struct LibraryView: View {
                         openedSearchResult = nil
                         destination = value
                     }
-                }),
-            twoColumn: twoColumn, focusRequest: sidebarFocus
+                })
         )
         .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
     }
@@ -457,7 +455,7 @@ struct LibraryView: View {
 
     var body: some View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
-        // Native columns align their titles and actions with the window toolbar.
+        // Keep that hierarchy inside one persistent sidebar and workspace split.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
             navigationWorkspace
@@ -543,11 +541,8 @@ struct LibraryView: View {
         .onChange(of: showsSearchResults ? nil : destination) { previous, selection in
             sidebarNavigation.cancelReveal()
             if previous == .meetings && selection != .meetings && !sidebarExpanded {
-                sidebarNavigation.reveal(twoColumn: showsSearchResults || destination?.usesTwoColumns == true)
+                sidebarNavigation.reveal()
             }
-            // The navigation owner observes current intent; a departing native
-            // column can still receive its old selection during replacement.
-            sidebarFocus.cancelIfDestinationChanged(to: selection)
         }
         .onDisappear { sidebarControl?.disconnect() }
         .onChange(of: search) { _, query in
@@ -751,23 +746,10 @@ struct LibraryView: View {
 
     private var sidebarExpanded: Bool { columnVisibility == .all }
     private var sidebarExpandedBinding: Binding<Bool> {
-        Binding(get: { sidebarExpanded }, set: { columnVisibility = $0 ? .all : .doubleColumn })
+        Binding(get: { sidebarExpanded }, set: { columnVisibility = $0 ? .all : .detailOnly })
     }
-    private var twoColumnVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(
-            get: { sidebarExpanded ? .all : .detailOnly },
-            set: { columnVisibility = $0 == .detailOnly ? .doubleColumn : .all })
-    }
-
     private func toggleSidebar(reduceMotion: Bool) {
-        let transition = UUID()
-        sidebarTransition = transition
-        withAnimation(reduceMotion ? nil : .default, completionCriteria: .removed) {
-            columnVisibility = sidebarExpanded ? .doubleColumn : .all
-        } completion: {
-            guard sidebarTransition == transition else { return }
-            sidebarControl?.completed?(sidebarExpanded)
-        }
+        sidebarNavigation.toggle(reduceMotion: reduceMotion)
     }
 
     @ViewBuilder private var emptySelection: some View {

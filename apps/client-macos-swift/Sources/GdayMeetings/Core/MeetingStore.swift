@@ -89,6 +89,8 @@ final class MeetingStore: ObservableObject {
     var jobProgressFlush: Task<Void, Never>?
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskRevision = 0
+    @Published var managedTaskScopeRevisions: [TaskHistoryScope: Int] = [:]
+    @Published var searchMaintenanceBatchActive = false
     @Published var managedTasksLoading = false
     @Published var managedTaskAttentionCount = 0
     @Published var managedMaintenanceStateCounts: [ManagedTaskState: Int] = [:]
@@ -133,7 +135,9 @@ final class MeetingStore: ObservableObject {
     let dataDirectory: URL
     let indexDirectory: URL
     private var retiredVoiceSearchMigration: Task<Void, Never>?
-    lazy var localSearch = LocalSearchController(directory: dataDirectory, indexDirectory: indexDirectory)
+    lazy var localSearch = LocalSearchController(
+        directory: dataDirectory, indexDirectory: indexDirectory,
+        scanActivityChanged: { [weak self] active in self?.updateSearchMaintenanceBatch(scanActive: active) })
 
     @Published var isCopyingLibrary = false
     @Published var copiedLibraryFiles = 0
@@ -903,7 +907,7 @@ final class MeetingStore: ObservableObject {
         meetingLoadRequests.removeValue(forKey: id)
         invalidateExternalMeetingReloads(ids: [id])
         defer { deletingMeetingIDs.remove(id) }
-        return await enqueueCanonical {
+        let deleted = await enqueueCanonical {
             guard self.notesStorage.reserveDeletion(id) else { return false }
             defer { self.notesStorage.releaseDeletion(id) }
             do {
@@ -945,6 +949,10 @@ final class MeetingStore: ObservableObject {
                 return false
             }
         }
+        if deleted { await cancelTasksForDeletedMeeting(id) }
+        deletingMeetingIDs.remove(id)
+        await managedTaskCommands.run { await self.startManagedTasks() }
+        return deleted
     }
     @discardableResult func addPerson(name: String) async -> UUID {
         guard canSave else { return UUID() }
