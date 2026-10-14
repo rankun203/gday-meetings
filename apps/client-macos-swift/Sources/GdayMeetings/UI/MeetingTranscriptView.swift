@@ -67,27 +67,23 @@ struct MeetingTranscriptView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ViewThatFits(in: .horizontal) {
                     HStack {
+                        historyMenu
                         TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
                         Spacer(minLength: 8)
-                        speakerLabelAction
                         labelingHistoryButton
-                        historyMenu
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         ViewThatFits(in: .horizontal) {
                             HStack {
+                                historyMenu
                                 TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
-                                speakerLabelAction
                             }
                             VStack(alignment: .leading, spacing: 6) {
+                                historyMenu
                                 TranscriptionActionButton(meeting: meeting, hasTranscript: !displayRows.isEmpty)
-                                speakerLabelAction
                             }
                         }
-                        HStack {
-                            labelingHistoryButton
-                            historyMenu
-                        }
+                        labelingHistoryButton
                     }
                 }
                 .controlSize(.small)
@@ -222,18 +218,21 @@ struct MeetingTranscriptView: View {
     }
 
     private var labelingHistoryButton: some View {
-        Button("Diarization History", systemImage: "clock.arrow.circlepath") {
+        Button("Diarizations", systemImage: "clock.arrow.circlepath") {
             showsLabelingHistory = true
         }
         .labelStyle(.titleAndIcon)
-        .help("Speaker Diarization History")
-        .accessibilityLabel("Diarization History")
+        .help("Review diarizations and identify speakers")
+        .accessibilityLabel("Diarizations")
         .popover(isPresented: $showsLabelingHistory) {
             SpeakerLabelingHistoryView(
                 history: $labelingHistory, restoreChoices: labelChoices,
-                currentSnapshotID: meeting.map { TranscriptRevisions.current($0).id }, canRestore: canRestore
-            ) { revision in
-                Task { if await store.restoreSpeakerLabels(revision, meetingID: meetingID) { await loadHistory() } }
+                currentSnapshotID: meeting.map { TranscriptRevisions.current($0).id }, canRestore: canRestore,
+                restore: { revision in
+                    Task { if await store.restoreSpeakerLabels(revision, meetingID: meetingID) { await loadHistory() } }
+                }
+            ) {
+                speakerLabelAction
             }
         }
     }

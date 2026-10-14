@@ -281,7 +281,9 @@ extension MeetingStore {
             throw ServiceError("Some meeting audio is missing. Restore the audio files before diarizing speakers.")
         }
         let sourceRevisions = try LocalDiarizationInputPolicy.revisions(for: files)
-        let recognize = settings.recognizeSpeakers
+        let pipeline = managedTasks.first { $0.kind == .diarization && $0.meetingID == id && $0.state == .running }?
+            .pipelineID
+        let recognize = pipeline == nil && settings.recognizeSpeakers
         setJobProgress(.diarization, .meeting(id), "Preparing the speaker model…")
         let manager = LocalModelManager.shared
         let lease = try await manager.acquire(.community1)

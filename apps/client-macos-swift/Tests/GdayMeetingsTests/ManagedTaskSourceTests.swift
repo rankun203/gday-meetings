@@ -49,7 +49,7 @@ import Testing
         #expect(records.first?.state == .completed)
     }
 
-    @Test func newCommittedTranscriptSupersedesOnlyItsSummary() async throws {
+    @Test func newCommittedTranscriptQueuesAnotherSummaryAndKeepsEarlierRequest() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -72,12 +72,19 @@ import Testing
         #expect(store.managedTask(id: replacement)?.userStopped == false)
         #expect(
             store.managedTasks.filter { $0.meetingID == meeting.id && $0.kind == .summary && $0.state.isActive }.count
-                == 1)
+                == 2)
+        #expect(first != replacement)
+        #expect(store.managedTask(id: first)?.state == .queued)
+        #expect(store.managedTask(id: first)?.sourceRevision == oldRevision)
         #expect(store.managedTask(id: other.id) == other)
-        #expect(store.managedTask(id: replacement)?.timeline?.contains { $0.kind == .ended } == true)
+        #expect(store.managedTask(id: replacement)?.timeline?.contains { $0.kind == .ended } == false)
+        let history = try SummaryHistory.read(at: store.directory(for: meeting.id))
+        let original = try #require(history.entries.first { $0.taskID == first })
+        let newer = try #require(history.entries.first { $0.taskID == replacement })
+        #expect(original.generation < newer.generation)
     }
 
-    @Test func explicitSummaryChangesSupersedeWhileIdenticalRequestsStayDeduplicated() async throws {
+    @Test func explicitSummaryChangesQueueDistinctSnapshotsWhileIdenticalRequestsStayDeduplicated() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
@@ -87,7 +94,16 @@ import Testing
         var meeting = Meeting(title: "Synthetic summary meeting")
         meeting.transcript = [.init(text: "Committed transcript")]
         try await store.insertImportedMeeting(meeting)
-        let provider = UUID()
+        var firstProvider = ServiceProvider(kind: .openAICompatible)
+        firstProvider.endpoint = "http://127.0.0.1:1/v1"
+        firstProvider.model = "first-fixture-model"
+        firstProvider.enabledCapabilities = [.summarization]
+        var secondProvider = firstProvider
+        secondProvider.id = UUID()
+        secondProvider.model = "second-fixture-model"
+        store.settings.serviceProviders = [firstProvider, secondProvider]
+        store.settings.summaryProviderID = firstProvider.id
+        let provider = firstProvider.id
         let first = try #require(
             await store.queueSummary(id: meeting.id, providerID: provider, instructions: "First request"))
         #expect(await store.queueSummary(id: meeting.id, providerID: provider, instructions: " First request ") == nil)
@@ -96,14 +112,25 @@ import Testing
             await store.queueSummary(id: meeting.id, providerID: provider, instructions: "New request"))
         #expect(store.managedTask(id: replacement)?.summaryInstructions == "New request")
         #expect(store.managedTask(id: replacement)?.isAutomatic == false)
-        #expect(store.managedTask(id: replacement)?.timeline?.contains { $0.kind == .ended } == true)
-        #expect(store.managedTask(id: first)?.state != .running)
-        let otherProvider = UUID()
+        #expect(store.managedTask(id: replacement)?.timeline?.contains { $0.kind == .ended } == false)
+        #expect(store.managedTask(id: first)?.state == .queued)
+        #expect(first != replacement)
+        let otherProvider = secondProvider.id
         let changedProvider = try #require(
             await store.queueSummary(id: meeting.id, providerID: otherProvider, instructions: "New request"))
         #expect(store.managedTask(id: changedProvider)?.providerID == otherProvider)
         #expect(store.managedTask(id: changedProvider)?.summaryInstructions == "New request")
-        #expect(store.managedTasks.filter { $0.kind == .summary && $0.state.isActive }.count == 1)
+        #expect(store.managedTasks.filter { $0.kind == .summary && $0.state.isActive }.count == 3)
+        let folder = store.directory(for: meeting.id)
+        let firstRequest = try #require(try SummaryHistory.generation(taskID: first, at: folder))
+        let replacementRequest = try #require(try SummaryHistory.generation(taskID: replacement, at: folder))
+        let changedRequest = try #require(try SummaryHistory.generation(taskID: changedProvider, at: folder))
+        #expect(firstRequest.messages.contains { $0.content.contains("First request") })
+        #expect(!firstRequest.messages.contains { $0.content.contains("New request") })
+        #expect(replacementRequest.messages.contains { $0.content.contains("New request") })
+        #expect(changedRequest.model == "second-fixture-model")
+        #expect(firstRequest.generation < replacementRequest.generation)
+        #expect(replacementRequest.generation < changedRequest.generation)
     }
 
     @Test func searchSupersedesQueuedRevisionAndBatchCancellationKeepsHistory() async throws {

@@ -532,18 +532,22 @@ struct TaskQueueView: View {
                     ).font(.callout)
                         .fontWeight(record.state == .failed ? .semibold : .regular)
                         .textSelection(.enabled)
-                    if let error = record.errorMessage, !error.isEmpty {
+                    if let error = record.errorMessage, !error.isEmpty, error != record.progress {
                         Text(error).font(.callout).textSelection(.enabled)
                     }
                     if record.recovery == .restartRequired {
                         Text("Restart sends the recording to the provider again.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if record.attemptKey != nil && !record.state.isActive && record.state != .completed {
+                    if record.attemptKey != nil && !record.state.isActive && record.state != .completed
+                        && record.providerID != ThisMacProvider.id
+                    {
                         Text("Discard Task removes this saved request. The provider may continue processing it.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if record.state == .running && record.kind != .diarization && record.kind != .searchIndex {
+                    if record.state == .running && [.transcription, .summary].contains(record.kind)
+                        && record.providerID != ThisMacProvider.id
+                    {
                         Text("The provider may continue processing after you stop waiting.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -575,7 +579,9 @@ struct TaskQueueView: View {
         if canOpen {
             Button("Open Meeting") { showMeeting(record.meetingID) }
         }
-        if record.state == .queued || record.state == .running || record.state == .paused {
+        if record.kind != .recordingFinalization
+            && (record.state == .queued || record.state == .running || record.state == .paused)
+        {
             if record.state == .queued {
                 Button("Run Next") { Task { await store.prioritizeManagedTask(id: record.id) } }
             }

@@ -161,7 +161,7 @@ import Testing
         #expect(try DataEventJournal.read(directory: store.directory(for: id)).allSatisfy { $0.action != .sent })
     }
 
-    @Test func streamCannotOverwriteSummaryChangedDuringRequest() async throws {
+    @Test func streamPreservesEditedSummaryInHistoryBeforePromotingGeneratedResult() async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let server = try HTTPFixture { _ in
@@ -179,10 +179,17 @@ import Testing
         changed.summary = "Changed elsewhere"
         await store.updateMeeting(changed)
         await store.waitForManagedTask(taskID)
-        #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
-        #expect(store.meetings[0].summary == "Changed elsewhere")
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .completed)
+        #expect(store.meetings[0].summary == "### Summary\n\n")
         #expect(store.summaryDrafts.values[id] == nil)
-        // The provider completed successfully even though newer local text prevented adoption.
+        let folder = store.directory(for: id)
+        let history = try SummaryHistory.read(at: folder)
+        let outputs = try history.entries.filter { $0.completedAt != nil }.map {
+            try SummaryGeneration.read(id: $0.id, at: folder).result
+        }
+        #expect(outputs.contains("Changed elsewhere"))
+        #expect(outputs.contains("### Summary\n\n"))
+        // Both the completed result and displaced local edit remain available.
         #expect(try DataEventJournal.read(directory: store.directory(for: id)).filter { $0.action == .sent }.count == 1)
     }
 
@@ -246,7 +253,7 @@ import Testing
     }
 
     @Test(arguments: [false, true])
-    func inputChangedDuringStreamKeepsSavedSummary(changeTranscript: Bool) async throws {
+    func inputChangedDuringStreamKeepsSnapshotAndSavesCompletedSummary(changeTranscript: Bool) async throws {
         let root = directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let server = try HTTPFixture { _ in
@@ -269,8 +276,23 @@ import Testing
         }
         await store.updateMeeting(changed)
         await store.waitForManagedTask(taskID)
-        #expect(store.managedTasks.first { $0.id == taskID }?.state == .failed)
-        #expect(store.meeting(id: id)?.summary == "Saved summary")
+        #expect(store.managedTasks.first { $0.id == taskID }?.state == .completed)
+        #expect(store.meeting(id: id)?.summary == "### Summary\n\n")
+        #expect(store.meeting(id: id)?.notes == changed.notes)
+        #expect(store.meeting(id: id)?.transcript == changed.transcript)
+        let folder = store.directory(for: id)
+        let generation = try #require(try SummaryHistory.generation(taskID: taskID, at: folder))
+        #expect(generation.messages.contains { $0.content.contains("Send the report.") })
+        #expect(
+            !generation.messages.contains {
+                $0.content.contains("Additional notes.") || $0.content.contains("A later transcript.")
+            })
+        #expect(generation.result == "### Summary\n\n")
+        let history = try SummaryHistory.read(at: folder)
+        let preserved = try history.entries.filter { $0.completedAt != nil }.map {
+            try SummaryGeneration.read(id: $0.id, at: folder).result
+        }
+        #expect(preserved.contains("Saved summary"))
         #expect(store.summaryDrafts.values[id] == nil)
     }
 }

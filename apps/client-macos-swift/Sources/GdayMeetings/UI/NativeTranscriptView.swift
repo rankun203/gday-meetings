@@ -16,13 +16,15 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var provisionalTextRanges: [NSRange]? = nil
     var recentWordRanges: [NSRange] = []
     var accessibilityHelp: String? = nil
+    var source: LiveAudioSource? = nil
     var isSourcePlaceholder = false
     let textRevision: UInt64
     init(
         id: UUID, start: Double, end: Double, speaker: String, speakerID: UUID?, text: String,
         personID: UUID? = nil, speakerColorIndex: Int? = nil, speakerColorKey: String? = nil,
         isProvisional: Bool = false, provisionalTextRanges: [NSRange]? = nil,
-        recentWordRanges: [NSRange] = [], accessibilityHelp: String? = nil, isSourcePlaceholder: Bool = false
+        recentWordRanges: [NSRange] = [], accessibilityHelp: String? = nil, isSourcePlaceholder: Bool = false,
+        source: LiveAudioSource? = nil
     ) {
         self.id = id
         self.start = start
@@ -38,6 +40,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
         self.recentWordRanges = recentWordRanges
         self.accessibilityHelp = accessibilityHelp
         self.isSourcePlaceholder = isSourcePlaceholder
+        self.source = source
         // Compute once when a row is constructed, never during a height lookup.
         self.textRevision = text.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
             ($0 ^ UInt64($1)) &* 1_099_511_628_211
@@ -53,6 +56,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     var layoutService: TranscriptLayoutService? = nil
     var generation: Int
     var showsSpeakers: Bool
+    var showsSources = false
     var editable: Bool
     var canPlay: Bool
     var playback: MeetingPlayback? = nil
@@ -179,7 +183,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                 parent.meetingID != value.meetingID
                 || parent.transcriptSourceID != value.transcriptSourceID || generation == nil
             let presentationChanged =
-                parent.showsSpeakers != value.showsSpeakers
+                parent.showsSpeakers != value.showsSpeakers || parent.showsSources != value.showsSources
                 || parent.editable != value.editable || parent.canPlay != value.canPlay
             let changed =
                 sourceChanged || presentationChanged
@@ -289,7 +293,8 @@ struct NativeTranscriptView: NSViewRepresentable {
             for id in removedLiveIDs { appliedHeights.removeValue(forKey: id) }
             let scale = table.window?.backingScaleFactor ?? 1
             let width = TranscriptTextMeasurement.normalizedTextWidth(
-                table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers, scale: scale
+                table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers,
+                showsSources: parent.showsSources, scale: scale
             )
             let widthChanged = settledWidth != width || settledScale != scale
             rebuildMeasurementKeys(from: value.liveRows != nil && !widthChanged ? selectionBoundary : 0)
@@ -525,7 +530,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             // A field editor must commit to its captured segment before this
             // reusable cell is rebound to a different row.
             if cell === editedCell && cell.rowID != value.id { finishEdit() }
-            cell.configure(colored(value), showsSpeakers: parent.showsSpeakers)
+            cell.configure(colored(value), showsSpeakers: parent.showsSpeakers, showsSources: parent.showsSources)
             cell.isPlaybackRow = activeRows.contains { rows[$0].id == value.id }
             cell.allowsEditing = parent.editable
             cell.body.delegate = self
@@ -592,6 +597,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                 let scale = table.window?.backingScaleFactor ?? 1
                 let width = TranscriptTextMeasurement.normalizedTextWidth(
                     table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers,
+                    showsSources: parent.showsSources,
                     scale: scale)
                 if settledWidth != width || settledScale != scale {
                     // Invalidate geometry without rebuilding unchanged cells.
@@ -654,6 +660,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             }
             let width = TranscriptTextMeasurement.normalizedTextWidth(
                 table.tableColumns.first?.width ?? table.bounds.width, showsSpeakers: parent.showsSpeakers,
+                showsSources: parent.showsSources,
                 scale: table.window?.backingScaleFactor ?? 1)
             let boundary = min(boundary, rows.count, measurementKeys.count)
             if indexesChanged {
@@ -679,7 +686,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                     return TranscriptMeasurementKey(
                         meetingID: parent.meetingID ?? fallbackMeetingID, rowID: row.id,
                         textRevision: row.textRevision, effectiveWidth: width, typographyVersion: 1,
-                        layoutVersion: parent.showsSpeakers ? 2 : 1)
+                        layoutVersion: (parent.showsSpeakers ? 2 : 1) + (parent.showsSources ? 2 : 0))
                 })
         }
         private func activateMeasurements() {
@@ -912,7 +919,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell?.body.isSelectable = false
             editSession.finish(cancel: cancel)
             if cancel, let id = cell?.rowID, let row = rows.first(where: { $0.id == id }) {
-                cell?.configure(colored(row), showsSpeakers: parent.showsSpeakers)
+                cell?.configure(colored(row), showsSpeakers: parent.showsSpeakers, showsSources: parent.showsSources)
             }
             applyDeferredLiveUpdate()
             scheduleLayout()
@@ -1235,6 +1242,8 @@ enum TranscriptSpeakerPalette {
 
 @MainActor final class TranscriptNativeCell: NSTableCellView {
     let time = NSTextField(labelWithString: "")
+    let sourceBadge = TranscriptSpeakerBadge()
+    let sourceIcon = NSImageView()
     let badge = TranscriptSpeakerBadge()
     let speaker = NSTextField(wrappingLabelWithString: "")
     let body = NSTextField()
@@ -1257,6 +1266,7 @@ enum TranscriptSpeakerPalette {
     var allowsEditing = false
     var userInteracted: (() -> Void)?
     private var showsSpeakers = false
+    private var showsSources = false
     private var speakerHeight: CGFloat = 20
     private var speakerWidth: CGFloat = 100
     var isPlaybackRow = false {
@@ -1286,6 +1296,8 @@ enum TranscriptSpeakerPalette {
         body.lineBreakMode = .byWordWrapping
         badge.wantsLayer = true
         badge.layer?.cornerRadius = 4
+        addSubview(sourceBadge)
+        sourceBadge.addSubview(sourceIcon)
         addSubview(time)
         addSubview(badge)
         badge.addSubview(speaker)
@@ -1295,9 +1307,21 @@ enum TranscriptSpeakerPalette {
         ])
     }
     required init?(coder: NSCoder) { nil }
-    func configure(_ row: TranscriptDisplayRow, showsSpeakers: Bool) {
+    func configure(_ row: TranscriptDisplayRow, showsSpeakers: Bool, showsSources: Bool = false) {
         rowID = row.id
         self.showsSpeakers = showsSpeakers
+        self.showsSources = showsSources
+        sourceBadge.isHidden = !showsSources || row.source == nil
+        if let source = row.source {
+            sourceBadge.tint = TranscriptSpeakerPalette.color(
+                for: source.rawValue, index: source == .microphone ? 0 : 1)
+            sourceIcon.image = NSImage(
+                systemSymbolName: source == .microphone ? "mic.fill" : "speaker.wave.2.fill",
+                accessibilityDescription: source.title)
+            sourceIcon.contentTintColor = TranscriptSpeakerPalette.foreground(for: sourceBadge.tint)
+            sourceIcon.setAccessibilityLabel(source.title)
+            sourceBadge.toolTip = source.title
+        }
         time.stringValue = TranscriptRow<Text>.timestamp(row.start)
         updatePlaybackAccessibility()
         speaker.stringValue = row.speaker
@@ -1346,9 +1370,12 @@ enum TranscriptSpeakerPalette {
         badge.frame = NSRect(
             x: 84, y: 4, width: speakerWidth, height: min(bounds.height - 8, max(20, speakerHeight)))
         speaker.frame = badge.bounds.insetBy(dx: 6, dy: 2)
-        let left: CGFloat = showsSpeakers ? 196 : 84
+        sourceBadge.frame = NSRect(x: showsSpeakers ? 196 : 84, y: 4, width: 24, height: 20)
+        sourceIcon.frame = sourceBadge.bounds.insetBy(dx: 4, dy: 3)
+        let left: CGFloat = (showsSpeakers ? 196 : 84) + (showsSources ? 32 : 0)
         let width = TranscriptTextMeasurement.normalizedTextWidth(
-            bounds.width, showsSpeakers: showsSpeakers, scale: window?.backingScaleFactor ?? 1)
+            bounds.width, showsSpeakers: showsSpeakers, showsSources: showsSources,
+            scale: window?.backingScaleFactor ?? 1)
         body.frame = NSRect(x: left, y: 4, width: width, height: max(20, bounds.height - 8))
     }
     private func updatePlaybackAccessibility() {

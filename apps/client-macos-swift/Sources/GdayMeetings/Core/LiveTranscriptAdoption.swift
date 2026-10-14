@@ -47,10 +47,27 @@ extension MeetingStore {
         await voiceLibrary.awaitLoaded()
         guard await ensureMeetingLoaded(id: draft.meetingID) else { return false }
         guard await flushCanonicalWrites() else { return false }
+        let blockingTranscription: Bool
+        do {
+            let journal = managedTaskJournal
+            let id = draft.meetingID
+            blockingTranscription = try await managedTaskIO.perform {
+                try journal.query(
+                    where: "meeting=" + ManagedTaskIndex.literal(id.uuidString)
+                        + " AND kind='transcription' AND state IN ('queued','running')", limit: Int.max
+                )
+                .contains { $0.pipelineID == nil || $0.state == .running }
+            }
+        }
+        catch {
+            errorMessage = "Couldn’t check the recording’s transcription tasks. \(error.localizedDescription)"
+            return false
+        }
         guard libraryWritable, draft.hasUsableText,
             var meeting = self.meeting(id: draft.meetingID),
             meeting.transcriptionAttempt == nil,
-            !isJobRunning(.transcription, .meeting(meeting.id))
+            !blockingTranscription,
+            !backgroundJobs.contains(where: { $0.key.kind == .transcription && $0.meetingID == meeting.id })
         else { return false }
         let source = liveTranscriptSource(draft, meeting: meeting)
         var speakers = draft.speakers

@@ -427,7 +427,11 @@ extension MeetingStore {
         guard await updateMeeting(latest) else {
             throw ServiceError(errorMessage ?? "Couldn’t save the transcript.")
         }
-        scheduleAutomaticSummary(id: meetingID)
+        if !managedTasks.contains(where: {
+            $0.kind == .transcription && $0.meetingID == meetingID && $0.state == .running && $0.pipelineID != nil
+        }) {
+            scheduleAutomaticSummary(id: meetingID)
+        }
     }
 }
 

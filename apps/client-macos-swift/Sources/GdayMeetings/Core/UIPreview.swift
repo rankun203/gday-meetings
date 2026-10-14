@@ -167,6 +167,7 @@ enum UIPreview {
                 conversation.transcriptSource = TranscriptSource(
                     id: UUID(), providerName: "Preview Transcription", generatedAt: conversation.createdAt)
                 await store.updateMeeting(conversation)
+                try seedSummaryHistory(store: store, meeting: conversation)
                 try seedVoiceExamples(store: store, meeting: conversation, firstPerson: person, secondPerson: matched)
                 var live = LiveTranscriptDraft(meetingID: conversation.id, locale: "en-AU")
                 // The checkpoint shares the canonical segment store with the

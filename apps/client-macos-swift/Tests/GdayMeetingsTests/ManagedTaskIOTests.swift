@@ -16,6 +16,18 @@ private final class TaskStorageLatch: @unchecked Sendable {
 }
 
 @MainActor struct ManagedTaskIOTests {
+    private func prepareSummaryInput(_ store: MeetingStore, id: UUID) async throws {
+        var provider = ServiceProvider(kind: .openAICompatible)
+        provider.endpoint = "http://127.0.0.1:1/v1"
+        provider.model = "fixture-model"
+        provider.enabledCapabilities = [.summarization]
+        store.settings.serviceProviders = [provider]
+        store.settings.summaryProviderID = provider.id
+        var meeting = try #require(store.meeting(id: id))
+        meeting.notes = "Review the synthetic draft."
+        #expect(await store.updateMeeting(meeting))
+    }
+
     @Test func blockedStorageKeepsUIResponsiveAndReservationsRejectDuplicates() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -101,6 +113,7 @@ private final class TaskStorageLatch: @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         let id = await store.createMeeting(title: "Scheduling failure")
+        try await prepareSummaryInput(store, id: id)
         let journal = store.managedTaskJournal
         store.managedTaskIO = ManagedTaskIO {
             if try journal.query(where: "state='queued'", limit: 1).first != nil {
@@ -122,6 +135,7 @@ private final class TaskStorageLatch: @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(dataDirectory: root)
         let id = await store.createMeeting(title: "Quit before submission")
+        try await prepareSummaryInput(store, id: id)
         let journal = store.managedTaskJournal
         let latch = TaskStorageLatch()
         defer { latch.resume() }

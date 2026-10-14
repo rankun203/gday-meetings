@@ -27,6 +27,8 @@ final class MeetingStore: ObservableObject {
     @Published var meetingPageError: String?
     var previewPreparation: Task<Void, Never>?
     let summaryDrafts = SummaryDraftState()
+    var summaryDraftGenerationIDs: [UUID: UUID] = [:]
+    @Published var summaryHistoryRevisions: [UUID: Int] = [:]
     let meetingPrefetch = MeetingPrefetchState()
     var meetingPageHasMore = true
     @Published var meetingPageHasPrevious = false
@@ -485,7 +487,7 @@ final class MeetingStore: ObservableObject {
         return await enqueueCanonical { await self.performCanonicalSave(personMerge: personMerge) }
     }
 
-    private func performCanonicalSave(
+    func performCanonicalSave(
         personMerge: PersonMerge? = nil, artifacts: [CanonicalMeetingArtifact] = [],
         validateInputs: (@Sendable () throws -> Void)? = nil
     ) async -> Bool {
@@ -876,7 +878,12 @@ final class MeetingStore: ObservableObject {
     }
 
     func hasCommittedTaskReceipt(_ task: ManagedTaskRecord) -> Bool {
-        lastSavedLibrary.meetings.first { $0.id == task.meetingID }?
+        if task.kind == .summary,
+            (try? hasCompletedSummary(taskID: task.id, meetingID: task.meetingID)) == true
+        {
+            return true
+        }
+        return lastSavedLibrary.meetings.first { $0.id == task.meetingID }?
             .completedTaskIDs[task.kind.rawValue] == task.id
     }
 
@@ -1253,6 +1260,7 @@ final class MeetingStore: ObservableObject {
         guard !captureTransition else { return }
         captureTransition = true
         isFinalizingRecording = true
+        let pipelineTaskID = await admitRecordingPipeline(id: id, transcribeAfter: transcribeAfter)
         let duration = recordingDuration
         var stopFailed = false
         do { try await recorder?.stop() }
@@ -1296,16 +1304,17 @@ final class MeetingStore: ObservableObject {
             }
         }
         let finalizedLive = liveTranscript.draft.flatMap { $0.meetingID == id ? $0 : nil }
-        let adoptedLive: Bool
-        if let finalizedLive {
-            adoptedLive = await adoptLiveTranscript(finalizedLive)
-        }
-        else {
-            adoptedLive = false
+        if let finalizedLive, finalizedLive.hasUsableText {
+            // Existing edited text may legitimately prevent live adoption. Audio
+            // processing can still use the saved recording in that case.
+            _ = await adoptLiveTranscript(finalizedLive)
         }
         recordingID = nil
         recordingStartedAt = nil
         recordingMeter.reset()
+        if let pipelineTaskID {
+            await finishRecordingPipelineAdmission(taskID: pipelineTaskID, meetingID: id, saved: !stopFailed)
+        }
         captureTransition = false
         isFinalizingRecording = false
         localSearch.deferredRecordingChanges = false
@@ -1313,17 +1322,6 @@ final class MeetingStore: ObservableObject {
         resumeSearchIndexingAfterRecording()
         if voiceLibrary.isLoaded, !isPreparingToQuit, !isChangingLibrary {
             voicePreparation.resumeAfterRecording(directory: directory(for:))
-        }
-        if adoptedLive { scheduleAutomaticSummary(id: id) }
-        // A separate task, so callers awaiting the stop return once audio is saved.
-        if !stopFailed && transcribeAfter
-            && settings.shouldAutomaticallyTranscribe(
-                hasUsableFinalizedLiveTranscript: finalizedLive?.hasUsableText == true)
-        {
-            Task { await transcribe(id: id) }
-        }
-        else if !stopFailed {
-            await scheduleAutomaticSpeakerLabeling(id: id)
         }
     }
     func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {

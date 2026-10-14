@@ -10,13 +10,14 @@ final class ManagedTaskJournal: @unchecked Sendable {
         let id: UUID
     }
     private struct Event: Codable {
-        enum Operation: String, Codable { case upsert, delete }
+        enum Operation: String, Codable { case upsert, delete, batch }
         var schemaVersion = 1
         var eventID = UUID()
         var writtenAt = Date()
         let operation: Operation
         let taskID: UUID
         let record: ManagedTaskRecord?
+        var records: [ManagedTaskRecord]? = nil
     }
     let url: URL
     private let lock = NSRecursiveLock()
@@ -163,6 +164,15 @@ final class ManagedTaskJournal: @unchecked Sendable {
                             throw ServiceError("The task journal contains an invalid deletion.")
                         }
                         try index.remove(event.taskID)
+                    case .batch:
+                        guard let records = event.records, !records.isEmpty,
+                            Set(records.map(\.id)).count == records.count, event.record == nil
+                        else { throw ServiceError("The task journal contains an invalid batch.") }
+                        for record in records {
+                            try index.upsert(
+                                record, offset: committedLength, length: line.count,
+                                digest: SHA256.hash(data: line).description)
+                        }
                     }
                     replayedEventCount += 1
                     let bytes = buffer.distance(from: buffer.startIndex, to: newline) + 1
@@ -195,6 +205,13 @@ final class ManagedTaskJournal: @unchecked Sendable {
     }
     func delete(_ id: UUID) throws {
         try append(Event(operation: .delete, taskID: id, record: nil))
+    }
+    /// One newline-terminated event admits the complete dependency graph, or none of it.
+    func upsertBatch(_ records: [ManagedTaskRecord]) throws {
+        guard !records.isEmpty, Set(records.map(\.id)).count == records.count else {
+            throw ServiceError("The task batch has missing or duplicate identities.")
+        }
+        try append(Event(operation: .batch, taskID: UUID(), record: nil, records: records))
     }
     private func append(_ event: Event) throws {
         lock.lock()
@@ -236,7 +253,14 @@ final class ManagedTaskJournal: @unchecked Sendable {
             if let disk = diskRevision {
                 knownRevision = Revision(size: committedLength, modified: disk.modified, inode: disk.inode)
             }
-            if let record = event.record {
+            if let records = event.records {
+                for record in records {
+                    try index?.upsert(
+                        record, offset: offset, length: data.count - 1,
+                        digest: SHA256.hash(data: data.dropLast()).description)
+                }
+            }
+            else if let record = event.record {
                 try index?.upsert(
                     record, offset: offset, length: data.count - 1,
                     digest: SHA256.hash(data: data.dropLast()).description)
@@ -259,7 +283,8 @@ final class ManagedTaskJournal: @unchecked Sendable {
         try handle.seek(toOffset: location.offset)
         guard let data = try handle.read(upToCount: location.length), data.count == location.length,
             SHA256.hash(data: data).description == location.digest,
-            let record = try JSONDecoder().decode(Event.self, from: data).record,
+            let event = try? JSONDecoder().decode(Event.self, from: data),
+            let record = event.record ?? event.records?.first(where: { $0.id.uuidString == location.id }),
             record.id.uuidString == location.id
         else {
             throw ServiceError("The task index no longer matches the journal.")

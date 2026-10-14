@@ -96,7 +96,8 @@ import Testing
         let tasks = store.managedTasks.filter { $0.kind == .diarization }
         #expect(tasks.count == 1)
         #expect(tasks.first?.providerID == provider.id)
-        #expect(store.managedTasks.allSatisfy { $0.kind != .transcription })
+        let transcription = try #require(store.managedTasks.first { $0.kind == .transcription })
+        #expect(transcription.pipelineOutcome == .disabled)
         let saved = try #require(store.meeting(id: id))
         #expect(saved.liveTranscriptAdopted)
         #expect(saved.transcript.map(\.text) == ["Final speech"])

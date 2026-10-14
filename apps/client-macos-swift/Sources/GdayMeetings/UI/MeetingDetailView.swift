@@ -15,6 +15,7 @@ struct MeetingDetailView: View {
     var retainedTab: Binding<Int>? = nil
     @ViewState private var localTab = 0
     @ViewState private var showsDetails = false
+    @ViewState private var showsSummaryHistory = false
     private var tab: Int {
         get { retainedTab?.wrappedValue ?? localTab }
         nonmutating set {
@@ -216,10 +217,16 @@ struct MeetingDetailView: View {
             MeetingNotesWorkspace(meetingID: meetingID)
         case 2:
             VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
-                HStack {
-                    Text("Summary").font(.headline)
-                    Spacer()
-                    SummaryGenerationButton(meeting: meeting)
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Text("Summary").font(.headline).fixedSize()
+                        Spacer()
+                        summaryActions(meeting)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Summary").font(.headline)
+                        summaryActions(meeting)
+                    }
                 }
                 SummaryReadingView(
                     drafts: store.summaryDrafts, meetingID: meetingID, summary: meeting.summary,
@@ -228,10 +235,22 @@ struct MeetingDetailView: View {
                 .accessibilityLabel("Summary")
                 .modifier(AppContentSurface())
                 .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
-
+            }
+            .sheet(isPresented: $showsSummaryHistory) {
+                SummaryHistoryView(meetingID: meetingID)
             }
         default: EmptyView()
         }
+    }
+
+    private func summaryActions(_ meeting: Meeting) -> some View {
+        HStack {
+            Button("Summary History…", systemImage: "clock.arrow.circlepath") {
+                showsSummaryHistory = true
+            }
+            SummaryGenerationButton(meeting: meeting)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
 }

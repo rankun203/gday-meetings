@@ -93,7 +93,7 @@ extension MeetingStore {
                 var archivedMeeting = MeetingVoicePrivacy.removingFingerprints(from: meeting)
                 archivedMeeting.transcriptionAttempt = nil
                 // The artifact whitelist excludes local evidence, source receipts,
-                // consolidation receipts, and transcript revision files.
+                // consolidation receipts, transcript revisions, and summary generation history.
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
                 encoder.dateEncodingStrategy = .iso8601

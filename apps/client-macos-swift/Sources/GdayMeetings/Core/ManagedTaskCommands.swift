@@ -26,17 +26,11 @@ extension MeetingStore {
     ) async -> UUID? {
         let key = BackgroundJob.Key(kind: .summary, scope: .meeting(id))
         guard !managedTaskReservations.contains(key), !isChangingLibrary, !isPreparingToQuit else { return nil }
-        // Reserve the replacement while cancellation releases the previous operation.
-        // A pending automatic callback must not take its place during that await.
         managedTaskReservations.insert(key)
         if !automatically { pendingAutomaticSummaries.remove(id) }
         defer { managedTaskReservations.remove(key) }
-        await supersedeObsoleteTask(
-            kind: .summary, meetingID: id, explicitSummary: !automatically,
-            providerID: providerID ?? settings.summaryProviderID, instructions: instructions)
-        // enqueueCommand installs its reservation synchronously before it first awaits.
-        managedTaskReservations.remove(key)
-        return await enqueueCommand(kind: .summary, meetingID: id) {
+        await managedTaskPreparation?.value
+        return await managedTaskCommands.run {
             await self.queueSummaryCommand(
                 id: id, providerID: providerID, automatically: automatically, instructions: instructions)
         }
@@ -165,6 +159,7 @@ extension MeetingStore {
     }
 
     func cancelManagedTask(id: UUID) async {
+        guard managedTask(id: id)?.kind != .recordingFinalization else { return }
         managedTaskStopRequests.insert(id)
         managedTaskOperations[id]?.cancel()
         await taskCommand(id: id) { await self.cancelManagedTaskCommand(id: id) }
@@ -209,6 +204,7 @@ extension MeetingStore {
     }
 
     func removeManagedTask(id: UUID) async {
+        if let task = managedTask(id: id), task.kind == .recordingFinalization && task.state.isActive { return }
         managedTaskStopRequests.insert(id)
         await taskCommand(id: id) { await self.removeManagedTaskCommand(id: id) }
     }

@@ -184,6 +184,9 @@ struct TaskDescription {
         case .summary: "Summary"
         case .searchIndex: "Search Index"
         case .diarization: "Speaker Diarization"
+        case .recordingFinalization: "Save Recording"
+        case .speakerAssociation: "Speaker Association"
+        case .todoExtraction: "Extract To-Dos"
         case .chat, .contextChat: "Chat"
         case .archive: "Archive"
         case .importAudio: "Audio Import"
@@ -198,6 +201,10 @@ struct ManagedTaskExecutionIntent: Encodable, Sendable {
     let meetingID: UUID
     let providerID: UUID?
     let summaryInstructions: String?
+    let pipelineID: UUID?
+    let dependencyIDs: [UUID]?
+    let extractTodosAfterSummary: Bool?
+    let preferFinalizedLiveTranscript: Bool?
     let searchIndexRevision: String?
     let state: ManagedTaskState
     let recovery: ManagedTaskRecovery
@@ -215,6 +222,10 @@ struct ManagedTaskExecutionIntent: Encodable, Sendable {
         meetingID = record.meetingID
         providerID = record.providerID
         summaryInstructions = record.summaryInstructions
+        pipelineID = record.pipelineID
+        dependencyIDs = record.dependencyIDs
+        extractTodosAfterSummary = record.extractTodosAfterSummary
+        preferFinalizedLiveTranscript = record.preferFinalizedLiveTranscript
         searchIndexRevision = record.searchIndexRevision
         state = record.state
         recovery = record.recovery

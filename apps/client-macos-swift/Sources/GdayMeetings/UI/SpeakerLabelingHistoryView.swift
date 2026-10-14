@@ -8,16 +8,21 @@ struct SpeakerLabelingHistoryReadKey: Equatable {
     let taskStates: [String]
 }
 
-struct SpeakerLabelingHistoryView: View {
+struct SpeakerLabelingHistoryView<DiarizationAction: View>: View {
     @Binding var history: SpeakerLabelingHistory?
     var restoreChoices: [TranscriptRevision] = []
     var currentSnapshotID: UUID? = nil
     var canRestore = false
     var restore: (TranscriptRevision) -> Void = { _ in }
+    @ViewBuilder var diarizationAction: () -> DiarizationAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Speaker Diarization History").font(.headline)
+            HStack {
+                Text("Diarizations").font(.headline)
+                Spacer()
+                diarizationAction()
+            }
             if !restoreChoices.isEmpty {
                 Menu("Restore Labels", systemImage: "arrow.uturn.backward") {
                     ForEach(restoreChoices) { revision in

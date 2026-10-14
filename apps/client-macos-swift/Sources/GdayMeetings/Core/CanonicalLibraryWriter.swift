@@ -63,7 +63,7 @@ enum CanonicalLibraryWriter {
                 let target = folder.appendingPathComponent(artifact.name)
                 let previous = FileManager.default.fileExists(atPath: target.path) ? try Data(contentsOf: target) : nil
                 guard previous == artifact.previous else {
-                    throw MeetingError.message("Speaker history changed on disk. Reload the meeting before saving.")
+                    throw MeetingError.message("Meeting history changed on disk. Reload the meeting before saving.")
                 }
                 try transaction.remember(target)
             }

@@ -35,9 +35,11 @@ enum TranscriptTextMeasurement {
         ).size
         return max(20, ceil(size.height) + 2) + 8
     }
-    static func normalizedTextWidth(_ width: CGFloat, showsSpeakers: Bool, scale: CGFloat) -> CGFloat {
+    static func normalizedTextWidth(_ width: CGFloat, showsSpeakers: Bool, showsSources: Bool = false, scale: CGFloat)
+        -> CGFloat
+    {
         let scale = max(1, scale)
-        return max(40, floor((width - (showsSpeakers ? 200 : 88)) * scale) / scale)
+        return max(40, floor((width - (showsSpeakers ? 200 : 88) - (showsSources ? 32 : 0)) * scale) / scale)
     }
 }
 

@@ -95,48 +95,58 @@ extension MeetingStore {
         guard let meeting = self.meeting(id: id) else {
             throw ServiceError("This meeting no longer exists.")
         }
-        guard !meeting.transcript.isEmpty || !meeting.notes.isEmpty else {
-            throw ServiceError("Add notes or transcribe the meeting before generating a summary.")
-        }
         setJobProgress(.summary, .meeting(id), "Writing summary…")
-        let provider = try summaryProvider(providerID: providerID)
-        summaryDrafts.values[id] = ""
-        defer { summaryDrafts.values.removeValue(forKey: id) }
-        let messages = try await summaryMessages(
-            provider: provider.provider, meeting: meeting, instructions: instructions)
-        var bodies = summaryDataBodies(meeting, messages: messages)
-        if instructions?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            bodies.append("User Instructions")
+        let task = managedTasks.first {
+            $0.kind == .summary && $0.meetingID == id && $0.state.isActive && managedTaskOperations[$0.id] != nil
         }
-        let response = try await provider.complete(
-            messages: messages, bodies: bodies,
-            filePaths: summaryDataFilePaths(meeting, messages: messages), purpose: "Summary",
+        let existing = try task.flatMap { try SummaryHistory.generation(taskID: $0.id, at: directory(for: id)) }
+        if existing?.result != nil { return }
+        var provider = try summaryProvider(providerID: existing?.providerID ?? providerID).provider
+        if let expected = existing?.endpointFingerprint,
+            expected != SummaryGeneration.endpointFingerprint(provider.endpoint)
+        {
+            throw ServiceError("Restore this provider’s original address to retry the saved summary request.")
+        }
+        let request: SummaryGeneration
+        if let existing {
+            request = existing
+        }
+        else if let task {
+            request = try await prepareSummaryRequest(task: task)
+        }
+        else {
+            guard !meeting.transcript.isEmpty || !meeting.notes.isEmpty else {
+                throw ServiceError("Add notes or transcribe the meeting before generating a summary.")
+            }
+            let messages = try await summaryMessages(provider: provider, meeting: meeting, instructions: instructions)
+            var bodies = summaryDataBodies(meeting, messages: messages)
+            if instructions?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                bodies.append("User Instructions")
+            }
+            request = try await prepareSummaryGeneration(
+                meetingID: id, taskID: task?.id, provider: provider, messages: messages, bodies: bodies,
+                filePaths: summaryDataFilePaths(meeting, messages: messages),
+                extractTodos: task?.pipelineID == nil && (task?.extractTodosAfterSummary ?? settings.autoExtractTodos))
+        }
+        if request.result != nil { return }
+        if let model = request.model { provider.model = model }
+        summaryDraftGenerationIDs[id] = request.id
+        summaryDrafts.values[id] = ""
+        defer {
+            if summaryDraftGenerationIDs[id] == request.id {
+                summaryDraftGenerationIDs.removeValue(forKey: id)
+                summaryDrafts.values.removeValue(forKey: id)
+            }
+        }
+        let response = try await OpenAISummaryProvider(provider: provider).complete(
+            messages: request.messages, bodies: request.bodies, filePaths: request.filePaths, purpose: "Summary",
             onPartial: { [weak self] text in
-                guard !Task.isCancelled else { return }
-                self?.summaryDrafts.values[id] = text
+                guard !Task.isCancelled, let self, self.summaryDraftGenerationIDs[id] == request.id else { return }
+                self.summaryDrafts.values[id] = text
             })
         recordDataFlow(response.dataFlow, meetingID: id)
-        let result = response.value
         try Task.checkCancellation()
-        if var current = self.meeting(id: id) {
-            guard current.transcript == meeting.transcript && current.notes == meeting.notes else {
-                throw ServiceError(
-                    "The transcript or notes changed during processing. Generate another summary to include the changes."
-                )
-            }
-            guard current.summary == meeting.summary else {
-                throw ServiceError("The summary changed during processing. Generate another summary to replace it.")
-            }
-            current.summary = result
-            if settings.autoExtractTodos {
-                let known = Set(current.todos.map { $0.title.lowercased() })
-                current.todos += Self.actionItems(from: result).filter { !known.contains($0.title.lowercased()) }
-            }
-            markManagedTaskCompletion(on: &current, kind: .summary)
-            guard await updateMeeting(current) else {
-                throw ServiceError(errorMessage ?? "Couldn’t save the summary.")
-            }
-        }
+        try await commitSummaryGeneration(request, result: response.value, meetingID: id)
     }
     func sendChat(id: UUID, message: String) async {
         let message = message.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -32,6 +32,7 @@ struct LiveTranscriptView: View {
             else {
                 NativeTranscriptView(
                     rows: [], layoutService: layoutService, generation: displayCache.revision, showsSpeakers: false,
+                    showsSources: true,
                     editable: store.libraryWritable, canPlay: false, meetingID: controller.draft?.meetingID,
                     liveRows: displayCache,
                     captureSave: { id in
@@ -54,7 +55,7 @@ struct LiveTranscriptView: View {
                     speakerPicker: { _, _, _ in AnyView(EmptyView()) })
             }
         }
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomTrailing) {
             LiveTranscriptHeader(
                 followsLive: followsLive, hasRows: displayCache.count > 0,
                 issues: headerIssues, showsProviderSettings: false,
@@ -133,7 +134,7 @@ enum LiveTranscriptDisplay {
                 isProvisional: !provisionalRanges.isEmpty, provisionalTextRanges: provisionalRanges,
                 recentWordRanges: recentRanges,
                 accessibilityHelp: phrase.isUserEdited ? "Edited text." : nil,
-                isSourcePlaceholder: !phrase.hasSpeakerIdentity)
+                isSourcePlaceholder: !phrase.hasSpeakerIdentity, source: phrase.source)
         }
         return (rows, Dictionary(uniqueKeysWithValues: groups.map { ($0.phrase.id, $0.phrase) }))
     }
@@ -144,7 +145,7 @@ private struct PersonDisplayIdentity: Equatable {
     let name: String
 }
 
-/// Floating controls leave the full transcript height available while following live text.
+/// Compact overlay controls preserve the full transcript viewport.
 struct LiveTranscriptHeader: View {
     let followsLive: Bool
     let hasRows: Bool
@@ -178,17 +179,12 @@ struct LiveTranscriptHeader: View {
             }
             Spacer(minLength: 8)
             if !followsLive && hasRows {
-                Button(action: follow) {
-                    Image(systemName: "arrow.down.to.line")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .background(.regularMaterial, in: Circle())
-                .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-                .help("Follow Live")
-                .accessibilityLabel("Follow Live")
+                Button("Follow Live", systemImage: "arrow.down.to.line", action: follow)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Scroll to the latest text and follow new passages.")
+                    .accessibilityLabel("Follow Live")
             }
         }
     }

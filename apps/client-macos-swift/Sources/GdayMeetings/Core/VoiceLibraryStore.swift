@@ -714,22 +714,24 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     func suggestReviewedPeople(from people: [Person]) async {
-        do {
-            let result = try await matchingResult(from: people, includeSuggestions: true)
-            try Task.checkCancellation()
-            var next = document
-            for suggestion in result.suggestions {
-                guard let index = exampleIndices[suggestion.exampleID], !next.examples[index].isReviewed else {
-                    continue
-                }
-                next.examples[index].suggestedPersonID = suggestion.personID
-                next.examples[index].review = suggestion.personID == nil ? .unassigned : .suggested
-            }
-            if next.examples != document.examples { _ = commit(next) }
-        }
+        do { try await suggestReviewedPeopleResult(from: people) }
         catch is CancellationError {}
         catch {
             errorMessage = "Couldn’t prepare voice matches. \(error.localizedDescription)"
+        }
+    }
+
+    func suggestReviewedPeopleResult(from people: [Person]) async throws {
+        let result = try await matchingResult(from: people, includeSuggestions: true)
+        try Task.checkCancellation()
+        var next = document
+        for suggestion in result.suggestions {
+            guard let index = exampleIndices[suggestion.exampleID], !next.examples[index].isReviewed else { continue }
+            next.examples[index].suggestedPersonID = suggestion.personID
+            next.examples[index].review = suggestion.personID == nil ? .unassigned : .suggested
+        }
+        if next.examples != document.examples, !commit(next) {
+            throw ServiceError(errorMessage ?? "Couldn’t save voice matches.")
         }
     }
 
