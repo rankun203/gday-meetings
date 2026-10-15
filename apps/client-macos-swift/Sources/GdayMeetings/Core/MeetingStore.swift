@@ -32,6 +32,7 @@ final class MeetingStore: ObservableObject {
     let meetingPrefetch = MeetingPrefetchState()
     var meetingPageHasMore = true
     @Published var meetingPageHasPrevious = false
+    let taskVisibilityCache = TaskVisibilityCache()
     var libraryIndex: LibraryIndex?
     @Published var meetingIndexRevision = UUID()
     var directoryIndex: DirectoryIndex?
@@ -506,7 +507,9 @@ final class MeetingStore: ObservableObject {
         }
         let captured = LibrarySnapshot(
             contextualChats: meetingID == nil ? contextualChats : lastSavedLibrary.contextualChats,
-            meetings: meetings.filter { meetingID == nil || $0.id == meetingID },
+            meetings: meetings.filter { meetingID == nil || $0.id == meetingID }.map {
+                notesStorage.applyingDraft(to: $0)
+            },
             people: meetingID == nil ? people : lastSavedLibrary.people,
             tags: meetingID == nil ? tags : lastSavedLibrary.tags)
         var baseline = lastSavedLibrary
@@ -679,10 +682,13 @@ final class MeetingStore: ObservableObject {
     }
 
     private func canReloadExternalMeeting(_ meeting: Meeting) -> Bool {
-        notesStorage.pending[meeting.id] == nil
-            && lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) == meeting
-            && !backgroundJobs.contains(where: { $0.meetingID == meeting.id })
-            && recordingID != meeting.id
+        guard notesStorage.pending[meeting.id] == nil,
+            !backgroundJobs.contains(where: { $0.meetingID == meeting.id }), recordingID != meeting.id,
+            let baseline = lastSavedLibrary.meetings.first(where: { $0.id == meeting.id })
+        else { return false }
+        var comparable = notesStorage.applyingDraft(to: meeting)
+        if notesStorage.saved[meeting.id] == comparable.notes { comparable.notes = baseline.notes }
+        return comparable == baseline
     }
 
     private func reloadExternalLibraryDocuments(batch: ExternalLibraryChangeBatch) async -> Bool {
@@ -1241,7 +1247,8 @@ final class MeetingStore: ObservableObject {
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
             meetings.insert(recorded, at: 0)
-            guard await save() else {
+            guard await save(meetingID: meeting.id) else {
+                meetings.removeAll { $0.id == meeting.id }
                 try? await capture.stop()
                 throw MeetingError.message(errorMessage ?? "Could not save recording metadata.")
             }
@@ -1291,8 +1298,9 @@ final class MeetingStore: ObservableObject {
         recordingMeter.deliver(levels)
     }
     func stopRecording(transcribeAfter: Bool = true) async {
-        _ = await flushNotes()
         guard let id = recordingID else { return }
+        do { try await notesStorage.flush(id) }
+        catch { errorMessage = "Couldn’t save meeting notes. " + error.localizedDescription }
         guard !captureTransition else { return }
         captureTransition = true
         isFinalizingRecording = true
@@ -1333,7 +1341,7 @@ final class MeetingStore: ObservableObject {
             meetings[index].duration = duration
             meetings[index].recordingProfile = profile
             setJobProgress(.recordingFinalization, .meeting(id), "Saving recording…")
-            if !(await save()) { stopFailed = true }
+            if !(await saveRecordingFinalization(id: id)) { stopFailed = true }
         }
         if !stopFailed && activeRecordingFormat == .m4a {
             setJobProgress(.recordingFinalization, .meeting(id), "Converting recorded audio…")
@@ -1400,11 +1408,15 @@ final class MeetingStore: ObservableObject {
                 }
                 meetings[index].recordingProfile = profile
             }
-            guard await save() else {
+            guard await save(meetingID: id) else {
                 throw MeetingError.message(errorMessage ?? "Could not save compressed recording metadata.")
             }
         }
         catch {
+            if let index = meetings.firstIndex(where: { $0.id == id }) {
+                meetings[index].audioFiles = meeting.audioFiles
+                meetings[index].recordingProfile = meeting.recordingProfile
+            }
             for file in encoded { try? FileManager.default.removeItem(at: file) }
             throw error
         }
@@ -1691,4 +1703,39 @@ extension MeetingStore {
         if !saved { profileNotesSavePending = true }
         return saved
     }
+}
+
+extension MeetingStore {
+    func saveRecordingFinalization(id: UUID) async -> Bool {
+        guard libraryWritable else { return false }
+        return await enqueueCanonical {
+            guard self.libraryWritable else { return false }
+            guard let proposed = self.meeting(id: id),
+                let baseline = self.lastSavedLibrary.meetings.first(where: { $0.id == id })
+            else { return false }
+            let folder = self.directory(for: id)
+            do {
+                try await Task.detached(priority: .utility) {
+                    try RecordingFinalizationRecovery(baseline: baseline, proposed: proposed).write(at: folder)
+                }.value
+            }
+            catch {
+                self.errorMessage = "Couldn’t save the recording’s recovery information. " + error.localizedDescription
+                return false
+            }
+            guard await self.performCanonicalSave(meetingID: id) else { return false }
+            do {
+                try await Task.detached(priority: .utility) {
+                    try RecordingFinalizationRecovery.remove(at: folder)
+                }.value
+            }
+            catch {
+                self.errorMessage =
+                    "The recording was saved, but its recovery information couldn’t be removed. "
+                    + error.localizedDescription
+            }
+            return true
+        }
+    }
+
 }

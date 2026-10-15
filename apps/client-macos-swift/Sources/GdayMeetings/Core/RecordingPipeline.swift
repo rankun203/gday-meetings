@@ -104,7 +104,7 @@ extension MeetingStore {
             ? await enqueueCanonical {
                 guard let index = self.meetings.firstIndex(where: { $0.id == meetingID }) else { return false }
                 self.meetings[index].completedTaskIDs[BackgroundJob.Kind.recordingFinalization.rawValue] = taskID
-                return await self.performCanonicalSave()
+                return await self.performCanonicalSave(meetingID: meetingID)
             } : false
         await completeManagedTask(
             taskID, state: committed ? .completed : .failed,

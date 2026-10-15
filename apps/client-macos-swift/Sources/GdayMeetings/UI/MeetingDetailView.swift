@@ -68,7 +68,9 @@ struct MeetingDetailView: View {
                     if rowID != nil { tab = 0 }
                 }
                 .onChange(of: store.recordingID) { _, id in
-                    if id == meetingID { tab = store.liveTranscript.enabled ? 0 : 1 }
+                    if id == meetingID, tab != MeetingContentTab.notes.rawValue {
+                        tab = store.liveTranscript.enabled ? 0 : 1
+                    }
                 }
         }
         else if loadingMeeting {
@@ -214,7 +216,8 @@ struct MeetingDetailView: View {
                 MeetingTranscriptView(meetingID: meetingID, initialRowID: initialTranscriptRowID)
             }
         case 1:
-            MeetingNotesWorkspace(meetingID: meetingID)
+            MeetingNotesWorkspace(meetingID: meetingID, initiallyRecording: store.recordingID == meetingID)
+                .id(meetingID)
         case 2:
             VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
                 ViewThatFits(in: .horizontal) {

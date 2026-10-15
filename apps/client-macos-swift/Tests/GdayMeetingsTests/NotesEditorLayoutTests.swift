@@ -35,6 +35,13 @@ import Testing
         store.meetings = [Meeting(id: meetingID, title: "Layout regression", notes: initial)]
         await store.updateMeeting(store.meetings[0])
         #expect(await store.flushNotes())
+        // Recording opens the workspace in Edit without starting audio capture.
+        store.recordingID = meetingID
+        store.recordingStartedAt = Date()
+        defer {
+            store.recordingID = nil
+            store.recordingStartedAt = nil
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -42,8 +49,9 @@ import Testing
         let root: AnyView =
             fullWorkspace
             ? AnyView(
-                MeetingNotesWorkspace(meetingID: meetingID).environmentObject(store).environmentObject(
-                    MeetingPlayback()))
+                MeetingNotesWorkspace(meetingID: meetingID, initiallyRecording: true).environmentObject(store)
+                    .environmentObject(
+                        MeetingPlayback()))
             : AnyView(NotesLayoutHarness(markdown: initial, directory: imageDirectory))
         let host = NSHostingView(rootView: root)
         window.contentView = host

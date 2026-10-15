@@ -2,6 +2,21 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor enum NotesTimestampGutter {
+    static let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+    static let minimumWidth = width(hourDigits: 2)
+
+    static func width(hourDigits: Int) -> CGFloat {
+        // Reserve two hour digits before recording reaches an hour,
+        // so crossing that boundary does not shift the notes or image previews.
+        let button = MarkdownActionButton(
+            title: String(repeating: "9", count: max(2, hourDigits)) + ":59:59", target: nil, action: nil)
+        button.isBordered = false
+        button.font = font
+        return ceil(button.cell?.cellSize.width ?? button.intrinsicContentSize.width) + 2
+    }
+}
+
 struct MeetingNotesEditor: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
@@ -9,33 +24,36 @@ struct MeetingNotesEditor: View {
     var showsPanelBorder = true
     var editingEnabled = true
     var body: some View {
-        MarkdownNotesEditor(
-            meetingID: meetingID,
-            markdown: store.meetings.first { $0.id == meetingID }?.notes ?? "",
-            editable: store.libraryWritable && editingEnabled,
-            clock: {
-                NotesDocument.clock(
-                    recording: store.recordingID == meetingID ? store.recordingDuration : nil,
-                    playback: playback.meetingID == meetingID ? playback.progress.time : nil)
-            },
-            playbackTime: { playback.meetingID == meetingID ? playback.progress.time : nil },
-            canPlay: {
-                !playback.isPlaybackBlocked
-                    && !(store.meetings.first { $0.id == meetingID }?.audioFiles.isEmpty ?? true)
-            },
-            play: { time in
-                guard let meeting = store.meetings.first(where: { $0.id == meetingID }) else { return }
-                playback.play(
-                    meeting: meeting, files: store.audioURLs(for: meeting), at: NotesDocument.playbackStart(time))
-            },
-            changed: { store.editNotes(id: meetingID, text: $0) }, flush: { Task { await store.flushNotes() } },
-            directory: store.directory(for: meetingID), imageError: { store.errorMessage = $0 },
-            audioDrop: { urls in
-                Task {
-                    do { _ = try await store.importAudioFiles(urls) }
-                    catch { store.errorMessage = error.localizedDescription }
+        NotesDraftEditor(
+            draft: store.notesStorage.draft(meetingID, fallback: store.meeting(id: meetingID)?.notes ?? ""),
+            editor: MarkdownNotesEditor(
+                meetingID: meetingID,
+                markdown: "",
+                editable: store.libraryWritable && editingEnabled,
+                clock: {
+                    NotesDocument.clock(
+                        recording: store.recordingID == meetingID ? store.recordingDuration : nil,
+                        playback: playback.meetingID == meetingID ? playback.progress.time : nil)
+                },
+                playbackTime: { playback.meetingID == meetingID ? playback.progress.time : nil },
+                canPlay: {
+                    !playback.isPlaybackBlocked
+                        && !(store.meetings.first { $0.id == meetingID }?.audioFiles.isEmpty ?? true)
+                },
+                play: { time in
+                    guard let meeting = store.meetings.first(where: { $0.id == meetingID }) else { return }
+                    playback.play(
+                        meeting: meeting, files: store.audioURLs(for: meeting), at: NotesDocument.playbackStart(time))
+                },
+                changed: { store.editNotes(id: meetingID, text: $0) }, flush: { Task { await store.flushNotes() } },
+                directory: store.directory(for: meetingID), imageError: { store.errorMessage = $0 },
+                audioDrop: { urls in
+                    Task {
+                        do { _ = try await store.importAudioFiles(urls) }
+                        catch { store.errorMessage = error.localizedDescription }
+                    }
                 }
-            }
+            )
         )
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
@@ -44,6 +62,17 @@ struct MeetingNotesEditor: View {
         )
         .onDisappear { Task { await store.flushNotes() } }
         .id(meetingID)
+    }
+}
+
+private struct NotesDraftEditor: View {
+    @ObservedObject var draft: NotesDraft
+    var editor: MarkdownNotesEditor
+    var body: some View {
+        var value = editor
+        value.markdown = draft.text
+        value.registerPreparation = { draft.prepareForSave = $0 }
+        return value
     }
 }
 
@@ -60,6 +89,7 @@ struct MarkdownNotesEditor: NSViewRepresentable {
     var directory: URL? = nil
     var imageError: (String) -> Void = { _ in }
     var audioDrop: ([URL]) -> Void = { _ in }
+    var registerPreparation: (@escaping @MainActor () async -> Void) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -76,10 +106,11 @@ struct MarkdownNotesEditor: NSViewRepresentable {
         text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true
         text.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        text.textContainerInset = NSSize(width: 52, height: 12)
+        text.textContainerInset = NSSize(width: NotesTimestampGutter.minimumWidth + 6, height: 12)
         text.drawsBackground = false
         text.setAccessibilityLabel("Meeting Notes")
         text.editor = self
+        registerPreparation { [weak text] in await text?.prepareImagesForSave() }
         text.registerForDraggedTypes(Array(Set(text.registeredDraggedTypes + [.fileURL, .png, .tiff])))
         text.load(markdown)
         text.delegate = text
@@ -93,12 +124,12 @@ struct MarkdownNotesEditor: NSViewRepresentable {
     }
     func update(_ text: NotesTextView) {
         text.editor = self
-        text.isEditable = editable
+        if text.isEditable != editable { text.isEditable = editable }
         if !editable, text.window?.firstResponder === text {
             text.window?.makeFirstResponder(nil)
         }
-        if text.document.markdown != markdown { text.load(markdown) }
-        text.needsLayout = true
+        if text.document.markdown != markdown, !text.hasMarkedText() { text.load(markdown) }
+        text.refreshPlaybackAvailability()
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) {
         guard let text = scroll.documentView as? NotesTextView else { return }
@@ -128,9 +159,15 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     var lastInsertionDate: Date?
     private var imageSaveTask: Task<Void, Never>?
     private var normalizingImages = false
-    private var normalizedImages: Set<String> = []
+    private var imagePreparationTask: Task<Void, Never>?
+    private var imageNormalizationTask: Task<Void, Never>?
+    private var imageUserOperation = false
+    private var imagePreparationRevision = UUID()
     private var gutterButtons: [NSButton] = []
+    private var gutterHourDigits = 2
+    private var gutterWidth = NotesTimestampGutter.minimumWidth
     private var gutterTimes: [ObjectIdentifier: TimeInterval] = [:]
+    private var gutterPlaybackAvailable = false
     private var notesTrackingArea: NSTrackingArea?
     private static let pasteType = NSPasteboard.PasteboardType("com.gdaymeetings.timed-notes")
     private struct Clipboard: Codable {
@@ -138,11 +175,21 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         var markdown: String
     }
 
+    func refreshPlaybackAvailability() {
+        let available = editor?.canPlay() == true
+        guard available != gutterPlaybackAvailable else { return }
+        gutterPlaybackAvailable = available
+        for button in gutterButtons { button.isEnabled = available }
+    }
+
     func load(_ markdown: String) {
         undoManager?.removeAllActions()
         lastInsertionDate = nil
         imageSaveTask?.cancel()
-        normalizedImages.removeAll()
+        imagePreparationTask?.cancel()
+        imageNormalizationTask?.cancel()
+        imageUserOperation = false
+        imagePreparationRevision = UUID()
         document = NotesDocument(markdown)
         images.invalidate()
         textStorage?.delegate = self
@@ -297,6 +344,16 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
         }
     }
     override func layout() {
+        let tenths = Int((min(1_000_000_000_000, lineLayoutIndex.latestTimestamp) * 10).rounded())
+        let hourDigits = max(2, String(tenths / 36_000).count)
+        if hourDigits != gutterHourDigits {
+            gutterHourDigits = hourDigits
+            gutterWidth = NotesTimestampGutter.width(hourDigits: hourDigits)
+        }
+        let inset = gutterWidth + 6
+        if textContainerInset.width != inset {
+            textContainerInset.width = inset
+        }
         // Mutating paragraph attributes inside viewport layout leaves TextKit's
         // fragments with stale ranges after a large replacement.
         scheduleImageLayout()
@@ -306,6 +363,7 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     }
     private func updateGutter() {
         guard let manager = textLayoutManager, let content = manager.textContentManager else { return }
+        gutterPlaybackAvailable = editor?.canPlay() == true
         var labels: [(NSRect, TimeInterval, Int)] = []
         let lineIndex = lineLayoutIndex
         let visible = visibleRect
@@ -320,14 +378,14 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             if rect.intersects(visible), let time = self.document.lines[line].time,
                 offset == lineIndex.start(of: line)
             {
-                labels.append((NSRect(x: 2, y: rect.minY, width: 46, height: 20), time, line))
+                labels.append((NSRect(x: 2, y: rect.minY, width: self.gutterWidth, height: 20), time, line))
             }
             return true
         }
         while gutterButtons.count < labels.count {
             let button = MarkdownActionButton(title: "", target: self, action: #selector(playGutter(_:)))
             button.isBordered = false
-            button.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+            button.font = NotesTimestampGutter.font
             button.contentTintColor = .secondaryLabelColor
             button.toolTip = "Play from this point"
             addSubview(button)
@@ -340,8 +398,8 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
             let (rect, time, lineIndex) = labels[index]
             button.tag = lineIndex
             button.frame = rect
-            button.title = NotesDocument.timestamp(time)
-            button.isEnabled = editor?.canPlay() == true
+            button.title = NotesDocument.displayTimestamp(time)
+            button.isEnabled = gutterPlaybackAvailable
             button.setAccessibilityLabel("Play from \(Int(time) / 60) minutes \(Int(time) % 60) seconds")
             gutterTimes[ObjectIdentifier(button)] = time
         }
@@ -637,51 +695,88 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
     }
     func resizeImage(_ reference: NotesImageReference, width: Double?) {
         guard isEditable, let directory = editor?.directory else { return }
-        do {
-            let largest = NotesImageReference.parse(in: string).filter {
-                $0.originalPath == reference.originalPath && $0.range != reference.range
-            }.compactMap(\.width).max()
-            let resized = try NotesImageStore.resized(
-                reference, width: width, directory: directory, previewWidth: largest)
-            replaceImage(reference, with: resized)
+        let source = string
+        let request = UUID()
+        imagePreparationRevision = request
+        imagePreparationTask?.cancel()
+        imageUserOperation = true
+        imagePreparationTask = Task { [weak self] in
+            let lease = UUID()
+            await NotesImagePreparation.shared.retainResults(lease, directory: directory)
+            defer { Task { await NotesImagePreparation.shared.releaseResults(lease) } }
+            defer { if self?.imagePreparationRevision == request { self?.imageUserOperation = false } }
+            do {
+                let resized = try await NotesImagePreparation.shared.resize(
+                    reference, width: width, source: source, directory: directory)
+                guard let self, !Task.isCancelled, self.imagePreparationRevision == request,
+                    self.string == source, self.isEditable, !self.hasMarkedText()
+                else { return }
+                self.undoManager?.beginUndoGrouping()
+                self.replaceImage(reference, with: resized)
+                self.undoManager?.endUndoGrouping()
+            }
+            catch { if !Task.isCancelled { self?.editor?.imageError(error.localizedDescription) } }
         }
-        catch { editor?.imageError(error.localizedDescription) }
+    }
+    func prepareImagesForSave() async {
+        await waitForImagePreparation()
+        normalizeImageWidths()
+        await waitForImagePreparation()
+    }
+    func waitForImagePreparation() async {
+        await imagePreparationTask?.value
+        await imageNormalizationTask?.value
     }
     @discardableResult func pasteImages(from pasteboard: NSPasteboard) -> Bool {
         guard isEditable, let directory = editor?.directory else { return false }
-        do {
-            let urls =
-                pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
-                ?? []
-            let imageURLs = urls.filter { NotesImageStore.isImage($0) }
-            var references: [NotesImageReference] = []
-            if !imageURLs.isEmpty {
-                references = try imageURLs.map { try NotesImageStore.importFile($0, directory: directory) }
-            }
-            else if let bytes = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) {
-                references = [try NotesImageStore.importClipboard(bytes, directory: directory)]
-            }
-            else if let image = NSImage(pasteboard: pasteboard), let bytes = image.tiffRepresentation {
-                references = [try NotesImageStore.importClipboard(bytes, directory: directory)]
-            }
-            else {
-                return false
-            }
-            let selected = selectedRange()
-            let source = string as NSString
-            let prefix =
-                selected.location > 0
-                    && source.substring(with: NSRange(location: selected.location - 1, length: 1)) != "\n" ? "\n" : ""
-            let suffix =
-                NSMaxRange(selected) < source.length
-                    && source.substring(with: NSRange(location: NSMaxRange(selected), length: 1)) == "\n" ? "" : "\n"
-            insertText(prefix + references.map(\.markdown).joined(separator: "\n") + suffix, replacementRange: selected)
-            return true
+        let urls =
+            pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let imageURLs = urls.filter {
+            (try? $0.resourceValues(forKeys: [.contentTypeKey]).contentType?.conforms(to: .image)) == true
         }
-        catch {
-            editor?.imageError(error.localizedDescription)
-            return true
+        let bytes =
+            imageURLs.isEmpty
+            ? (pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff)
+                ?? NSImage(pasteboard: pasteboard)?.tiffRepresentation) : nil
+        guard !imageURLs.isEmpty || bytes != nil else { return false }
+        let source = string
+        let selected = selectedRange()
+        let request = UUID()
+        imagePreparationRevision = request
+        imagePreparationTask?.cancel()
+        imageUserOperation = true
+        imagePreparationTask = Task { [weak self] in
+            let lease = UUID()
+            await NotesImagePreparation.shared.retainResults(lease, directory: directory)
+            defer { Task { await NotesImagePreparation.shared.releaseResults(lease) } }
+            defer { if self?.imagePreparationRevision == request { self?.imageUserOperation = false } }
+            do {
+                let references = try await NotesImagePreparation.shared.importImages(
+                    urls: imageURLs, bytes: bytes, directory: directory)
+                guard let self, !Task.isCancelled, self.imagePreparationRevision == request, self.isEditable else {
+                    return
+                }
+                guard self.string == source, !self.hasMarkedText() else {
+                    self.editor?.imageError(
+                        "The notes changed while the image was being prepared. Paste the image again.")
+                    return
+                }
+                let value = source as NSString
+                let prefix =
+                    selected.location > 0
+                        && value.substring(with: NSRange(location: selected.location - 1, length: 1)) != "\n"
+                    ? "\n" : ""
+                let suffix =
+                    NSMaxRange(selected) < value.length
+                        && value.substring(with: NSRange(location: NSMaxRange(selected), length: 1)) == "\n" ? "" : "\n"
+                self.undoManager?.beginUndoGrouping()
+                self.insertText(
+                    prefix + references.map(\.markdown).joined(separator: "\n") + suffix, replacementRange: selected)
+                self.undoManager?.endUndoGrouping()
+            }
+            catch { if !Task.isCancelled { self?.editor?.imageError(error.localizedDescription) } }
         }
+        return true
     }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard isEditable else { return [] }
@@ -716,42 +811,51 @@ final class NotesTextView: NSTextView, NSTextViewDelegate, NSTextStorageDelegate
 
     func finishEditingSession() {
         imageSaveTask?.cancel()
-        normalizeImageWidths()
-        editor?.flush()
-        undoManager?.removeAllActions()
-        guard let directory = editor?.directory,
-            let saved = try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8),
-            saved == document.markdown
-        else { return }
-        do { try NotesImageClipboard.cleanupSaved(directory: directory, markdown: saved) }
-        catch { editor?.imageError(error.localizedDescription) }
+        Task { @MainActor in
+            await self.waitForImagePreparation()
+            self.normalizeImageWidths()
+            await self.waitForImagePreparation()
+            self.editor?.flush()
+            self.undoManager?.removeAllActions()
+            if let directory = self.editor?.directory {
+                do {
+                    try await NotesImagePreparation.shared.cleanupSavedIfMatching(
+                        self.document.markdown, directory: directory)
+                }
+                catch { self.editor?.imageError(error.localizedDescription) }
+            }
+        }
     }
 
     func normalizeImageWidths() {
-        guard !normalizingImages, isEditable, let directory = editor?.directory else { return }
-        normalizingImages = true
-        defer { normalizingImages = false }
-        for reference in NotesImageReference.parse(in: string).reversed() where reference.width != nil {
+        guard !normalizingImages, !imageUserOperation, isEditable, !hasMarkedText(), let directory = editor?.directory
+        else { return }
+        let source = string
+        guard source.contains("width=") else { return }
+        let request = imagePreparationRevision
+        imageNormalizationTask?.cancel()
+        imageNormalizationTask = Task { [weak self] in
+            let lease = UUID()
+            await NotesImagePreparation.shared.retainResults(lease, directory: directory)
+            defer { Task { await NotesImagePreparation.shared.releaseResults(lease) } }
             do {
-                let original = try NotesAssets.safeURL(relativePath: reference.originalPath, directory: directory)
-                let metadata = try original.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let version =
-                    "@\(metadata.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(metadata.fileSize ?? 0)"
-                let key = reference.markdown + version
-                if normalizedImages.contains(key) { continue }
-                let largest = NotesImageReference.parse(in: string).filter { $0.originalPath == reference.originalPath }
-                    .compactMap(\.width).max()
-                let desired = try NotesImageStore.resized(
-                    reference, width: reference.width, directory: directory, previewWidth: largest)
-                normalizedImages.insert(key)
-                normalizedImages.insert(desired.markdown + version)
-                if desired.markdown != reference.markdown {
-                    replaceSourcePreservingSelection(in: reference.range, with: desired.markdown)
+                let replacements = try await NotesImagePreparation.shared.normalize(source, directory: directory)
+                guard let self, !Task.isCancelled, self.imagePreparationRevision == request,
+                    self.string == source, self.isEditable, !self.hasMarkedText()
+                else { return }
+                self.normalizingImages = true
+                defer { self.normalizingImages = false }
+                let changes = replacements.filter { $0.0.markdown != $0.1.markdown }
+                guard !changes.isEmpty else { return }
+                self.undoManager?.beginUndoGrouping()
+                for (reference, desired) in changes.reversed() {
+                    self.replaceSourcePreservingSelection(in: reference.range, with: desired.markdown)
                 }
+                self.undoManager?.endUndoGrouping()
+                self.editor?.flush()
             }
-            catch { editor?.imageError(error.localizedDescription) }
+            catch { if !Task.isCancelled { self?.editor?.imageError(error.localizedDescription) } }
         }
-        editor?.flush()
     }
 
     func replaceImage(_ reference: NotesImageReference, with replacement: NotesImageReference) {

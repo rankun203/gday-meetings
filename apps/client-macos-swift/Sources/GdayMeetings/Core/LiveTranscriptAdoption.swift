@@ -26,6 +26,9 @@ extension MeetingStore {
     }
 
     func recoverUnadoptedLiveTranscript(_ meeting: Meeting) async {
+        guard libraryWritable, await recoverRecordingFinalization(id: meeting.id),
+            let meeting = self.meeting(id: meeting.id)
+        else { return }
         scheduleLiveSourcePlaceholderRecovery(meeting)
         guard libraryWritable, recordingID != meeting.id, !meeting.liveTranscriptAdopted,
             meeting.speakers.isEmpty, meeting.transcriptionAttempt == nil
@@ -69,6 +72,7 @@ extension MeetingStore {
             !blockingTranscription,
             !backgroundJobs.contains(where: { $0.key.kind == .transcription && $0.meetingID == meeting.id })
         else { return false }
+        let adoptionBaseline = meeting
         let source = liveTranscriptSource(draft, meeting: meeting)
         var speakers = draft.speakers
         for index in speakers.indices where !people.contains(where: { $0.id == speakers[index].personID }) {
@@ -98,6 +102,18 @@ extension MeetingStore {
         _ = voiceLibrary.ingest(
             meeting: meeting, directory: directory(for: meeting.id))
         meeting = voiceLibrary.applyingDecisions(to: meeting)
+        if recordingID == meeting.id {
+            let adopted = meeting
+            return await enqueueCanonical {
+                guard let index = self.meetings.firstIndex(where: { $0.id == adopted.id }) else { return false }
+                guard
+                    let merged = try? RecordingMeetingMerge.merge(
+                        baseline: adoptionBaseline, proposed: adopted, disk: self.meetings[index])
+                else { return false }
+                self.meetings[index] = merged
+                return await self.performCanonicalSave(meetingID: adopted.id, commitVoice: true)
+            }
+        }
         return await updateMeeting(meeting)
     }
 }

@@ -64,6 +64,18 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var accessibilityHelp: String? = nil
     var source: LiveAudioSource? = nil
     var isSourcePlaceholder = false
+    var constituents: [TranscriptDisplayRow] = []
+    var constituentTextRanges: [NSRange] = []
+    var canonicalRows: [TranscriptDisplayRow] { constituents.isEmpty ? [self] : constituents }
+    func containsSourceRow(_ id: UUID?) -> Bool {
+        guard let id else { return false }
+        return self.id == id || constituents.contains { $0.id == id }
+    }
+    func sourceRow(atUTF16 offset: Int) -> TranscriptDisplayRow {
+        guard !constituents.isEmpty else { return self }
+        let index = constituentTextRanges.lastIndex { $0.location <= offset } ?? 0
+        return constituents[min(index, constituents.count - 1)]
+    }
     let textRevision: UInt64
     init(
         id: UUID, start: Double, end: Double, speaker: String, speakerID: UUID?, text: String,
@@ -225,7 +237,15 @@ struct NativeTranscriptView: NSViewRepresentable {
             self.heights = parent.layoutService ?? TranscriptLayoutService()
             super.init()
         }
-        func update(_ value: NativeTranscriptView) {
+        private var expandedPassageIDs: Set<UUID> = []
+        func update(_ incoming: NativeTranscriptView) {
+            var value = incoming
+            if parent.meetingID != value.meetingID || parent.transcriptSourceID != value.transcriptSourceID {
+                expandedPassageIDs.removeAll()
+            }
+            value.rows = value.rows.flatMap { row in
+                row.constituents.contains(where: { expandedPassageIDs.contains($0.id) }) ? row.canonicalRows : [row]
+            }
             if parent.meetingID != value.meetingID { speakerColors = [:] }
             let sourceChanged =
                 parent.meetingID != value.meetingID
@@ -251,7 +271,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             if navigationChanged {
                 table?.enumerateAvailableRowViews { view, index in
                     (view as? TranscriptNativeRowView)?.isReviewTarget =
-                        self.rows.indices.contains(index) && self.rows[index].id == value.initialRowID
+                        self.rows.indices.contains(index) && self.rows[index].containsSourceRow(value.initialRowID)
                 }
             }
             deferredLiveUpdate = nil
@@ -298,7 +318,11 @@ struct NativeTranscriptView: NSViewRepresentable {
                 removedLiveIDs = Set(previousTail.map(\.id)).subtracting(nextTail.map(\.id))
                 if boundary > 0 {
                     for row in previousTail {
-                        if let index = rowIndices[row.id], index >= boundary { rowIndices.removeValue(forKey: row.id) }
+                        for sourceID in row.canonicalRows.map(\.id) {
+                            if let index = rowIndices[sourceID], index >= boundary {
+                                rowIndices.removeValue(forKey: sourceID)
+                            }
+                        }
                         if let duplicates = duplicateRowIndices[row.id] {
                             let retained = duplicates.filter { $0 < boundary }
                             if retained.isEmpty {
@@ -322,12 +346,18 @@ struct NativeTranscriptView: NSViewRepresentable {
                 registerSpeakerColors(value.rows)
                 update = TranscriptRowUpdate(previous: rows, current: value.rows)
                 rows = value.rows
-                playbackOrder = rows.enumerated().filter {
-                    $0.element.start.isFinite && $0.element.end.isFinite && $0.element.end > $0.element.start
-                }.map {
-                    ($0.element.start, $0.element.end, $0.offset)
+                var intervals: [(start: Double, end: Double, row: Int)] = []
+                for (index, row) in rows.enumerated() {
+                    for source in row.canonicalRows {
+                        guard source.start.isFinite, source.end.isFinite, source.end > source.start else { continue }
+                        intervals.append((start: source.start, end: source.end, row: index))
+                    }
                 }
-                .sorted { $0.start == $1.start ? $0.row < $1.row : $0.start < $1.start }
+                intervals.sort { left, right in
+                    if left.start == right.start { return left.row < right.row }
+                    return left.start < right.start
+                }
+                playbackOrder = intervals
                 var maximumEnd = -Double.infinity
                 playbackMaxEnds = playbackOrder.map { interval in
                     maximumEnd = max(maximumEnd, interval.end)
@@ -561,12 +591,12 @@ struct NativeTranscriptView: NSViewRepresentable {
                 ?? TranscriptNativeRowView()
             view.identifier = identifier
             view.isPlaybackRow = activeRows.contains(row)
-            view.isReviewTarget = rows[row].id == parent.initialRowID
+            view.isReviewTarget = rows[row].containsSourceRow(parent.initialRowID)
             return view
         }
         func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
             (rowView as? TranscriptNativeRowView)?.isPlaybackRow = activeRows.contains(row)
-            (rowView as? TranscriptNativeRowView)?.isReviewTarget = rows[row].id == parent.initialRowID
+            (rowView as? TranscriptNativeRowView)?.isReviewTarget = rows[row].containsSourceRow(parent.initialRowID)
         }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             let id = NSUserInterfaceItemIdentifier("transcript-cell")
@@ -587,6 +617,12 @@ struct NativeTranscriptView: NSViewRepresentable {
             cell.body.delegate = self
             cell.play = parent.canPlay ? { [weak self] in self?.parent.play(value.start) } : nil
             cell.editText = { [weak self] in self?.edit(id: value.id) }
+            cell.contextMenuEdit = { [weak self, weak cell] event in
+                guard let self, let cell else { return nil }
+                let point = cell.body.convert(event.locationInWindow, from: nil)
+                let target = self.sourceRow(value, cell: cell, point: point)
+                return { [weak self] in self?.edit(id: target.id) }
+            }
             cell.userInteracted = { [weak self] in self?.userSelected() }
             cell.assignSpeaker =
                 parent.editable && value.canAssignPerson
@@ -669,13 +705,13 @@ struct NativeTranscriptView: NSViewRepresentable {
                     // Saved rows can arrive after the first layout. Keep an
                     // explicit navigation request pending until its row exists.
                     if let initialRowID = parent.initialRowID,
-                        !rows.contains(where: { $0.id == initialRowID })
+                        !rows.contains(where: { $0.containsSourceRow(initialRowID) })
                     {
                         return
                     }
                     needsInitialPosition = false
                     if let initialRowID = parent.initialRowID,
-                        let row = rows.firstIndex(where: { $0.id == initialRowID })
+                        let row = rows.firstIndex(where: { $0.containsSourceRow(initialRowID) })
                     {
                         let target = min(
                             max(0, table.rect(ofRow: row).minY - scroll.contentView.bounds.height * 0.3),
@@ -728,6 +764,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                     let index = boundary + $0.offset
                     let row = $0.element
                     if indexesChanged {
+                        for source in row.constituents.dropFirst() { rowIndices[source.id] = index }
                         if rowIndices[row.id] == nil {
                             rowIndices[row.id] = index
                         }
@@ -873,10 +910,38 @@ struct NativeTranscriptView: NSViewRepresentable {
             }
             scheduleMeasurements()
         }
+        private func clickedSourceRow(_ row: TranscriptDisplayRow, table: NSTableView, row index: Int)
+            -> TranscriptDisplayRow
+        {
+            guard !row.constituents.isEmpty, let event = NSApp.currentEvent,
+                let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? TranscriptNativeCell
+            else { return row.canonicalRows[0] }
+            let point = cell.body.convert(event.locationInWindow, from: nil)
+            return sourceRow(row, cell: cell, point: point)
+        }
+        private func sourceRow(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell, point: NSPoint)
+            -> TranscriptDisplayRow
+        {
+            guard !row.constituents.isEmpty, cell.body.bounds.contains(point) else { return row.canonicalRows[0] }
+            let storage = NSTextStorage(
+                string: row.text, attributes: [.font: cell.body.font ?? NSFont.systemFont(ofSize: 13)])
+            let layout = NSLayoutManager()
+            let container = NSTextContainer(size: cell.body.bounds.size)
+            container.lineFragmentPadding = 0
+            storage.addLayoutManager(layout)
+            layout.addTextContainer(container)
+            let glyph = layout.glyphIndex(for: point, in: container)
+            guard glyph < layout.numberOfGlyphs else { return row.canonicalRows.last! }
+            let offset = layout.characterIndexForGlyph(at: glyph)
+            return row.sourceRow(atUTF16: offset)
+        }
+
         @objc func clicked(_ sender: NSTableView) {
             pendingClick?.cancel()
             guard rows.indices.contains(sender.clickedRow), parent.canPlay else { return }
-            let start = rows[sender.clickedRow].start
+            let value = rows[sender.clickedRow]
+            let target = clickedSourceRow(value, table: sender, row: sender.clickedRow)
+            let start = target.start
             let work = DispatchWorkItem { [weak self] in self?.parent.play(start) }
             pendingClick = work
             DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
@@ -890,6 +955,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             let point = NSApp.currentEvent.map { cell.convert($0.locationInWindow, from: nil) } ?? .zero
             let value = rows[row]
             let assigning = parent.showsSpeakers && cell.badge.frame.contains(point)
+            let target = clickedSourceRow(value, table: sender, row: row)
             // NSTableView finishes its mouse tracking after this action returns.
             // Activate the editor after that phase so the table cannot reclaim it.
             DispatchQueue.main.async { [weak self, weak cell] in
@@ -898,11 +964,23 @@ struct NativeTranscriptView: NSViewRepresentable {
                     self.showSpeaker(value, cell: cell)
                 }
                 else {
-                    self.edit(id: value.id)
+                    self.edit(id: target.id)
                 }
             }
         }
         func showSpeaker(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell) {
+            guard parent.editable else { return }
+            if !row.constituents.isEmpty {
+                expand(row)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let index = self.rows.firstIndex(where: { $0.id == row.id }),
+                        let cell = self.table?.view(atColumn: 0, row: index, makeIfNecessary: true)
+                            as? TranscriptNativeCell
+                    else { return }
+                    self.showSpeaker(self.rows[index], cell: cell)
+                }
+                return
+            }
             guard parent.editable, row.canAssignPerson, let speakerID = row.speakerID else { return }
             pauseLiveFollow()
             finishEdit()
@@ -920,11 +998,28 @@ struct NativeTranscriptView: NSViewRepresentable {
             applyDeferredLiveUpdate()
             scheduleLayout()
         }
-        func edit(id: UUID) { if let index = rows.firstIndex(where: { $0.id == id }) { edit(row: index) } }
+        private func expand(_ row: TranscriptDisplayRow) {
+            expandedPassageIDs.formUnion(row.constituents.map(\.id))
+            update(parent)
+        }
+        func edit(id: UUID) {
+            guard let index = rows.firstIndex(where: { $0.containsSourceRow(id) }) else { return }
+            if !rows[index].constituents.isEmpty {
+                expand(rows[index])
+                DispatchQueue.main.async { [weak self] in self?.edit(id: id) }
+                return
+            }
+            edit(row: index)
+        }
         func edit(row: Int) {
             pendingClick?.cancel()
             guard parent.editable, rows.indices.contains(row), let table else { return }
+            if !rows[row].constituents.isEmpty {
+                edit(id: rows[row].id)
+                return
+            }
             finishEdit()
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             table.scrollRowToVisible(row)
             guard let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? TranscriptNativeCell else {
                 return
@@ -1317,6 +1412,11 @@ enum TranscriptSpeakerPalette {
     let body = NSTextField()
     var rowID: UUID?
     var editText: (() -> Void)?
+    /// Resolve the canonical target while the original right-click event is available.
+    var contextMenuEdit: ((NSEvent) -> (() -> Void)?)? {
+        didSet { menuEditAction = nil }
+    }
+    private var menuEditAction: (() -> Void)?
     var assignSpeaker: (() -> Void)? {
         didSet {
             speaker.setAccessibilityCustomActions(
@@ -1468,7 +1568,8 @@ enum TranscriptSpeakerPalette {
         copy.target = self
         menu.addItem(copy)
         if allowsEditing {
-            let edit = NSMenuItem(title: "Edit Transcript", action: #selector(accessibilityEdit), keyEquivalent: "")
+            menuEditAction = contextMenuEdit?(event) ?? editText
+            let edit = NSMenuItem(title: "Edit Transcript", action: #selector(editFromMenu), keyEquivalent: "")
             edit.target = self
             menu.addItem(edit)
             if showsSpeakers && assignSpeaker != nil {
@@ -1499,6 +1600,11 @@ enum TranscriptSpeakerPalette {
             view = current.superview
         }
         return nil
+    }
+    @objc private func editFromMenu() {
+        let action = menuEditAction
+        menuEditAction = nil
+        action?()
     }
     @objc private func accessibilityEdit() -> Bool {
         editText?()

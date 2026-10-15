@@ -14,15 +14,16 @@ struct PeopleView: View {
         get { session.showExcluded }
         nonmutating set { session.showExcluded = newValue }
     }
-    @ViewState private var reviewingVoices = false
+    @Binding var reviewingVoices: Bool
     private struct MergeRequest: Identifiable {
         let id = UUID()
         let personIDs: Set<UUID>
     }
     @ViewState private var mergeRequest: MergeRequest?
 
-    init(selection: Binding<Set<UUID>>, session: DirectorySession) {
+    init(selection: Binding<Set<UUID>>, session: DirectorySession, reviewingVoices: Binding<Bool>) {
         _selection = selection
+        _reviewingVoices = reviewingVoices
         _session = ObservedObject(wrappedValue: session)
         _page = ObservedObject(wrappedValue: session.page)
     }
@@ -86,7 +87,6 @@ struct PeopleView: View {
                 page.reveal(keptID, query: "", expectedName: store.people.first(where: { $0.id == keptID })?.name)
             }
         }
-        .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary) }
         .focusedValue(\.directoryControlFocus, true)
         .confirmationDialog(
             "Delete \(deleting?.name ?? "person")?",

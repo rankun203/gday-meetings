@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Serial filesystem work stays off the main actor, including preview cleanup and receipts.
@@ -39,7 +40,7 @@ actor NotesFileWorker {
             try MeetingExport.write(meeting, directory: directory, to: destination)
         }
     }
-    func write(_ id: UUID, text: String, previous: String?) throws -> WriteResult {
+    func write(_ id: UUID, text: String, previous: String?) async throws -> WriteResult {
         try beforeWrite?(id, text)
         let file = try folder(id).appendingPathComponent("notes.md")
         let previousBytes = try? Data(contentsOf: file)
@@ -62,15 +63,32 @@ actor NotesFileWorker {
                 DataEventJournal.recordCreatedFile(backup, directory: file.deletingLastPathComponent())
             }
         }
-        try NotesImageStore.ensurePreviews(in: text, directory: file.deletingLastPathComponent())
+        try await NotesImagePreparation.shared.ensurePreviews(text, directory: file.deletingLastPathComponent())
         try Data(text.utf8).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         var result = WriteResult()
         do { try DataEventJournal.fileChanged(file, previous: previousBytes) }
         catch { result.receiptWarning = error }
-        do { try NotesImageStore.cleanupManagedPreviews(in: text, directory: file.deletingLastPathComponent()) }
+        do { try await NotesImagePreparation.shared.cleanupPreviews(text, directory: file.deletingLastPathComponent()) }
         catch { result.cleanupError = error }
         return result
+    }
+}
+
+/// Only views displaying this meeting's notes observe character-by-character changes.
+@MainActor final class NotesDraft: ObservableObject {
+    @Published private(set) var text: String
+    private(set) var hasLocalChanges = false
+    var prepareForSave: (@MainActor () async -> Void)?
+    init(_ text: String) { self.text = text }
+    func edit(_ value: String) {
+        guard text != value else { return }
+        hasLocalChanges = true
+        text = value
+    }
+    func reload(_ value: String) {
+        hasLocalChanges = false
+        if text != value { text = value }
     }
 }
 
@@ -78,6 +96,7 @@ actor NotesFileWorker {
 @MainActor
 final class NotesStorage {
     let directory: URL
+    private var drafts: [UUID: NotesDraft] = [:]
     var saved: [UUID: String] = [:]
     private(set) var pending: [UUID: String] = [:]
     private var revisions: [UUID: UInt64] = [:]
@@ -96,6 +115,25 @@ final class NotesStorage {
         self.directory = directory
         self.worker = worker ?? NotesFileWorker(directory: directory)
     }
+    func draft(_ id: UUID, fallback: String) -> NotesDraft {
+        if let draft = drafts[id] { return draft }
+        let draft = NotesDraft(pending[id] ?? saved[id] ?? fallback)
+        drafts[id] = draft
+        return draft
+    }
+    func applyingDraft(to meeting: Meeting) -> Meeting {
+        guard let draft = drafts[meeting.id], draft.hasLocalChanges else { return meeting }
+        var value = meeting
+        value.notes = draft.text
+        return value
+    }
+    func prepareDraftsForSave() async {
+        for draft in Array(drafts.values) { await draft.prepareForSave?() }
+    }
+    func reloadDraft(_ id: UUID, text: String) {
+        drafts[id]?.reload(text)
+    }
+
     func url(_ id: UUID) -> URL {
         MeetingFolderStorage.folder(id: id, directory: directory).appendingPathComponent("notes.md")
     }
@@ -183,6 +221,7 @@ final class NotesStorage {
             throw ServiceError("Save the latest meeting notes before discarding their draft.")
         }
         saved.removeValue(forKey: id)
+        drafts.removeValue(forKey: id)
         readRequests.removeValue(forKey: id)
         revisions[id, default: 0] &+= 1
     }
@@ -236,13 +275,19 @@ extension MeetingStore {
     func editNotes(id: UUID, text: String) {
         guard libraryWritable, !notesStorage.isDeleting(id), let index = meetings.firstIndex(where: { $0.id == id })
         else { return }
-        meetings[index].notes = text
+        notesStorage.draft(id, fallback: meetings[index].notes).edit(text)
         notesStorage.schedule(id, text: text)
     }
     @discardableResult func flushNotes() async -> Bool {
         guard libraryWritable else { return true }
         do {
+            await notesStorage.prepareDraftsForSave()
             try await notesStorage.flushAll()
+            for index in meetings.indices {
+                let latest = notesStorage.applyingDraft(to: meetings[index])
+                if latest.notes != meetings[index].notes { meetings[index].notes = latest.notes }
+                notesStorage.reloadDraft(latest.id, text: latest.notes)
+            }
             return true
         }
         catch {
@@ -250,29 +295,31 @@ extension MeetingStore {
             return false
         }
     }
-    func openNotes(id: UUID, session: UUID? = nil) async {
+    func openNotes(id: UUID, session: UUID? = nil, editing: Bool = true) async {
         guard !Task.isCancelled, let value = meetings.first(where: { $0.id == id }) else { return }
         let storage = notesStorage
-        storage.beginEditing(id, session: session)
+        if editing { storage.beginEditing(id, session: session) }
         var opened = false
         defer {
             if !opened {
-                storage.endEditing(id, session: session)
+                if editing { storage.endEditing(id, session: session) }
                 if !storage.isEditing(id) { storage.stopWatching(id) }
             }
         }
-        await suspendSearchIndexForEditing(id: id)
+        if editing { await suspendSearchIndexForEditing(id: id) }
         do {
             let text = try await storage.load(id, fallback: value.notes)
             guard !Task.isCancelled, notesStorage === storage,
                 let index = meetings.firstIndex(where: { $0.id == id })
             else { return }
-            meetings[index].notes = text
+            storage.reloadDraft(id, text: text)
+            if meetings[index].notes != text { meetings[index].notes = text }
             try await storage.watch(id) { [weak self, weak storage] text in
                 guard let self, let storage, self.notesStorage === storage,
                     let index = self.meetings.firstIndex(where: { $0.id == id })
                 else { return }
-                self.meetings[index].notes = text
+                storage.reloadDraft(id, text: text)
+                if self.meetings[index].notes != text { self.meetings[index].notes = text }
             }
             opened = !Task.isCancelled
         }

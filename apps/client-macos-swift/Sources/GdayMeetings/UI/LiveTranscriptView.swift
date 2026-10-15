@@ -183,10 +183,39 @@ struct LiveTranscriptHeader: View {
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .modifier(FollowLiveSurface())
                     .help("Scroll to the latest text and follow new passages.")
                     .accessibilityLabel("Follow Live")
             }
         }
+    }
+}
+
+/// Keep text beneath the overlay from showing through the native button bezel.
+private struct FollowLiveSurface: ViewModifier {
+    @ViewState private var hovered = false
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.primary.opacity(hovered ? 0.1 : 0))
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                if hovered && contrast == .increased {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(.primary, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onHover { hovered = $0 }
     }
 }
 

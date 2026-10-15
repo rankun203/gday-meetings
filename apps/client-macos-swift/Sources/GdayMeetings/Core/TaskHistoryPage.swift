@@ -85,8 +85,8 @@ enum TaskHistoryRow: Identifiable, Equatable, @unchecked Sendable {
 extension MeetingStore {
     /// Use the complete indexed state counts, not the retained task page window.
     func taskHistoryCount(scope: TaskHistoryScope) -> Int {
-        managedTaskScopeCounts[scope, default: 0]
-            + managedTasks.filter { $0.isPreview && scope.includes($0) }.count
+        visibleManagedTaskCount(where: scope.predicate, unfiltered: managedTaskScopeCounts[scope, default: 0])
+            + visibleManagedTasks.filter { $0.isPreview && scope.includes($0) }.count
             + voiceLibrary.jobs.filter(scope.includes).count
     }
 
@@ -96,11 +96,12 @@ extension MeetingStore {
         scope: TaskHistoryScope, cursor: ManagedTaskJournal.Cursor? = nil, newer: Bool = false, limit: Int = 50
     ) async -> [TaskHistoryRow] {
         let journal = managedTaskJournal
+        let predicate = "(\(scope.predicate)) AND (\(taskVisibilityPredicate))"
         let extras =
-            managedTasks.filter { $0.isPreview && scope.includes($0) }.map(TaskHistoryRow.managed)
+            visibleManagedTasks.filter { $0.isPreview && scope.includes($0) }.map(TaskHistoryRow.managed)
             + voiceLibrary.jobs.filter(scope.includes).map(TaskHistoryRow.voice)
         let result = await Task.detached(priority: .userInitiated) {
-            var candidates = journal.page(after: cursor, limit: limit, predicate: scope.predicate, newer: newer).map(
+            var candidates = journal.page(after: cursor, limit: limit, predicate: predicate, newer: newer).map(
                 TaskHistoryRow.managed)
             candidates += extras
             if let cursor {

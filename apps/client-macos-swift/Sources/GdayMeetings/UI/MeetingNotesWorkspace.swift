@@ -4,9 +4,18 @@ import SwiftUI
 struct MeetingNotesWorkspace: View {
     @EnvironmentObject private var store: MeetingStore
     let meetingID: UUID
-    @ViewState private var reading = false
-    @ViewState private var viewRequest = UUID()
-    @ViewState private var editingSession = UUID()
+    @ViewState private var mode: NotesViewMode
+    @ViewState private var editingSession: NotesEditingSession?
+    init(meetingID: UUID, initiallyRecording: Bool) {
+        self.meetingID = meetingID
+        _mode = ViewState(initialValue: NotesViewMode(isRecordingOnEntry: initiallyRecording))
+    }
+    private var requestedReading: Bool { mode.reading }
+    // Keep the editor visible until its draft has been saved successfully.
+    private var reading: Bool { requestedReading && editingSession?.meetingID != meetingID }
+    private var modeContext: NotesViewMode.Context {
+        .init(meetingID: meetingID, reading: requestedReading)
+    }
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -22,24 +31,7 @@ struct MeetingNotesWorkspace: View {
                     selection: Binding(
                         get: { reading },
                         set: { value in
-                            let request = UUID()
-                            viewRequest = request
-                            let session = editingSession
-                            Task {
-                                if value {
-                                    guard await store.finishNotesEditing(id: meetingID, session: session) else {
-                                        return
-                                    }
-                                }
-                                else {
-                                    let nextSession = UUID()
-                                    editingSession = nextSession
-                                    store.notesStorage.beginEditing(meetingID, session: nextSession)
-                                    await store.suspendSearchIndexForEditing(id: meetingID)
-                                }
-                                guard viewRequest == request else { return }
-                                reading = value
-                            }
+                            mode.reading = value
                         }
                     )
                 ) {
@@ -59,24 +51,65 @@ struct MeetingNotesWorkspace: View {
                     .allowsHitTesting(!reading)
                     .accessibilityHidden(reading)
                 if reading {
-                    MeetingMarkdownReadingView(
+                    MeetingNotesReadingView(
                         meetingID: meetingID,
-                        markdown: store.meetings.first { $0.id == meetingID }?.notes ?? "",
-                        showsTimestamps: true,
-                        emptyMessage: "No notes yet. Choose Edit Notes to add notes.",
-                        changed: store.libraryWritable ? { store.editNotes(id: meetingID, text: $0) } : nil)
+                        draft: store.notesStorage.draft(
+                            meetingID, fallback: store.meeting(id: meetingID)?.notes ?? ""))
                 }
             }
             .modifier(AppContentSurface())
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
         }
-        .task(id: meetingID) { await store.openNotes(id: meetingID, session: editingSession) }
+        .task(id: meetingID) { await store.openNotes(id: meetingID, editing: false) }
+        .task(id: modeContext) {
+            let request = modeContext
+            if let session = editingSession {
+                guard await store.finishNotesEditing(id: session.meetingID, session: session.id) else {
+                    if !Task.isCancelled, modeContext == request, session.meetingID == meetingID {
+                        mode.reading = false
+                    }
+                    return
+                }
+                if editingSession == session { editingSession = nil }
+            }
+            guard !Task.isCancelled, modeContext == request, !requestedReading else { return }
+            let session = NotesEditingSession(meetingID: meetingID)
+            editingSession = session
+            store.notesStorage.beginEditing(meetingID, session: session.id)
+            await store.suspendSearchIndexForEditing(id: meetingID)
+        }
         .onDisappear {
-            viewRequest = UUID()
             let session = editingSession
-            Task { await store.closeNotes(id: meetingID, session: session) }
+            Task { await store.closeNotes(id: session?.meetingID ?? meetingID, session: session?.id) }
         }
         .id(meetingID)
+    }
+}
+
+private struct NotesEditingSession: Equatable {
+    let meetingID: UUID
+    let id = UUID()
+}
+
+/// Constructed when Notes enters the visible hierarchy, never from live recording updates.
+struct NotesViewMode {
+    struct Context: Equatable {
+        let meetingID: UUID
+        let reading: Bool
+    }
+    var reading: Bool
+    init(isRecordingOnEntry: Bool) { reading = !isRecordingOnEntry }
+}
+
+private struct MeetingNotesReadingView: View {
+    @EnvironmentObject private var store: MeetingStore
+    let meetingID: UUID
+    @ObservedObject var draft: NotesDraft
+    var body: some View {
+        MeetingMarkdownReadingView(
+            meetingID: meetingID, markdown: draft.text, showsTimestamps: true,
+            emptyMessage: "No notes yet. Choose Edit Notes to add notes.",
+            changed: store.libraryWritable ? { store.editNotes(id: meetingID, text: $0) } : nil)
     }
 }
 

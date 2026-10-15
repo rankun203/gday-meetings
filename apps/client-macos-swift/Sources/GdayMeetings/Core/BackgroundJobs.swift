@@ -64,12 +64,24 @@ extension MeetingStore {
     }
 
     func setJobProgress(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String) {
-        setJobProgress(kind, scope, progress, details: TaskProgress(phase: progress))
+        // Legacy messages may contain changing counts. They do not declare a phase boundary.
+        updateJobProgress(
+            kind, scope, progress, details: TaskProgress(phase: progress),
+            attemptID: nil, publishesPhaseChanges: false)
     }
 
     func setJobProgress(
         _ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String,
         details: TaskProgress, attemptID: UUID? = nil
+    ) {
+        updateJobProgress(
+            kind, scope, progress, details: details, attemptID: attemptID,
+            publishesPhaseChanges: true)
+    }
+
+    private func updateJobProgress(
+        _ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String,
+        details: TaskProgress, attemptID: UUID?, publishesPhaseChanges: Bool
     ) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
         guard let index = backgroundJobs.firstIndex(where: { $0.key == key }),
@@ -83,7 +95,7 @@ extension MeetingStore {
         {
             update.progressDetails?.startedAt = startedAt
         }
-        if backgroundJobs[index].progressDetails?.phase != details.phase
+        if (publishesPhaseChanges && backgroundJobs[index].progressDetails?.phase != details.phase)
             || (jobProgressUpdatedAt[key].map({ $0.duration(to: .now) >= .milliseconds(500) }) ?? true)
         {
             pendingJobProgress.removeValue(forKey: key)

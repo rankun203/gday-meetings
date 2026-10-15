@@ -294,7 +294,7 @@ extension MeetingStore {
             return .failed
         }
     }
-    func meeting(id: UUID) -> Meeting? { meetings.first { $0.id == id } }
+    func meeting(id: UUID) -> Meeting? { meetings.first { $0.id == id }.map { notesStorage.applyingDraft(to: $0) } }
     func resetMeetingPages(evictLoaded: Bool = false) {
         resetMeetingPrefetch()
         if evictLoaded { clearLoadedMeetingCache() }

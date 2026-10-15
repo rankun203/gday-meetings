@@ -161,7 +161,7 @@ enum NotesAssets {
     }
 }
 
-struct NotesImageReference: Equatable {
+struct NotesImageReference: Equatable, Sendable {
     var range: NSRange
     var originalPath: String
     var displayPath: String

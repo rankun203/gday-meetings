@@ -99,21 +99,30 @@ actor AppleLiveTranscription {
             try await analyzer.start(inputSequence: AsyncStream(unfolding: { await input.next() }))
             let sessionID = UUID()
             let results = Task(name: "Live transcription results: \(source.rawValue)") {
+                let epoch = UUID()
+                var validator = AudioAnalysisStreamValidator(sessionID: sessionID, epoch: epoch)
+                var sequence: UInt64 = 0
+                var items: [Double: (id: UUID, revision: UInt64)] = [:]
                 do {
                     for try await result in transcriber.results {
                         let range = result.range
-                        let words = result.text.runs.compactMap { run -> LiveTranscriptWord? in
-                            guard let time = run.audioTimeRange else { return nil }
-                            return LiveTranscriptWord(
-                                text: String(result.text[run.range].characters),
-                                start: time.start.seconds, end: CMTimeRangeGetEnd(time).seconds)
+                        let timing = AppleTranscriptTiming.extract(result.text)
+                        let previous = items[range.start.seconds]
+                        let item = (id: previous?.id ?? UUID(), revision: (previous?.revision ?? 0) + 1)
+                        let phrase = LiveTranscriptPhrase(
+                            id: item.id,
+                            session: sessionID, source: source,
+                            start: range.start.seconds, end: CMTimeRangeGetEnd(range).seconds,
+                            text: timing.text, words: timing.words, textTiming: timing.timing, locale: locale.identifier
+                        )
+                        let event = AudioAnalysisStreamRevision(
+                            sessionID: sessionID, epoch: epoch, sequence: sequence, itemID: item.id,
+                            revision: item.revision, finality: result.isFinal ? .final : .provisional, payload: phrase)
+                        if try validator.accept(event) {
+                            items[range.start.seconds] = item
+                            sequence += 1
+                            await receive(event.payload, event.finality == .final)
                         }
-                        await receive(
-                            LiveTranscriptPhrase(
-                                session: sessionID, source: source,
-                                start: range.start.seconds, end: CMTimeRangeGetEnd(range).seconds,
-                                text: String(result.text.characters), words: words, locale: locale.identifier),
-                            result.isFinal)
                     }
                 }
                 catch {

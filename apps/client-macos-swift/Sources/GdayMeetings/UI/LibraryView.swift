@@ -38,6 +38,7 @@ struct LibraryView: View {
     @ViewState private var selectedMeeting: UUID?
     @ViewState private var meetingCountResult: (request: MeetingCountRequest, count: Int)?
     @ViewState private var selectedPeople: Set<UUID> = []
+    @ViewState private var reviewingVoices = false
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @StateObject private var searchSession = LibrarySearchSession()
@@ -254,21 +255,29 @@ struct LibraryView: View {
                 else {
                     // Resolve the navigation pane's safe area once before the
                     // native split measures its list and detail hosting views.
-                    GeometryReader { geometry in
-                        HSplitView {
-                            directoryColumn
-                                .frame(minWidth: 250, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
-                            selectedDetail
-                                .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
-                                .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+                    VStack(spacing: 0) {
+                        if destination == .people {
+                            PeopleVoiceReviewBar(library: store.voiceLibrary, reviewingVoices: $reviewingVoices)
                         }
-                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        GeometryReader { geometry in
+                            HSplitView {
+                                directoryColumn
+                                    .frame(minWidth: 250, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
+                                selectedDetail
+                                    .frame(
+                                        minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity
+                                    )
+                                    .background(AppTheme.readingBackground, ignoresSafeAreaEdges: [])
+                            }
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                        }
+                        .frame(minWidth: 250 + 1 + AppTheme.minimumDetailWidth)
                     }
-                    .frame(minWidth: 250 + 1 + AppTheme.minimumDetailWidth)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
+            .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary) }
         }
     }
 
@@ -290,7 +299,8 @@ struct LibraryView: View {
 
     @ViewBuilder private var directoryColumn: some View {
         switch destination {
-        case .people: PeopleView(selection: $selectedPeople, session: workspace.people)
+        case .people:
+            PeopleView(selection: $selectedPeople, session: workspace.people, reviewingVoices: $reviewingVoices)
         case .tags: TagsView(selection: $selectedTag, session: workspace.tags)
         default:
             meetingList

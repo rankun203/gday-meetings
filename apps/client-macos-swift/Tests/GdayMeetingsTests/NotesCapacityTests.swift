@@ -34,6 +34,13 @@ import Testing
         meeting.notes = initial
         await store.updateMeeting(meeting)
         #expect(await store.flushNotes())
+        // Synthetic state exercises the recording screen without audio hardware.
+        store.recordingID = meetingID
+        store.recordingStartedAt = Date()
+        defer {
+            store.recordingID = nil
+            store.recordingStartedAt = nil
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -46,8 +53,9 @@ import Testing
             ? AnyView(
                 LibraryView(selectedMeetingID: meetingID).environmentObject(store).environmentObject(MeetingPlayback()))
             : AnyView(
-                MeetingNotesWorkspace(meetingID: meetingID).environmentObject(store).environmentObject(
-                    MeetingPlayback()))
+                MeetingNotesWorkspace(meetingID: meetingID, initiallyRecording: true).environmentObject(store)
+                    .environmentObject(
+                        MeetingPlayback()))
         let host = NSHostingView(rootView: root)
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
@@ -107,6 +115,7 @@ import Testing
                 if mode == "image" {
                     text.setSelectedRange(NSRange(location: location, length: 0))
                     try #require(text.pasteImages(from: pasteboard))
+                    await text.waitForImagePreparation()
                 }
                 else {
                     text.insertText(fragment, replacementRange: NSRange(location: location, length: 0))

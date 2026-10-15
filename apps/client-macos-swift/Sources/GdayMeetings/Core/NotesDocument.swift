@@ -135,6 +135,11 @@ struct NotesDocument: Equatable {
             : String(format: "%d:%02d", seconds / 60, seconds % 60)
         return tenths % 10 == 0 ? base : "\(base).\(tenths % 10)"
     }
+    static func displayTimestamp(_ time: TimeInterval) -> String {
+        let seconds = Int(time.isFinite ? min(1_000_000_000_000, max(0, time)) : 0)
+        return String(
+            format: "%02lld:%02lld:%02lld", Int64(seconds / 3600), Int64(seconds / 60 % 60), Int64(seconds % 60))
+    }
     static func playbackStart(_ time: TimeInterval) -> TimeInterval { max(0, time - 3) }
     static func clock(recording: TimeInterval?, playback: TimeInterval?) -> TimeInterval? {
         let time = recording ?? playback

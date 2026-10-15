@@ -4,6 +4,7 @@ import Foundation
 struct NotesEditorLineIndex {
     private let starts: [Int]
     private let ends: [Int]
+    let latestTimestamp: TimeInterval
 
     init(_ document: NotesDocument) {
         var starts: [Int] = []
@@ -11,13 +12,16 @@ struct NotesEditorLineIndex {
         starts.reserveCapacity(document.lines.count)
         ends.reserveCapacity(document.lines.count)
         var offset = 0
+        var latestTimestamp: TimeInterval = 0
         for line in document.lines {
+            latestTimestamp = max(latestTimestamp, line.time ?? 0)
             starts.append(offset)
             offset += line.text.utf16.count + line.newline.utf16.count
             ends.append(offset)
         }
         self.starts = starts
         self.ends = ends
+        self.latestTimestamp = latestTimestamp
     }
 
     func line(at offset: Int) -> Int {

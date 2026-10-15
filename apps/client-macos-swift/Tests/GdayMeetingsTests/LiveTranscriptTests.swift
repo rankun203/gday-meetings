@@ -69,6 +69,27 @@ struct LiveTranscriptTests {
         #expect(mode == 0o600)
     }
 
+    @Test func canonicalTimingTrackAndSourceAnchorsSurviveStorageRoundTrip() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let meetingID = UUID()
+        let phrase = LiveTranscriptPhrase(
+            session: UUID(), source: .system, start: 0, end: 2, text: "Hello world",
+            words: [.init(text: "Hello", start: 0, end: 1), .init(text: "world", start: 1, end: 2)])
+        var row = TranscriptSegment(live: phrase)
+        row.analysisTrackID = "track1"
+        row.sourceSpans = [.init(rowID: UUID(), range: .init(location: 0, length: 11), text: row.text)]
+        try TranscriptStorage.write([row], at: directory)
+        let restored = try #require(TranscriptStorage.read(at: directory).first)
+        #expect(restored == row)
+        let reconstructed = restored.livePhrase(meetingID: meetingID)
+        #expect(reconstructed.words == phrase.words)
+        #expect(TranscriptSegment(live: reconstructed).timing == row.timing)
+        var edited = restored
+        edited.text = "Correction"
+        #expect(edited.livePhrase(meetingID: meetingID).words.isEmpty)
+    }
+
     @Test func testAlignedFeedDoesNotIncludePaddingAndTrimsOverlap() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -188,7 +209,8 @@ struct LiveTranscriptTests {
         #expect(controller.draft?.phrases.last?.text == "Last  phrase")
         #expect(try LiveTranscriptDraft.read(at: directory, meetingID: meetingID)?.phrases.last?.text == "Last  phrase")
         let phrase = try #require(controller.draft?.phrases.last)
-        #expect(phrase.words.isEmpty)  // Saved display segments do not retain recognition word events.
+        #expect(phrase.words == [.init(text: "phrase", start: 1.5, end: 2)])
+        #expect(TranscriptSegment(live: phrase).timing?.spans.first?.start == 1.5)
         let highlighted = try #require(LiveTranscriptPresentation.newestWordRange(in: phrase))
         #expect(String(phrase.text[highlighted]) == "phrase")
         controller.receive(

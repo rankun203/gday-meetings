@@ -23,6 +23,7 @@ struct MeetingTranscriptView: View {
     @ViewState private var displayedMeetingID: UUID?
     @ViewState private var showsSpeakers = false
     @ViewState private var showsLiveText = false
+    @ViewState private var passageAnalysis: LocalDiarizationResult?
     @ViewState private var labelingHistory: SpeakerLabelingHistory?
     @ViewState private var showsLabelingHistory = false
 
@@ -402,12 +403,34 @@ struct MeetingTranscriptView: View {
             meetingID: meetingID, segments: segments,
             speakers: usesCheckpoint ? draft?.speakers ?? [] : meeting?.speakers ?? [],
             audioFiles: meeting?.audioFiles ?? [])
-        visibleRows = displayRows.filter { !hidden.contains($0.id) }
+        let visible = displayRows.filter { !hidden.contains($0.id) }
+        let mapped = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
+        let source = segments.filter { !hidden.contains($0.id) }
+        let groups = TranscriptPassagePresentation.groups(
+            source, speakers: usesCheckpoint ? draft?.speakers ?? [] : meeting?.speakers ?? [],
+            analysis: !usesCheckpoint && passageAnalysis?.id == meeting?.speakerLabelSource?.resultID
+                ? passageAnalysis : nil)
+        visibleRows = groups.compactMap { group in
+            let rows = group.compactMap { mapped[$0.id] }
+            return TranscriptDisplayRow.passage(rows: rows, segments: group)
+        }
         displayGeneration += 1
     }
 
     private func loadHistory() async {
         let key = historyReadKey
+        let folder = store.directory(for: meetingID)
+        let resultID = meeting?.speakerLabelSource?.resultID
+        passageAnalysis = nil
+        if let resultID {
+            let analysis = await Task.detached(priority: .utility) {
+                try? JSONDecoder().decode(
+                    LocalDiarizationResult.self,
+                    from: Data(contentsOf: folder.appendingPathComponent("speaker-labels-\(resultID).json")))
+            }.value
+            guard !Task.isCancelled, key == historyReadKey else { return }
+            if analysis?.id == resultID { passageAnalysis = analysis }
+        }
         if historyOwner?.meetingID != key.meetingID || historyOwner?.directory != key.directory {
             draft = nil
             revisions = []

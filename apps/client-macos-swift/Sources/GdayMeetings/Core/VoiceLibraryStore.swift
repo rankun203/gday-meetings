@@ -86,6 +86,7 @@ enum VoiceReviewConflicts {
 
 @MainActor
 final class VoiceLibraryStore: ObservableObject {
+    let reviewNotice: VoiceReviewNotice
     @Published private(set) var examples: [VoiceExample] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var canUndo = false
@@ -143,6 +144,7 @@ final class VoiceLibraryStore: ObservableObject {
         write: (@Sendable (Data, URL) throws -> Void)? = nil,
         beforeLoad: (@Sendable () throws -> Void)? = nil
     ) {
+        reviewNotice = VoiceReviewNotice(directory: directory)
         url = directory.appendingPathComponent("voice-library")
         self.canWrite = canWrite
         writeOverride = write

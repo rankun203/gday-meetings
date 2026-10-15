@@ -264,8 +264,10 @@ extension MeetingStore {
             return MeetingTodo(title: title, isCompleted: text.hasPrefix("- [x]") || text.hasPrefix("- [X]"))
         }
     }
-    private func context(_ meeting: Meeting) -> String {
-        "Title: \(meeting.title)\nNotes: \(NotesDocument(meeting.notes).citedText)\nSummary: \(meeting.summary)\nTranscript:\n"
+    private func context(_ source: Meeting) -> String {
+        let meeting = notesStorage.applyingDraft(to: source)
+        return
+            "Title: \(meeting.title)\nNotes: \(NotesDocument(meeting.notes).citedText)\nSummary: \(meeting.summary)\nTranscript:\n"
             + meeting.transcript.map { segment in
                 let name = meeting.speakerName(for: segment, people: people)
                 return name.isEmpty ? segment.text : "\(name): \(segment.text)"

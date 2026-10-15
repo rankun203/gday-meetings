@@ -14,7 +14,7 @@ struct RecordingActivitySurface: NSViewRepresentable {
     func updateNSView(_ view: RecordingActivityView, context: Context) {
         view.configure(bars: bars, start: bucketStart, tint: NSColor(tint), animate: animate)
     }
-    static func dismantleNSView(_ view: RecordingActivityView, coordinator: ()) { view.stop() }
+    static func dismantleNSView(_ view: RecordingActivityView, coordinator: ()) { view.tearDown() }
 }
 
 final class RecordingActivityView: NSView {
@@ -23,10 +23,13 @@ final class RecordingActivityView: NSView {
     private let quiet = CAShapeLayer()
     private var bars: [Double] = []
     private var start: TimeInterval?
+    private var displayedStart: TimeInterval?
+    private var displayedStep: CGFloat = 0
     private var tint = NSColor.controlAccentColor
     private var animate = false
-    private var dirty = true
-    private var drawnSize = CGSize.zero
+    private lazy var preparation = RecordingActivityPreparation { [weak self] geometry in
+        self?.apply(geometry)
+    }
     private var link: CADisplayLink?
     private final class Target: NSObject {
         weak var view: RecordingActivityView?
@@ -50,15 +53,14 @@ final class RecordingActivityView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func configure(bars: [Double], start: TimeInterval?, tint: NSColor, animate: Bool) {
-        if self.bars != bars {
-            self.bars = bars
-            dirty = true
-        }
+        self.bars = bars
         self.start = start
+        let styleChanged = self.tint != tint
         self.tint = tint
         self.animate = animate
-        // Update paths and origin together, avoiding a one-frame jump on bucket rollover.
-        layout()
+        requestGeometry()
+        if styleChanged { updateColors() }
+        position()
         updateClock()
     }
     override func viewDidMoveToWindow() {
@@ -79,35 +81,41 @@ final class RecordingActivityView: NSView {
         link?.invalidate()
         link = nil
     }
+    func tearDown() {
+        stop()
+        preparation.cancel()
+    }
 
     override func layout() {
         super.layout()
+        requestGeometry()
+        updateColors()
+        position()
+    }
+    private func requestGeometry() {
+        preparation.submit(RecordingActivityGeometryInput(bars: bars, size: bounds.size, start: start))
+    }
+    private func apply(_ geometry: RecordingActivityGeometry) {
+        // Publish paths and their matching origin together; old bars never use a newer bucket's offset.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if dirty || drawnSize != bounds.size {
-            dirty = false
-            drawnSize = bounds.size
-            let activePath = CGMutablePath()
-            let quietPath = CGMutablePath()
-            let step = bounds.width / CGFloat(max(1, bars.count))
-            for (index, value) in bars.enumerated() {
-                let height = max(1.5, min(1, max(0, value)) * (bounds.height - 4))
-                let rect = CGRect(
-                    x: CGFloat(index + 1) * step, y: (bounds.height - height) / 2,
-                    width: max(1, step * 0.58), height: height)
-                (value > 0 ? activePath : quietPath).addRoundedRect(in: rect, cornerWidth: 1, cornerHeight: 1)
-            }
-            moving.bounds = CGRect(origin: .zero, size: bounds.size)
-            signal.frame = moving.bounds
-            quiet.frame = moving.bounds
-            signal.path = activePath
-            quiet.path = quietPath
-        }
+        moving.bounds = CGRect(origin: .zero, size: geometry.input.size)
+        signal.frame = moving.bounds
+        quiet.frame = moving.bounds
+        signal.path = geometry.signal
+        quiet.path = geometry.quiet
+        displayedStart = geometry.input.start
+        displayedStep = geometry.step
+        position()
+        CATransaction.commit()
+    }
+    private func updateColors() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         effectiveAppearance.performAsCurrentDrawingAppearance {
             signal.fillColor = tint.cgColor
             quiet.fillColor = NSColor.secondaryLabelColor.withAlphaComponent(0.25).cgColor
         }
-        position()
         CATransaction.commit()
     }
     override func viewDidChangeEffectiveAppearance() {
@@ -117,10 +125,10 @@ final class RecordingActivityView: NSView {
     private func position() {
         let fraction =
             animate
-            ? start.map {
+            ? displayedStart.map {
                 RecordingActivityHistory.scrollFraction(since: $0, at: ProcessInfo.processInfo.systemUptime)
             } ?? 0 : 0
-        let offset = -fraction * bounds.width / CGFloat(max(1, bars.count))
+        let offset = -fraction * displayedStep
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         moving.transform = CATransform3DMakeTranslation(offset, 0, 0)
@@ -135,21 +143,27 @@ struct RecordingLiveActivitySurface: NSViewRepresentable {
     let tint: Color
     let animate: Bool
 
-    final class Coordinator {
-        var subscription: AnyCancellable?
+    struct Configuration: Equatable {
+        let microphone: Bool
+        let tint: NSColor
+        let animate: Bool
     }
+    typealias Coordinator = RecordingMeterSubscription<Configuration>
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> RecordingActivityView { RecordingActivityView() }
     func updateNSView(_ view: RecordingActivityView, context: Context) {
-        context.coordinator.subscription = meter.$levels.sink { [weak view] _ in
+        context.coordinator.update(
+            meter: meter, configuration: Configuration(microphone: microphone, tint: NSColor(tint), animate: animate)
+        ) { [weak view, weak meter] _, configuration in
+            guard let meter else { return }
             view?.configure(
-                bars: meter.activity.bars(microphone: microphone), start: meter.activity.bucketStart,
-                tint: NSColor(tint), animate: animate)
+                bars: meter.activity.bars(microphone: configuration.microphone), start: meter.activity.bucketStart,
+                tint: configuration.tint, animate: configuration.animate)
         }
     }
     static func dismantleNSView(_ view: RecordingActivityView, coordinator: Coordinator) {
-        coordinator.subscription = nil
-        view.stop()
+        coordinator.cancel()
+        view.tearDown()
     }
 }
 
@@ -161,21 +175,66 @@ struct RecordingLiveLevelSurface: NSViewRepresentable {
     let tint: Color
     let title: String
 
-    final class Coordinator {
-        var subscription: AnyCancellable?
+    struct Configuration: Equatable {
+        let microphone: Bool
+        let saving: Bool
+        let tint: NSColor
+        let title: String
+        let reduceMotion: Bool
     }
+    typealias Coordinator = RecordingMeterSubscription<Configuration>
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> RecordingLevelView { RecordingLevelView() }
     func updateNSView(_ view: RecordingLevelView, context: Context) {
-        context.coordinator.subscription = meter.$levels.sink { [weak view] levels in
+        context.coordinator.update(
+            meter: meter,
+            configuration: Configuration(
+                microphone: microphone, saving: saving, tint: NSColor(tint), title: title, reduceMotion: reduceMotion)
+        ) { [weak view] levels, configuration in
             view?.configure(
-                source: microphone ? levels.microphone : levels.system, saving: saving,
-                tint: NSColor(tint), title: title, reduceMotion: reduceMotion)
+                source: configuration.microphone ? levels.microphone : levels.system, saving: configuration.saving,
+                tint: configuration.tint, title: configuration.title, reduceMotion: configuration.reduceMotion)
         }
     }
     static func dismantleNSView(_ view: RecordingLevelView, coordinator: Coordinator) {
-        coordinator.subscription = nil
+        coordinator.cancel()
         view.stop()
+    }
+}
+
+/// A SwiftUI update with unchanged presentation does not replay the meter or replace its subscription.
+@MainActor
+final class RecordingMeterSubscription<Configuration: Equatable> {
+    private weak var meter: RecordingMeterState?
+    private var configuration: Configuration?
+    private var subscription: AnyCancellable?
+    private var receive: ((RecordingLevels, Configuration) -> Void)?
+
+    func update(
+        meter: RecordingMeterState, configuration: Configuration,
+        receive: @escaping (RecordingLevels, Configuration) -> Void
+    ) {
+        let changedMeter = self.meter !== meter
+        guard changedMeter || self.configuration != configuration else { return }
+        self.configuration = configuration
+        self.receive = receive
+        if changedMeter {
+            self.meter = meter
+            subscription = meter.$levels.sink { [weak self] levels in
+                guard let self, let configuration = self.configuration else { return }
+                self.receive?(levels, configuration)
+            }
+        }
+        else {
+            receive(meter.levels, configuration)
+        }
+    }
+
+    func cancel() {
+        subscription = nil
+        receive = nil
+        meter = nil
+        configuration = nil
     }
 }
 

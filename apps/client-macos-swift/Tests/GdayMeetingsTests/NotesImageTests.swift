@@ -128,7 +128,7 @@ extension NotesImageTests {
 }
 
 @MainActor struct NotesImageEditorTests {
-    @Test func imagePasteResizeAndUndoPreserveTextTimesAndAssets() throws {
+    @Test func imagePasteResizeAndUndoPreserveTextTimesAndAssets() async throws {
         _ = NSApplication.shared
         let fixtures = NotesImageTests()
         let root = try fixtures.directory()
@@ -157,6 +157,7 @@ extension NotesImageTests {
         text.undoManager?.beginUndoGrouping()
         text.paste(nil)
         text.undoManager?.endUndoGrouping()
+        await text.waitForImagePreparation()
         let original = text.document.markdown
         #expect(text.document.lines[0].time == 25)
         let reference = try #require(NotesImageReference.parse(in: text.string).first)
@@ -165,6 +166,7 @@ extension NotesImageTests {
         text.undoManager?.beginUndoGrouping()
         text.resizeImage(reference, width: 80)
         text.undoManager?.endUndoGrouping()
+        await text.waitForImagePreparation()
         #expect(text.string.contains("width=\"80\""))
         #expect(text.document.lines[0].time == 25)
         text.undoManager?.undo()
@@ -199,7 +201,7 @@ extension NotesImageEditorTests {
 }
 
 extension NotesImageEditorTests {
-    @Test func deferredWidthCopyPreservesCaretTimelineAndUndo() throws {
+    @Test func deferredWidthCopyPreservesCaretTimelineAndUndo() async throws {
         _ = NSApplication.shared
         let fixtures = NotesImageTests()
         let root = try fixtures.directory()
@@ -226,6 +228,7 @@ extension NotesImageEditorTests {
         text.undoManager?.beginUndoGrouping()
         text.normalizeImageWidths()
         text.undoManager?.endUndoGrouping()
+        await text.waitForImagePreparation()
         #expect((text.string as NSString).substring(with: text.selectedRange()) == "Tail")
         #expect(text.document.time(at: text.selectedRange().location) == 40)
         #expect(text.string.contains("gday-preview-"))
@@ -362,7 +365,7 @@ extension NotesImageTests {
 }
 
 extension NotesImageEditorTests {
-    @Test func mountedMultilineReplacementScrollDeleteAndUndoKeepLayoutCoherent() throws {
+    @Test func mountedMultilineReplacementScrollDeleteAndUndoKeepLayoutCoherent() async throws {
         _ = NSApplication.shared
         let fixtures = NotesImageTests()
         let root = try fixtures.directory()
@@ -390,12 +393,14 @@ extension NotesImageEditorTests {
         text.delegate = text
         text.textStorage?.delegate = text
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         window.layoutIfNeeded()
         let long = String(repeating: "Line 😀\n", count: 30) + "![Last image](\(path))"
         text.undoManager?.beginUndoGrouping()
         text.insertText(long, replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
         text.undoManager?.endUndoGrouping()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         text.scrollRangeToVisible(NSRange(location: (text.string as NSString).length, length: 0))
         window.layoutIfNeeded()
@@ -406,10 +411,12 @@ extension NotesImageEditorTests {
         text.insertText("Short", replacementRange: NSRange(location: 0, length: (text.string as NSString).length))
         text.undoManager?.endUndoGrouping()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.images.views.isEmpty)
         text.undoManager?.undo()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         text.scrollRangeToVisible(NSRange(location: (text.string as NSString).length, length: 0))
         text.layout()
@@ -417,11 +424,13 @@ extension NotesImageEditorTests {
         #expect(text.document.text == long)
         text.undoManager?.redo()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.string == "Short")
         let linked = "<a href=\"\(path)\"><img src=\"\(path)\" width=\"80\" alt=\"Diagram\"></a>"
         text.load(linked)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         let start = (text.string as NSString).range(of: "<img").location
         text.undoManager?.beginUndoGrouping()
@@ -433,11 +442,13 @@ extension NotesImageEditorTests {
         let allHidden = text.images.views.allSatisfy { $0.isHidden }
         #expect(allHidden)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.images.views.isEmpty)
         #expect(text.string == "<a href=\"\(path)\">")
         text.undoManager?.undo()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.string == linked)
         #expect(text.images.views.count == 1)
@@ -445,7 +456,7 @@ extension NotesImageEditorTests {
 }
 
 extension NotesImageEditorTests {
-    @Test func typingKeepsImageIdentityAndVisibilityAcrossDeferredLayout() throws {
+    @Test func typingKeepsImageIdentityAndVisibilityAcrossDeferredLayout() async throws {
         _ = NSApplication.shared
         let fixture = NotesImageTests()
         let directory = try fixture.directory()
@@ -465,6 +476,7 @@ extension NotesImageEditorTests {
         text.load("![Diagram](\(path))\nFollowing text")
         text.delegate = text
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         let image = try #require(text.images.views.first)
         let bitmap = image.image
@@ -479,6 +491,7 @@ extension NotesImageEditorTests {
             #expect(image.superview === text)
             #expect(!image.isHidden)
             text.prepareImageLayout()
+            await text.images.waitForPreparation()
             text.layout()
             #expect(text.images.views.first === image)
             #expect(image.image === bitmap)
@@ -490,6 +503,7 @@ extension NotesImageEditorTests {
         #expect(image.reference.range.location == 7)
         text.undoManager?.endUndoGrouping()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(!image.isHidden)
         text.undoManager?.beginUndoGrouping()
@@ -498,8 +512,10 @@ extension NotesImageEditorTests {
         text.layout()
         #expect(text.images.views.isEmpty)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.undoManager?.undo()
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.images.views.count == 1)
         #expect(text.images.views.first?.isHidden == false)
@@ -507,6 +523,7 @@ extension NotesImageEditorTests {
         let markup = "![Diagram](\(path))"
         text.load(markup + "\n" + markup + "\nFollowing")
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         let second = try #require(text.images.views.last)
         text.undoManager?.beginUndoGrouping()
@@ -515,11 +532,13 @@ extension NotesImageEditorTests {
         text.layout()
         #expect(text.images.views.first === second)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         #expect(text.images.views.first === second)
 
         text.load(markup)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         let endingImage = try #require(text.images.views.first)
         text.undoManager?.beginUndoGrouping()
@@ -528,6 +547,7 @@ extension NotesImageEditorTests {
         text.layout()
         #expect(text.images.views.first === endingImage)
         text.prepareImageLayout()
+        await text.images.waitForPreparation()
         text.layout()
         let tail = (text.string as NSString).range(of: "Typing")
         let paragraph =

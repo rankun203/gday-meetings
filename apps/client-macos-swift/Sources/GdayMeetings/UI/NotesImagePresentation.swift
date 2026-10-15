@@ -12,7 +12,22 @@ import QuickLookUI
     private var pendingEdits: [(NSRange, Int)] = []
     private var proposedEdit: (range: NSRange, replacement: String)?
     private static let spacingKey = NSAttributedString.Key("GdayNotesImageSpacing")
-    private var cache: [String: NSImage] = [:]
+    private var prepared: [String: NotesPreparedImage] = [:]
+    private var preparationTask: Task<Void, Never>?
+    private var preparationKey: String?
+    private var preparationReady = false
+    private var preparationInFlight = false
+    private var preparationGeneration: UInt64 = 0
+    func waitForPreparation() async {
+        // Native layout can change the requested width while preparation yields.
+        // Wait for the replacement as well, rather than just the canceled request.
+        while let task = preparationTask {
+            let generation = preparationGeneration
+            await task.value
+            if generation == preparationGeneration { return }
+        }
+    }
+
     init(text: NotesTextView, parseReferences: @escaping (String) -> [NotesImageReference] = NotesImageReference.parse)
     {
         self.text = text
@@ -51,18 +66,32 @@ import QuickLookUI
         }
     }
 
-    func prepare() {
+    func prepare(refreshAssets: Bool = true) {
         guard let text, let directory = text.editor?.directory, let storage = text.textStorage else { return }
         let width = max(40, text.bounds.width - text.textContainerInset.width * 2 - 10)
         reconcileRanges()
-        let versions = references.map { reference -> String in
-            guard let file = try? NotesAssets.safeURL(relativePath: reference.displayPath, directory: directory),
-                let metadata = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            else { return "missing" }
-            return "\(metadata.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(metadata.fileSize ?? 0)"
-        }.joined(separator: ",")
-        let key = references.map { "\($0.range):\($0.markdown)" }.joined(separator: "\n") + "\n@\(width)@" + versions
-        guard key != signature else { return }
+        let key = references.map { "\($0.range):\($0.markdown)" }.joined(separator: "\n") + "\n@\(width)"
+        let requested = references
+        let assetKey = references.map(\.markdown).joined(separator: "\n") + "@\(width)"
+        if preparationKey != assetKey || (refreshAssets && !preparationInFlight) {
+            preparationGeneration &+= 1
+            preparationInFlight = true
+            preparationKey = assetKey
+            preparationReady = false
+            preparationTask?.cancel()
+            preparationTask = Task { [weak self] in
+                let result = await NotesImagePreparation.shared.prepare(requested, width: width, directory: directory)
+                guard let self, !Task.isCancelled, self.preparationKey == assetKey else { return }
+                let changed = self.prepared.mapValues(\.version) != result.mapValues(\.version)
+                self.prepared = result
+                self.preparationInFlight = false
+                self.preparationReady = true
+                if changed { self.signature = "" }
+                self.prepare(refreshAssets: false)
+            }
+            return
+        }
+        guard preparationReady, key != signature else { return }
         signature = key
         if let content = text.textLayoutManager?.textContentManager {
             content.performEditingTransaction {
@@ -83,35 +112,14 @@ import QuickLookUI
         var updated: [NotesImageView] = []
         var desiredSpacing: [(NSRange, CGFloat)] = []
         for reference in references {
-            do {
-                let original = try NotesAssets.safeURL(relativePath: reference.originalPath, directory: directory)
-                let requestedDisplay = try NotesAssets.safeURL(
-                    relativePath: reference.displayPath, directory: directory)
-                let display =
-                    FileManager.default.fileExists(atPath: requestedDisplay.path) ? requestedDisplay : original
-                let info = try NotesImageStore.info(at: original)
-                let displayWidth = min(width, reference.width ?? info.naturalSize.width)
-                let size = CGSize(
-                    width: displayWidth, height: displayWidth * info.naturalSize.height / info.naturalSize.width)
-                let metadata = try display.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let cacheKey =
-                    display.path
-                    + "@\(Int(displayWidth * 2))-\(metadata.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(metadata.fileSize ?? 0)"
+            if let prepared = prepared[reference.markdown] {
+                let original = prepared.original
+                let size = prepared.size
+                let cacheKey = reference.markdown + "@\(size)" + prepared.version
                 let reusable = available.first { $0.reference == reference }
-                let image: NSImage
-                if let reusable, reusable.assetKey == cacheKey, let retained = reusable.image {
-                    image = retained
-                }
-                else if let cached = cache[cacheKey] {
-                    image = cached
-                }
-                else {
-                    let cg = try NotesImageStore.thumbnail(
-                        at: display, maximumPixels: Int(max(size.width, size.height) * 2))
-                    image = NSImage(cgImage: cg, size: size)
-                    cache[cacheKey] = image
-                    if cache.count > 30 { cache = [cacheKey: image] }
-                }
+                let image =
+                    (reusable?.assetKey == cacheKey ? reusable?.image : nil)
+                    ?? NSImage(cgImage: prepared.image, size: size)
                 desiredSpacing.append(
                     ((text.string as NSString).paragraphRange(for: reference.range), size.height + 16))
                 let view: NotesImageView
@@ -133,10 +141,6 @@ import QuickLookUI
                 view.setAccessibilityRole(.image)
                 view.setAccessibilityLabel(reference.alt.isEmpty ? "Image in notes" : reference.alt)
                 updated.append(view)
-            }
-            catch {
-                // Missing and unsupported images retain their editable Markdown.
-                continue
             }
         }
         available.forEach { $0.removeFromSuperview() }
@@ -241,6 +245,10 @@ import QuickLookUI
     }
     func invalidate() {
         signature = ""
+        preparationKey = nil
+        preparationInFlight = false
+        preparationTask?.cancel()
+        prepared.removeAll()
         referencesDirty = true
         proposedEdit = nil
         pendingEdits.removeAll(keepingCapacity: true)

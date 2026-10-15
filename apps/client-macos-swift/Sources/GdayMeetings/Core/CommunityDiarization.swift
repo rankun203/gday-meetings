@@ -174,6 +174,8 @@ actor CommunityDiarizationWorker {
             let track = "track\(index)"
             let sourceName = LocalDiarizationInputPolicy.sourceName(for: file)
             output.trackSources[track] = sourceName
+            if output.audioReferences == nil { output.audioReferences = [] }
+            output.audioReferences?.append(.init(trackID: track, source: sourceName, revision: sourceRevision))
             let prefix = sourceName == "microphone" ? "mic_" : (sourceName == "system" ? "sys_" : "speaker_")
             let labels = Array(Set(result.segments.map(\.speakerId))).sorted()
             for (slot, modelLabel) in labels.enumerated() {
@@ -241,6 +243,9 @@ enum LocalDiarizationAssignment {
     /// Keep exact text and explicit person assignments. Untimed words cannot be
     /// split safely, so only assign a clear majority of one source's activity.
     static func applying(_ result: LocalDiarizationResult, to meeting: Meeting, fileCount: Int) -> Meeting {
+        if meeting.transcript.contains(where: { $0.timing?.isValid == true && $0.timing?.text == $0.text }) {
+            return DiarizedTranscriptProjection.applying(result, to: meeting, fileCount: fileCount)
+        }
         var updated = meeting
         if meeting.transcript.isEmpty {
             let assigned = meeting.speakers.filter { $0.personID != nil || $0.manuallyAssigned == true }
@@ -382,9 +387,20 @@ extension MeetingStore {
             await self?.setJobProgress(
                 .diarization, .meeting(id), progress, details: .init(phase: progress), attemptID: progressAttempt)
         }
+        let references = AudioAnalysisArtifacts.audio(files: files, revisions: sourceRevisions)
+        let request = DiarizationAnalysisRequest(
+            context: .init(requestID: UUID(), providerID: provider.id, model: lease.revision, audio: references),
+            minimumSpeakers: nil, maximumSpeakers: nil)
         let result = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
-            try await CommunityDiarizationWorker().run(
-                files: files, lease: lease, recognize: true, progress: report, taskProgress: reportDetails)
+            let analysis = try await CommunityRecordedAnalysisProvider(
+                lease: lease, extractVoiceEmbeddings: true, taskProgress: reportDetails
+            )
+            .diarize(
+                request: request,
+                files: zip(files, references).map {
+                    AnalysisAudioFile(reference: $0.1, url: $0.0)
+                }, progress: report)
+            return analysis.localResult()
         }
         try Task.checkCancellation()
         guard !result.ranges.isEmpty else {
@@ -395,29 +411,65 @@ extension MeetingStore {
             attemptID: progressAttempt)
         let current = try await validatedMeetingForSpeakerLabeling(
             resultID: result.id, original: meeting, files: files, sourceRevisions: sourceRevisions)
-        try PrivateTranscriptFile.write(
-            try JSONEncoder().encode(result), name: "speaker-labels-\(result.id).json",
-            at: self.directory(for: id))
-        guard self.preserveTranscript(current) else { throw ServiceError("Couldn’t preserve the current transcript.") }
-        var updated = LocalDiarizationAssignment.applying(result, to: current, fileCount: files.count)
-        guard self.voiceLibrary.ingest(meeting: updated, directory: self.directory(for: id)) else {
-            throw ServiceError(
-                self.voiceLibrary.errorMessage ?? "Couldn’t save the speaker examples for People review.")
+        let saved = await enqueueCanonical { [self] in
+            do {
+                guard libraryWritable, !deletingMeetingIDs.contains(id),
+                    let index = meetings.firstIndex(where: { $0.id == id }),
+                    meetings[index].transcript == current.transcript,
+                    meetings[index].transcriptSource == current.transcriptSource,
+                    meetings[index].speakers == current.speakers,
+                    meetings[index].audioFiles == current.audioFiles
+                else { throw ServiceError("The transcript changed before speaker labels could be saved.") }
+                let folder = directory(for: id)
+                var input = meetings[index]
+                let savedRevisions = try TranscriptRevisions.read(at: folder).revisions
+                let normalized = TranscriptRevisions.snapshots(savedRevisions, current: input)
+                    .first(where: { $0.id == TranscriptRevisions.current(input).id })
+                input.transcriptSource =
+                    normalized?.source
+                    ?? input.transcriptSource
+                    ?? .init(id: input.id, providerName: "Transcript", generatedAt: input.createdAt)
+                let audio = AudioAnalysisArtifacts.audio(files: files, revisions: sourceRevisions)
+                var artifacts: [CanonicalMeetingArtifact] = []
+                if let source = try AudioAnalysisArtifacts.source(meeting: input, audio: audio, directory: folder) {
+                    artifacts.append(source)
+                }
+                if let history = try AudioAnalysisArtifacts.history(meeting: input, directory: folder) {
+                    artifacts.append(history)
+                }
+                artifacts.append(
+                    try AudioAnalysisArtifacts.immutable(
+                        result, name: "speaker-labels-\(result.id).json", meetingID: id, directory: folder))
+                artifacts.append(
+                    try AudioAnalysisArtifacts.immutable(
+                        DiarizationProjectionArtifact(
+                            sourceID: input.transcriptSource!.id, resultID: result.id, audio: audio),
+                        name: "diarization-projection-\(result.id).json", meetingID: id, directory: folder))
+                var updated = LocalDiarizationAssignment.applying(result, to: input, fileCount: files.count)
+                guard voiceLibrary.ingest(meeting: updated, directory: folder) else {
+                    throw ServiceError(
+                        voiceLibrary.errorMessage ?? "Couldn’t save the speaker examples for People review.")
+                }
+                updated = voiceLibrary.applyingDecisions(to: updated)
+                updated.speakerLabelSource = .init(
+                    resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
+                markManagedTaskCompletion(on: &updated, kind: .diarization)
+                meetings[index] = updated
+                invalidateExternalMeetingReloads(ids: [id])
+                return await performCanonicalSave(
+                    artifacts: artifacts,
+                    validateInputs: {
+                        guard try LocalDiarizationInputPolicy.revisions(for: files) == sourceRevisions else {
+                            throw ServiceError("The source audio changed before speaker labels could be saved.")
+                        }
+                    })
+            }
+            catch {
+                errorMessage = error.localizedDescription
+                return false
+            }
         }
-        updated = self.voiceLibrary.applyingDecisions(to: updated)
-        let savedRevisions = try TranscriptRevisions.read(at: self.directory(for: id)).revisions
-        if let normalized = TranscriptRevisions.snapshots(savedRevisions, current: current)
-            .first(where: { $0.id == TranscriptRevisions.current(current).id })
-        {
-            updated.transcriptSource =
-                normalized.source
-                ?? .init(
-                    id: current.id, providerName: "Transcript", generatedAt: current.createdAt)
-        }
-        updated.speakerLabelSource = .init(
-            resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
-        self.markManagedTaskCompletion(on: &updated, kind: .diarization)
-        guard await self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
+        guard saved else { throw ServiceError(errorMessage ?? "Couldn’t save speaker labels.") }
         if recognize { await self.voiceLibrary.suggestReviewedPeople(from: self.people) }
         await commitAudioPerformance(
             measurement, kind: .diarization, meetingID: id, key: performanceKey, attemptID: progressAttempt)

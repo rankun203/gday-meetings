@@ -100,8 +100,60 @@ struct TranscriptRevisions: Codable {
         lhs.count == rhs.count
             && zip(lhs, rhs).allSatisfy {
                 $0.id == $1.id && $0.text == $1.text && $0.start == $1.start && $0.end == $1.end
-                    && $0.source == $1.source && $0.session == $1.session
+                    && $0.source == $1.source && $0.session == $1.session && $0.analysisTrackID == $1.analysisTrackID
             }
+    }
+
+    /// Compare exact source characters and their timing independently of display rows.
+    /// A changed passage or an unanchored edit cannot participate in this restore.
+    static func sameProjectionText(_ lhs: [TranscriptSegment], _ rhs: [TranscriptSegment]) -> Bool {
+        struct CharacterEvidence: Equatable {
+            var source: LiveAudioSource?
+            var session: UUID?
+            var trackID: String?
+            var unit: UInt16
+            var start: Double?
+            var end: Double?
+        }
+        func evidence(_ rows: [TranscriptSegment]) -> [UUID: [Int: CharacterEvidence]]? {
+            var output: [UUID: [Int: CharacterEvidence]] = [:]
+            for row in rows {
+                guard let anchors = row.sourceSpans, !anchors.isEmpty,
+                    anchors.map({ ($0.separatorBefore ?? "") + $0.text }).joined() == row.text,
+                    let timing = row.timing, timing.text == row.text, timing.isValid,
+                    timing.spans.first?.start == row.start, timing.spans.last?.end == row.end
+                else { return nil }
+                var localOffset = 0
+                for anchor in anchors {
+                    localOffset += (anchor.separatorBefore ?? "").utf16.count
+                    let units = Array(anchor.text.utf16)
+                    guard anchor.range.location >= 0, anchor.range.length == units.count,
+                        anchor.range.location <= Int.max - units.count
+                    else { return nil }
+                    for (offset, unit) in units.enumerated() {
+                        let position = localOffset + offset
+                        let span = timing.spans.first {
+                            position >= $0.range.location && position - $0.range.location < $0.range.length
+                        }
+                        let sourceOffset = anchor.range.location + offset
+                        guard output[anchor.rowID]?[sourceOffset] == nil else { return nil }
+                        output[anchor.rowID, default: [:]][sourceOffset] = CharacterEvidence(
+                            source: row.source, session: row.session, trackID: row.analysisTrackID, unit: unit,
+                            start: span?.start, end: span?.end)
+                    }
+                    localOffset += units.count
+                }
+            }
+            return output.isEmpty ? nil : output
+        }
+        guard let left = evidence(lhs), let right = evidence(rhs) else { return false }
+        return left == right
+    }
+
+    static func canRestoreProjection(_ revision: TranscriptRevision, meeting: Meeting) -> Bool {
+        !meeting.speakers.contains(where: { $0.manuallyAssigned == true })
+            && !meeting.transcript.contains(where: { $0.personID != nil })
+            && sameProjectionText(revision.segments, meeting.transcript)
     }
 
     static func choices(_ revisions: [TranscriptRevision], current meeting: Meeting) -> [TranscriptRevision] {
@@ -140,7 +192,7 @@ struct TranscriptRevisions: Codable {
         guard let selected = values.first(where: { $0.id == current(meeting).id }) else { return [] }
         return values.filter {
             ($0.source?.id ?? $0.id) == (selected.source?.id ?? selected.id)
-                && sameText($0.segments, selected.segments)
+                && (sameText($0.segments, selected.segments) || canRestoreProjection($0, meeting: meeting))
         }.sorted {
             ($0.speakerLabelSource?.generatedAt ?? $0.savedAt) > ($1.speakerLabelSource?.generatedAt ?? $1.savedAt)
         }
@@ -220,6 +272,10 @@ extension MeetingStore {
                 return false
             }
             guard preserveTranscript(meeting) else { return false }
+            if !TranscriptRevisions.sameText(selected.segments, meeting.transcript) {
+                // Compatibility above proves exact source text/timing and excludes manual assignments.
+                meeting.transcript = selected.segments
+            }
             for index in meeting.transcript.indices {
                 let row = selected.segments[index]
                 meeting.transcript[index].speaker = row.speaker

@@ -89,7 +89,7 @@ extension MeetingStore {
 
     @discardableResult func queueTranscriptionCommand(id: UUID, providerID: UUID? = nil) async -> UUID? {
         guard await ensureMeetingLoaded(id: id), recordingID != id, !isJobRunning(.importAudio, .meeting(id)),
-            let meeting = meetings.first(where: { $0.id == id })
+            let meeting = self.meeting(id: id)
         else { return nil }
         return await enqueueManagedTask(
             kind: .transcription, meeting: meeting,
@@ -99,7 +99,9 @@ extension MeetingStore {
     @discardableResult func queueSummaryCommand(
         id: UUID, providerID: UUID? = nil, automatically: Bool = false, instructions: String? = nil
     ) async -> UUID? {
-        guard await ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id }) else {
+        guard await ensureMeetingLoaded(id: id) else { return nil }
+        await notesStorage.prepareDraftsForSave()
+        guard let meeting = self.meeting(id: id) else {
             return nil
         }
         return await enqueueManagedTask(
@@ -114,7 +116,7 @@ extension MeetingStore {
         let selectedID = (providerID ?? settings.diarizationProviderID)
         guard libraryWritable, await ensureMeetingLoaded(id: id), recordingID != id,
             !isJobRunning(.transcription, .meeting(id)), !isJobRunning(.importAudio, .meeting(id)),
-            let meeting = meetings.first(where: { $0.id == id }), meeting.transcriptionAttempt == nil,
+            let meeting = self.meeting(id: id), meeting.transcriptionAttempt == nil,
             settings.serviceProviders.contains(where: {
                 $0.id == selectedID && $0.kind == .speakerLabeling && $0.supports(.diarization)
             })
@@ -138,7 +140,7 @@ extension MeetingStore {
             guard force else { return nil }
         }
         guard let selected = selectedSearchProvider,
-            await ensureMeetingLoaded(id: id), let meeting = meetings.first(where: { $0.id == id })
+            await ensureMeetingLoaded(id: id), let meeting = self.meeting(id: id)
         else { return nil }
         let source: String
         if let revision {
@@ -613,7 +615,7 @@ extension MeetingStore {
         do {
             try Task.checkCancellation()
             guard await ensureMeetingLoaded(id: task.meetingID),
-                let meeting = meetings.first(where: { $0.id == task.meetingID })
+                let meeting = self.meeting(id: task.meetingID)
             else {
                 try Task.checkCancellation()
                 if await managedTaskMeetingIsMissing(task.meetingID) { throw MissingManagedTaskMeeting() }
@@ -895,7 +897,7 @@ extension MeetingStore {
                     $0.id == task.providerID && $0.kind == .speakerLabeling && $0.supports(.diarization)
                 }
         }
-        if let current = meetings.first(where: { $0.id == task.meetingID })?.transcriptionAttempt {
+        if let current = self.meeting(id: task.meetingID)?.transcriptionAttempt {
             guard current.idempotencyKey == task.attemptKey, current.failure == nil, current.result == nil,
                 !current.submissionUncertain || current.taskID != nil
             else { return false }
@@ -955,7 +957,7 @@ extension MeetingStore {
         }
         guard var task = managedTask(id: id), canRestartManagedTask(task),
             await ensureMeetingLoaded(id: task.meetingID),
-            let meeting = meetings.first(where: { $0.id == task.meetingID }),
+            let meeting = self.meeting(id: task.meetingID),
             let attempt = meeting.transcriptionAttempt, attempt.idempotencyKey == task.attemptKey,
             attempt.remoteJobExpired == true
         else { return }
@@ -966,7 +968,7 @@ extension MeetingStore {
 
     private func finishRequestedRestart(_ original: ManagedTaskRecord) async {
         guard await ensureMeetingLoaded(id: original.meetingID),
-            var meeting = meetings.first(where: { $0.id == original.meetingID })
+            var meeting = self.meeting(id: original.meetingID)
         else { return }
         if let attempt = meeting.transcriptionAttempt {
             guard attempt.idempotencyKey == original.attemptKey && attempt.remoteJobExpired == true else { return }
@@ -1025,7 +1027,7 @@ extension MeetingStore {
 
     private func finishRequestedDismiss(_ task: ManagedTaskRecord) async {
         if task.kind == .transcription, let attemptKey = task.attemptKey, await ensureMeetingLoaded(id: task.meetingID),
-            var meeting = meetings.first(where: { $0.id == task.meetingID }),
+            var meeting = self.meeting(id: task.meetingID),
             meeting.transcriptionAttempt?.idempotencyKey == attemptKey
         {
             meeting.transcriptionAttempt = nil
@@ -1095,7 +1097,7 @@ extension MeetingStore {
                 cursor = next
                 for var record in batch {
                     if record.state == .running, await ensureMeetingLoaded(id: record.meetingID),
-                        let meeting = meetings.first(where: { $0.id == record.meetingID }),
+                        let meeting = self.meeting(id: record.meetingID),
                         meeting.completedTaskIDs[record.kind.rawValue] == record.id
                     {
                         record.state = .completed
@@ -1113,7 +1115,7 @@ extension MeetingStore {
                         record.progress = changed ? "Paused" : "Failed"
                         record.errorMessage =
                             changed
-                            ? "This task changed outside the app. Resume to continue."
+                            ? "The saved task request changed outside this app. Resume to continue."
                             : "This task has no running operation. Review it before retrying."
                     }
                     guard await saveManagedTask(record) else {
@@ -1238,7 +1240,7 @@ extension MeetingStore {
                 continue
             }
             guard await ensureMeetingLoaded(id: original.meetingID),
-                let meeting = meetings.first(where: { $0.id == original.meetingID })
+                let meeting = self.meeting(id: original.meetingID)
             else {
                 if await managedTaskMeetingIsMissing(original.meetingID) {
                     await finishManagedTask(

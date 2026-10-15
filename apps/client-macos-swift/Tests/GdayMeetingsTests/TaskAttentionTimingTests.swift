@@ -241,3 +241,22 @@ extension TaskAttentionTimingTests {
         store.recordingID = nil
     }
 }
+
+extension TaskAttentionTimingTests {
+    @Test @MainActor func structuredPhaseChangeReplacesPendingLegacyMessages() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(dataDirectory: root)
+        await store.flushManagedTaskCommands()
+        #expect(store.beginJob(.archive, .library, progress: "Starting"))
+        store.setJobProgress(.archive, .library, "Item 0")
+        store.setJobProgress(.archive, .library, "Item 1")
+        #expect(!store.pendingJobProgress.isEmpty)
+        store.setJobProgress(.archive, .library, "Saving archive", details: .init(phase: "Saving archive"))
+        #expect(store.backgroundJobs.first?.progress == "Saving archive")
+        await store.jobProgressFlush?.value
+        #expect(store.backgroundJobs.first?.progressDetails?.phase == "Saving archive")
+        #expect(store.pendingJobProgress.isEmpty)
+        store.endJob(.archive, .library)
+    }
+}

@@ -29,7 +29,6 @@ struct TranscriptSpeakerPicker: View {
     @ViewState private var query = ""
     @ViewState private var saving = false
     @ViewState private var saveError: String?
-    @FocusState private var focused: Bool
 
     private var matches: [Person] { TranscriptSpeakerSearch.matches(store.people, query: query) }
     private var newName: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -40,10 +39,8 @@ struct TranscriptSpeakerPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Assign Person").font(.headline)
-            if lineAssignment != nil {
-                Toggle("Apply to All Speech with This Speaker Label", isOn: $appliesToSpeaker)
-                    .toggleStyle(.checkbox)
-            }
+            TextField("Search people", text: $query)
+                .onSubmit { if let person = matches.first { assign(person.id) } }
             if associationUncertain {
                 Text(
                     "This passage’s voice match is uncertain. Assign just this passage, or explicitly apply the name to all speech with this label."
@@ -67,8 +64,6 @@ struct TranscriptSpeakerPicker: View {
                 }
             }
             if let saveError { Text(saveError).font(.caption).foregroundStyle(.red) }
-            TextField("Search people", text: $query).focused($focused)
-                .onSubmit { if let person = matches.first { assign(person.id) } }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(matches) { person in
@@ -84,6 +79,10 @@ struct TranscriptSpeakerPicker: View {
                     }
                 }
             }.frame(maxHeight: 220)
+            if lineAssignment != nil {
+                Toggle("Apply to All Speech with This Speaker Label", isOn: $appliesToSpeaker)
+                    .toggleStyle(.checkbox)
+            }
             if !newName.isEmpty && !hasExactMatch {
                 Button("Create and Assign \(newName)") {
                     guard !saving else { return }
@@ -107,7 +106,6 @@ struct TranscriptSpeakerPicker: View {
         }
         .padding(16).frame(width: 320)
         .disabled(saving)
-        .defaultFocus($focused, true)
         .task {
             appliesToSpeaker = !associationUncertain
         }

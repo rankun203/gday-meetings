@@ -782,7 +782,7 @@ final class MarkdownReadingTextView: NSTextView, NSTextViewDelegate {
             }
             if timestamps, let time = block.time {
                 let prefix = NSMutableAttributedString(
-                    string: NotesDocument.timestamp(time) + "  ",
+                    string: NotesDocument.displayTimestamp(time) + "  ",
                     attributes: [
                         .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
                         .link: URL(string: "gday-time://\(Int(time))")!,

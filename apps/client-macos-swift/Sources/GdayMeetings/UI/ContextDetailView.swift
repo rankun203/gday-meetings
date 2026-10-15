@@ -148,8 +148,10 @@ struct ContextDetailView: View {
                                     await store.updateTag(updated)
                                 }
                             }))
-                    Text("Hide associated meetings and people from the main lists and meeting search.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Text(
+                        "Hide tagged meetings and people from main lists and meeting search. Also hide tasks for those meetings."
+                    )
+                    .font(.callout).foregroundStyle(.secondary)
                 }
             }.textFieldStyle(.roundedBorder).padding(AppTheme.contentInset)
         }.frame(width: 400, height: personID == nil ? 200 : 430)
