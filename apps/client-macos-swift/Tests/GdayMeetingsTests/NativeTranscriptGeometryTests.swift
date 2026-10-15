@@ -6,6 +6,48 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct NativeTranscriptGeometryTests {
+    @Test func backgroundCompletionPublishesGeometryAndPrefetchesUpcomingViewport() async throws {
+        let fixture = GeometryFixture()
+        defer { fixture.close() }
+        var view = fixture.view
+        view.rows = (0..<300).map { index in
+            TranscriptDisplayRow(
+                id: UUID(), start: Double(index), end: Double(index + 1),
+                speaker: "Speaker", speakerID: nil, text: "Short passage.")
+        }
+        fixture.column.width = 570
+        fixture.coordinator.update(view)
+        fixture.coordinator.settleLayout()
+        let expected = nativeHeight("Short passage.", width: 570, scale: fixture.window.backingScaleFactor)
+        // Materialize estimated geometry before any background worker can finish.
+        #expect(fixture.table.rect(ofRow: 0).height != expected)
+        #expect(fixture.coordinator.heights.statistics.measurements == 0)
+        let upcoming = 35
+        let row = view.rows[upcoming]
+        let key = TranscriptMeasurementKey(
+            meetingID: try #require(view.meetingID), rowID: row.id, textRevision: row.textRevision,
+            effectiveWidth: TranscriptTextMeasurement.normalizedTextWidth(
+                570, showsSpeakers: true, scale: fixture.window.backingScaleFactor),
+            typographyVersion: 1, layoutVersion: 2)
+        let deadline = ContinuousClock.now + .seconds(3)
+        // Let production scheduling deliver both the request and the publication.
+        // Calling requestVisibleMeasurements here would hide a broken callback.
+        while ContinuousClock.now < deadline {
+            if fixture.table.rect(ofRow: 0).height == expected,
+                fixture.coordinator.heights.height(for: key) == expected
+            {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(fixture.table.rect(ofRow: 0).height == expected)
+        #expect(fixture.coordinator.heights.height(for: key) == expected)
+        let visible = fixture.table.rows(in: fixture.table.visibleRect)
+        #expect(upcoming >= NSMaxRange(visible) + 8, "Prefetch must reach beyond the former eight-row margin")
+        #expect(fixture.coordinator.heights.statistics.peakPendingCount <= 128)
+        #expect(fixture.scroll.contentView.bounds.minY == 0)
+    }
+
     /// Matched work probe; callback timing is not presented-frame latency.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_TRANSCRIPT_REVISION_PERFORMANCE"] == "1"))
     func warmRevisionPerformance() async throws {
@@ -23,6 +65,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let longRow = TranscriptDisplayRow(
             id: shortRows[0].id, start: 0, end: 1,
             speaker: "Speaker", speakerID: nil, text: String(repeating: "Synthetic wrapping passage. ", count: 50))
@@ -30,12 +73,14 @@ import Testing
         fixture.coordinator.update(view)
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let clip = fixture.scroll.contentView
         fixture.coordinator.userScrolled()
         clip.scroll(to: NSPoint(x: 0, y: fixture.table.rect(ofRow: 40).minY + 7))
         fixture.scroll.reflectScrolledClipView(clip)
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let service = fixture.coordinator.heights
         let measured = service.statistics.measurements
         let start = PerformanceResourceSnapshot.capture()
@@ -57,6 +102,7 @@ import Testing
             fixture.coordinator.settleLayout()
             fixture.coordinator.requestVisibleMeasurements()
             await service.waitUntilIdle()
+            fixture.coordinator.requestVisibleMeasurements()
             let after = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
             if after != row || abs(clip.bounds.minY - fixture.table.rect(ofRow: after).minY - offset) >= 1 {
                 drifted += 1
@@ -105,18 +151,21 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         view.rows[0] = TranscriptDisplayRow(
             id: initialRows[0].id, start: 0, end: 1,
             speaker: "Speaker", speakerID: nil, text: String(repeating: "Synthetic wrapping passage. ", count: 50))
         fixture.coordinator.update(view)
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let clip = fixture.scroll.contentView
         fixture.coordinator.userScrolled()
         clip.scroll(to: NSPoint(x: 0, y: fixture.table.rect(ofRow: 40).minY + 7))
         fixture.scroll.reflectScrolledClipView(clip)
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let before = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
         let offset = clip.bounds.minY - fixture.table.rect(ofRow: before).minY
         // Restore a cached text revision above the reader's viewport.
@@ -125,6 +174,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let after = fixture.table.row(at: NSPoint(x: 0, y: clip.bounds.minY))
         #expect(view.rows[after].id == view.rows[before].id)
         #expect(abs(clip.bounds.minY - fixture.table.rect(ofRow: after).minY - offset) < 1)
@@ -140,6 +190,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         fixture.table.layoutSubtreeIfNeeded()
         let bounds = fixture.table.bounds.width
         let previous = fixture.table.rect(ofRow: 0).height
@@ -154,6 +205,7 @@ import Testing
             "A width-only change must keep the last estimate until its measurement arrives")
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         fixture.table.layoutSubtreeIfNeeded()
         for index in view.rows.indices {
             let actual = fixture.table.rect(ofRow: index).height
@@ -174,6 +226,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let bounds = fixture.table.bounds.width
         fixture.column.width = 310
         view.meetingID = UUID()
@@ -188,6 +241,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         fixture.table.layoutSubtreeIfNeeded()
         for index in view.rows.indices {
             let actual = fixture.table.rect(ofRow: index).height
@@ -207,6 +261,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let wide = fixture.table.rect(ofRow: 0).height
         fixture.column.width = 310
         view.rows[2] = TranscriptDisplayRow(
@@ -215,6 +270,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         #expect(fixture.table.rect(ofRow: 0).height > wide)
         #expect(
             fixture.table.rect(ofRow: 0).height
@@ -231,6 +287,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         let previous = fixture.coordinator.tableView(fixture.table, heightOfRow: 0)
         view.rows[0] = TranscriptDisplayRow(
             id: view.rows[0].id, start: 0, end: 1, speaker: "Speaker", speakerID: nil,
@@ -241,6 +298,7 @@ import Testing
         fixture.coordinator.beginEdit(cell, value: view.rows[0])
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         #expect(fixture.table.rect(ofRow: 0).height == previous)
         fixture.coordinator.finishEdit(cancel: true)
         fixture.coordinator.requestVisibleMeasurements()
@@ -263,6 +321,7 @@ import Testing
         fixture.coordinator.settleLayout()
         fixture.coordinator.requestVisibleMeasurements()
         await fixture.coordinator.heights.waitUntilIdle()
+        fixture.coordinator.requestVisibleMeasurements()
         #expect(fixture.table.rect(ofRow: 1).height > fixture.table.rect(ofRow: 0).height)
     }
 

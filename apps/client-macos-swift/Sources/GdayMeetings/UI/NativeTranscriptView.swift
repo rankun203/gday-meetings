@@ -2,6 +2,52 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Limits request construction as well as the background queue. Geometry comes
+/// from the native table; choosing rows never measures their text.
+enum TranscriptMeasurementViewport {
+    static func order(
+        visible: NSRange, nearby: NSRange, rowCount: Int, forward: Bool, limit: Int = 128
+    ) -> [Int] {
+        guard rowCount > 0, limit > 0, visible.location != NSNotFound else { return [] }
+        let start = min(rowCount, max(0, visible.location))
+        let end = start + min(rowCount - start, max(1, visible.length))
+        guard start < end else { return [] }
+        let lower = nearby.location == NSNotFound ? start : min(start, max(0, nearby.location))
+        let upper =
+            nearby.location == NSNotFound
+            ? end : max(end, min(rowCount, nearby.location + nearby.length))
+        var result: [Int] = []
+        result.reserveCapacity(min(limit, rowCount))
+        for index in start..<end {
+            guard result.count < limit else { return result }
+            result.append(index)
+        }
+        func appendBefore() {
+            var index = start
+            while index > lower, result.count < limit {
+                index -= 1
+                result.append(index)
+            }
+        }
+        func appendAfter() {
+            var index = end
+            while index < upper, result.count < limit {
+                result.append(index)
+                index += 1
+            }
+        }
+        if forward {
+            appendAfter()
+            appendBefore()
+        }
+        else {
+            appendBefore()
+            appendAfter()
+        }
+        return result
+    }
+}
+
 struct TranscriptDisplayRow: Identifiable, Equatable {
     let id: UUID
     let start: Double
@@ -143,6 +189,8 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var appliedHeights: [UUID: CGFloat] = [:]
         private var clipObserver: NSObjectProtocol?
         private var measurementWork: DispatchWorkItem?
+        private var measurementOrigin: CGFloat?
+        private var measurementForward = true
         var pendingClick: DispatchWorkItem?
         var popover: NSPopover?
         private var playbackSubscription: AnyCancellable?
@@ -221,6 +269,8 @@ struct NativeTranscriptView: NSViewRepresentable {
                 readingRow >= 0 ? (scroll?.contentView.bounds.minY ?? 0) - table.rect(ofRow: readingRow).minY : 0
             cancelFollow()
             if sourceChanged {
+                measurementOrigin = nil
+                measurementForward = true
                 deferredLiveUpdate = nil
                 liveFollowPaused = false
                 needsInitialPosition = true
@@ -420,6 +470,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             layoutWork = nil
             playbackSubscription = nil
             measurementWork?.cancel()
+            measurementWork = nil
             if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
             clipObserver = nil
             heights.deactivate(pageID)
@@ -564,6 +615,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             return result
         }
         func widthChanged() {
+            measurementOrigin = nil
             cancelFollow()
             scheduleLayout()
         }
@@ -691,7 +743,9 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         private func activateMeasurements() {
             heights.activate(pageID, retry: { [weak self] in self?.scheduleMeasurements() }) {
-                [weak self] keys in self?.publishMeasurements(keys)
+                // Coalesce pending worker notifications through the next measurement request.
+                // The request reads current keys, so obsolete widths never publish.
+                [weak self] _ in self?.scheduleMeasurements()
             }
         }
         private func scheduleMeasurements() {
@@ -715,22 +769,24 @@ struct NativeTranscriptView: NSViewRepresentable {
             guard heights.isAvailable(to: pageID) else { return }
             activateMeasurements()
             guard let table, !rows.isEmpty, measurementKeys.count == rows.count else { return }
+            let origin = table.visibleRect.minY
+            if let measurementOrigin, abs(origin - measurementOrigin) > 1 {
+                measurementForward = origin > measurementOrigin
+            }
             var visible = table.rows(in: table.visibleRect)
             guard visible.location != NSNotFound else { return }
-            var start = min(rows.count, visible.location)
-            var end = min(rows.count, start + max(1, visible.length))
-            var nearby = max(0, start - 8)..<min(rows.count, end + 8)
-            var order = Array(start..<end) + nearby.filter { $0 < start || $0 >= end }
+            var order = measurementOrder(in: table)
             publishMeasurements(Set(order.map { measurementKeys[$0] }))
             visible = table.rows(in: table.visibleRect)
             guard visible.location != NSNotFound else { return }
-            start = min(rows.count, visible.location)
-            end = min(rows.count, start + max(1, visible.length))
-            nearby = max(0, start - 8)..<min(rows.count, end + 8)
-            order = Array(start..<end) + nearby.filter { $0 < start || $0 >= end }
+            let start = min(rows.count, visible.location)
+            let end = min(rows.count, start + max(1, visible.length))
+            order = measurementOrder(in: table)
+            // Anchoring during publication is not a change in scroll direction.
+            measurementOrigin = table.visibleRect.minY
             if let anchor = navigationAnchorID, let index = rowIndices[anchor], (start..<end).contains(index),
                 editedID == nil, !scrollerTracking, parent.followsLive == nil || popover?.isShown != true,
-                order.allSatisfy({ row in
+                (start..<end).allSatisfy({ row in
                     guard let height = heights.height(for: measurementKeys[row]) else { return false }
                     return height
                         == (duplicateRowIndices[rows[row].id] == nil
@@ -742,6 +798,18 @@ struct NativeTranscriptView: NSViewRepresentable {
             heights.request(
                 order.map { TranscriptMeasurementInput(key: measurementKeys[$0], text: rows[$0].text) },
                 owner: pageID)
+        }
+        private func measurementOrder(in table: NSTableView) -> [Int] {
+            let viewport = table.visibleRect
+            let before: CGFloat = measurementForward ? 1 : 2
+            let expanded = NSRect(
+                x: viewport.minX, y: max(0, viewport.minY - viewport.height * before),
+                width: viewport.width,
+                height: viewport.height * (measurementForward ? 3 : 2)
+                    + min(viewport.minY, viewport.height * before))
+            return TranscriptMeasurementViewport.order(
+                visible: table.rows(in: viewport), nearby: table.rows(in: expanded),
+                rowCount: rows.count, forward: measurementForward)
         }
         private func publishMeasurements(_ keys: Set<TranscriptMeasurementKey>) {
             guard let table, let scroll = table.enclosingScrollView, editedID == nil, !scrollerTracking,

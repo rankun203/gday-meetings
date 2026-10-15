@@ -108,7 +108,7 @@ import Testing
         cold.requestVisibleMeasurements()
         await service.waitUntilIdle()
         let measured = service.statistics.measurements
-        #expect(measured > 0 && measured < 128)
+        #expect(measured > 0 && measured <= 128)
         let height = cold.tableView(coldTable, heightOfRow: 0)
         cold.tearDown()
         let (warmScroll, warmTable, warm) = tablePage()
