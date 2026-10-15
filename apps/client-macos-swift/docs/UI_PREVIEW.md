@@ -75,7 +75,7 @@ Additional meetings contain synthetic notes, a summary, and one transcript passa
 
 ## Long transcript
 
-Launch with `--synthetic-long-transcript`, or set the `GdaySyntheticLongTranscript` Boolean bundle flag, to replace Synthetic conversation's transcript with 10,000 alternating short and wrapped segments. Scroll its Transcript tab and confirm timestamp/speaker alignment remains stable. Double-click text or choose **Edit Transcript** from its contextual menu to edit. Return or leaving the editor saves; Escape cancels. Only the active segment creates an editor. This synthetic fixture checks layout and editing; use the full app with an isolated real library for end-to-end CPU, memory, and perceived scrolling measurements.
+Launch with `--synthetic-long-transcript`, or set the `GdaySyntheticLongTranscript` Boolean bundle flag, to replace Synthetic conversation's transcript with 10,000 segments with a repeatable mix of brief replies, medium passages, long paragraphs, paragraph breaks, and Chinese/English text. Neighboring lengths vary to exercise wrapping and row-height corrections after scrolling or resizing. Scroll its Transcript tab and confirm timestamp/speaker alignment remains stable. Double-click text or choose **Edit Transcript** from its contextual menu to edit. Return or leaving the editor saves; Escape cancels. Only the active segment creates an editor. This synthetic fixture checks layout and editing; use the full app with an isolated real library for end-to-end CPU, memory, and perceived scrolling measurements.
 
 ## Provider testing
 

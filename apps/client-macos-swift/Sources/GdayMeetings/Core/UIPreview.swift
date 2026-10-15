@@ -241,10 +241,7 @@ enum UIPreview {
                     return TranscriptSegment(
                         start: Double(index * 6), end: Double(index * 6 + 5),
                         speaker: label,
-                        text: "Segment \(index + 1). "
-                            + (index.isMultiple(of: 3)
-                                ? "Review the release plan, delivery dates, and decisions. This longer paragraph exercises wrapped transcript rows while scrolling."
-                                : "Keep the meeting notes up to date."),
+                        text: UIPreviewPerformanceFixtures.longTranscriptText(at: index),
                         speakerID: meeting.speakers.first(where: { $0.label == label })?.id)
                 }
                 await store.updateMeeting(meeting)

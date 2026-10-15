@@ -3,6 +3,33 @@ import Foundation
 /// Optional large-library fixtures use the normal folder and indexing pipeline.
 /// Disk generation runs outside the main actor and never creates audio assets.
 enum UIPreviewPerformanceFixtures {
+    private static let transcriptPassages = [
+        "Yes.",
+        "Agreed.",
+        "Let's check that tomorrow.",
+        "The room is available after lunch. We can move the discussion to the afternoon.",
+        "Please keep the original draft so we can compare it with the revised version. The introduction needs a shorter explanation, but the examples can stay as they are.",
+        "We have three things to check before the workshop: the room booking, the printed handouts, and the demonstration. The first two are ready. For the demonstration, let's walk through each step together and note where someone might need more information. We should leave enough time at the end for questions.",
+        "好。",
+        "我们先确认时间，再整理需要讨论的问题。",
+        "这次讨论先从准备工作开始。材料已经分成几个部分，每个部分都有一个简单的例子。我们可以先看第一部分，确认说明是否清楚，再继续检查后面的内容。如果发现遗漏，就记录下来，等全部看完以后一起修改。这样可以避免在同一个地方反复调整，也方便比较修改前后的版本。",
+        "The draft is ready for review。我们可以先看概述，再检查每个 example 是否清楚。Please note any missing steps before the next discussion.",
+        (0..<3).map { _ in
+            "For the practice session, start with a short introduction and explain what participants will do. Give everyone a few minutes to read the example before asking for suggestions. Some people may want to work through the steps independently, while others may prefer to discuss them with a partner. Keep both options available. After the exercise, collect the questions that remain and use them to improve the instructions. We can review those changes together at the next session."
+        }.joined(separator: " "),
+        "Let's separate the preparation from the follow-up.\n\nBefore the session, confirm the room and share the agenda. After the session, collect the notes, check the open questions, and send a short record of the decisions. The record should explain what changed and who will take the next step.",
+    ]
+
+    static func longTranscriptText(at index: Int) -> String {
+        // A fixed sequence varies neighboring row lengths without changing between launches.
+        var value = UInt64(index) &+ 0x9E37_79B9_7F4A_7C15
+        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+        value ^= value >> 31
+        let passage = transcriptPassages[Int(value % UInt64(transcriptPassages.count))]
+        return "Segment \(index + 1). \(passage)"
+    }
+
     static func flag(_ argument: String, infoKey: String) -> Bool {
         ProcessInfo.processInfo.arguments.contains(argument)
             || Bundle.main.object(forInfoDictionaryKey: infoKey) as? Bool == true
