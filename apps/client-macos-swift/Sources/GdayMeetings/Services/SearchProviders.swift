@@ -75,6 +75,10 @@ struct SearchIndexProgress: Sendable {
     let meetingID: UUID
     let completed: Int
     let total: Int
+    var remainingCharacters: Int = 0
+    var embeddedCharacters: Int = 0
+    var embeddingSeconds: Double = 0
+    var persisted: Bool = false
 }
 
 enum SearchProviderError: Error, LocalizedError {

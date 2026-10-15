@@ -19,12 +19,24 @@ enum SemanticModelID: String, Codable, CaseIterable, Sendable, Identifiable {
     func formatPassage(_ passage: String) -> String { passage }
 }
 
+struct SemanticEmbeddingMeasurement: Sendable {
+    var vector: [Double]
+    var processingSeconds: Double?
+}
+
 protocol SemanticEmbedding: Sendable {
     var modelID: SemanticModelID { get }
     func prepare() async throws
     func embed(_ text: String, isQuery: Bool) async throws -> [Double]
+    func embedMeasured(_ text: String, isQuery: Bool) async throws -> SemanticEmbeddingMeasurement
     func passageParts(_ text: String) async throws -> [String]
     func unload() async
+}
+
+extension SemanticEmbedding {
+    func embedMeasured(_ text: String, isQuery: Bool) async throws -> SemanticEmbeddingMeasurement {
+        .init(vector: try await embed(text, isQuery: isQuery), processingSeconds: nil)
+    }
 }
 
 /// Core ML and tokenization run on this actor, never on the main actor.
@@ -143,6 +155,10 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
     }
 
     func embed(_ text: String, isQuery: Bool) async throws -> [Double] {
+        try await embedMeasured(text, isQuery: isQuery).vector
+    }
+
+    func embedMeasured(_ text: String, isQuery: Bool) async throws -> SemanticEmbeddingMeasurement {
         try await prepare()
         guard let tokenizer else { throw LocalModelError.unavailable }
         let formatted = isQuery ? modelID.formatQuery(text) : modelID.formatPassage(text)
@@ -157,10 +173,11 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
         let model = try await encoder(shortQuery: tokens == modelID.queryTokens)
         try Task.checkCancellation()
         let modelID = modelID
-        let vector: [Double] = try await ProcessingCoordinator.shared.withPermit(
+        let measurement: SemanticEmbeddingMeasurement = try await ProcessingCoordinator.shared.withPermit(
             for: .inference,
             priority: usage == .indexing ? .maintenance : .interactive
         ) {
+            let started = SuspendingClock.now
             let result = try await model.prediction(
                 from: Self.features(
                     ids: ids, tokens: tokens, paddingToken: modelID.paddingToken))
@@ -172,11 +189,14 @@ actor CoreMLSemanticEmbedding: SemanticEmbedding {
             guard vector.allSatisfy(\.isFinite), norm.isFinite, norm > 0 else {
                 throw SearchProviderError.invalidResponse
             }
-            return vector.map { $0 / norm }
+            let duration = started.duration(to: .now).components
+            return .init(
+                vector: vector.map { $0 / norm },
+                processingSeconds: Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
         }
 
         try Task.checkCancellation()
-        return vector
+        return measurement
     }
 
     nonisolated private static func features(ids: [Int], tokens: Int, paddingToken: Int) throws

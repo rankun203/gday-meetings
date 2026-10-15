@@ -5,6 +5,8 @@ import Synchronization
 /// Extracts the reviewed source range; never runs transcription or changes speaker labels.
 actor LocalVoiceExampleExtractor: VoiceExampleEmbeddingExtracting {
     private var worker: VoiceEmbeddingWorker?
+    func processingDuration() async -> Double? { await worker?.lastProcessingSeconds }
+
     func finish() async {
         let held = worker
         worker = nil

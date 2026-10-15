@@ -261,7 +261,7 @@ extension MeetingStore {
             if let missing = error as? CocoaError,
                 missing.code == .fileReadNoSuchFile || missing.code == .fileNoSuchFile,
                 let monitor = libraryMonitor,
-                beginJob(.libraryIndex, .meeting(id), progress: "Updating Index")
+                beginJob(.libraryIndex, .meeting(id), progress: "Checking the meeting index…")
             {
                 Task { @MainActor [weak self] in
                     guard let self else { return }

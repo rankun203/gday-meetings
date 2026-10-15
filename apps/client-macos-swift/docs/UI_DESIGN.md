@@ -62,6 +62,10 @@ General settings includes “Display summary title on meetings,” enabled by de
 
 ## Task status bar
 
+Task details show a native linear progress bar for the current phase. Use measured completed work and a known total for a determinate bar; preparation, provider waits, and operations without totals remain indeterminate. Display learned time estimates as approximate time remaining in the current step. When no estimate is available, show elapsed phase time. A time estimate never advances a percentage or marks a task complete. Saving is a separate phase. Paused and terminal tasks do not display active progress or remaining-time estimates.
+
+Task list rows use the same current progress snapshot as details. Keep row height stable while updating percentages and estimates. Background page loads and checkpoint writes must not replace newer progress. Transient operations use the same progress presentation without creating durable task history solely for display.
+
 Show the bottom task status bar only while work is queued, running, or needs attention, including other background activity such as imports and archives. Completed, cancelled, and dismissed tasks do not keep the bar visible. Keep **Tasks** in the sidebar for history and management even when the bar is hidden.
 
 Use a brief opacity transition when the bar appears or disappears, respecting Reduce Motion. Preserve the identities and scroll positions of the meeting list and transcript; only the bottom status row changes. Keep the player independent of task visibility.

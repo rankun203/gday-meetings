@@ -13,6 +13,7 @@ actor VoiceEmbeddingWorker {
     private var extractor: CommunityVoiceEmbeddingExtractor?
     private var cancelled = false
     private var activeExtractions = 0
+    private(set) var lastProcessingSeconds: Double?
 
     func prepare(priority: ProcessingCoordinator.Priority = .processing) async throws {
         let acquired = try await LocalModelManager.shared.acquire(
@@ -36,16 +37,20 @@ actor VoiceEmbeddingWorker {
         async throws
         -> TypedVoiceEmbedding?
     {
+        lastProcessingSeconds = nil
         guard Self.hasValidPhysicalSupport(sample) else {
             throw ServiceError("The voice sample does not match its recorded speech ranges.")
         }
         guard let extractor, !cancelled, !Task.isCancelled else { throw CancellationError() }
         activeExtractions += 1
-        let values: [Double]
+        let measured: (values: [Double], seconds: Double)
         do {
-            values = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: priority) {
+            measured = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: priority) {
                 try await ProcessingCoordinator.shared.withPermit(for: .communityInference, priority: priority) {
-                    try await extractor.extract(samples: sample.samples)
+                    let started = SuspendingClock.now
+                    let values = try await extractor.extract(samples: sample.samples)
+                    let duration = started.duration(to: .now).components
+                    return (values, Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
                 }
             }
         }
@@ -57,8 +62,9 @@ actor VoiceEmbeddingWorker {
         activeExtractions -= 1
         await releaseIfCancelled()
         guard !cancelled, !Task.isCancelled else { throw CancellationError() }
+        lastProcessingSeconds = measured.seconds
         return TypedVoiceEmbedding.normalizing(
-            type: CommunityVoiceEmbeddingExtractor.embeddingType, values: values,
+            type: CommunityVoiceEmbeddingExtractor.embeddingType, values: measured.values,
             provenance: sample.spans == nil ? "saved-example-speech-span" : "saved-example-clean-fragments-v1")
     }
 

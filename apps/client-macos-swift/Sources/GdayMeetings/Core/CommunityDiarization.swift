@@ -76,16 +76,22 @@ enum LocalDiarizationInputPolicy {
 
 /// File processing and optional voice extraction run away from the main actor.
 actor CommunityDiarizationWorker {
-    func run(files: [URL], lease: LocalModelLease, recognize: Bool, progress: (@Sendable (String) async -> Void)? = nil)
+    func run(
+        files: [URL], lease: LocalModelLease, recognize: Bool,
+        progress: (@Sendable (String) async -> Void)? = nil,
+        taskProgress: (@Sendable (AudioTaskProgress) async -> Void)? = nil
+    )
         async throws -> LocalDiarizationResult
     {
         try await ProcessingCoordinator.shared.withPermit(for: .communityInference, priority: .processing) {
-            try await self.runSerial(files: files, lease: lease, recognize: recognize, progress: progress)
+            try await self.runSerial(
+                files: files, lease: lease, recognize: recognize, progress: progress, taskProgress: taskProgress)
         }
     }
 
     private func runSerial(
-        files: [URL], lease: LocalModelLease, recognize: Bool, progress: (@Sendable (String) async -> Void)?
+        files: [URL], lease: LocalModelLease, recognize: Bool, progress: (@Sendable (String) async -> Void)?,
+        taskProgress: (@Sendable (AudioTaskProgress) async -> Void)?
     ) async throws -> LocalDiarizationResult {
         guard let segmentation = lease.models["Segmentation"], let fbank = lease.models["FBank"],
             let embedding = lease.models["Embedding"], let plda = lease.models["PldaRho"]
@@ -106,23 +112,64 @@ actor CommunityDiarizationWorker {
                 pldaRhoModel: plda, pldaPsi: values.map(Double.init), compilationDuration: 0))
         let extractor = recognize ? try CommunityVoiceEmbeddingExtractor(models: lease.models) : nil
         var output = LocalDiarizationResult(modelRevision: lease.revision, ranges: [], speakers: [])
+        let durations = try AudioTaskProgress.durations(files)
+        let total = durations.reduce(0, +)
+        var completed = 0.0
+        var inferenceSeconds = 0.0
         for (index, file) in files.enumerated() {
             try Task.checkCancellation()
             guard let sourceRevision = VoiceLibraryStore.revision(url: file) else {
                 throw ServiceError("The source audio is unavailable. Restore it before diarizing speakers.")
             }
             await progress?("Preparing audio \(index + 1) of \(files.count)…")
+            await taskProgress?(.init(.init(phase: "Preparing audio \(index + 1) of \(files.count)")))
             let preparedAudio = try await AudioPlaybackPreparation.prepare(file)
             defer { if preparedAudio.temporary { try? FileManager.default.removeItem(at: preparedAudio.url) } }
             let (source, loadSeconds) = try AudioSourceFactory().makeDiskBackedSource(
                 from: preparedAudio.url, targetSampleRate: 16000)
             defer { source.cleanup() }
             let result: DiarizationResult
+            let started = Date()
+            let clockStart = SuspendingClock.now
+            let channel = AudioProgressChannel(report: taskProgress)
             do {
                 await progress?("Diarizing audio \(index + 1) of \(files.count)…")
-                result = try await manager.process(audioSource: source, audioLoadingSeconds: loadSeconds)
+                await taskProgress?(
+                    .init(
+                        .init(
+                            phase: "Diarizing audio \(index + 1) of \(files.count)", completed: completed,
+                            total: total, unit: "audio seconds", startedAt: started)))
+                let prepared = try await manager.prepare(
+                    audioSource: source, audioLoadingSeconds: loadSeconds
+                ) { done, count in
+                    if done < count {
+                        channel.continuation.yield(
+                            .init(
+                                phase: "Finding speech in audio \(index + 1) of \(files.count)",
+                                completed: Double(done), total: Double(count), unit: "chunks", startedAt: started))
+                    }
+                    else {
+                        // Segmentation can finish before the overlapping embedding worker.
+                        channel.continuation.yield(.init(phase: "Analyzing voices", startedAt: started))
+                    }
+                }
+                await channel.finish()
+                await taskProgress?(.init(.init(phase: "Grouping speakers", startedAt: started)))
+                result = try manager.cluster(prepared)
+                inferenceSeconds += AudioTaskProgress.elapsed(since: clockStart)
+                completed += durations[index]
             }
-            catch OfflineDiarizationError.noSpeechDetected { continue }
+            catch OfflineDiarizationError.noSpeechDetected {
+                await channel.finish()
+                inferenceSeconds += AudioTaskProgress.elapsed(since: clockStart)
+                completed += durations[index]
+                continue
+            }
+            catch {
+                await channel.finish()
+                throw error
+            }
+            await taskProgress?(.init(.init(phase: "Preparing voice examples")))
             try Task.checkCancellation()
             let track = "track\(index)"
             let sourceName = LocalDiarizationInputPolicy.sourceName(for: file)
@@ -181,6 +228,11 @@ actor CommunityDiarizationWorker {
                 throw ServiceError("The source audio changed during analysis. Run speaker diarization again.")
             }
         }
+        try Task.checkCancellation()
+        await taskProgress?(
+            .init(
+                .init(phase: "Speaker analysis complete", completed: completed, total: total, unit: "audio seconds"),
+                processedAudioSeconds: completed, processingSeconds: inferenceSeconds))
         return output
     }
 }
@@ -317,17 +369,30 @@ extension MeetingStore {
             catch { self.errorMessage = "Couldn’t save the speaker processing data event." }
         }
         setJobProgress(.diarization, .meeting(id), "Diarizing speakers…")
+        let progressAttempt = jobProgressAttemptID(.diarization, .meeting(id))
+        let performanceKey = TaskPerformanceKey(
+            operation: "diarization", provider: provider.kind.rawValue, model: lease.revision)
+        let measurement = AudioPerformanceMeasurement()
+        let reportDetails: @Sendable (AudioTaskProgress) async -> Void = { [weak self] update in
+            await measurement.include(update)
+            await self?.reportAudioTaskProgress(
+                update, kind: .diarization, meetingID: id, key: performanceKey, attemptID: progressAttempt)
+        }
         let report: @Sendable (String) async -> Void = { [weak self] progress in
-            await self?.setJobProgress(.diarization, .meeting(id), progress)
+            await self?.setJobProgress(
+                .diarization, .meeting(id), progress, details: .init(phase: progress), attemptID: progressAttempt)
         }
         let result = try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
             try await CommunityDiarizationWorker().run(
-                files: files, lease: lease, recognize: true, progress: report)
+                files: files, lease: lease, recognize: true, progress: report, taskProgress: reportDetails)
         }
         try Task.checkCancellation()
         guard !result.ranges.isEmpty else {
             throw ServiceError("No speech was found for speaker diarization. The current transcript was kept.")
         }
+        setJobProgress(
+            .diarization, .meeting(id), "Saving speaker labels…", details: .init(phase: "Saving speaker labels"),
+            attemptID: progressAttempt)
         let current = try await validatedMeetingForSpeakerLabeling(
             resultID: result.id, original: meeting, files: files, sourceRevisions: sourceRevisions)
         try PrivateTranscriptFile.write(
@@ -354,6 +419,8 @@ extension MeetingStore {
         self.markManagedTaskCompletion(on: &updated, kind: .diarization)
         guard await self.updateMeeting(updated) else { throw ServiceError("Couldn’t save speaker labels.") }
         if recognize { await self.voiceLibrary.suggestReviewedPeople(from: self.people) }
+        await commitAudioPerformance(
+            measurement, kind: .diarization, meetingID: id, key: performanceKey, attemptID: progressAttempt)
     }
 
     /// Binding is durable before applying the result. Read the current meeting

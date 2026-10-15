@@ -272,10 +272,12 @@ struct TaskQueueView: View {
                     .frame(maxWidth: .infinity, minHeight: 220)
                 }
                 ForEach(store.taskQueueOtherJobs) { job in
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text(store.progressText(for: job))
-                        if let id = job.meetingID { Button("Open Meeting") { showMeeting(id) } }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(store.progressText(for: job))
+                            if let id = job.meetingID { Button("Open Meeting") { showMeeting(id) } }
+                        }
+                        TaskProgressView(progress: job.progressDetails ?? TaskProgress(phase: job.progress))
                     }
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -425,6 +427,9 @@ struct TaskQueueView: View {
             }
             Text(job.providerName).font(.subheadline).foregroundStyle(.secondary)
             Text(job.progress).font(.callout)
+            if job.state == .running {
+                TaskProgressView(progress: job.progressDetails)
+            }
             if job.state == .paused, let reason = job.timeline?.last?.reason {
                 Text(reason).font(.callout).foregroundStyle(.secondary)
             }
@@ -532,6 +537,9 @@ struct TaskQueueView: View {
                     ).font(.callout)
                         .fontWeight(record.state == .failed ? .semibold : .regular)
                         .textSelection(.enabled)
+                    if record.state == .running {
+                        TaskProgressView(progress: record.progressDetails ?? TaskProgress(phase: record.progress))
+                    }
                     if let error = record.errorMessage, !error.isEmpty, error != record.progress {
                         Text(error).font(.callout).textSelection(.enabled)
                     }

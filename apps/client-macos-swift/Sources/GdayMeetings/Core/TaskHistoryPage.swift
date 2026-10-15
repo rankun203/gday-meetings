@@ -117,6 +117,13 @@ extension MeetingStore {
         if let failure = journal.readFailure {
             managedTaskJournalError = "Couldn’t read task history. \(failure.localizedDescription)"
         }
-        return result
+        // Disk paging may finish after progress or a terminal transition. Keep the
+        // current snapshot, removing rows that have since left this scope.
+        return result.compactMap { row in
+            guard case .managed(let saved) = row,
+                let live = managedTasks.first(where: { $0.id == saved.id })
+            else { return row }
+            return scope.includes(live) ? .managed(live) : nil
+        }
     }
 }

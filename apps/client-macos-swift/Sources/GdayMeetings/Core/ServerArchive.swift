@@ -133,8 +133,13 @@ extension MeetingStore {
                         "artifacts": artifacts,
                     ], options: [.sortedKeys])
                 var audio: [ArchiveAudio] = []
-                for (index, file) in audioURLs(for: meeting).enumerated() {
-                    setJobProgress(.archive, .meeting(id), "Preparing archive audio \(index + 1)…")
+                let files = audioURLs(for: meeting)
+                for (index, file) in files.enumerated() {
+                    setJobProgress(
+                        .archive, .meeting(id), "Preparing archive audio \(index + 1) of \(files.count)…",
+                        details: TaskProgress(
+                            phase: "Preparing archive audio", completed: Double(index),
+                            total: Double(files.count), unit: "files"))
                     // Archive original supported bytes when they fit; transcription
                     // separately prefers compressed upload copies for network efficiency.
                     let prepared = try await prepareServerAudio(file, compressPCM: false)
@@ -195,7 +200,11 @@ extension MeetingStore {
                     )
                 }
                 setJobProgress(
-                    .archive, .meeting(id), "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…")
+                    .archive, .meeting(id), "Uploading archive audio \(index + 1) of \(checkpoint.audio.count)…",
+                    details: TaskProgress(
+                        phase: "Uploading archive audio",
+                        completed: checkpoint.audio.filter { $0.url != nil }.reduce(0) { $0 + Double($1.size) },
+                        total: checkpoint.audio.reduce(0) { $0 + Double($1.size) }, unit: "bytes"))
                 let uploadResult = try await server.upload(file: source, provider: provider)
                 recordDataFlow(uploadResult.dataFlow.referencing(file: source, prepared: source), meetingID: id)
                 checkpoint.audio[index].url = uploadResult.value

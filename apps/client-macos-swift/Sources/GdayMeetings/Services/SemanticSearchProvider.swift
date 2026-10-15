@@ -23,18 +23,24 @@ struct SemanticSearchProvider: SearchIndexProvider {
     func updateIndex(
         meetingID: UUID, rebuild: Bool = false, progress: @escaping @Sendable (SearchIndexProgress) -> Void
     ) async throws {
-        try await updateIndex(meetingID: meetingID, rebuild: rebuild, refresh: false, progress: progress)
+        _ = try await updateIndex(meetingID: meetingID, rebuild: rebuild, refresh: false, progress: progress)
     }
 
     /// Rebuild stored index rows while retaining vectors for unchanged passages.
     func refreshIndex(meetingID: UUID, progress: @escaping @Sendable (SearchIndexProgress) -> Void) async throws {
-        try await updateIndex(meetingID: meetingID, rebuild: false, refresh: true, progress: progress)
+        _ = try await updateIndex(meetingID: meetingID, rebuild: false, refresh: true, progress: progress)
+    }
+
+    func indexWithMeasurement(
+        meetingID: UUID, refresh: Bool, progress: @escaping @Sendable (SearchIndexProgress) -> Void
+    ) async throws -> SearchIndexProgress? {
+        try await updateIndex(meetingID: meetingID, rebuild: false, refresh: refresh, progress: progress)
     }
 
     private func updateIndex(
         meetingID: UUID, rebuild: Bool, refresh: Bool,
         progress: @escaping @Sendable (SearchIndexProgress) -> Void
-    ) async throws {
+    ) async throws -> SearchIndexProgress? {
         let directory = directory
         let model = configuration.selectedModel
         let (folder, fingerprint, meeting) = try await Task.detached(priority: .utility) {
@@ -44,7 +50,7 @@ struct SemanticSearchProvider: SearchIndexProvider {
         }.value
         try Task.checkCancellation()
         if !rebuild, !refresh, try await index.isCurrent(meetingID, space: model.space, fingerprint: fingerprint) {
-            return
+            return nil
         }
         var windows: [SemanticWindow] = []
         for window in SemanticSource.windows(meeting) {
@@ -66,21 +72,42 @@ struct SemanticSearchProvider: SearchIndexProvider {
             else { return [:] }
             return Dictionary(old.windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         }.value
-        progress(.init(meetingID: meetingID, completed: 0, total: windows.count))
+        let reused = windows.map { window in
+            guard let old = reusable[window.id], old.text == window.text,
+                old.vector.count == model.dimensions, old.vector.allSatisfy(\.isFinite),
+                abs(old.vector.reduce(0) { $0 + $1 * $1 } - 1) < 0.0001
+            else { return false }
+            return true
+        }
+        var remainingCharacters = windows.indices.filter { !reused[$0] }.reduce(0) { $0 + windows[$1].text.count }
+        var embeddedCharacters = 0
+        var embeddingSeconds = 0.0
+        func report(_ completed: Int, persisted: Bool = false) {
+            progress(
+                .init(
+                    meetingID: meetingID, completed: completed, total: windows.count,
+                    remainingCharacters: remainingCharacters, embeddedCharacters: embeddedCharacters,
+                    embeddingSeconds: embeddingSeconds, persisted: persisted))
+        }
+        report(0)
         var lastProgress = ContinuousClock.now
         for position in windows.indices {
             try Task.checkCancellation()
-            if let old = reusable[windows[position].id], old.text == windows[position].text,
-                old.vector.count == model.dimensions, old.vector.allSatisfy(\.isFinite),
-                abs(old.vector.reduce(0) { $0 + $1 * $1 } - 1) < 0.0001
-            {
+            if reused[position], let old = reusable[windows[position].id] {
                 windows[position].vector = old.vector
             }
             else {
-                windows[position].vector = try await encoder.embed(windows[position].text, isQuery: false)
+                let measurement = try await encoder.embedMeasured(windows[position].text, isQuery: false)
+                windows[position].vector = measurement.vector
+                let characters = windows[position].text.count
+                if let seconds = measurement.processingSeconds, seconds.isFinite, seconds > 0 {
+                    embeddingSeconds += seconds
+                    embeddedCharacters += characters
+                }
+                remainingCharacters -= characters
             }
             if position + 1 == windows.count || lastProgress.duration(to: .now) >= .milliseconds(250) {
-                progress(.init(meetingID: meetingID, completed: position + 1, total: windows.count))
+                report(position + 1)
                 lastProgress = .now
             }
             await Task.yield()
@@ -89,6 +116,10 @@ struct SemanticSearchProvider: SearchIndexProvider {
         try await index.persist(
             .init(space: model.space, meetingID: meetingID, revision: revision, windows: windows),
             fingerprint: fingerprint)
+        return .init(
+            meetingID: meetingID, completed: windows.count, total: windows.count,
+            remainingCharacters: 0, embeddedCharacters: embeddedCharacters,
+            embeddingSeconds: embeddingSeconds, persisted: true)
     }
 
     func search(_ request: ProviderSearchRequest) -> AsyncThrowingStream<ProviderResult<ProviderSearchSnapshot>, Error>

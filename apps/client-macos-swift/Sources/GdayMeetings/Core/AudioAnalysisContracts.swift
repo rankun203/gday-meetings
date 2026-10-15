@@ -221,6 +221,7 @@ enum AudioAnalysisBoundary {
 struct AppleRecordedAnalysisProvider: RecordedTranscriptionAnalysisProvider {
     var capabilities: AudioAnalysisCapabilities { .apple }
     var meetingID: UUID
+    var taskProgress: (@Sendable (AudioTaskProgress) async -> Void)? = nil
 
     func transcribe(
         request: TranscriptionAnalysisRequest, files: [AnalysisAudioFile],
@@ -230,9 +231,21 @@ struct AppleRecordedAnalysisProvider: RecordedTranscriptionAnalysisProvider {
         try AudioAnalysisBoundary.validateFiles(files, request: request.context)
         var segments: [TranscriptSegment] = []
         var speakers: [MeetingSpeaker] = []
-        for file in files {
+        let durations = try AudioTaskProgress.durations(files.map(\.url))
+        let total = durations.reduce(0, +)
+        var completed = 0.0
+        for (index, file) in files.enumerated() {
+            let offset = completed
             let draft = try await AppleRecordedTranscription.transcribe(
-                files: [file.url], meetingID: meetingID, language: request.language, status: progress)
+                files: [file.url], meetingID: meetingID, language: request.language,
+                progress: { update in
+                    var update = update
+                    update.details.phase = "Transcribing audio \(index + 1) of \(files.count)"
+                    update.details.completed = offset + (update.details.completed ?? 0)
+                    update.details.total = total
+                    await taskProgress?(update)
+                }, status: progress)
+            completed += durations[index]
             segments += draft.segments.map { row in
                 var row = row
                 row.analysisTrackID = file.reference.trackID
@@ -251,6 +264,7 @@ struct CommunityRecordedAnalysisProvider: RecordedDiarizationAnalysisProvider {
     var capabilities: AudioAnalysisCapabilities { .community }
     var lease: LocalModelLease
     var extractVoiceEmbeddings: Bool
+    var taskProgress: (@Sendable (AudioTaskProgress) async -> Void)? = nil
 
     func diarize(
         request: DiarizationAnalysisRequest, files: [AnalysisAudioFile],
@@ -260,7 +274,8 @@ struct CommunityRecordedAnalysisProvider: RecordedDiarizationAnalysisProvider {
         guard request.context.model == lease.revision else { throw AudioAnalysisContractError.invalidRequest }
         try AudioAnalysisBoundary.validateFiles(files, request: request.context)
         let result = try await CommunityDiarizationWorker().run(
-            files: files.map(\.url), lease: lease, recognize: extractVoiceEmbeddings, progress: progress)
+            files: files.map(\.url), lease: lease, recognize: extractVoiceEmbeddings, progress: progress,
+            taskProgress: taskProgress)
         try AudioAnalysisBoundary.validateFiles(files, request: request.context)
         var acoustic = result.acousticAnalysis
         acoustic.provenance.requestID = request.context.requestID

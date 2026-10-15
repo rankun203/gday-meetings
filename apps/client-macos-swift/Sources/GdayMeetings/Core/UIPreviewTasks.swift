@@ -26,6 +26,7 @@ extension UIPreview {
 extension UIPreview {
     /// Finite local-only activity for checking alert-list stability during maintenance.
     @MainActor static func startTaskRefreshPreview(_ store: MeetingStore) {
+        seedTaskProgressPreview(store)
         guard enabled,
             ProcessInfo.processInfo.arguments.contains("--synthetic-task-refresh")
                 || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticTaskRefresh") as? Bool == true
@@ -50,6 +51,47 @@ extension UIPreview {
             let keys = Set(store.managedTasks.filter { ids.contains($0.id) }.map(\.key))
             store.backgroundJobs.removeAll { keys.contains($0.key) }
             store.updateSearchMaintenanceBatch(scanActive: false)
+        }
+    }
+}
+
+extension UIPreview {
+    /// Fixed states for inspecting the production progress UI without provider work.
+    @MainActor static func seedTaskProgressPreview(_ store: MeetingStore) {
+        guard enabled,
+            UIPreviewPerformanceFixtures.flag("--synthetic-task-progress", infoKey: "GdaySyntheticTaskProgress")
+        else { return }
+        for index in store.managedTasks.indices {
+            guard store.managedTasks[index].state == .running else { continue }
+            let kind = store.managedTasks[index].kind
+            let details: TaskProgress
+            if kind == .diarization {
+                details = TaskProgress(
+                    phase: "Analyzing audio…", completed: 420, total: 1200, unit: "audio seconds",
+                    estimatedRemainingSeconds: 120)
+            }
+            else if kind == .transcription {
+                details = TaskProgress(phase: "Waiting for provider…")
+            }
+            else {
+                details = TaskProgress(phase: "Generating summary…")
+            }
+            store.managedTasks[index].progress = details.phase
+            store.managedTasks[index].progressDetails = details
+        }
+        if let meeting = store.meetings.first {
+            var record = ManagedTaskRecord(
+                kind: .searchIndex, meetingID: meeting.id, meetingTitle: "Synthetic indexing progress",
+                providerName: "This Mac", state: .running, progress: "Indexing passages: 40 of 100",
+                isPreview: true)
+            record.progressDetails = TaskProgress(
+                phase: record.progress, completed: 40, total: 100, unit: "passages", estimatedRemainingSeconds: 35)
+            store.managedTasks.append(record)
+            var saving = ManagedTaskRecord(
+                kind: .transcription, meetingID: meeting.id, meetingTitle: "Synthetic saving phase",
+                providerName: "This Mac", state: .running, progress: "Saving transcript…", isPreview: true)
+            saving.progressDetails = TaskProgress(phase: saving.progress)
+            store.managedTasks.append(saving)
         }
     }
 }

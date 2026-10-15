@@ -7,11 +7,15 @@ import Speech
 enum AppleRecordedTranscription {
     static func transcribe(
         files: [URL], meetingID: UUID, language: String,
+        progress: (@Sendable (AudioTaskProgress) async -> Void)? = nil,
         status: @escaping @Sendable (String) async -> Void
     ) async throws -> LiveTranscriptDraft {
         let locale = try await AppleLiveTranscription.prepare(language: language, status: status)
         try await AppleSpeechAssets.shared.retain(locale)
         do {
+            let durations = try AudioTaskProgress.durations(files)
+            let total = durations.reduce(0, +)
+            var completed = 0.0
             var draft = LiveTranscriptDraft(meetingID: meetingID, locale: locale.identifier)
             for (index, file) in files.enumerated() {
                 try Task.checkCancellation()
@@ -19,7 +23,30 @@ enum AppleRecordedTranscription {
                     file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
                     ? .microphone : .system
                 await status("Transcribing audio \(index + 1) of \(files.count) on This Mac…")
-                let phrases = try await transcribeFile(file, source: source, locale: locale)
+                let started = Date()
+                let clockStart = SuspendingClock.now
+                let offset = completed
+                let duration = durations[index]
+                let phase = "Transcribing audio \(index + 1) of \(files.count)"
+                await progress?(
+                    .init(
+                        .init(phase: phase, completed: offset, total: total, unit: "audio seconds", startedAt: started))
+                )
+                let phrases = try await transcribeFile(file, source: source, locale: locale) { seconds in
+                    await progress?(
+                        .init(
+                            .init(
+                                phase: phase, completed: offset + min(duration, max(0, seconds)), total: total,
+                                unit: "audio seconds", startedAt: started)))
+                }
+                try Task.checkCancellation()
+                completed += duration
+                await progress?(
+                    .init(
+                        .init(
+                            phase: phase, completed: completed, total: total, unit: "audio seconds", startedAt: started),
+                        processedAudioSeconds: duration, processingSeconds: AudioTaskProgress.elapsed(since: clockStart)
+                    ))
                 for phrase in phrases { draft.accept(phrase) }
             }
             draft.complete = true
@@ -33,12 +60,27 @@ enum AppleRecordedTranscription {
     }
 
     private static func transcribeFile(
-        _ file: URL, source: LiveAudioSource, locale: Locale
+        _ file: URL, source: LiveAudioSource, locale: Locale,
+        progress: @escaping @Sendable (Double) async -> Void
     ) async throws -> [LiveTranscriptPhrase] {
         let transcriber = SpeechTranscriber(
             locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let session = UUID()
+        let pair = AsyncStream<Double>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let progressConsumer = Task {
+            var frontier = 0.0
+            for await seconds in pair.stream {
+                guard !Task.isCancelled else { break }
+                guard seconds.isFinite, seconds > frontier else { continue }
+                frontier = seconds
+                await progress(seconds)
+            }
+        }
+        await analyzer.setVolatileRangeChangedHandler { range, changedStart, _ in
+            // The end marks submitted audio; only the start marks finalized analysis.
+            if changedStart { pair.continuation.yield(range.start.seconds) }
+        }
         return try await withTaskCancellationHandler {
             let results = Task { try await collect(transcriber, session: session, source: source, locale: locale) }
             do {
@@ -60,10 +102,16 @@ enum AppleRecordedTranscription {
                 else {
                     await analyzer.cancelAndFinishNow()
                 }
-                return try await results.value
+                let phrases = try await results.value
+                pair.continuation.finish()
+                await progressConsumer.value
+                return phrases
             }
             catch {
                 results.cancel()
+                pair.continuation.finish()
+                progressConsumer.cancel()
+                await progressConsumer.value
                 await analyzer.cancelAndFinishNow()
                 _ = try? await results.value
                 throw error

@@ -78,8 +78,8 @@ struct ServiceTests {
         #expect(segments[1].speaker == "S1")
         #expect(throws: (any Error).self) { try GdayServerService.parseTask(["status": "COMPLETED", "outputs": []]) }
         #expect(throws: (any Error).self) { try GdayServerService.parseTask([:]) }
-        guard case .pending = try GdayServerService.parseTask(["status": "RUNNING", "outputs": []]) else {
-            Issue.record("Expected pending")
+        guard case .processing = try GdayServerService.parseTask(["status": "RUNNING", "outputs": []]) else {
+            Issue.record("Expected processing")
             return
         }
     }

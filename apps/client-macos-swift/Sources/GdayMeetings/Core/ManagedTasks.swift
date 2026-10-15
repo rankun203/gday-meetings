@@ -29,6 +29,7 @@ struct ManagedTaskRecord: Identifiable, Codable, Equatable, Sendable {
     var batchID: UUID?
     var state: ManagedTaskState = .queued
     var progress = "Waiting to start"
+    var progressDetails: TaskProgress?
     var errorMessage: String?
     var createdAt = Date()
     var finishedAt: Date?
@@ -401,8 +402,12 @@ extension MeetingStore {
 
     /// Journal first: provider work must not start from an uncommitted intent.
     @discardableResult func saveManagedTask(_ proposed: ManagedTaskRecord) async -> Bool {
+        var normalized = proposed
+        if normalized.state != .running { normalized.progressDetails = nil }
+        let proposed = normalized
         var task = proposed
         var previous = managedTask(id: proposed.id)
+        let initialProgress = previous?.progressDetails
         if task.isPreview { task.recordTransition(from: managedTask(id: proposed.id)) }
         do {
             guard libraryWritable else { throw ServiceError("The meeting library is read-only.") }
@@ -443,6 +448,14 @@ extension MeetingStore {
                     managedTaskScopeCounts[scope, default: 0] += 1
                 }
                 if task.state.isActive { managedTaskActiveCounts[task.key, default: 0] += 1 }
+            }
+            // A provider can report progress while the journal write suspends.
+            // Its live presentation is newer than the checkpoint we just saved.
+            if task.state == .running, let live = managedTask(id: task.id), live.state == .running,
+                live.progressDetails != initialProgress
+            {
+                task.progress = live.progress
+                task.progressDetails = live.progressDetails
             }
             cacheManagedTask(task)
             updateSearchMaintenanceBatch()
@@ -556,6 +569,7 @@ extension MeetingStore {
                     }
                     task.state = .running
                     task.progress = "Starting…"
+                    task.progressDetails = TaskProgress(phase: "Starting…")
                     guard await saveManagedTask(task) else {
                         failUncommittedTask(task)
                         return
@@ -760,6 +774,7 @@ extension MeetingStore {
     ) async {
         guard var task = managedTask(id: id) else { return }
         task.state = state
+        task.progressDetails = nil
         task.recovery = recovery
         task.finishedAt = state == .paused ? nil : Date()
         task.errorMessage = message
@@ -1332,10 +1347,12 @@ extension MeetingStore {
         }
     }
 
-    func recordManagedTaskProgress(_ key: BackgroundJob.Key, progress: String) {
-        guard var task = managedTasks.first(where: { $0.key == key && $0.state == .running }), task.progress != progress
+    func recordManagedTaskProgress(_ key: BackgroundJob.Key, progress: String, details: TaskProgress? = nil) {
+        guard var task = managedTasks.first(where: { $0.key == key && $0.state == .running }),
+            task.progress != progress || task.progressDetails != details
         else { return }
         task.progress = progress
+        task.progressDetails = details
         // Progress is presentation, not recovery state. The next durable transition
         // captures it; provider intent/checkpoint bindings still synchronize first.
         cacheManagedTask(task)

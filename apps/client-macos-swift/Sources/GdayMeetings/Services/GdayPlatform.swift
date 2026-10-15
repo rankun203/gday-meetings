@@ -47,7 +47,7 @@ struct ServerTranscriptSegment: Equatable {
     }
 }
 enum ServerTaskResult {
-    case pending
+    case pending, processing
     case complete([ServerTranscriptSegment])
     case failed(String)
 }
@@ -166,6 +166,7 @@ extension GdayServerService {
             return .failed("Transcription \(status.lowercased().replacingOccurrences(of: "_", with: " ")).")
         }
         if status == "COMPLETED" { throw ServiceError("The completed task contains no transcript output.") }
+        if status == "RUNNING" { return .processing }
         return .pending
     }
     @discardableResult func ensureArchiveAvailable() async throws -> Bool {

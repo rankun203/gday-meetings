@@ -67,6 +67,8 @@ The task filter offers **All Tasks**, **Active**, **Needs Attention**, **Paused*
 
 Use `--synthetic-pagination`, or the `GdaySyntheticPagination` Boolean bundle flag, to add 45 older meetings, load the first 20, then scroll through later pages. Search for **Unique last-page search phrase** to find content outside the first page. Use `--synthetic-summary-stream` to display a synthetic summary draft that grows for about 32 seconds in Synthetic conversation. This fixture makes no network requests and does not replace the saved summary; transport streaming is tested separately with a loopback server.
 
+For task progress checks, launch with `--synthetic-tasks --synthetic-task-progress`. This uses production Tasks views with fixed measured indexing and diarization progress, provider waiting, generation, and saving phases. It starts no provider requests. Check the list and detail percentage agreement, remaining-time labels, indeterminate bars, elapsed time, terminal states, and keyboard selection in light and dark appearances.
+
 ## Large library
 
 Launch with `--synthetic-library-size=1000` or `--synthetic-library-size=10000`, or set the integer bundle key `GdaySyntheticLibrarySize` to the same count. The count includes the two ordinary Preview meetings. This option replaces the 45-meeting pagination fixture when both are enabled.

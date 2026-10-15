@@ -38,6 +38,8 @@ struct BackgroundJob: Identifiable, Equatable {
     }
     let key: Key
     var progress: String
+    var attemptID = UUID()
+    var progressDetails: TaskProgress?
     var id: Key { key }
     var meetingID: UUID? {
         if case .meeting(let id) = key.scope { return id }
@@ -52,37 +54,62 @@ extension MeetingStore {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
         guard !isChangingLibrary, !isPreparingToQuit else { return false }
         guard !backgroundJobs.contains(where: { $0.key == key }) else { return false }
-        backgroundJobs.append(BackgroundJob(key: key, progress: progress))
+        backgroundJobs.append(
+            BackgroundJob(key: key, progress: progress, progressDetails: TaskProgress(phase: progress)))
+        recordManagedTaskProgress(key, progress: progress, details: backgroundJobs.last?.progressDetails)
         return true
     }
+    func jobProgressAttemptID(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope) -> UUID? {
+        backgroundJobs.first { $0.key == .init(kind: kind, scope: scope) }?.attemptID
+    }
+
     func setJobProgress(_ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String) {
+        setJobProgress(kind, scope, progress, details: TaskProgress(phase: progress))
+    }
+
+    func setJobProgress(
+        _ kind: BackgroundJob.Kind, _ scope: BackgroundJob.Scope, _ progress: String,
+        details: TaskProgress, attemptID: UUID? = nil
+    ) {
         let key = BackgroundJob.Key(kind: kind, scope: scope)
-        guard let index = backgroundJobs.firstIndex(where: { $0.key == key }) else { return }
-        if jobProgressUpdatedAt[key].map({ $0.duration(to: .now) >= .milliseconds(100) }) ?? true {
+        guard let index = backgroundJobs.firstIndex(where: { $0.key == key }),
+            attemptID == nil || backgroundJobs[index].attemptID == attemptID
+        else { return }
+        var update = backgroundJobs[index]
+        update.progress = progress
+        update.progressDetails = details
+        if update.progressDetails?.phase == backgroundJobs[index].progressDetails?.phase,
+            let startedAt = backgroundJobs[index].progressDetails?.startedAt
+        {
+            update.progressDetails?.startedAt = startedAt
+        }
+        if backgroundJobs[index].progressDetails?.phase != details.phase
+            || (jobProgressUpdatedAt[key].map({ $0.duration(to: .now) >= .milliseconds(500) }) ?? true)
+        {
             pendingJobProgress.removeValue(forKey: key)
             jobProgressUpdatedAt[key] = .now
-            if backgroundJobs[index].progress != progress {
-                backgroundJobs[index].progress = progress
-                recordManagedTaskProgress(key, progress: progress)
+            if backgroundJobs[index] != update {
+                backgroundJobs[index] = update
+                recordManagedTaskProgress(key, progress: progress, details: update.progressDetails)
             }
             return
         }
-        pendingJobProgress[key] = progress
+        pendingJobProgress[key] = update
         guard jobProgressFlush == nil else { return }
         jobProgressFlush = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: .milliseconds(500))
             guard let self else { return }
             let pending = pendingJobProgress
             pendingJobProgress.removeAll()
             jobProgressFlush = nil
             var jobs = backgroundJobs
-            for (key, progress) in pending {
-                guard let index = jobs.firstIndex(where: { $0.key == key }), jobs[index].progress != progress else {
-                    continue
-                }
-                jobs[index].progress = progress
+            for (key, update) in pending {
+                guard let index = jobs.firstIndex(where: { $0.key == key }),
+                    jobs[index].attemptID == update.attemptID, jobs[index] != update
+                else { continue }
+                jobs[index] = update
                 jobProgressUpdatedAt[key] = .now
-                recordManagedTaskProgress(key, progress: progress)
+                recordManagedTaskProgress(key, progress: update.progress, details: update.progressDetails)
             }
             if jobs != backgroundJobs { backgroundJobs = jobs }
         }

@@ -212,9 +212,21 @@ private final class TaskCell: NSTableCellView {
         let description = TaskDescription(row, recordingActive: recordingActive)
         title.stringValue = description.operation + " · " + description.affectedItem
         subtitle.stringValue = description.progress
+        let progress: TaskProgress?
+        switch row {
+        case .managed(let record): progress = record.state == .running ? record.progressDetails : nil
+        case .voice(let job): progress = job.state == .running ? job.progressDetails : nil
+        }
+        if let fraction = progress?.fractionCompleted {
+            subtitle.stringValue += " · \(Int(fraction * 100))%"
+        }
         subtitle.textColor = description.attention ? .labelColor : .secondaryLabelColor
         detail.stringValue =
             description.state + " · " + description.date.formatted(date: .abbreviated, time: .shortened)
+        if let remaining = progress?.remainingTimeText {
+            detail.stringValue = description.state + " · " + remaining
+        }
+        toolTip = title.stringValue + "\n" + subtitle.stringValue + "\n" + detail.stringValue
         setAccessibilityLabel(title.stringValue + ", " + subtitle.stringValue + ", " + detail.stringValue)
     }
 }

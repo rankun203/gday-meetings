@@ -163,7 +163,7 @@ struct ProviderAudioTrack {
     let sourceType: String
 }
 enum ProviderTranscriptionStatus {
-    case pending
+    case pending, queued, processing
     case complete([ServerTranscriptSegment])
     case failed(String)
 }
@@ -324,7 +324,8 @@ struct RunPodProvider: TranscriptionProvider {
     {
         guard let status = result["status"] as? String else { throw ServiceError("RunPod returned no job status.") }
         switch status {
-        case "IN_QUEUE", "IN_PROGRESS": return .pending
+        case "IN_QUEUE": return .queued
+        case "IN_PROGRESS": return .processing
         case "FAILED", "CANCELLED", "TIMED_OUT":
             return .failed("RunPod transcription \(status.lowercased().replacingOccurrences(of: "_", with: " ")).")
         case "COMPLETED":

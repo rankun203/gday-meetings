@@ -37,6 +37,29 @@ struct VoicePreparationJob: Identifiable, Codable, Equatable {
     var createdAt = Date()
     var attentionAcknowledged: Bool?
     var timeline: [TaskAttemptEvent]?
+    /// Explicit phases keep failed discovery inputs from masking later example preparation.
+    var progressPhase: String?
+    var progressStartedAt: Date?
+    var estimatedRemainingSeconds: Double?
+    var progressDetails: TaskProgress {
+        if progressPhase == "Comparing voice examples" {
+            return TaskProgress(
+                phase: "Comparing voice examples", startedAt: progressStartedAt ?? timeline?.last?.date ?? createdAt)
+        }
+        if progressPhase != "Preparing voice examples" && !discoveryInputs.isEmpty
+            && completedRecordingIDs.count < discoveryInputs.count
+        {
+            return TaskProgress(
+                phase: "Analyzing recordings", completed: Double(completedRecordingIDs.count),
+                total: Double(discoveryInputs.count), unit: "recordings",
+                startedAt: progressStartedAt ?? timeline?.last?.date ?? createdAt)
+        }
+        return TaskProgress(
+            phase: "Preparing voice examples", completed: Double(completedExampleIDs.count),
+            total: Double(exampleIDs.count), unit: "voice examples",
+            startedAt: progressStartedAt ?? timeline?.last?.date ?? createdAt,
+            estimatedRemainingSeconds: state == .running ? estimatedRemainingSeconds : nil)
+    }
     var progress: String {
         let examples = "\(completedExampleIDs.count) of \(exampleIDs.count) voice examples prepared"
         guard !discoveryInputs.isEmpty else { return examples }
@@ -46,6 +69,7 @@ struct VoicePreparationJob: Identifiable, Codable, Equatable {
 
 protocol VoiceExampleEmbeddingExtracting: Sendable {
     func finish() async
+    func processingDuration() async -> Double?
     func extract(example: VoiceExample, directory: URL, type: EmbeddingType) async throws -> TypedVoiceEmbedding
 }
 
@@ -54,12 +78,16 @@ protocol VoiceRecordingDiscovering: Sendable {
     func discover(files: [URL]) async throws -> LocalDiarizationResult
 }
 
-extension VoiceExampleEmbeddingExtracting { func finish() async {} }
+extension VoiceExampleEmbeddingExtracting {
+    func finish() async {}
+    func processingDuration() async -> Double? { nil }
+}
 extension VoiceRecordingDiscovering { func finish() async {} }
 
 @MainActor
 final class VoiceLibraryPreparation: ObservableObject {
     private let library: VoiceLibraryStore
+    private let performanceCache: TaskPerformanceCache?
     private let extractor: (any VoiceExampleEmbeddingExtracting)?
     private let discoverer: (any VoiceRecordingDiscovering)?
     private let inventoryReader = VoiceDiscoverySourceReader()
@@ -72,11 +100,13 @@ final class VoiceLibraryPreparation: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     init(
-        library: VoiceLibraryStore, extractor: (any VoiceExampleEmbeddingExtracting)? = nil,
+        library: VoiceLibraryStore, performanceCache: TaskPerformanceCache? = nil,
+        extractor: (any VoiceExampleEmbeddingExtracting)? = nil,
         discoverer: (any VoiceRecordingDiscovering)? = nil,
         people: @escaping () -> [Person] = { [] }
     ) {
         self.library = library
+        self.performanceCache = performanceCache
         self.extractor = extractor
         self.discoverer = discoverer
         self.people = people
@@ -236,7 +266,15 @@ final class VoiceLibraryPreparation: ObservableObject {
         guard tasks.isEmpty, let job = library.jobs.first(where: { $0.id == jobID }), job.state != .completed else {
             return
         }
-        guard update(jobID, { $0.state = .running }) else { return }
+        guard
+            update(
+                jobID,
+                {
+                    $0.state = .running
+                    $0.progressStartedAt = Date()
+                    $0.estimatedRemainingSeconds = nil
+                })
+        else { return }
         let token = UUID()
         runTokens[jobID] = token
         let retiring = Array(retiringRuns.values)
@@ -274,9 +312,43 @@ final class VoiceLibraryPreparation: ObservableObject {
         jobID: UUID, directory: (UUID) -> URL,
         extractor: any VoiceExampleEmbeddingExtracting, discoverer: any VoiceRecordingDiscovering
     ) async {
+        guard
+            update(
+                jobID,
+                {
+                    $0.progressPhase = "Analyzing recordings"
+                    $0.progressStartedAt = Date()
+                    $0.estimatedRemainingSeconds = nil
+                })
+        else { return }
         await discoverRecordings(jobID: jobID, directory: directory, discoverer: discoverer)
         guard let job = library.jobs.first(where: { $0.id == jobID }), job.state == .running else { return }
+        let performanceKey = TaskPerformanceKey(
+            operation: "voiceExampleEmbedding", provider: job.providerID.uuidString,
+            model: job.type.modelID, configuration: job.type.revision + ":" + job.type.compatibilityVersion)
+        guard
+            update(
+                jobID,
+                {
+                    $0.progressPhase = "Preparing voice examples"
+                    $0.progressStartedAt = Date()
+                })
+        else { return }
+        let pending = Set(job.exampleIDs).subtracting(job.completedExampleIDs)
+        let remainingDurations = Dictionary(
+            uniqueKeysWithValues: library.examples.compactMap { example -> (UUID, Double)? in
+                guard pending.contains(example.id), !example.excluded, let duration = example.range?.speechDuration
+                else { return nil }
+                return (example.id, duration)
+            })
+        var remainingAudio = remainingDurations.values.reduce(0, +)
+        var measuredAudio = 0.0
+        var measuredSeconds = 0.0
         for exampleID in job.exampleIDs {
+            defer {
+                remainingAudio = max(0, remainingAudio - (remainingDurations[exampleID] ?? 0))
+                updateExampleEstimate(jobID: jobID, key: performanceKey, remainingAudio: remainingAudio)
+            }
             guard !Task.isCancelled,
                 library.jobs.first(where: { $0.id == jobID })?.state == .running
             else { return }
@@ -306,6 +378,7 @@ final class VoiceLibraryPreparation: ObservableObject {
                 continue
             }
             do {
+                updateExampleEstimate(jobID: jobID, key: performanceKey, remainingAudio: remainingAudio)
                 let representation = try await extractor.extract(
                     example: example, directory: directory(example.meetingID), type: job.type)
                 try Task.checkCancellation()
@@ -325,6 +398,20 @@ final class VoiceLibraryPreparation: ObservableObject {
                 guard library.addRepresentation(exampleID: exampleID, embedding: representation),
                     complete(exampleID, jobID: jobID)
                 else { return }
+                if let seconds = await extractor.processingDuration(), let duration = example.range?.speechDuration {
+                    try Task.checkCancellation()
+                    guard library.jobs.first(where: { $0.id == jobID })?.state == .running else { return }
+                    measuredAudio += duration
+                    measuredSeconds += seconds
+                    // Short examples can finish below the cache's minimum sample interval.
+                    if measuredSeconds >= 0.25 {
+                        performanceCache?.record(
+                            key: performanceKey, completedUnits: measuredAudio,
+                            elapsedSeconds: measuredSeconds)
+                        measuredAudio = 0
+                        measuredSeconds = 0
+                    }
+                }
             }
             catch is CancellationError { return }
             catch {
@@ -332,10 +419,25 @@ final class VoiceLibraryPreparation: ObservableObject {
             }
         }
         guard !Task.isCancelled else { return }
+        guard
+            update(
+                jobID,
+                {
+                    $0.progressPhase = "Comparing voice examples"
+                    $0.progressStartedAt = Date()
+                    $0.estimatedRemainingSeconds = nil
+                })
+        else { return }
         if job.discover { groupUnassigned(type: job.type, exampleIDs: Set(job.exampleIDs)) }
         await library.suggestReviewedPeople(from: people())
         guard !Task.isCancelled else { return }
         update(jobID) { $0.state = $0.failures.isEmpty ? .completed : .failed }
+    }
+
+    private func updateExampleEstimate(jobID: UUID, key: TaskPerformanceKey, remainingAudio: Double) {
+        guard !Task.isCancelled else { return }
+        let estimate = performanceCache?.estimate(key: key, remainingUnits: remainingAudio)
+        library.setJobTimeEstimate(estimate, jobID: jobID)
     }
 
     private func discoverRecordings(jobID: UUID, directory: (UUID) -> URL, discoverer: any VoiceRecordingDiscovering)

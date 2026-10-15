@@ -538,27 +538,61 @@ extension MeetingStore {
         guard let selected = selectedSearchProvider, selected.id == providerID else { throw CancellationError() }
         guard !notesStorage.isEditing(id) else { throw CancellationError() }
         guard recordingID == nil, !isStartingRecording, !isFinalizingRecording else { throw CancellationError() }
+        let attemptID = jobProgressAttemptID(.searchIndex, .meeting(id))
+        setJobProgress(.searchIndex, .meeting(id), "Preparing search indexing…")
         let provider = try await localSearch.indexingProvider(selected)
+        let startedAt = Date()
+        let delivery = SearchTaskProgressDelivery()
+        let performanceKey = TaskPerformanceKey(
+            operation: "searchEmbedding", provider: selected.id.uuidString,
+            model: provider.configuration.selectedModel.space, configuration: "characters-v1")
         defer {
+            delivery.persisted = true
             localSearch.progress = nil
             localSearch.indexingFinished()
         }
         let progress: @Sendable (SearchIndexProgress) -> Void = { [weak self] progress in
             Task { @MainActor in
-                guard let self, self.selectedSearchProvider == selected else { return }
+                guard let self, self.selectedSearchProvider == selected,
+                    self.jobProgressAttemptID(.searchIndex, .meeting(id)) == attemptID,
+                    self.isJobRunning(.searchIndex, .meeting(id)),
+                    !delivery.persisted, progress.completed >= delivery.completed
+                else { return }
+                delivery.completed = progress.completed
+                delivery.persisted = progress.persisted
                 self.localSearch.progress = progress
+                if progress.completed == progress.total {
+                    self.setJobProgress(.searchIndex, .meeting(id), "Saving search index…")
+                    return
+                }
+                let estimate =
+                    progress.embeddedCharacters > 0 && progress.embeddingSeconds > 0
+                    ? Double(progress.remainingCharacters) * progress.embeddingSeconds
+                        / Double(progress.embeddedCharacters)
+                    : self.taskProgressEstimate(
+                        key: performanceKey, remainingUnits: Double(progress.remainingCharacters))
                 self.setJobProgress(
-                    .searchIndex, .meeting(id), "Indexing passages: \(progress.completed) of \(progress.total)")
+                    .searchIndex, .meeting(id), "Indexing passages: \(progress.completed) of \(progress.total)",
+                    details: TaskProgress(
+                        phase: "Indexing passages", completed: Double(progress.completed),
+                        total: Double(progress.total), unit: "passages", startedAt: startedAt,
+                        estimatedRemainingSeconds: estimate), attemptID: attemptID)
             }
         }
-        if managedTasks.contains(where: {
+        let refresh = managedTasks.contains(where: {
             $0.kind == .searchIndex && $0.meetingID == id && $0.state == .running && $0.batchID != nil
-        }) {
-            try await provider.refreshIndex(meetingID: id, progress: progress)
+        })
+        let measurement = try await provider.indexWithMeasurement(meetingID: id, refresh: refresh, progress: progress)
+        delivery.persisted = true
+        try Task.checkCancellation()
+        if let measurement, let attemptID,
+            jobProgressAttemptID(.searchIndex, .meeting(id)) == attemptID
+        {
+            reportTaskPerformance(
+                key: performanceKey, completedUnits: Double(measurement.embeddedCharacters),
+                elapsedSeconds: measurement.embeddingSeconds)
         }
-        else {
-            try await provider.updateIndex(meetingID: id, rebuild: false, progress: progress)
-        }
+        setJobProgress(.searchIndex, .meeting(id), "Search index saved.")
     }
 }
 
@@ -573,4 +607,10 @@ extension AppSettings {
         let eligible = serviceProviders.filter { $0.supports(.search) }
         if eligible.count == 1 { searchProviderID = eligible[0].id }
     }
+}
+
+/// Provider callbacks cross onto the main actor; a delayed callback cannot rewind a later one.
+@MainActor private final class SearchTaskProgressDelivery {
+    var completed = -1
+    var persisted = false
 }

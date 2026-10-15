@@ -60,6 +60,7 @@ extension ProviderTranscriptionAttempt {
 
 extension MeetingStore {
     func transcribeWithProvider(id: UUID, provider: ServiceProvider) async throws {
+        let progressAttempt = jobProgressAttemptID(.transcription, .meeting(id))
         guard await ensureMeetingLoaded(id: id) else { throw ServiceError("This meeting no longer exists.") }
         guard libraryWritable else {
             throw ServiceError("Restore the local library before transcribing. Job progress must be saved first.")
@@ -77,7 +78,9 @@ extension MeetingStore {
         {
             try await prepareAppleTranscriptionAudio(id: id) { file in
                 try await AppleTranscriptionAudio.prepare(file) { message in
-                    await self.setJobProgress(.transcription, .meeting(id), message)
+                    await self.setJobProgress(
+                        .transcription, .meeting(id), message, details: .init(phase: message),
+                        attemptID: progressAttempt)
                 }
             }
             guard let latest = self.meeting(id: id) else { throw ServiceError("This meeting no longer exists.") }
@@ -135,19 +138,36 @@ extension MeetingStore {
             let files = audioURLs(for: meeting)
             guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
             let startedAt = Date()
+            let performanceKey = TaskPerformanceKey(
+                operation: "transcription", provider: provider.kind.rawValue, model: provider.model,
+                configuration: attempt.language)
+            let measurement = AudioPerformanceMeasurement()
+            let report: @Sendable (AudioTaskProgress) async -> Void = { [weak self] update in
+                await measurement.include(update)
+                await self?.reportAudioTaskProgress(
+                    update, kind: .transcription, meetingID: id, key: performanceKey, attemptID: progressAttempt)
+            }
             let draft: (segments: [TranscriptSegment], speakers: [MeetingSpeaker])
             if let request = attempt.analysisRequest {
-                let result = try await AppleRecordedAnalysisProvider(meetingID: id).transcribe(
+                let result = try await AppleRecordedAnalysisProvider(meetingID: id, taskProgress: report).transcribe(
                     request: request,
                     files: zip(files, request.context.audio).map { AnalysisAudioFile(reference: $0.1, url: $0.0) }
-                ) { message in await self.setJobProgress(.transcription, .meeting(id), message) }
+                ) { message in
+                    await self.setJobProgress(
+                        .transcription, .meeting(id), message, details: .init(phase: message),
+                        attemptID: progressAttempt)
+                }
                 draft = (result.segments, result.speakers)
             }
             else {
                 // Requests admitted before capability contracts retain unknown input provenance.
                 let result = try await AppleRecordedTranscription.transcribe(
-                    files: files, meetingID: id, language: attempt.language
-                ) { message in await self.setJobProgress(.transcription, .meeting(id), message) }
+                    files: files, meetingID: id, language: attempt.language, progress: report
+                ) { message in
+                    await self.setJobProgress(
+                        .transcription, .meeting(id), message, details: .init(phase: message),
+                        attemptID: progressAttempt)
+                }
                 draft = (result.segments, result.speakers)
             }
             try Task.checkCancellation()
@@ -160,6 +180,8 @@ extension MeetingStore {
             attempt.resultSpeakers = draft.speakers
             try await saveTranscriptionAttempt(attempt, meetingID: id)
             try await saveTranscriptionResult(draft.segments, attempt: attempt, meetingID: id)
+            await commitAudioPerformance(
+                measurement, kind: .transcription, meetingID: id, key: performanceKey, attemptID: progressAttempt)
         case .gdayWebsite:
             let server = GdayServerService.shared
             let origin = try ServiceHTTP.origin(provider.endpoint).absoluteString
@@ -174,8 +196,14 @@ extension MeetingStore {
                 for (index, file) in files.enumerated() where index >= attempt.inputs.count {
                     setJobProgress(
                         .transcription, .meeting(id),
-                        "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…")
+                        "Preparing audio \(index + 1) of \(files.count)…", details: .init(phase: "Preparing audio"))
                     let prepared = try await prepareServerAudio(file)
+                    setJobProgress(
+                        .transcription, .meeting(id),
+                        "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…",
+                        details: .init(
+                            phase: "Uploading audio", completed: Double(index), total: Double(files.count),
+                            unit: "files"))
                     defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
                     let uploadResult = try await server.upload(file: prepared.url, provider: provider)
                     recordDataFlow(uploadResult.dataFlow.referencing(file: file, prepared: prepared.url), meetingID: id)
@@ -187,6 +215,9 @@ extension MeetingStore {
                             sourceType: isMic ? "mic" : "system", channels: prepared.channels))
                     try await saveTranscriptionAttempt(attempt, meetingID: id)
                 }
+                setJobProgress(
+                    .transcription, .meeting(id), "Submitting transcription…",
+                    details: .init(phase: "Submitting transcription"))
                 let submission = try await server.submit(
                     externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs,
                     language: attempt.providerLanguage ?? attempt.language,
@@ -199,7 +230,6 @@ extension MeetingStore {
             var pollFailures = 0
             while true {
                 try Task.checkCancellation()
-                setJobProgress(.transcription, .meeting(id), "Waiting for \(provider.name)…")
                 let status: ProviderResult<ServerTaskResult>
                 do { status = try await server.task(id: taskID, provider: provider) }
                 catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
@@ -215,9 +245,19 @@ extension MeetingStore {
                     try await Task.sleep(for: transcriptionRetryDelay(failures: pollFailures))
                     continue
                 }
+                try Task.checkCancellation()
                 pollFailures = 0
                 switch status.value {
-                case .pending: try await Task.sleep(for: transcriptionPollDelay)
+                case .pending:
+                    setJobProgress(
+                        .transcription, .meeting(id), "Waiting for \(provider.name)…",
+                        details: .init(phase: "Waiting for provider"))
+                    try await Task.sleep(for: transcriptionPollDelay)
+                case .processing:
+                    setJobProgress(
+                        .transcription, .meeting(id), "Transcribing with \(provider.name)…",
+                        details: .init(phase: "Transcribing audio"))
+                    try await Task.sleep(for: transcriptionPollDelay)
                 case .failed(let message):
                     attempt.failure = message
                     try await saveTranscriptionAttempt(attempt, meetingID: id)
@@ -315,8 +355,13 @@ extension MeetingStore {
         try await saveTranscriptionAttempt(attempt, meetingID: id)
         for (index, file) in files.enumerated() where index >= attempt.inputs.count {
             setJobProgress(
-                .transcription, .meeting(id), "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…")
+                .transcription, .meeting(id), "Preparing audio \(index + 1) of \(files.count)…",
+                details: .init(phase: "Preparing audio"))
             let prepared = try await prepareFiledropAudio(file, allowedExtensions: info.allowedExtensions)
+            setJobProgress(
+                .transcription, .meeting(id), "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…",
+                details: .init(
+                    phase: "Uploading audio", completed: Double(index), total: Double(files.count), unit: "files"))
             defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
             let uploadResult = try await filedrop.upload(file: prepared.url)
             recordDataFlow(uploadResult.dataFlow.referencing(file: file, prepared: prepared.url), meetingID: id)
@@ -343,6 +388,9 @@ extension MeetingStore {
             tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
         attempt.submissionUncertain = true
         try await saveTranscriptionAttempt(attempt, meetingID: id)
+        setJobProgress(
+            .transcription, .meeting(id), "Submitting transcription…", details: .init(phase: "Submitting transcription")
+        )
         let submission = try await runpod.submit(
             tracks: tracks, language: attempt.providerLanguage ?? attempt.language, diarize: attempt.diarize)
         recordDataFlow(submission.dataFlow.referencingAudio(files), meetingID: id)
@@ -360,7 +408,6 @@ extension MeetingStore {
         var pollFailures = 0
         while true {
             try Task.checkCancellation()
-            setJobProgress(.transcription, .meeting(id), "Waiting for \(runpod.provider.name)…")
             let status: ProviderResult<ProviderTranscriptionStatus>
             do { status = try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) }
             catch let error as ServiceHTTPStatusError where error.statusCode == 404 {
@@ -377,9 +424,24 @@ extension MeetingStore {
                 try await Task.sleep(for: transcriptionRetryDelay(failures: pollFailures))
                 continue
             }
+            try Task.checkCancellation()
             pollFailures = 0
             switch status.value {
-            case .pending: try await Task.sleep(for: transcriptionPollDelay)
+            case .pending:
+                setJobProgress(
+                    .transcription, .meeting(id), "Waiting for \(runpod.provider.name)…",
+                    details: .init(phase: "Waiting for provider"))
+                try await Task.sleep(for: transcriptionPollDelay)
+            case .queued:
+                setJobProgress(
+                    .transcription, .meeting(id), "Queued at \(runpod.provider.name)…",
+                    details: .init(phase: "Waiting in provider queue"))
+                try await Task.sleep(for: transcriptionPollDelay)
+            case .processing:
+                setJobProgress(
+                    .transcription, .meeting(id), "Transcribing with \(runpod.provider.name)…",
+                    details: .init(phase: "Transcribing audio"))
+                try await Task.sleep(for: transcriptionPollDelay)
             case .failed(let message):
                 attempt.failure = message
                 try await saveTranscriptionAttempt(attempt, meetingID: id)
@@ -470,6 +532,8 @@ extension MeetingStore {
     )
         async throws
     {
+        setJobProgress(
+            .transcription, .meeting(meetingID), "Saving transcript…", details: .init(phase: "Saving transcript"))
         let saved = await enqueueCanonical { [self] in
             do {
                 guard libraryWritable, !deletingMeetingIDs.contains(meetingID),

@@ -217,13 +217,16 @@ extension MeetingStore {
     }
 
     func performPipelineSpeakerAssociation(id: UUID) async throws {
+        setJobProgress(.speakerAssociation, .meeting(id), "Preparing speaker examples…")
         await voiceLibrary.awaitLoaded()
         guard let meeting = meeting(id: id) else { throw MissingManagedTaskMeeting() }
         guard voiceLibrary.ingest(meeting: meeting, directory: directory(for: id)) else {
             throw ServiceError(voiceLibrary.errorMessage ?? "Couldn’t prepare speaker examples.")
         }
+        setJobProgress(.speakerAssociation, .meeting(id), "Comparing voices with the People Library…")
         try await voiceLibrary.suggestReviewedPeopleResult(from: people)
         try Task.checkCancellation()
+        setJobProgress(.speakerAssociation, .meeting(id), "Saving speaker associations…")
         let saved = await enqueueCanonical {
             guard let index = self.meetings.firstIndex(where: { $0.id == id }) else { return false }
             var current = self.voiceLibrary.applyingDecisions(to: self.meetings[index])
@@ -262,12 +265,14 @@ extension MeetingStore {
     }
 
     func performPipelineTodoExtraction(_ task: ManagedTaskRecord) async throws {
+        setJobProgress(.todoExtraction, .meeting(task.meetingID), "Reading the saved summary…")
         let summaryTask = try await pipelineDependencyRecords(task).first { $0.kind == .summary }
         let generated = try summaryTask.flatMap { dependency in
             dependency.pipelineOutcome == .completed
                 ? try SummaryHistory.generation(taskID: dependency.id, at: directory(for: task.meetingID))?.result
                 : nil
         }
+        setJobProgress(.todoExtraction, .meeting(task.meetingID), "Extracting and saving to-dos…")
         let saved = await enqueueCanonical {
             guard let index = self.meetings.firstIndex(where: { $0.id == task.meetingID }) else { return false }
             var current = self.meetings[index]

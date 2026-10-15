@@ -86,9 +86,11 @@ final class MeetingStore: ObservableObject {
     /// block recording. Progress is transient: outcomes appear in the content
     /// itself, and failures use errorMessage.
     @Published var backgroundJobs: [BackgroundJob] = []
-    var pendingJobProgress: [BackgroundJob.Key: String] = [:]
+    var pendingJobProgress: [BackgroundJob.Key: BackgroundJob] = [:]
     var jobProgressUpdatedAt: [BackgroundJob.Key: ContinuousClock.Instant] = [:]
     var jobProgressFlush: Task<Void, Never>?
+    lazy var taskPerformanceCache = TaskPerformanceCache(
+        url: indexDirectory.appendingPathComponent("task-performance-v1.json"))
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskRevision = 0
     @Published var managedTaskScopeRevisions: [TaskHistoryScope: Int] = [:]
@@ -200,7 +202,7 @@ final class MeetingStore: ObservableObject {
 
     private let voiceLibraryLoading: VoiceLibraryStore.Loading
     lazy var voicePreparation = VoiceLibraryPreparation(
-        library: voiceLibrary, people: { [weak self] in self?.people ?? [] })
+        library: voiceLibrary, performanceCache: taskPerformanceCache, people: { [weak self] in self?.people ?? [] })
     private var recorder: AudioCapture?
     private var captureTransition = false
     private var activeRecordingFormat: RecordingFormat = .opus
@@ -1295,6 +1297,8 @@ final class MeetingStore: ObservableObject {
         captureTransition = true
         isFinalizingRecording = true
         let pipelineTaskID = await admitRecordingPipeline(id: id, transcribeAfter: transcribeAfter)
+        let reportsFinalization = beginJob(.recordingFinalization, .meeting(id), progress: "Finishing audio capture…")
+        defer { if reportsFinalization { endJob(.recordingFinalization, .meeting(id)) } }
         let duration = recordingDuration
         var stopFailed = false
         do { try await recorder?.stop() }
@@ -1320,6 +1324,7 @@ final class MeetingStore: ObservableObject {
                 }
             }
         }
+        setJobProgress(.recordingFinalization, .meeting(id), "Finishing live transcription…")
         await liveTranscript.finish()
         let profile = recorder?.profile
         recorder = nil
@@ -1327,9 +1332,11 @@ final class MeetingStore: ObservableObject {
         if let index = meetings.firstIndex(where: { $0.id == id }) {
             meetings[index].duration = duration
             meetings[index].recordingProfile = profile
+            setJobProgress(.recordingFinalization, .meeting(id), "Saving recording…")
             if !(await save()) { stopFailed = true }
         }
         if !stopFailed && activeRecordingFormat == .m4a {
+            setJobProgress(.recordingFinalization, .meeting(id), "Converting recorded audio…")
             do { try await finalizeRecordingAudio(id: id, format: activeRecordingFormat) }
             catch {
                 errorMessage =
@@ -1478,7 +1485,12 @@ final class MeetingStore: ObservableObject {
         var newFolders: [URL] = []
         var additions: [(id: UUID, title: String, file: String, duration: Double, createdAt: Date)] = []
         do {
-            for source in urls {
+            for (position, source) in urls.enumerated() {
+                setJobProgress(
+                    .importAudio, scope, "Importing audio \(position + 1) of \(urls.count)…",
+                    details: TaskProgress(
+                        phase: "Importing audio", completed: Double(position),
+                        total: Double(urls.count), unit: "files"))
                 try Task.checkCancellation()
                 let ext = source.pathExtension.lowercased()
                 guard source.isFileURL,
@@ -1553,6 +1565,7 @@ final class MeetingStore: ObservableObject {
                 }
                 meetings.insert(contentsOf: imported, at: 0)
             }
+            setJobProgress(.importAudio, scope, "Saving imported audio…")
             guard await save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
         }
         catch {

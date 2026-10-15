@@ -90,6 +90,7 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var canUndo = false
     @Published private(set) var jobs: [VoicePreparationJob] = []
+    private var jobTimeEstimates: [UUID: Double] = [:]
     @Published private(set) var isLoaded = false
     private(set) var decisions: [VoiceSpeakerDecision] = []
     private var document = VoiceLibraryDocument()
@@ -281,7 +282,7 @@ final class VoiceLibraryStore: ObservableObject {
         }
         if decisions != document.decisions { decisions = document.decisions }
         canUndo = !document.undo.isEmpty
-        if jobs != document.jobs { jobs = document.jobs }
+        publishJobs()
     }
 
     private func commit(_ next: VoiceLibraryDocument, changed: Set<UUID> = []) -> Bool {
@@ -476,8 +477,33 @@ final class VoiceLibraryStore: ObservableObject {
         return commit(next)
     }
 
+    /// Estimates are presentation state. Updating one must not write a recovery checkpoint.
+    func setJobTimeEstimate(_ estimate: Double?, jobID: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }), jobs[index].state == .running else { return }
+        jobTimeEstimates[jobID] = estimate
+        guard jobs[index].estimatedRemainingSeconds != estimate else { return }
+        jobs[index].estimatedRemainingSeconds = estimate
+    }
+
+    private func publishJobs() {
+        let active = Set(
+            document.jobs.filter { $0.state == .running && $0.progressPhase == "Preparing voice examples" }.map(\.id))
+        jobTimeEstimates = jobTimeEstimates.filter { active.contains($0.key) }
+        let presented = document.jobs.map { job in
+            var value = job
+            value.estimatedRemainingSeconds = jobTimeEstimates[job.id]
+            return value
+        }
+        if jobs != presented { jobs = presented }
+    }
+
     @discardableResult
     func setJobs(_ jobs: [VoicePreparationJob]) -> Bool {
+        let jobs = jobs.map { job in
+            var value = job
+            value.estimatedRemainingSeconds = nil
+            return value
+        }
         guard isLoaded else { return false }
         guard jobs != document.jobs else { return true }
         guard admitVoiceWrite() else { return false }
@@ -494,7 +520,7 @@ final class VoiceLibraryStore: ObservableObject {
         do {
             try persistence.commit(previous: previous, next: next)
             document.jobs = jobs
-            self.jobs = jobs
+            publishJobs()
             errorMessage = persistence.maintenanceWarning
             return true
         }

@@ -13,6 +13,11 @@ struct SearchIndexRebuild: Codable, Equatable {
     var failed = 0
     var cancelled = 0
     var isActive: Bool { state == .requested || state == .running }
+    var progressDetails: TaskProgress {
+        TaskProgress(
+            phase: "Rebuilding search index", completed: meetings.map { _ in Double(finished) },
+            total: meetings.map { Double($0.count) }, unit: "meetings")
+    }
     var progress: String {
         if state == .cancelled { return "Rebuild cancelled." }
         guard let meetings else { return "Preparing rebuild…" }
