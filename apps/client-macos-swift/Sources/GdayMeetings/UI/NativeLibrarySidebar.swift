@@ -44,13 +44,19 @@ struct NativeLibrarySidebar: NSViewRepresentable {
         var parent: NativeLibrarySidebar
         weak var table: NSTableView?
         private var updating = false
+        private var synchronizedSelection: IndexSet?
         init(_ parent: NativeLibrarySidebar) { self.parent = parent }
         func update(_ parent: NativeLibrarySidebar) {
             self.parent = parent
             guard let table else { return }
+            let selected = parent.selection.map { IndexSet(integer: $0.rawValue) } ?? IndexSet()
+            // AppKit can be tracking a new row while the binding still contains
+            // the previous destination. Unrelated content refreshes must not
+            // restore that old row before the completed selection notification.
+            guard selected != synchronizedSelection else { return }
+            synchronizedSelection = selected
             updating = true
             defer { updating = false }
-            let selected = parent.selection.map { IndexSet(integer: $0.rawValue) } ?? IndexSet()
             if table.selectedRowIndexes != selected { table.selectRowIndexes(selected, byExtendingSelection: false) }
         }
         func numberOfRows(in tableView: NSTableView) -> Int { LibraryDestination.allCases.count }
@@ -75,6 +81,7 @@ struct NativeLibrarySidebar: NSViewRepresentable {
             else {
                 return
             }
+            synchronizedSelection = IndexSet(integer: destination.rawValue)
             parent.selection = destination
         }
     }

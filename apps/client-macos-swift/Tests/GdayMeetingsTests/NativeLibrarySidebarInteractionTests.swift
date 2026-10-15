@@ -5,6 +5,50 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct NativeLibrarySidebarInteractionTests {
+    @Test func contentRefreshPreservesPendingPointerSelection() {
+        var selection: LibraryDestination? = .meetings
+        var writes = 0
+        let sidebar = NativeLibrarySidebar(
+            selection: Binding(
+                get: { selection },
+                set: {
+                    selection = $0
+                    writes += 1
+                }))
+        let coordinator = sidebar.makeCoordinator()
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("destination")))
+        table.dataSource = coordinator
+        coordinator.table = table
+        table.reloadData()
+        coordinator.update(sidebar)
+
+        // AppKit changes its selected row before completing pointer tracking.
+        // Playback or a focus change can refresh SwiftUI in that interval.
+        table.selectRowIndexes(IndexSet(integer: LibraryDestination.tasks.rawValue), byExtendingSelection: false)
+        for _ in 0..<3 { coordinator.update(sidebar) }
+        #expect(table.selectedRow == LibraryDestination.tasks.rawValue)
+        #expect(selection == .meetings)
+        #expect(writes == 0)
+        coordinator.tableViewSelectionDidChange(
+            Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+        #expect(selection == .tasks)
+        #expect(writes == 1)
+
+        // A programmatic return to the previous destination must still apply,
+        // even before SwiftUI refreshes after the pointer selection.
+        selection = .meetings
+        coordinator.update(sidebar)
+        #expect(table.selectedRow == LibraryDestination.meetings.rawValue)
+        selection = .agents
+        coordinator.update(sidebar)
+        #expect(table.selectedRow == LibraryDestination.agents.rawValue)
+        selection = nil
+        coordinator.update(sidebar)
+        #expect(table.selectedRow == -1)
+        #expect(writes == 1)
+    }
+
     @Test func selectionPublishesOnceAfterTracking() {
         var selection: LibraryDestination? = .meetings
         var writes = 0
