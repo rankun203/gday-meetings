@@ -8,6 +8,10 @@ struct LocalDiarizationTests {
         for (stem, expected) in [
             ("microphone", "microphone"), ("system", "system"), ("mic", "microphone"), ("system_mix", "system"),
             ("dynamic", "unknown"), ("systematic", "unknown"),
+            ("microphone-compatible-00000000-0000-0000-0000-000000000001", "microphone"),
+            ("system_mix-compatible-00000000-0000-0000-0000-000000000001", "system"),
+            ("dynamic-compatible-00000000-0000-0000-0000-000000000001", "unknown"),
+            ("mic-compatible-not-a-uuid", "unknown"),
         ] {
             #expect(
                 LocalDiarizationInputPolicy.sourceName(for: URL(fileURLWithPath: "/synthetic/" + stem + ".wav"))

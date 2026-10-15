@@ -10,6 +10,10 @@ struct ProviderTranscriptionAttempt: Codable, Equatable {
     var inputs: [ServerTrackInput] = []
     var taskID: String?
     var originalTranscript: [TranscriptSegment] = []
+    var audioReferences: [AnalysisAudioReference]?
+    var analysisRequest: TranscriptionAnalysisRequest?
+    var providerDisplayName: String?
+    var admittedAt: Date?
     var result: [TranscriptSegment]?
     var resultSpeakers: [MeetingSpeaker]?
     var originalSpeakers: [MeetingSpeaker]?
@@ -23,6 +27,9 @@ struct ProviderTranscriptionAttempt: Codable, Equatable {
     var providerLanguage: String?
     var failure: String?
     var remoteJobExpired: Bool?
+    /// Retain the old admission when an uncompleted local request needs converted audio.
+    var supersededAnalysisRequests: [TranscriptionAnalysisRequest]?
+    var requiresAudioAdmission: Bool?
 }
 
 extension ProviderTranscriptionAttempt {
@@ -32,7 +39,23 @@ extension ProviderTranscriptionAttempt {
             originalTranscript: meeting.transcript, originalSpeakers: meeting.speakers,
             diarize: provider.enabledCapabilities.contains(.diarization),
             language: meeting.language)
+        providerDisplayName = provider.name
     }
+
+    /// Validate the complete snapshot before marking a draft as admitted.
+    mutating func admit(provider: ServiceProvider, audio: [AnalysisAudioReference], diarize: Bool) throws {
+        let request = TranscriptionAnalysisRequest(
+            context: .init(
+                requestID: UUID(uuidString: idempotencyKey) ?? UUID(), providerID: provider.id,
+                model: provider.model, audio: audio, options: ["diarize": String(diarize)]), language: language)
+        let capabilities: AudioAnalysisCapabilities = provider.kind == .appleSpeech ? .apple : .remoteWorker
+        try capabilities.validate(request)
+        audioReferences = audio
+        self.diarize = diarize
+        analysisRequest = request
+        admittedAt = Date()
+    }
+
 }
 
 extension MeetingStore {
@@ -41,14 +64,28 @@ extension MeetingStore {
         guard libraryWritable else {
             throw ServiceError("Restore the local library before transcribing. Job progress must be saved first.")
         }
-        guard let meeting = meetings.first(where: { $0.id == id }) else { return }
+        guard var meeting = meetings.first(where: { $0.id == id }) else { return }
+        if let pending = meeting.transcriptionAttempt {
+            guard pending.providerID == provider.id, pending.kind == provider.kind,
+                pending.endpoint == provider.endpoint
+            else {
+                throw ServiceError("Resume the pending transcription with its original provider and address.")
+            }
+        }
+        if provider.kind == .appleSpeech, meeting.transcriptionAttempt?.result == nil,
+            meeting.transcriptionAttempt?.failure == nil, meeting.transcriptionAttempt?.remoteJobExpired != true
+        {
+            try await prepareAppleTranscriptionAudio(id: id) { file in
+                try await AppleTranscriptionAudio.prepare(file) { message in
+                    await self.setJobProgress(.transcription, .meeting(id), message)
+                }
+            }
+            guard let latest = self.meeting(id: id) else { throw ServiceError("This meeting no longer exists.") }
+            meeting = latest
+        }
         var attempt =
             meeting.transcriptionAttempt
             ?? ProviderTranscriptionAttempt(provider: provider, meeting: meeting)
-        if meeting.transcriptionAttempt == nil {
-            attempt.diarize =
-                provider.supports(.diarization) && settings.shouldLabelDuringTranscription(providerID: provider.id)
-        }
         guard attempt.providerID == provider.id, attempt.kind == provider.kind, attempt.endpoint == provider.endpoint
         else {
             throw ServiceError("Resume the pending transcription with its original provider and address.")
@@ -74,16 +111,44 @@ extension MeetingStore {
                     attempt.providerLanguage ?? attempt.language, for: provider,
                     preservingRequestCode: meeting.transcriptionAttempt != nil)
         }
+        if meeting.transcriptionAttempt == nil || attempt.requiresAudioAdmission == true {
+            let files = audioURLs(for: meeting)
+            guard files.count == meeting.audioFiles.count else {
+                throw ServiceError("Some meeting audio is missing. Restore it before transcribing.")
+            }
+            let audio = AudioAnalysisArtifacts.audio(
+                files: files, revisions: try LocalDiarizationInputPolicy.revisions(for: files))
+            try attempt.admit(
+                provider: provider, audio: audio,
+                diarize: provider.supports(.diarization)
+                    && settings.shouldLabelDuringTranscription(providerID: provider.id))
+            attempt.requiresAudioAdmission = nil
+
+        }
+        if let request = attempt.analysisRequest {
+            let capabilities: AudioAnalysisCapabilities = provider.kind == .appleSpeech ? .apple : .remoteWorker
+            try capabilities.validate(request)
+        }
         switch provider.kind {
         case .appleSpeech:
             try await saveTranscriptionAttempt(attempt, meetingID: id)
             let files = audioURLs(for: meeting)
             guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
             let startedAt = Date()
-            let draft = try await AppleRecordedTranscription.transcribe(
-                files: files, meetingID: id, language: attempt.language
-            ) { message in
-                await self.setJobProgress(.transcription, .meeting(id), message)
+            let draft: (segments: [TranscriptSegment], speakers: [MeetingSpeaker])
+            if let request = attempt.analysisRequest {
+                let result = try await AppleRecordedAnalysisProvider(meetingID: id).transcribe(
+                    request: request,
+                    files: zip(files, request.context.audio).map { AnalysisAudioFile(reference: $0.1, url: $0.0) }
+                ) { message in await self.setJobProgress(.transcription, .meeting(id), message) }
+                draft = (result.segments, result.speakers)
+            }
+            else {
+                // Requests admitted before capability contracts retain unknown input provenance.
+                let result = try await AppleRecordedTranscription.transcribe(
+                    files: files, meetingID: id, language: attempt.language
+                ) { message in await self.setJobProgress(.transcription, .meeting(id), message) }
+                draft = (result.segments, result.speakers)
             }
             try Task.checkCancellation()
             recordDataFlow(
@@ -375,61 +440,106 @@ extension MeetingStore {
     private func transcriptSource(_ attempt: ProviderTranscriptionAttempt) -> TranscriptSource {
         TranscriptSource(
             id: UUID(uuidString: attempt.idempotencyKey) ?? UUID(),
-            providerName: settings.serviceProviders.first(where: { $0.id == attempt.providerID })?.name
-                ?? attempt.kind.title,
-            generatedAt: Date())
+            providerName: attempt.providerDisplayName ?? attempt.kind.title,
+            generatedAt: attempt.admittedAt ?? Date())
     }
 
     func applySavedTranscriptionResult(meetingID: UUID) async {
         guard !isJobRunning(.transcription, .meeting(meetingID)),
-            var latest = meetings.first(where: { $0.id == meetingID }),
-            let result = latest.transcriptionAttempt?.result
+            let latest = meetings.first(where: { $0.id == meetingID }),
+            var attempt = latest.transcriptionAttempt, let result = attempt.result
         else { return }
-        guard preserveTranscript(latest) else { return }
-        latest.replaceSpeakers(latest.transcriptionAttempt?.resultSpeakers ?? [])
-        latest.transcript = result
-        latest.speakerLabelSource = nil
-        if let attempt = latest.transcriptionAttempt {
-            latest.transcriptSource = transcriptSource(attempt)
-        }
-        latest.restoreSpeakerIdentities()
-        markManagedTaskCompletion(on: &latest, kind: .transcription)
-        latest.transcriptionAttempt = nil
-        if await updateMeeting(latest) {
-            await reconcileManagedTaskCompletion(for: latest, kind: .transcription)
+        // Explicit replacement accepts these current edits; the queued save still
+        // rejects another edit and preserves this exact snapshot in history.
+        attempt.originalTranscript = latest.transcript
+        attempt.originalSpeakers = latest.speakers
+        do {
+            try await saveTranscriptionResult(result, attempt: attempt, meetingID: meetingID, scheduleSummary: false)
+            if let saved = meeting(id: meetingID) {
+                await reconcileManagedTaskCompletion(for: saved, kind: .transcription)
+            }
             await scheduleAutomaticSpeakerLabeling(id: meetingID)
             scheduleAutomaticSummary(id: meetingID)
         }
+        catch { errorMessage = error.localizedDescription }
     }
 
-    func saveTranscriptionResult(_ result: [TranscriptSegment], attempt: ProviderTranscriptionAttempt, meetingID: UUID)
+    func saveTranscriptionResult(
+        _ result: [TranscriptSegment], attempt: ProviderTranscriptionAttempt, meetingID: UUID,
+        scheduleSummary: Bool = true
+    )
         async throws
     {
-        guard var latest = meetings.first(where: { $0.id == meetingID }) else { return }
-        guard latest.transcript == attempt.originalTranscript,
-            attempt.originalSpeakers == nil || latest.speakers == attempt.originalSpeakers
-        else {
-            throw ServiceError(
-                "The transcript was edited during processing. The new result is saved. Choose Apply Saved Transcript to review the replacement."
-            )
+        let saved = await enqueueCanonical { [self] in
+            do {
+                guard libraryWritable, !deletingMeetingIDs.contains(meetingID),
+                    let index = meetings.firstIndex(where: { $0.id == meetingID })
+                else { return false }
+                var latest = meetings[index]
+                guard latest.transcript == attempt.originalTranscript,
+                    attempt.originalSpeakers == nil || latest.speakers == attempt.originalSpeakers
+                else {
+                    throw ServiceError(
+                        "The transcript was edited during processing. The new result is saved. Choose Apply Saved Transcript to review the replacement."
+                    )
+                }
+                let folder = directory(for: meetingID)
+                let files = audioURLs(for: latest)
+                let revisions = try LocalDiarizationInputPolicy.revisions(for: files)
+                let audio = AudioAnalysisArtifacts.audio(files: files, revisions: revisions)
+                if let admitted = attempt.audioReferences, admitted != audio {
+                    throw ServiceError(
+                        "The source audio changed during transcription. Transcribe the current recording again.")
+                }
+                var artifacts: [CanonicalMeetingArtifact] = []
+                if let history = try AudioAnalysisArtifacts.history(meeting: latest, directory: folder) {
+                    artifacts.append(history)
+                }
+                latest.replaceSpeakers(attempt.resultSpeakers ?? [])
+                if let request = attempt.analysisRequest {
+                    guard request.context.audio == attempt.audioReferences else {
+                        throw AudioAnalysisContractError.invalidRequest
+                    }
+                    latest.transcript = try AudioAnalysisBoundary.transcription(
+                        request: request, providerName: transcriptSource(attempt).providerName,
+                        segments: result, speakers: attempt.resultSpeakers ?? []
+                    ).segments
+                }
+                else {
+                    latest.transcript = result
+                }
+                latest.speakerLabelSource = nil
+                latest.transcriptSource = transcriptSource(attempt)
+                latest.restoreSpeakerIdentities()
+                if let source = try AudioAnalysisArtifacts.source(
+                    meeting: latest, audio: attempt.audioReferences, directory: folder, binding: .admittedInput,
+                    request: attempt.analysisRequest)
+                {
+                    artifacts.append(source)
+                }
+                markManagedTaskCompletion(on: &latest, kind: .transcription)
+                latest.transcriptionAttempt = nil
+                meetings[index] = latest
+                invalidateExternalMeetingReloads(ids: [meetingID])
+                return await performCanonicalSave(
+                    artifacts: artifacts,
+                    validateInputs: {
+                        guard try LocalDiarizationInputPolicy.revisions(for: files) == revisions else {
+                            throw ServiceError("The source audio changed before the transcript could be saved.")
+                        }
+                    })
+            }
+            catch {
+                errorMessage = error.localizedDescription
+                return false
+            }
         }
-        guard preserveTranscript(latest) else {
-            throw ServiceError(errorMessage ?? "Couldn’t save the previous transcript.")
-        }
-        latest.replaceSpeakers(attempt.resultSpeakers ?? [])
-        latest.transcript = result
-        latest.speakerLabelSource = nil
-        latest.transcriptSource = transcriptSource(attempt)
-        latest.restoreSpeakerIdentities()
-        markManagedTaskCompletion(on: &latest, kind: .transcription)
-        latest.transcriptionAttempt = nil
-        errorMessage = nil
-        guard await updateMeeting(latest) else {
-            throw ServiceError(errorMessage ?? "Couldn’t save the transcript.")
-        }
-        if !managedTasks.contains(where: {
-            $0.kind == .transcription && $0.meetingID == meetingID && $0.state == .running && $0.pipelineID != nil
-        }) {
+        guard saved else { throw ServiceError(errorMessage ?? "Couldn’t save the transcript.") }
+        if scheduleSummary
+            && !managedTasks.contains(where: {
+                $0.kind == .transcription && $0.meetingID == meetingID && $0.state == .running && $0.pipelineID != nil
+            })
+        {
             scheduleAutomaticSummary(id: meetingID)
         }
     }

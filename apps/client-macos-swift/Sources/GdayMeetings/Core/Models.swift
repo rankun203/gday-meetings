@@ -12,9 +12,12 @@ struct TranscriptSegment: Codable, Identifiable, Equatable {
     var sourcePlaceholder: Bool?
     var personID: UUID?
     var associationUncertain: Bool?
+    var analysisTrackID: String?
+    var timing: TranscriptTextTiming?
+    var sourceSpans: [TranscriptSourceSpan]?
     enum CodingKeys: String, CodingKey {
         case id, start, end, speaker, text, speakerID, source, session, sourcePlaceholder, personID,
-            associationUncertain
+            associationUncertain, analysisTrackID, timing, sourceSpans
     }
 
 }
@@ -171,6 +174,9 @@ extension TranscriptSegment {
         sourcePlaceholder = try values.decodeIfPresent(Bool.self, forKey: .sourcePlaceholder)
         personID = try values.decodeIfPresent(UUID.self, forKey: .personID)
         associationUncertain = try values.decodeIfPresent(Bool.self, forKey: .associationUncertain)
+        analysisTrackID = try values.decodeIfPresent(String.self, forKey: .analysisTrackID)
+        timing = try values.decodeIfPresent(TranscriptTextTiming.self, forKey: .timing)
+        sourceSpans = try values.decodeIfPresent([TranscriptSourceSpan].self, forKey: .sourceSpans)
     }
 }
 

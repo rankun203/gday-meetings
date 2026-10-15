@@ -440,6 +440,7 @@ extension LiveTranscriptPhrase {
         row.start = selected[0].start
         row.words = selected
         row.text = String(text[first...])
+        row.textTiming = validTextTiming?.sliced(to: NSRange(first..<text.endIndex, in: text))
         return row
     }
 }

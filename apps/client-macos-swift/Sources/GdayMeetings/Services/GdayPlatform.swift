@@ -14,6 +14,37 @@ struct ServerTranscriptSegment: Equatable {
     let track: String
     var embedding: [Double]?
     var voiceEmbedding: TypedVoiceEmbedding? = nil
+    var timing: TranscriptTextTiming? = nil
+
+    /// Untimed words advance the text cursor but remain outside the timed spans.
+    static func wordTiming(_ entry: [String: Any], text: String) -> TranscriptTextTiming? {
+        guard let entries = entry["words"] as? [[String: Any]], !entries.isEmpty else { return nil }
+        let source = text as NSString
+        var cursor = 0
+        var spans: [TranscriptTimedSpan] = []
+        for word in entries {
+            // Once text cannot be anchored, later repeated words are ambiguous.
+            // Keep the valid prefix rather than guessing where to resume.
+            guard let value = word["word"] as? String else { break }
+            let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            let range = source.range(
+                of: token, options: [], range: NSRange(location: cursor, length: source.length - cursor))
+            guard range.location != NSNotFound else { break }
+            cursor = NSMaxRange(range)
+            guard let start = word["start"] as? Double, let end = word["end"] as? Double,
+                start.isFinite, end.isFinite, start >= 0, end > start,
+                start >= (entry["start"] as? Double ?? 0), end <= (entry["end"] as? Double ?? .infinity),
+                start >= (spans.last?.start ?? 0)
+            else { continue }
+            spans.append(
+                .init(
+                    range: .init(location: range.location, length: range.length),
+                    start: start, end: end, granularity: .word))
+        }
+        let timing = TranscriptTextTiming(text: text, spans: spans)
+        return timing.isValid ? timing : nil
+    }
 }
 enum ServerTaskResult {
     case pending
@@ -123,7 +154,9 @@ extension GdayServerService {
                         let text = entry["text"] as? String, start.isFinite, end.isFinite, start >= 0, end >= start
                     else { throw ServiceError("The server transcript contains an invalid segment.") }
                     segments.append(
-                        .init(start: start, end: end, text: text, speaker: entry["speaker"] as? String, track: name))
+                        .init(
+                            start: start, end: end, text: text, speaker: entry["speaker"] as? String, track: name,
+                            timing: ServerTranscriptSegment.wordTiming(entry, text: text)))
                 }
             }
             return .complete(segments.sorted { $0.start == $1.start ? $0.track < $1.track : $0.start < $1.start })

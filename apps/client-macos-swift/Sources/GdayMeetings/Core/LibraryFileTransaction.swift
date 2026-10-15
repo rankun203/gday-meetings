@@ -33,11 +33,7 @@ struct LibraryFileTransaction {
             let destination = root.appendingPathComponent(entry.path)
             if let backup = entry.backup {
                 let saved = journal.appendingPathComponent(backup)
-                try Data(contentsOf: saved).write(to: destination, options: .atomic)
-                if let permissions = try FileManager.default.attributesOfItem(atPath: saved.path)[.posixPermissions] {
-                    try FileManager.default.setAttributes(
-                        [.posixPermissions: permissions], ofItemAtPath: destination.path)
-                }
+                try Self.copyAtomically(saved, to: destination)
             }
             else if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
@@ -51,5 +47,20 @@ struct LibraryFileTransaction {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return }
         transaction.entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: manifest))
         try transaction.restore()
+    }
+
+    /// Copy through a sibling so large audio rollback stays bounded in memory.
+    /// copyItem preserves permissions; rename publishes the complete file atomically.
+    static func copyAtomically(_ source: URL, to destination: URL) throws {
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".restore-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.copyItem(at: source, to: temporary)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            _ = try FileManager.default.replaceItemAt(
+                destination, withItemAt: temporary, options: .usingNewMetadataOnly)
+        }
+        else {
+            try FileManager.default.moveItem(at: temporary, to: destination)
+        }
     }
 }

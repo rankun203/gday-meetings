@@ -170,10 +170,21 @@ enum SpeakerRecognition {
                     speakerID = speaker.id
                 }
             }
-            return TranscriptSegment(
+            var result = TranscriptSegment(
                 start: segment.start, end: segment.end,
                 speaker: segment.speaker ?? "",
-                text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines), speakerID: speakerID)
+                text: segment.text, speakerID: speakerID)
+            result.timing = segment.timing
+            result.analysisTrackID =
+                attempt.inputs.firstIndex { $0.trackName == segment.track }
+                .map { "track\($0)" } ?? segment.track
+            let source = attempt.inputs.first { $0.trackName == segment.track }?.sourceType ?? segment.track
+            switch source.lowercased() {
+            case "mic", "microphone": result.source = .microphone
+            case "sys", "system", "system_mix": result.source = .system
+            default: break
+            }
+            return result
         }
         // Provider labels are retained without turning a similarity guess into
         // a person's name. Playable evidence is reviewed in the voice library.

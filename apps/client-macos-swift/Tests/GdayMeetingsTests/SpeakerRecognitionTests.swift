@@ -43,7 +43,7 @@ import Testing
         let recognized = SpeakerRecognition.result(
             segments, attempt: .init(provider: provider(), meeting: Meeting()), people: [])
         #expect(recognized.speakers.count == 2)
-        #expect(recognized.segments[1].text == "Two  words")
+        #expect(recognized.segments[1].text == " \tTwo  words\n")
         #expect(recognized.segments[1].start == 1)
         #expect(recognized.segments[1].end == 2)
         #expect(recognized.segments[0].speakerID != recognized.segments[1].speakerID)

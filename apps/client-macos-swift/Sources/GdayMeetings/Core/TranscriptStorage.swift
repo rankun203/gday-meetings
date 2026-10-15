@@ -119,13 +119,26 @@ extension TranscriptSegment {
             text: phrase.text, speakerID: phrase.speakerIdentity ?? phrase.id,
             source: phrase.source, session: phrase.session,
             sourcePlaceholder: !phrase.hasSpeakerIdentity, personID: phrase.personID,
-            associationUncertain: phrase.associationUncertain)
+            associationUncertain: phrase.associationUncertain,
+            timing: phrase.validTextTiming)
     }
 
     func livePhrase(meetingID: UUID) -> LiveTranscriptPhrase {
-        LiveTranscriptPhrase(
+        let words: [LiveTranscriptWord]
+        if let timing, timing.isValid, timing.text == text {
+            words = timing.spans.map {
+                .init(
+                    text: (text as NSString).substring(
+                        with: NSRange(location: $0.range.location, length: $0.range.length)),
+                    start: $0.start, end: $0.end)
+            }
+        }
+        else {
+            words = []
+        }
+        return LiveTranscriptPhrase(
             id: id, session: session ?? meetingID, source: source ?? .system,
-            start: start, end: end, text: text, personID: personID,
+            start: start, end: end, text: text, words: words, textTiming: timing, personID: personID,
             speakerIdentity: sourcePlaceholder == true ? nil : speakerID,
             diarizationLabel: speaker, associationUncertain: associationUncertain)
     }

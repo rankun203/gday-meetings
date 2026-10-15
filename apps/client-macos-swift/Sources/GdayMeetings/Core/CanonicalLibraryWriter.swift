@@ -19,11 +19,14 @@ struct CanonicalLibraryWrite: Sendable {
     var indexIsBuilding: Bool
     var voice: VoiceLibraryStore.CanonicalCommit?
     var artifacts: [CanonicalMeetingArtifact] = []
+    var reconcileMeetingID: UUID? = nil
     var validateInputs: (@Sendable () throws -> Void)? = nil
+    var audioReplacements: [CanonicalAudioReplacement] = []
 }
 
 struct CanonicalLibraryResult: Sendable {
     var committed: Bool
+    var meetings: [Meeting] = []
     var requiresRecovery = false
     var error: String?
     var warning: String?
@@ -36,7 +39,7 @@ struct CanonicalLibraryResult: Sendable {
 enum CanonicalLibraryWriter {
     static func write(_ input: CanonicalLibraryWrite) -> CanonicalLibraryResult {
         let dataDirectory = input.directory
-        let meetings = input.current.meetings
+        var meetings = input.current.meetings
         let people = input.current.people
         let tags = input.current.tags
         let contextualChats = input.current.contextualChats
@@ -51,9 +54,26 @@ enum CanonicalLibraryWriter {
         var voiceWorker: VoiceLibraryPersistence?
         func directory(for id: UUID) -> URL { MeetingFolderStorage.folder(id: id, directory: dataDirectory) }
         var transaction = LibraryFileTransaction(root: dataDirectory)
+        var reconciledDisk: Meeting?
         var mergedEntries: [MeetingListEntry] = []
         do {
             try input.validateInputs?()
+            for (id, replacements) in Dictionary(grouping: input.audioReplacements, by: \.meetingID) {
+                guard let before = lastSavedLibrary.meetings.first(where: { $0.id == id }),
+                    let after = meetings.first(where: { $0.id == id }),
+                    Set(replacements.map(\.original)).count == replacements.count,
+                    Set(replacements.map(\.replacement)).count == replacements.count,
+                    replacements.allSatisfy({ before.audioFiles.contains($0.original) }),
+                    after.audioFiles
+                        == before.audioFiles.map({ name in
+                            replacements.first(where: { $0.original == name })?.replacement ?? name
+                        }),
+                    Set(after.audioFiles).count == after.audioFiles.count
+                else { throw ServiceError("The meeting’s audio changed during conversion. Try transcribing again.") }
+            }
+            for audio in input.audioReplacements {
+                try audio.validate(directory: dataDirectory)
+            }
             for artifact in input.artifacts {
                 guard meetings.contains(where: { $0.id == artifact.meetingID }) else {
                     throw MeetingError.message("The artifact’s meeting is unavailable.")
@@ -72,6 +92,31 @@ enum CanonicalLibraryWriter {
                 worker.adopt(voice.persistence)
                 voiceWorker = worker
                 try worker.commit(previous: voice.previous, next: voice.next, transaction: &transaction)
+            }
+            if let id = input.reconcileMeetingID,
+                let position = meetings.firstIndex(where: { $0.id == id }),
+                var baseline = lastSavedLibrary.meetings.first(where: { $0.id == id })
+            {
+                var disk = try MeetingFolderStorage.read(id: id, directory: dataDirectory)
+                disk.notes = baseline.notes
+                if recordingID == id { disk.transcript = baseline.transcript }
+                baseline.personIDs = MeetingListEntry(baseline).personIDs
+                disk.personIDs = MeetingListEntry(disk).personIDs
+                meetings[position].personIDs = MeetingListEntry(meetings[position]).personIDs
+                reconciledDisk = disk
+                meetings[position] = try RecordingMeetingMerge.merge(
+                    baseline: baseline, proposed: meetings[position], disk: disk)
+            }
+            if let id = input.reconcileMeetingID,
+                !lastSavedLibrary.meetings.contains(where: { $0.id == id })
+            {
+                let folder = directory(for: id)
+                if ["metadata.json", "content.json"].contains(where: {
+                    FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path)
+                }) {
+                    throw MeetingError.message(
+                        "A meeting already exists in the recording’s folder. Its files were kept.")
+                }
             }
             let changed = meetings.filter { meeting in
                 lastSavedLibrary.meetings.first(where: { $0.id == meeting.id }) != meeting
@@ -111,7 +156,7 @@ enum CanonicalLibraryWriter {
                     normalizedBaseline.personIDs = MeetingListEntry(baseline).personIDs
                     proposed.personIDs = MeetingListEntry(proposed).personIDs
                     disk.personIDs = MeetingListEntry(disk).personIDs
-                    guard disk == normalizedBaseline || disk == proposed else {
+                    guard disk == normalizedBaseline || disk == proposed || disk == reconciledDisk else {
                         throw MeetingError.message("This meeting changed on disk. Reload it before saving.")
                     }
                 }
@@ -203,7 +248,28 @@ enum CanonicalLibraryWriter {
                     at: directory(for: artifact.meetingID), recordEvent: false)
             }
             try input.validateInputs?()
+            for audio in input.audioReplacements {
+                try audio.validate(directory: dataDirectory)
+                let folder = directory(for: audio.meetingID)
+                let destination = folder.appendingPathComponent(audio.replacement)
+                try transaction.remember(folder.appendingPathComponent(audio.original))
+                try transaction.remember(destination)
+                try LibraryFileTransaction.copyAtomically(audio.staged, to: destination)
+                if audio.original != audio.replacement {
+                    try FileManager.default.removeItem(at: folder.appendingPathComponent(audio.original))
+                }
+            }
             try transaction.commit()
+            for audio in input.audioReplacements {
+                let folder = directory(for: audio.meetingID)
+                // New filenames are recorded as created by the common audio-list diff below.
+                if audio.original == audio.replacement {
+                    DataEventJournal.recordFile(
+                        folder.appendingPathComponent(audio.replacement), action: .modified, directory: folder)
+                }
+                changedPaths.append(folder.appendingPathComponent(audio.replacement))
+                changedPaths.append(folder.appendingPathComponent(audio.original))
+            }
             do { try voiceWorker?.reloadRevision(committed: true) }
             catch {
                 voiceStateRefreshFailed = true
@@ -248,12 +314,12 @@ enum CanonicalLibraryWriter {
                     let paths = (changed.map(\.id) + mergedEntries.map(\.id)).map {
                         directory(for: $0).appendingPathComponent("metadata.json")
                     }
-                    changedPaths = paths
+                    changedPaths += paths
                 }
             }
             catch { indexError = "Couldn’t refresh the index. Rebuild it in Data settings." }
             return CanonicalLibraryResult(
-                committed: true, warning: warning, indexError: indexError,
+                committed: true, meetings: meetings, warning: warning, indexError: indexError,
                 changedPaths: changedPaths, voiceState: voiceWorker?.snapshot(),
                 voiceStateRefreshFailed: voiceStateRefreshFailed)
         }

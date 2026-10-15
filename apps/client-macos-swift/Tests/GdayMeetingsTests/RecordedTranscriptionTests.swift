@@ -97,5 +97,22 @@ struct AppleRecordedTranscriptionSmokeTests {
         #expect(result.segments.contains { $0.source == .system && !$0.text.isEmpty })
         #expect(result.segments.allSatisfy { $0.start.isFinite && $0.end > $0.start && $0.sourcePlaceholder == true })
         #expect(result.speakers.allSatisfy { $0.providerName == "This Mac" && $0.sourcePlaceholder != nil })
+        // Exercise provider output through draft grouping and actual persistence.
+        let lexicalRows = result.segments.filter {
+            $0.text.rangeOfCharacter(from: .alphanumerics) != nil
+        }
+        #expect(!lexicalRows.isEmpty)
+        #expect(lexicalRows.allSatisfy { $0.timing?.isValid == true && $0.timing?.text == $0.text })
+        for source in LiveAudioSource.allCases {
+            let spans = result.segments.filter { $0.source == source }.flatMap { $0.timing?.spans ?? [] }
+            #expect(spans.count > 1)
+            #expect(spans.contains { $0.granularity == .word })
+        }
+        try TranscriptStorage.write(result.segments, at: directory)
+        let restored = try TranscriptStorage.read(at: directory)
+        #expect(restored == result.segments)
+        #expect(
+            restored.map { TranscriptSegment(live: $0.livePhrase(meetingID: result.meetingID)).timing }
+                == result.segments.map(\.timing))
     }
 }

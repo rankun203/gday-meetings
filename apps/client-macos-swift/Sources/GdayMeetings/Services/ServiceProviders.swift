@@ -172,8 +172,6 @@ protocol TranscriptionProvider {
     func status(jobID: String) async throws -> ProviderResult<ProviderTranscriptionStatus>
     @discardableResult func cancel(jobID: String) async throws -> ProviderResult<Void>
 }
-/// Speaker labels can be requested in the same audio job as transcription.
-protocol DiarizationProvider: TranscriptionProvider {}
 protocol SummarizationProvider {
     func summarize(transcript: String, instructions: String) async throws -> ProviderResult<String>
 }
@@ -219,7 +217,7 @@ enum ProviderEndpoint {
     }
 }
 
-struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
+struct RunPodProvider: TranscriptionProvider {
     let provider: ServiceProvider
     static let maximumRequestBytes = 10_000_000
     func submit(tracks: [ProviderAudioTrack], language: String, diarize: Bool = false) async throws -> ProviderResult<
@@ -372,7 +370,7 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
                                         type: type, values: $0,
                                         provenance: body["speaker_embedding_provenance"] as? String)
                                 }
-                            }))
+                            }, timing: ServerTranscriptSegment.wordTiming(entry, text: text)))
                 }
             }
             return .complete(segments.sorted { $0.start == $1.start ? $0.track < $1.track : $0.start < $1.start })

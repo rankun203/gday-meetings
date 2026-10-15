@@ -27,6 +27,7 @@ struct LocalDiarizationResult: Codable, Sendable {
     var detail: String?
     var providerName: String?
     var unresolvedRanges: [UnresolvedSpeakerRange]?
+    var audioReferences: [AnalysisAudioReference]?
 }
 
 enum LocalDiarizationInputPolicy {
@@ -41,8 +42,20 @@ enum LocalDiarizationInputPolicy {
         return revisions
     }
 
+    /// Recovery adds this reserved suffix only when the original stem would collide.
+    /// Require a complete UUID so ordinary imported names keep their existing meaning.
+    static func recordingStem(for file: URL) -> String {
+        let stem = file.deletingPathExtension().lastPathComponent
+        if let suffix = stem.range(of: "-compatible-", options: .backwards),
+            UUID(uuidString: String(stem[suffix.upperBound...])) != nil
+        {
+            return String(stem[..<suffix.lowerBound])
+        }
+        return stem
+    }
+
     static func sourceName(for file: URL) -> String {
-        switch file.deletingPathExtension().lastPathComponent.lowercased() {
+        switch recordingStem(for: file).lowercased() {
         case "microphone", "mic": return "microphone"
         case "system", "system_mix": return "system"
         default: return "unknown"

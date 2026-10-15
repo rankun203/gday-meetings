@@ -477,29 +477,38 @@ final class MeetingStore: ObservableObject {
         return succeeded
     }
 
-    @discardableResult private func save(personMerge: PersonMerge? = nil) async -> Bool {
+    @discardableResult private func save(personMerge: PersonMerge? = nil, meetingID: UUID? = nil) async -> Bool {
         guard canSave else {
             errorMessage = "Library is read-only because loading failed. Check the data folder before saving changes."
             return false
         }
         invalidateExternalMeetingReloads(
             ids: Set(meetings.filter { !lastSavedLibrary.meetings.contains($0) }.map(\.id)))
-        return await enqueueCanonical { await self.performCanonicalSave(personMerge: personMerge) }
+        return await enqueueCanonical {
+            await self.performCanonicalSave(personMerge: personMerge, meetingID: meetingID)
+        }
     }
 
     func performCanonicalSave(
-        personMerge: PersonMerge? = nil, artifacts: [CanonicalMeetingArtifact] = [],
-        validateInputs: (@Sendable () throws -> Void)? = nil
+        personMerge: PersonMerge? = nil, artifacts: [CanonicalMeetingArtifact] = [], meetingID: UUID? = nil,
+        commitVoice: Bool = false,
+        validateInputs: (@Sendable () throws -> Void)? = nil,
+        audioReplacements: [CanonicalAudioReplacement] = []
     ) async -> Bool {
         guard !canonicalRecoveryRequired else { return false }
-        for index in meetings.indices {
+        for index in meetings.indices where meetingID == nil || meetings[index].id == meetingID {
             let previous = lastSavedLibrary.meetings.first { $0.id == meetings[index].id }
             if previous != meetings[index] {
                 meetings[index] = MeetingSpeakerColors.assigning(meetings[index], previous: previous)
             }
         }
-        let captured = LibrarySnapshot(contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
-        let baseline = lastSavedLibrary
+        let captured = LibrarySnapshot(
+            contextualChats: meetingID == nil ? contextualChats : lastSavedLibrary.contextualChats,
+            meetings: meetings.filter { meetingID == nil || $0.id == meetingID },
+            people: meetingID == nil ? people : lastSavedLibrary.people,
+            tags: meetingID == nil ? tags : lastSavedLibrary.tags)
+        var baseline = lastSavedLibrary
+        if let meetingID { baseline.meetings = baseline.meetings.filter { $0.id == meetingID } }
         let revisions = externalMeetingRevisions
         let peopleRevision = peopleMutationRevision
         let tagsRevision = tagsMutationRevision
@@ -510,8 +519,13 @@ final class MeetingStore: ObservableObject {
         var voice: VoiceLibraryStore.CanonicalCommit?
         var result: CanonicalLibraryResult
         do {
-            voice = try voiceLibrary.beginCanonicalCommit()
-            try await notesStorage.flushAll()
+            if meetingID == nil || commitVoice { voice = try voiceLibrary.beginCanonicalCommit() }
+            if let meetingID {
+                try await notesStorage.flush(meetingID)
+            }
+            else {
+                try await notesStorage.flushAll()
+            }
             for meeting in changed where notesStorage.saved[meeting.id] != meeting.notes {
                 guard notesStorage.revision(meeting.id) == noteRevisions[meeting.id] else { continue }
                 try await notesStorage.write(meeting.id, text: meeting.notes)
@@ -520,7 +534,8 @@ final class MeetingStore: ObservableObject {
                 current: captured, previous: baseline, directory: dataDirectory,
                 recordingID: recordingID, personMerge: personMerge, index: libraryIndex,
                 indexIsBuilding: libraryDataStatus.isBuilding, voice: voice,
-                artifacts: artifacts, validateInputs: validateInputs)
+                artifacts: artifacts, reconcileMeetingID: meetingID, validateInputs: validateInputs,
+                audioReplacements: audioReplacements)
             let hook = canonicalWriteHook
             result = await Task.detached(priority: .utility) {
                 do { try hook?() }
@@ -539,12 +554,27 @@ final class MeetingStore: ObservableObject {
             return false
         }
         if result.committed {
+            let committedMeetings = result.meetings
+            for committed in committedMeetings {
+                if let position = meetings.firstIndex(where: { $0.id == committed.id }),
+                    let proposed = captured.meetings.first(where: { $0.id == committed.id })
+                {
+                    guard committed != proposed else { continue }
+                    // Carry edits made while the worker ran into the committed snapshot.
+                    if let merged = try? RecordingMeetingMerge.merge(
+                        baseline: proposed, proposed: meetings[position], disk: committed,
+                        preferProposedOnConflict: true)
+                    {
+                        meetings[position] = merged
+                    }
+                }
+            }
             let loaded = Set(meetings.map(\.id))
-            let changedIDs = Set(changed.map(\.id))
+            let changedIDs = Set(committedMeetings.filter { !baseline.meetings.contains($0) }.map(\.id))
             lastSavedLibrary.meetings =
                 lastSavedLibrary.meetings.filter {
                     loaded.contains($0.id) && !changedIDs.contains($0.id)
-                } + changed.filter { loaded.contains($0.id) }
+                } + committedMeetings.filter { changedIDs.contains($0.id) && loaded.contains($0.id) }
             if captured.people != baseline.people { lastSavedLibrary.people = captured.people }
             if captured.tags != baseline.tags { lastSavedLibrary.tags = captured.tags }
             if captured.contextualChats != baseline.contextualChats {
@@ -564,6 +594,10 @@ final class MeetingStore: ObservableObject {
                 await refreshMeetingPagesAfterSave(previousIDs: [])
             }
             return true
+        }
+        if meetingID != nil {
+            errorMessage = "Couldn’t save changes. " + (result.error ?? "Try again.")
+            return false
         }
         // Roll back only values still owned by this command. Later edits remain dirty.
         let proposed = Dictionary(uniqueKeysWithValues: captured.meetings.map { ($0.id, $0) })

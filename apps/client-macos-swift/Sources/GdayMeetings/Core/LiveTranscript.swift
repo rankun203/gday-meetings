@@ -361,6 +361,8 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
     var end: Double
     var text: String
     var words: [LiveTranscriptWord] = []
+    /// Exact native text offsets; absent in historical checkpoints.
+    var textTiming: TranscriptTextTiming?
     var locale: String?
     var personID: UUID?
     var userEdited: Bool?
@@ -440,6 +442,8 @@ struct LiveTranscriptPhrase: Codable, Identifiable, Equatable, Sendable {
         }
         guard let first = indices.first, let last = indices.last else { return nil }
         result.text = String(text[ranges[first].lowerBound..<ranges[last].upperBound])
+        result.textTiming = validTextTiming?.sliced(
+            to: NSRange(ranges[first].lowerBound..<ranges[last].upperBound, in: text))
         return result
     }
 

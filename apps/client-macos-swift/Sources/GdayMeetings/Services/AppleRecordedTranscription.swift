@@ -15,13 +15,11 @@ enum AppleRecordedTranscription {
             var draft = LiveTranscriptDraft(meetingID: meetingID, locale: locale.identifier)
             for (index, file) in files.enumerated() {
                 try Task.checkCancellation()
-                await status("Transcribing audio \(index + 1) of \(files.count) on This Mac…")
                 let source: LiveAudioSource =
                     file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
                     ? .microphone : .system
-                let prepared = try prepareInput(file)
-                defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
-                let phrases = try await transcribeFile(prepared.url, source: source, locale: locale)
+                await status("Transcribing audio \(index + 1) of \(files.count) on This Mac…")
+                let phrases = try await transcribeFile(file, source: source, locale: locale)
                 for phrase in phrases { draft.accept(phrase) }
             }
             draft.complete = true
@@ -30,37 +28,6 @@ enum AppleRecordedTranscription {
         }
         catch {
             await AppleSpeechAssets.shared.releaseUse(locale)
-            throw error
-        }
-    }
-
-    /// Use the same libopusfile decoder as playback, including end trimming.
-    private static func prepareInput(_ file: URL) throws -> PreparedPlaybackAudio {
-        guard ["opus", "ogg"].contains(file.pathExtension.lowercased()) else {
-            return .init(url: file, temporary: false)
-        }
-        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "gday-transcription-\(UUID()).caf")
-        do {
-            let reader = try OpusFileDecoder(file)
-            let format = StreamingAudioReader.format
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else {
-                throw ServiceError("Couldn’t prepare transcription audio.")
-            }
-            var settings = format.settings
-            settings[AVLinearPCMIsNonInterleaved] = false
-            let output = try AVAudioFile(forWriting: destination, settings: settings)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-            while true {
-                try Task.checkCancellation()
-                try reader.read(into: buffer, frames: buffer.frameCapacity)
-                if buffer.frameLength == 0 { break }
-                try output.write(from: buffer)
-            }
-            return .init(url: destination, temporary: true)
-        }
-        catch {
-            try? FileManager.default.removeItem(at: destination)
             throw error
         }
     }
@@ -75,8 +42,19 @@ enum AppleRecordedTranscription {
         return try await withTaskCancellationHandler {
             let results = Task { try await collect(transcriber, session: session, source: source, locale: locale) }
             do {
-                let audio = try AVAudioFile(forReading: file)
-                if let end = try await analyzer.analyzeSequence(from: audio) {
+                let end: CMTime?
+                if ["opus", "ogg"].contains(file.pathExtension.lowercased()) {
+                    guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+                    else { throw ServiceError("This Mac couldn’t select an audio format for transcription.") }
+                    let input = try RecordedOpusInput(file: file, format: format)
+                    let sequence = AsyncThrowingStream<AnalyzerInput, Error>(unfolding: { try await input.next() })
+                    end = try await analyzer.analyzeSequence(sequence)
+                }
+                else {
+                    let audio = try AVAudioFile(forReading: file)
+                    end = try await analyzer.analyzeSequence(from: audio)
+                }
+                if let end {
                     try await analyzer.finalizeAndFinish(through: end)
                 }
                 else {
@@ -102,18 +80,74 @@ enum AppleRecordedTranscription {
         for try await result in transcriber.results {
             try Task.checkCancellation()
             guard result.isFinal else { continue }
-            let words = result.text.runs.compactMap { run -> LiveTranscriptWord? in
-                guard let time = run.audioTimeRange else { return nil }
-                return LiveTranscriptWord(
-                    text: String(result.text[run.range].characters),
-                    start: time.start.seconds, end: CMTimeRangeGetEnd(time).seconds)
-            }
+            let timing = AppleTranscriptTiming.extract(result.text)
             phrases.append(
                 LiveTranscriptPhrase(
                     session: session, source: source,
                     start: result.range.start.seconds, end: CMTimeRangeGetEnd(result.range).seconds,
-                    text: String(result.text.characters), words: words, locale: locale.identifier))
+                    text: timing.text, words: timing.words, textTiming: timing.timing, locale: locale.identifier))
         }
         return phrases
+    }
+}
+
+/// SpeechAnalyzer pulls each buffer on demand. There is no producer queue or PCM spool.
+/// One converter spans the recording and receives endOfStream to drain its final samples.
+actor RecordedOpusInput {
+    private let reader: OpusFileDecoder
+    private let converter: AVAudioConverter
+    private let input: AVAudioPCMBuffer
+    private let format: AVAudioFormat
+    private var outputFrames: Int64 = 0
+    private var finished = false
+
+    init(file: URL, format: AVAudioFormat) throws {
+        reader = try OpusFileDecoder(file)
+        guard reader.totalFrames > 0,
+            let converter = AVAudioConverter(from: StreamingAudioReader.format, to: format),
+            let input = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: 8192)
+        else { throw ServiceError("Couldn’t prepare transcription audio.") }
+        self.converter = converter
+        converter.primeMethod = .normal
+        self.input = input
+        self.format = format
+    }
+
+    func next() throws -> AnalyzerInput? {
+        guard let item = try nextBuffer() else { return nil }
+        return AnalyzerInput(buffer: item.buffer, bufferStartTime: item.start)
+    }
+
+    func nextBuffer() throws -> (buffer: AVAudioPCMBuffer, start: CMTime)? {
+        try Task.checkCancellation()
+        guard !finished else { return nil }
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096) else {
+            throw ServiceError("Couldn’t prepare transcription audio.")
+        }
+        var conversionError: NSError?
+        var readError: Error?
+        let state = converter.convert(to: output, error: &conversionError) { [self] requested, status in
+            do {
+                try Task.checkCancellation()
+                try reader.read(into: input, frames: min(requested, input.frameCapacity))
+                status.pointee = input.frameLength == 0 ? .endOfStream : .haveData
+                return input.frameLength == 0 ? nil : input
+            }
+            catch {
+                readError = error
+                status.pointee = .endOfStream
+                return nil
+            }
+        }
+        if let readError { throw readError }
+        if state == .error { throw conversionError ?? ServiceError("Couldn’t decode audio for transcription.") }
+        finished = state == .endOfStream
+        guard output.frameLength > 0 else {
+            guard finished else { throw ServiceError("The audio decoder stopped before transcription was complete.") }
+            return nil
+        }
+        let start = CMTime(value: outputFrames, timescale: Int32(format.sampleRate))
+        outputFrames += Int64(output.frameLength)
+        return (output, start)
     }
 }

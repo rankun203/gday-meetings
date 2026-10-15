@@ -39,7 +39,18 @@ enum LiveTranscriptParagraphs {
             {
                 let separator = separator(previous.phrase.text, phrase.text)
                 let offset = previous.phrase.text.utf16.count + separator.utf16.count
+                let leftTiming = previous.phrase.validTextTiming
+                let rightTiming = phrase.validTextTiming
                 previous.phrase.text += separator + phrase.text
+                let mergedSpans =
+                    (leftTiming?.spans ?? [])
+                    + (rightTiming?.spans ?? []).map {
+                        var span = $0
+                        span.range.location += offset
+                        return span
+                    }
+                let timing = TranscriptTextTiming(text: previous.phrase.text, spans: mergedSpans)
+                previous.phrase.textTiming = timing.isValid ? timing : nil
                 previous.phrase.end = phrase.end
                 previous.phrase.words += phrase.words
                 previous.phrase.recognizedFinal = !row.provisional
