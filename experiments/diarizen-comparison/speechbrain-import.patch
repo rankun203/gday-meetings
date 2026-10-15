@@ -1,0 +1,10 @@
+diff --git a/pyannote-audio/pyannote/audio/pipelines/speaker_verification.py b/pyannote-audio/pyannote/audio/pipelines/speaker_verification.py
+index 1510f22..07daa58 100644
+--- a/pyannote-audio/pyannote/audio/pipelines/speaker_verification.py
++++ b/pyannote-audio/pyannote/audio/pipelines/speaker_verification.py
+@@ -42,4 +42,4 @@
+ try:
+-    from speechbrain.pretrained import (
++    from speechbrain.inference.classifiers import (
+         EncoderClassifier as SpeechBrain_EncoderClassifier,
+     )

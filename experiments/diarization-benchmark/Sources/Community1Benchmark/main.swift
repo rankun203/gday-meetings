@@ -32,7 +32,30 @@ struct Community1Benchmark {
       throw Failure.invalidInput(
         "Usage: Community1Benchmark model-directory [generated-speech.wav]")
     }
-    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    var arguments = Array(CommandLine.arguments.dropFirst(2))
+    var profile = "baseline"
+    if let index = arguments.firstIndex(of: "--configuration") {
+      guard index + 1 < arguments.count else { throw Failure.invalidInput("Missing configuration") }
+      profile = arguments[index + 1]
+      arguments.removeSubrange(index...index + 1)
+    }
+    var config = OfflineDiarizerConfig.default
+    switch profile {
+    case "baseline": break
+    case "dense": config.segmentationStepRatio = 0.1
+    case "overlap": config.exclusiveSegments = false
+    default: throw Failure.invalidInput("Expected baseline, dense, or overlap configuration")
+    }
+    let configuration: [String: Any] = [
+      "phase": "configuration", "profile": profile,
+      "segmentation_step_ratio": config.segmentationStepRatio,
+      "exclusive_segments": config.exclusiveSegments,
+      "complete_configuration": String(reflecting: config),
+    ]
+    if arguments == ["--describe-configuration"] {
+      try emit(configuration)
+      return
+    }
     let fileOptions: FileOptions?
     if arguments.contains("--audio") {
       fileOptions = try FileOptions(arguments: arguments)
@@ -78,7 +101,8 @@ struct Community1Benchmark {
       segmentationModel: segmentation, fbankModel: fbank,
       embeddingModel: embedding, pldaRhoModel: plda, pldaPsi: floats.map(Double.init),
       compilationDuration: now() - loadStart)
-    let manager = OfflineDiarizerManager()
+    let manager = OfflineDiarizerManager(config: config)
+    try emit(configuration)
     manager.initialize(models: models)
     try emit([
       "phase": "load", "seconds": now() - loadStart, "peak_rss_bytes": peakRSS(),
@@ -91,9 +115,9 @@ struct Community1Benchmark {
     ])
     if let fileOptions {
       try await runFile(manager, options: fileOptions)
-    } else if CommandLine.arguments.count == 3 {
+    } else if arguments.count == 1 {
       let audio = try AudioConverter().resampleAudioFile(
-        URL(fileURLWithPath: CommandLine.arguments[2]))
+        URL(fileURLWithPath: arguments[0]))
       guard !audio.isEmpty, audio.count <= 16000 * 120 else {
         throw Failure.invalidInput("Fixture must contain at most 120 seconds")
       }
