@@ -20,6 +20,45 @@ struct DiarizedTranscriptProjectionTests {
                 MeetingSpeaker(label: $0, track: "track0", providerName: "Synthetic")
             }, trackSources: ["track0": "system"])
     }
+    @Test func mixedTimingRetainsWholePassageAssignment() {
+        let timed = row("Timed", words: [("Timed", 0, 1)])
+        let untimed = TranscriptSegment(start: 2, end: 4, text: "Untimed passage", source: .system)
+        let ambiguous = TranscriptSegment(start: 5, end: 7, text: "Two voices", source: .system)
+        var meeting = Meeting()
+        meeting.transcript = [timed, untimed, ambiguous]
+        let analysis = result([("A", 0, 4), ("A", 5, 6), ("B", 6, 7)])
+        let projected = LocalDiarizationAssignment.applying(analysis, to: meeting, fileCount: 1)
+        let saved = projected.transcript.first { $0.id == untimed.id }!
+        #expect(saved.speaker == "A")
+        #expect(saved.speakerID == analysis.speakers.first { $0.label == "A" }?.id)
+        #expect(saved.timing == nil)
+        #expect(saved.text == untimed.text && saved.start == untimed.start && saved.end == untimed.end)
+        #expect(projected.transcript.first { $0.id == ambiguous.id } == ambiguous)
+        #expect(
+            LocalDiarizationAssignment.applying(analysis, to: projected, fileCount: 1).transcript
+                == projected.transcript)
+    }
+
+    @Test func mixedTimingKeepsManualAssignmentsAndSourceTracks() {
+        var reviewed = MeetingSpeaker(label: "Reviewed", track: "system", providerName: "Synthetic")
+        reviewed.personID = UUID()
+        var protected = TranscriptSegment(start: 2, end: 3, text: "Reviewed passage", source: .system)
+        protected.speakerID = reviewed.id
+        let microphone = TranscriptSegment(start: 2, end: 3, text: "Microphone passage", source: .microphone)
+        var meeting = Meeting()
+        meeting.speakers = [reviewed]
+        meeting.transcript = [row("Timed", words: [("Timed", 0, 1)]), protected, microphone]
+        var analysis = result([("A", 0, 4)])
+        let micSpeaker = MeetingSpeaker(label: "B", track: "track1", providerName: "Synthetic")
+        analysis.trackSources["track1"] = "microphone"
+        analysis.speakers.append(micSpeaker)
+        analysis.ranges.append(.init(track: "track1", label: "B", start: 0, end: 4))
+        let projected = LocalDiarizationAssignment.applying(analysis, to: meeting, fileCount: 2)
+        #expect(projected.transcript.first { $0.id == protected.id } == protected)
+        #expect(projected.transcript.first { $0.id == microphone.id }?.speakerID == micSpeaker.id)
+        #expect(projected.transcript.first { $0.id == microphone.id }?.timing == nil)
+    }
+
     @Test func unresolvedWordsAndPunctuationGroupInsideOneAcousticGap() {
         var meeting = Meeting()
         let original = row("你好！", words: [("你", 1, 1.2), ("好", 1.2, 1.4), ("！", 1.4, 1.6)])

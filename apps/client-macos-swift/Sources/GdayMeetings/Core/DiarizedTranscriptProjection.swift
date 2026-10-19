@@ -36,7 +36,14 @@ enum DiarizedTranscriptProjection {
                 return matches.count == 1 ? matches.first?.key : nil
             }()
             guard !protected, let track, let timing = row.timing, timing.text == row.text, timing.isValid else {
-                pieces.append(.init(row: row, track: track ?? ""))
+                // Missing timing uses the legacy whole-passage policy. Invalid or
+                // stale timing remains untouched rather than reusing edited offsets.
+                let retained =
+                    row.timing == nil
+                    ? LocalDiarizationAssignment.assigningWholePassage(
+                        row, oldSpeaker: old, result: result, fileCount: fileCount)
+                    : row
+                pieces.append(.init(row: retained, track: track ?? ""))
                 continue
             }
             let text = row.text as NSString

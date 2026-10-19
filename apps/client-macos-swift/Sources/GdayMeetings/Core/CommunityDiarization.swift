@@ -262,44 +262,11 @@ enum LocalDiarizationAssignment {
         let oldByID = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0) })
         for index in updated.transcript.indices {
             let row = updated.transcript[index]
-            let old = row.speakerID.flatMap { oldByID[$0] }
-            if old?.protectsManualAssignment(to: row) == true
-                || (old?.personID != nil && old?.manualReviewThrough == nil)
-            {
-                continue
-            }
-            let track: String?
-            if let value = old?.track, value.hasPrefix("track") {
-                track = value
-            }
-            else if fileCount == 1 {
-                track = "track0"
-            }
-            else if let value = row.source?.rawValue ?? old?.track {
-                let source = value == "mic" ? "microphone" : (value == "system_mix" ? "system" : value)
-                let candidates = result.trackSources.filter { $0.value == source && source != "unknown" }
-                track = candidates.count == 1 ? candidates.first?.key : nil
-            }
-            else {
-                track = nil
-            }
-            guard let track, row.end > row.start else { continue }
-            var overlaps: [String: Double] = [:]
-            for interval in result.ranges where interval.track == track {
-                overlaps[interval.label, default: 0] += max(
-                    0, min(row.end, interval.end) - max(row.start, interval.start))
-            }
-            let ranked = overlaps.sorted { $0.value > $1.value }
-            guard let best = ranked.first, best.value / (row.end - row.start) >= 0.6,
-                ranked.dropFirst().allSatisfy({ $0.value < best.value * 0.25 }),
-                let speaker = result.speakers.first(where: { $0.track == track && $0.label == best.key })
-            else { continue }
+            updated.transcript[index] = assigningWholePassage(
+                row, oldSpeaker: row.speakerID.flatMap { oldByID[$0] }, result: result, fileCount: fileCount)
+        }
+        for speaker in result.speakers where updated.transcript.contains(where: { $0.speakerID == speaker.id }) {
             if !speakers.contains(where: { $0.id == speaker.id }) { speakers.append(speaker) }
-            updated.transcript[index].speakerID = speaker.id
-            updated.transcript[index].speaker = speaker.label
-            updated.transcript[index].sourcePlaceholder = false
-            updated.transcript[index].personID = nil
-            updated.transcript[index].associationUncertain = nil
         }
         // A real acoustic cluster can have a clean review example even when no
         // whole transcript row has enough exclusive support to take its label.
@@ -313,6 +280,52 @@ enum LocalDiarizationAssignment {
         updated.replaceSpeakers(speakers.filter { used.contains($0.id) })
         return updated
     }
+
+    /// Preserve a passage's text and interval when no word alignment is available.
+    /// Use the same conservative whole-passage evidence in mixed and legacy transcripts.
+    static func assigningWholePassage(
+        _ row: TranscriptSegment, oldSpeaker old: MeetingSpeaker?, result: LocalDiarizationResult, fileCount: Int
+    ) -> TranscriptSegment {
+        if old?.protectsManualAssignment(to: row) == true
+            || (old?.personID != nil && old?.manualReviewThrough == nil)
+        {
+            return row
+        }
+        let track: String?
+        if let value = old?.track, value.hasPrefix("track") {
+            track = value
+        }
+        else if fileCount == 1 {
+            track = "track0"
+        }
+        else if let value = row.source?.rawValue ?? old?.track {
+            let source = value == "mic" ? "microphone" : (value == "system_mix" ? "system" : value)
+            let candidates = result.trackSources.filter { $0.value == source && source != "unknown" }
+            track = candidates.count == 1 ? candidates.first?.key : nil
+        }
+        else {
+            track = nil
+        }
+        guard let track, row.end > row.start else { return row }
+        var overlaps: [String: Double] = [:]
+        for interval in result.ranges where interval.track == track {
+            overlaps[interval.label, default: 0] += max(
+                0, min(row.end, interval.end) - max(row.start, interval.start))
+        }
+        let ranked = overlaps.sorted { $0.value > $1.value }
+        guard let best = ranked.first, best.value / (row.end - row.start) >= 0.6,
+            ranked.dropFirst().allSatisfy({ $0.value < best.value * 0.25 }),
+            let speaker = result.speakers.first(where: { $0.track == track && $0.label == best.key })
+        else { return row }
+        var assigned = row
+        assigned.speakerID = speaker.id
+        assigned.speaker = speaker.label
+        assigned.sourcePlaceholder = false
+        assigned.personID = nil
+        assigned.associationUncertain = nil
+        return assigned
+    }
+
 }
 
 extension MeetingStore {

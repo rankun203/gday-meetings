@@ -17,7 +17,7 @@ struct LibrarySearchField: View {
             startedAt: controller.loadingStartedAt, duration: controller.loadingDuration, ready: controller.isReady,
             reduceMotion: reduceMotion, activate: activate, submit: submit
         )
-        .frame(minWidth: 180, idealWidth: 280, maxWidth: 360).frame(height: 28)
+        .frame(minWidth: 90, idealWidth: 280, maxWidth: 360).frame(height: 28)
         .task {
             if UIPreview.enabled,
                 ProcessInfo.processInfo.arguments.contains("--synthetic-search-loading")
