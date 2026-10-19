@@ -246,8 +246,11 @@ struct LibraryView: View {
                     }
                 }
                 else if destination == .tasks {
-                    TaskQueueView(showMeeting: showMeeting, focusedTaskID: focusedTaskID, session: workspace.tasks)
-                        .navigationTitle("Tasks")
+                    TaskQueueView(
+                        showMeeting: showMeeting, focusedTaskID: focusedTaskID, sidebarExpanded: sidebarExpanded,
+                        session: workspace.tasks
+                    )
+                    .navigationTitle("Tasks")
                 }
                 else if destination == .agents {
                     AgentsView().navigationTitle("Agents")
@@ -263,6 +266,7 @@ struct LibraryView: View {
                             HSplitView {
                                 directoryColumn
                                     .frame(minWidth: 250, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
+                                    .background(ListWidthPersistence(key: directoryWidthKey))
                                 selectedDetail
                                     .frame(
                                         minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity
@@ -295,6 +299,16 @@ struct LibraryView: View {
                 })
         )
         .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+    }
+
+    private var directoryWidthKey: ListWidthPreferenceKey {
+        let page: ListWidthPage
+        switch destination {
+        case .people: page = .people
+        case .tags: page = .tags
+        default: page = .meetings
+        }
+        return ListWidthPreferenceKey(page: page, sidebarExpanded: sidebarExpanded)
     }
 
     @ViewBuilder private var directoryColumn: some View {
@@ -468,13 +482,18 @@ struct LibraryView: View {
         // Keep that hierarchy inside one persistent sidebar and workspace split.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
-            navigationWorkspace
-                .navigationSplitViewStyle(.balanced)
-                .scrollEdgeEffectStyle(.soft, for: .top)
-                .toolbar {
-                    meetingToolbar
-                    recordingToolbar
-                }
+            // Size navigation within the space above the persistent transport,
+            // letting the native columns share the available workspace width.
+            GeometryReader { geometry in
+                navigationWorkspace
+                    .navigationSplitViewStyle(.balanced)
+                    .scrollEdgeEffectStyle(.soft, for: .top)
+                    .toolbar {
+                        meetingToolbar
+                        recordingToolbar
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
             // HIG Feedback: keep the activity visible while people browse other content.
             // A single persistent transport replaces scattered status and action rows.
             // https://developer.apple.com/design/human-interface-guidelines/feedback

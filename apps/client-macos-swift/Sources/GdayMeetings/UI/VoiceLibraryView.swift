@@ -101,6 +101,7 @@ struct VoiceLibraryView: View {
                     Text("Select individual examples to change their assignments.")
                         .font(.caption).foregroundStyle(.secondary).padding(12)
                 }.frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
+                    .background(ListWidthPersistence(key: .init(page: .voices)))
                 VStack(alignment: .leading, spacing: 0) {
                     if let current {
                         evidenceHeader(current)

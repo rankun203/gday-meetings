@@ -15,37 +15,29 @@ struct GdayMeetingsApp: App {
 
     var body: some Scene {
         Window("Meetings", id: "main") {
-            // Bound the split view before applying the window minimum. During sidebar
-            // animation, changing safe-area insets must not enlarge the window content.
-            GeometryReader { geometry in
-                PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
-                    .environmentObject(appearance)
-                    .disabled(store.isChangingLibrary || store.isPreparingToQuit)
-                    .onAppear {
-                        delegate.store = store
-                        delegate.providerDrafts = providerDrafts
-                        delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
+            PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
+                .environmentObject(appearance)
+                .disabled(store.isChangingLibrary || store.isPreparingToQuit)
+                .onAppear {
+                    delegate.store = store
+                    delegate.providerDrafts = providerDrafts
+                    delegate.mainWindowLifecycle.openMainWindow = { openWindow(id: "main") }
+                }
+                .task {
+                    await store.previewPreparation?.value
+                    if UIPreview.enabled,
+                        !UIPreviewPerformanceFixtures.flag("--preview-chrome-only", infoKey: "GdayPreviewChromeOnly"),
+                        !playback.hasSelection, let meeting = store.meetings.first
+                    {
+                        playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
                     }
-                    .task {
-                        await store.previewPreparation?.value
-                        if UIPreview.enabled,
-                            !UIPreviewPerformanceFixtures.flag(
-                                "--preview-chrome-only", infoKey: "GdayPreviewChromeOnly"),
-                            !playback.hasSelection, let meeting = store.meetings.first
-                        {
-                            playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
-                        }
-                    }
-                    .onReceive(
-                        store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)
-                    ) {
-                        starting, recording, saving in
-                        playback.setRecordingActive(starting || recording != nil || saving)
-                    }
-                    .onReceive(store.$meetings) { meetings in playback.reconcile(meetings: meetings) }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            }
-            .frame(minWidth: 900, minHeight: 600)
+                }
+                .onReceive(store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)) {
+                    starting, recording, saving in
+                    playback.setRecordingActive(starting || recording != nil || saving)
+                }
+                .onReceive(store.$meetings) { meetings in playback.reconcile(meetings: meetings) }
+                .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1200, height: 800)
         .windowToolbarStyle(.unified(showsTitle: true))

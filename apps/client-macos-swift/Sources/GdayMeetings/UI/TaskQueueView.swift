@@ -4,6 +4,7 @@ struct TaskQueueView: View {
     @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
     var focusedTaskID: UUID? = nil
+    var sidebarExpanded = false
     @ViewState private var reviewingVoices = false
     @ViewState private var discardedTask: ManagedTaskRecord?
     @ViewState private var discardedVoiceJob: VoicePreparationJob?
@@ -79,11 +80,18 @@ struct TaskQueueView: View {
     }
 
     private var queueLayout: some View {
-        HStack(spacing: 0) {
-            taskListPane
-            Divider()
-            taskDetailPane
+        GeometryReader { geometry in
+            HSplitView {
+                taskListPane
+                    .frame(minWidth: 250, idealWidth: 340, maxWidth: 480, maxHeight: .infinity)
+                    .background(
+                        ListWidthPersistence(key: .init(page: .tasks, sidebarExpanded: sidebarExpanded)))
+                taskDetailPane
+                    .frame(minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .frame(minWidth: 250 + 1 + AppTheme.minimumDetailWidth)
     }
 
     private var lifecycleContent: some View {
@@ -249,7 +257,7 @@ struct TaskQueueView: View {
             }
             Divider()
             Text(store.taskQueueSummary).font(.caption).foregroundStyle(.secondary).padding(12)
-        }.frame(width: 340)
+        }
     }
 
     private var taskDetailPane: some View {
