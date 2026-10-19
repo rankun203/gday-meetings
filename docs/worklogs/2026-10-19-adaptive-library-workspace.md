@@ -27,6 +27,8 @@ Only AppKit notifications identified as user divider drags update preferences. W
 
 # Technical debt
 
+The quantified [layout debt register](../macos-layout-technical-debt.md) tracks three open SDK-migration items, including 170 lines of hierarchy/lifecycle bridge code and three explicit geometry boundaries. It records risk, retained behavior, failure signals, validation limits, and removal criteria.
+
 Retained: the existing native sidebar action bridge discovers the split controller through the view hierarchy. Its maintenance consequence and future replacement with an equivalent supported SwiftUI action remain documented in the October 14 persistent-sidebar worklog. The nested native split and geometry boundaries remain part of the existing design and require coverage when changing window layout.
 
 Added compatibility bridge: the preference marker locates its enclosing native split because SwiftUI's `HSplitView` exposes no divider-position binding. It uses public AppKit sizing and notification APIs, retaining native divider behavior. SwiftUI hosting-hierarchy changes may require adapting discovery. Replace this bridge when SwiftUI provides a supported divider-position binding; the offscreen native test covers the current persistence contract.
