@@ -1,6 +1,7 @@
 ---
 title: Repository instructions
 date: 2026-09-26
+updated: 2026-10-21
 status: active
 scope: repository-workflow
 ---
@@ -9,6 +10,38 @@ scope: repository-workflow
 
 - If `~/AGENTS.md` exists, read and follow its instructions in addition to this file.
 - Push back on user requests when implementing them would require hacks that introduce technical debt.
+- Scale planning, review, and validation to the change. Keep small tasks lightweight while completing the checks needed to support the result.
+
+## Understand the task and preserve intent
+
+- Establish the user's intended outcome, constraints, and acceptance criteria before implementing. For new features, cover the complete journey from discovering the action through completion, correction, and returning later.
+- Reconcile later corrections with earlier requests and replies. Distinguish accepted decisions, superseded approaches, proposals, and verified behavior. Consult saved conversation history when available context is incomplete; keep private conversation extracts out of tracked files.
+- Before revising an existing solution, read its design rationale, relevant worklog, and tests. Preserve intended behavior, including less visible navigation, restoration, recovery, and accessibility capabilities. Explain any necessary tradeoff.
+- When the user is still testing and asks to collect feedback, record and organize the issues without replacing the running build or resetting data. Respect any explicit authorization to make changes during testing.
+- Keep progress updates concise: findings, decisions, remaining uncertainty, and the next useful check. Ask for clarification when missing information materially affects the outcome; continue independent authorized work where possible.
+
+## Design and investigate
+
+- For bugs, reproduce the failure when practical and distinguish observed evidence from hypotheses. Trace ownership, dependencies, state transitions, and persistence before choosing a fix. Record reproduction limits when the failure cannot be reproduced.
+- Fix the cause at the layer that owns the behavior. When several surfaces disagree about the same fact, inspect their shared model and queries before patching each surface separately.
+- Define relevant lifecycle states and transitions: initialization, updates, cancellation, failure, retry, completion, dismissal, reopening, and restoration. Include concurrent background work and stale results where applicable.
+- Keep changes focused. Prefer supported platform behavior and existing abstractions when they fit; avoid new infrastructure or fixed-value workarounds without evidence that they solve the underlying problem.
+- When consolidating or removing an interface or subsystem, inventory its capabilities and preserve the ones users still need. Add regression coverage for behavior at risk.
+
+## Responsiveness and concurrency
+
+- Match performance evidence to the tested source revision and build configuration. Separate measured bottlenecks from suspected causes; compare equivalent workloads before and after changes.
+- Reduce repeated computation, scans, and broad invalidation before introducing more concurrency or changing storage technology. Inspect both background work and the cost of publishing its results to the UI.
+- Move filesystem access and substantial independent computation off the main actor when suitable. Use immutable inputs, cancellation, and dependency or revision checks so stale results cannot overwrite newer state.
+- Keep UI operations on the main actor and state mutations under an explicit ordering model. Coalesce redundant derived refreshes while preserving user-action and Undo ordering.
+- Keep view evaluation cheap and scope observation to the consumers that need each change. Cheap, bounded work may stay on the main actor; account for scheduling, copying, and reconciliation costs before moving it.
+
+## Delegation and independent review
+
+- When delegating, give each agent a bounded scope, ownership, shared constraints, and acceptance criteria, including lifecycle and regression checks. Avoid overlapping edits. The primary agent owns integration and final verification.
+- Honor explicitly requested review tools and models. Report unavailability rather than silently substituting or claiming the requested review happened.
+- Ask independent reviewers to examine architecture, correctness, lifecycle, regressions, and whether each change is necessary. Evaluate findings yourself, fix valid issues, rerun relevant checks, and obtain follow-up review for substantive fixes.
+- Summarize material findings, accepted or rejected recommendations and their reasons, resulting changes, and remaining limits.
 
 ## Writing (all apps and documents)
 
@@ -24,13 +57,23 @@ scope: repository-workflow
 - Use that evidence to describe the current problem and the intended layout, controls, and behavior before editing UI code. Do not implement a UI change without a concrete design.
 - After implementation, capture the changed UI and compare it with the design. Check the affected interactions and record validation limits in the worklog.
 
-## Branches and validation
+## Validation and handoff
+
+- Complete developer-owned checks before handing a build to the user: inspect the diff, perform static review, run meaningful regression tests and mocked-state checks, and exercise the affected workflow where tools permit.
+- Test relevant failure, retry, cancellation, stale-response, and restoration cases as well as successful paths. Use tests that protect intended behavior rather than merely mirror implementation details.
+- Distinguish compilation, automated tests, rendered UI checks, and interaction checks in the results. Report blocked checks and warnings plainly; a successful build does not establish end-to-end usability.
+- Give the user the exact build or commit, a concise change summary, validation results and limits, and a focused test sequence. Reserve user testing for real-world judgments and transitions that remain difficult to verify automatically.
+- For Swift macOS changes, validate a release build before finishing. Use `make build-macos` in an isolated checkout if a development bundle is running. Formatting, tests, and debug builds do not replace release validation. Check the macOS CI matrix after pushing and report any failed or unavailable runner.
+
+## Repository and test-data safety
 
 - This is a single-maintainer repository. Work directly on the default branch (`master`).
 - Do not create feature branches or pull requests unless the user explicitly asks for one.
 - Use Conventional Commits format for commit messages (for example, `feat: add export support` or `fix(audio): handle device loss`).
 - Before committing, inspect the complete diff and run the relevant checks.
-- For Swift macOS changes, validate a release build before finishing. Use `make build-macos` in an isolated checkout if a development bundle is running. Formatting, tests, and debug builds do not replace release validation. Check the macOS CI matrix after pushing and report any failed or unavailable runner.
+- Preserve unrelated work. Before staging, inspect ignore rules and ensure private inputs, credentials, caches, and generated artifacts are excluded. After an authorized commit and push, check relevant CI and report the repository state.
+- Use isolated test environments and reproducible baselines. Preserve user data and active work; back up the affected test data before an authorized reset and verify the target library or directory.
+- Store temporary artifacts and recovery bundles under the repository's ignored `tmp/` directory when appropriate, and verify that Git ignores them. Before a planned interruption, save the necessary source state, artifacts, decisions, validation results, and resume instructions in a durable location.
 - For standalone or temporary Python scripts, use `uv run --no-project` and add required third-party packages with `--with` (for example, `uv run --no-project --with httpx script.py`). Use the repository's normal project environment for project-owned Python code.
 
 ## Current APIs and deprecations (all apps)
@@ -55,6 +98,12 @@ and record progress, key decisions, results, and blockers as the task evolves,
 without repeating information. Do not create a worklog for a task that makes no
 repository code changes unless the user explicitly requests one.
 
+Maintain one coherent worklog per task across testing rounds, agents, and
+resumed sessions. Update the relevant sections instead of creating a new log
+for each iteration. Preserve important earlier reasoning, mark superseded
+approaches clearly, and distinguish proposed, implemented, and verified work.
+Keep unrelated tasks in their own worklogs.
+
 - **Problem:** what was wrong or missing.
 - **User Intention:** record the user's intention when it is known from the
   conversation.
@@ -68,4 +117,5 @@ repository code changes unless the user explicitly requests one.
   future remediation. Write `None` when the assessment found no added or
   retained technical debt.
 - **Notes:** optional related context worth preserving, such as compatibility,
-  migration, validation, release, or remaining-blocker details.
+  migration, validation, release, or remaining-blocker details. Include the
+  relevant test results, independent review outcomes, and validation limits.
