@@ -7,6 +7,7 @@ scope: repository-workflow
 
 # Repository workflow
 
+- If `~/AGENTS.md` exists, read and follow its instructions in addition to this file.
 - Push back on user requests when implementing them would require hacks that introduce technical debt.
 
 ## Writing (all apps and documents)
@@ -55,6 +56,8 @@ without repeating information. Do not create a worklog for a task that makes no
 repository code changes unless the user explicitly requests one.
 
 - **Problem:** what was wrong or missing.
+- **User Intention:** record the user's intention when it is known from the
+  conversation.
 - **Implemented solution:** what changed and where.
 - **Reasoning:** why this approach was chosen, including important tradeoffs or
   rejected alternatives.

@@ -54,3 +54,6 @@ node_modules/
 /experiments/**/runs/
 /experiments/**/.cache/
 /experiments/**/*.private.*
+# Standalone Swift experiment compiler caches
+/experiments/**/module-cache/
+/experiments/**/astra-module-cache/
