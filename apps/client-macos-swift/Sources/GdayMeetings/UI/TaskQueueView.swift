@@ -75,7 +75,7 @@ struct TaskQueueView: View {
     var body: some View {
         confirmationContent
             .sheet(isPresented: $reviewingVoices) {
-                VoiceLibraryView(library: store.voiceLibrary).environmentObject(store)
+                PeopleMatchReviewLauncher(library: store.voiceLibrary).environmentObject(store)
             }
     }
 

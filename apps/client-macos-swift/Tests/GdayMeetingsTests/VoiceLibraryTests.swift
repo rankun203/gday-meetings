@@ -80,7 +80,7 @@ struct VoiceLibraryTests {
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 1)
     }
 
-    @Test func rejectionSurvivesReopeningAndSuppressesSimilarVoiceInNewRecording() throws {
+    @Test func rejectionSurvivesReopeningAndOnlySuppressesItsExactPair() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let personID = UUID()
@@ -94,8 +94,148 @@ struct VoiceLibraryTests {
         let candidate = try example(root: directory)
         #expect(reopened.upsert([candidate]))
         #expect(reopened.suggest(exampleID: candidate.id, personID: personID))
-        #expect(reopened.examples.first { $0.id == candidate.id }?.suggestedPersonID == nil)
+        #expect(reopened.examples.first { $0.id == candidate.id }?.suggestedPersonID == personID)
+        #expect(reopened.suggest(exampleID: rejected.id, personID: personID))
+        #expect(reopened.examples.first { $0.id == rejected.id }?.suggestedPersonID == nil)
+        let other = UUID()
+        #expect(reopened.suggest(exampleID: rejected.id, personID: other))
+        #expect(reopened.examples.first { $0.id == rejected.id }?.suggestedPersonID == other)
         #expect(reopened.examples.first { $0.id == rejected.id }?.rejectedPersonIDs == [personID])
+    }
+
+    @Test func asynchronousReviewUsesPersistedEmbeddingsAndExactPairDecisions() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = Person(name: "Alex")
+        let other = Person(name: "Sam")
+        let seed = try example(root: directory)
+        let candidate = try example(root: directory)
+        let unavailable = try example(root: directory)
+        #expect(library.upsert([seed, candidate, unavailable]))
+        #expect(library.confirm(ids: [seed.id], personID: person.id))
+        let folder = try MeetingFolderLocation.resolve(id: unavailable.meetingID, directory: directory)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("system.wav"))
+        #expect(
+            Set(try await library.matchingPeople(from: [person]).flatMap(\.voiceSamples).map(\.speakerID)) == [seed.id])
+        #expect(try await library.reviewCandidates(for: person.id).map(\.id) == [candidate.id])
+        #expect(library.reject(ids: [candidate.id], personID: person.id))
+        #expect(try await library.reviewCandidates(for: person.id).isEmpty)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(try await reopened.reviewCandidates(for: person.id).isEmpty)
+        let otherSeed = try example(root: directory)
+        #expect(reopened.upsert([otherSeed]))
+        #expect(reopened.confirm(ids: [otherSeed.id], personID: other.id))
+        try await reopened.suggestReviewedPeopleResult(from: [person, other])
+        #expect(reopened.examples.first { $0.id == candidate.id }?.suggestedPersonID == other.id)
+        #expect(reopened.examples.first { $0.id == candidate.id }?.rejectedPersonIDs == [person.id])
+        #expect(try await reopened.reviewCandidates(for: other.id).map(\.id) == [candidate.id])
+    }
+
+    @Test func queuedReviewChecksCanonicalEvidenceBeforeSaving() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        store.voiceLibrary.didChange = nil
+        let person = await store.addPerson(name: "Alex")
+        let sample = try example(root: directory)
+        #expect(store.voiceLibrary.upsert([sample]))
+        #expect(store.voiceLibrary.suggest(exampleID: sample.id, personID: person))
+        #expect(
+            await store.reviewVoiceExamples(.confirm(ids: [sample.id], personID: person), expectedExamples: [sample]))
+        #expect(
+            await !store.reviewVoiceExamples(.reject(ids: [sample.id], personID: person), expectedExamples: [sample]))
+        #expect(store.voiceLibrary.examples.first?.personID == person)
+        #expect(store.voiceLibrary.examples.first?.rejectedPersonIDs.isEmpty == true)
+        #expect(store.voiceLibrary.undo())
+        var staleRange = sample
+        staleRange.end = 2
+        #expect(
+            await !store.reviewVoiceExamples(
+                .confirm(ids: [sample.id], personID: person), expectedExamples: [staleRange]))
+        #expect(store.voiceLibrary.examples.first?.personID == nil)
+        #expect(VoiceLibraryStore(loading: .immediate, directory: directory).examples.first?.personID == nil)
+    }
+
+    @Test func busyReviewPreparationWaitsCancellablyForSaving() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([], staged: true))
+        let review = Task { try await library.reviewCandidates(for: UUID()) }
+        await Task.yield()
+        review.cancel()
+        do {
+            _ = try await review.value
+            Issue.record("A cancelled review must finish without returning a queue.")
+        }
+        catch { #expect(error is CancellationError) }
+    }
+
+    @Test func selectedProfileIDsDistinguishBoundedProfileFromAllConfirmedSamples() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = UUID()
+        let samples = try (0..<15).map { _ in try example(root: directory) }
+        #expect(library.upsert(samples))
+        #expect(library.confirm(ids: Set(samples.map(\.id)), personID: person))
+        let initial = Set(
+            try await library.matchingPeople(from: [Person(id: person)]).flatMap(\.voiceSamples).map(\.speakerID))
+        #expect(initial.count == 12)
+        #expect(library.examples.filter { $0.review == .confirmed }.count == 15)
+        let removed = try #require(initial.first)
+        #expect(library.reject(ids: [removed], personID: person))
+        let selected = Set(
+            try await library.matchingPeople(from: [Person(id: person)]).flatMap(\.voiceSamples).map(\.speakerID))
+        #expect(selected.count == 12 && !selected.contains(removed))
+        #expect(library.examples.first { $0.id == removed }?.rejectedPersonIDs == [person])
+        #expect(library.undo())
+        #expect(
+            Set(try await library.matchingPeople(from: [Person(id: person)]).flatMap(\.voiceSamples).map(\.speakerID))
+                == initial)
+    }
+
+    @Test func rejectedPairOnlyClearsMatchingSourcePersonAndSurvivesNewSpeakerLabels() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        var sample = try example(root: directory)
+        sample.origin = .savedSpeaker
+        let rejected = UUID()
+        let other = UUID()
+        var meeting = Meeting(id: sample.meetingID, audioFiles: ["system.wav"])
+        let speaker = MeetingSpeaker(
+            id: sample.speakerID, label: "Speaker 1", track: "system", providerName: "Synthetic", personID: rejected,
+            confirmed: true)
+        meeting.speakers = [speaker]
+        meeting.transcript = [
+            .init(start: 0, end: 4, text: "Reviewed passage.", speakerID: speaker.id),
+            .init(start: 5, end: 8, text: "Another passage.", speakerID: speaker.id),
+        ]
+        #expect(library.upsert([sample]))
+        #expect(library.reject(ids: [sample.id], personID: rejected))
+        let cleared = library.applyingDecisions(to: meeting)
+        let reviewedID = try #require(cleared.transcript[0].speakerID)
+        #expect(cleared.speakers.first { $0.id == reviewedID }?.personID == nil)
+        #expect(cleared.speakers.first { $0.id == speaker.id }?.personID == rejected)
+        meeting.speakers[0].personID = other
+        #expect(library.applyingDecisions(to: meeting).speakers == meeting.speakers)
+        #expect(library.confirm(ids: [sample.id], personID: other))
+        let newSpeakerID = UUID()
+        meeting.speakers[0].id = newSpeakerID
+        meeting.speakers[0].personID = nil
+        meeting.speakers[0].confirmed = false
+        for index in meeting.transcript.indices { meeting.transcript[index].speakerID = newSpeakerID }
+        let reprocessed = library.applyingDecisions(to: meeting)
+        let exactID = try #require(reprocessed.transcript[0].speakerID)
+        #expect(reprocessed.speakers.first { $0.id == exactID }?.personID == other)
+        #expect(reprocessed.transcript[1].speakerID == newSpeakerID)
+        #expect(library.decisions.isEmpty)
+        #expect(library.undo())
+        #expect(library.applyingDecisions(to: reprocessed).speakers == meeting.speakers)
     }
 
     @Test func clearStaysClearedAndStalePreparationCannotOverwriteReview() throws {
@@ -194,7 +334,8 @@ struct VoiceLibraryTests {
         #expect(library.confirm(ids: [example.id], personID: personID))
         #expect(library.examples.allSatisfy { !$0.needsReview })
         let assigned = library.applyingDecisions(to: meeting)
-        #expect(assigned.speakers.first?.personID == personID)
+        #expect(assigned.speakers.first?.personID == nil)
+        #expect(library.decisions.isEmpty)
         #expect(library.undo())
         #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
         #expect(library.examples.first?.needsReview == true)
@@ -202,7 +343,7 @@ struct VoiceLibraryTests {
         #expect(library.clear(ids: [example.id]))
         #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
         #expect(library.undo())
-        #expect(library.applyingDecisions(to: meeting).speakers.first?.personID == personID)
+        #expect(library.applyingDecisions(to: meeting).speakers.first?.personID == nil)
         #expect(library.reject(ids: [example.id], personID: personID))
         #expect(library.applyingDecisions(to: assigned).speakers.first?.personID == nil)
     }
@@ -231,7 +372,8 @@ struct VoiceLibraryTests {
         let reviewed = library.applyingDecisions(to: meeting)
         #expect(reviewed.speakers.first?.id == speaker.id)
         #expect(reviewed.speakers.first?.personID == person.id)
-        #expect(reviewed.speakers.first?.manuallyAssigned == true)
+        #expect(reviewed.speakers.first?.manuallyAssigned != true)
+        #expect(library.decisions.isEmpty)
     }
 
     @Test func attachingAudioRevisionPreservesExistingModelRepresentations() throws {
@@ -344,7 +486,8 @@ struct VoiceLibraryTests {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
-        let sample = try example(root: directory, start: 2, end: 6)
+        var sample = try example(root: directory, start: 2, end: 6)
+        sample.origin = .savedSpeaker
         let personID = UUID()
         var meeting = Meeting(id: sample.meetingID, audioFiles: ["system.wav"])
         let speaker = MeetingSpeaker(id: sample.speakerID, label: "sys_01", track: "system", providerName: "Synthetic")
@@ -356,6 +499,7 @@ struct VoiceLibraryTests {
         ]
         #expect(library.upsert([sample]))
         #expect(library.confirm(ids: [sample.id], personID: personID))
+        #expect(library.decisions.isEmpty)
         let projected = library.applyingDecisions(to: meeting)
         #expect(projected.transcript.map(\.text) == meeting.transcript.map(\.text))
         #expect(projected.transcript[0].speakerID == speaker.id)
@@ -386,7 +530,13 @@ struct VoiceLibraryTests {
         #expect(library.exclude(ids: [first.id]))
         #expect(library.applyingDecisions(to: meeting).speakers[0].personID == personID)
         #expect(library.confirm(ids: [first.id], personID: personID))
-        #expect(library.confirm(ids: [second.id], personID: UUID()))
+        // A subsequent correction updates compatible aliases. Load an already
+        // conflicting explicit record to exercise preserved identity ambiguity.
+        var conflicting = second
+        conflicting.id = UUID()
+        conflicting.personID = UUID()
+        conflicting.review = .confirmed
+        #expect(library.upsert([conflicting]))
         let projected = library.applyingDecisions(to: meeting)
         #expect(projected.speakers.count == 1)
         #expect(projected.speakers[0].personID == nil)
@@ -543,5 +693,295 @@ private final class VoiceWriteFailureFlag: @unchecked Sendable {
     var value: Bool {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func correctingExactAliasesIsAtomicPreservesConflictsAndUndoRestoresProvenance() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = UUID()
+        let replacement = UUID()
+        let conflictPerson = UUID()
+        var first = try example(root: directory)
+        first.personID = person
+        first.review = .confirmed
+        var alias = first
+        alias.id = UUID()
+        alias.groupID = UUID()
+        var associated = first
+        associated.id = UUID()
+        associated.personID = nil
+        associated.namedPersonID = person
+        associated.review = .suggested
+        var conflict = first
+        conflict.id = UUID()
+        conflict.personID = conflictPerson
+        var otherSource = first
+        otherSource.id = UUID()
+        otherSource.source = "microphone"
+        let originals = [first, alias, associated, conflict, otherSource]
+        #expect(library.upsert(originals))
+        #expect(library.confirm(ids: [first.id], personID: replacement))
+        for id in [first.id, alias.id, associated.id] {
+            let value = try #require(library.examples.first { $0.id == id })
+            #expect(value.personID == replacement && value.review == .confirmed)
+            #expect(value.rejectedPersonIDs.contains(person))
+        }
+        #expect(library.examples.first { $0.id == conflict.id }?.personID == conflictPerson)
+        #expect(library.examples.first { $0.id == otherSource.id }?.personID == person)
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(library.examples, personID: person).map(\.id) == [otherSource.id])
+        #expect(library.undo())
+        for original in originals {
+            #expect(library.examples.first { $0.id == original.id }?.hasSameReviewEvidence(as: original) == true)
+        }
+        #expect(library.reject(ids: [first.id], personID: person))
+        let scoped = library.referenceEvidence(for: person)
+        #expect(VoiceMatchReviewSession.referenceExamples(scoped, personID: person).map(\.id) == [otherSource.id])
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(library.examples, personID: person).map(\.id) == [otherSource.id])
+        #expect(library.undo())
+        #expect(library.exclude(ids: [first.id]))
+        #expect(library.examples.filter { $0.excluded }.count == 3)
+        #expect(library.undo())
+        #expect(library.examples.allSatisfy { !$0.excluded })
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func indexedReferenceEvidenceIncludesExactRejectedAliasesAfterPublicationAndUndo() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = UUID()
+        var associated = try example(root: directory)
+        associated.namedPersonID = person
+        associated.review = .suggested
+        var rejection = associated
+        rejection.id = UUID()
+        rejection.namedPersonID = nil
+        rejection.rejectedPersonIDs = [person]
+        rejection.review = .rejected
+        let unrelated = try example(root: directory)
+        #expect(library.upsert([associated, rejection, unrelated]))
+        let evidence = library.referenceEvidence(for: person)
+        #expect(Set(evidence.map(\.id)) == [associated.id, rejection.id])
+        #expect(VoiceMatchReviewSession.referenceExamples(evidence, personID: person).isEmpty)
+        #expect(library.confirm(ids: [associated.id], personID: person))
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(library.referenceEvidence(for: person), personID: person).count
+                == 1)
+        #expect(library.undo())
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(library.referenceEvidence(for: person), personID: person).isEmpty)
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func confirmedAliasesContributeOncePerAudioAndModelToRecognitionProfile() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = Person(name: "Alex")
+        let first = try example(root: directory)
+        var alias = first
+        alias.id = UUID()
+        var otherModel = first
+        otherModel.id = UUID()
+        let alternateType = EmbeddingType(
+            modelID: "other-synthetic", revision: "v1", compatibilityVersion: "v1", dimension: 2,
+            normalization: "unitL2")
+        otherModel.embeddings = [.init(type: alternateType, values: [1, 0])]
+        let distinctAudio = try example(root: directory, meetingID: first.meetingID, start: 10, end: 14)
+        #expect(library.upsert([first, alias, otherModel, distinctAudio]))
+        #expect(library.confirm(ids: [first.id, distinctAudio.id], personID: person.id))
+        let profile = try #require(try await library.matchingPeople(from: [person]).first)
+        #expect(profile.voiceSamples.count == 3)
+        #expect(profile.voiceSamples.filter { $0.resolvedVoiceEmbedding.type == type }.count == 2)
+        #expect(profile.voiceSamples.filter { $0.resolvedVoiceEmbedding.type == alternateType }.count == 1)
+        #expect(library.examples.count == 4)
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func reassigningExactAliasesBackRemovesRejectionOfCurrentPerson() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = UUID()
+        let other = UUID()
+        var first = try example(root: directory)
+        first.personID = person
+        first.review = .confirmed
+        var alias = first
+        alias.id = UUID()
+        #expect(library.upsert([first, alias]))
+        #expect(library.confirm(ids: [first.id], personID: other))
+        #expect(library.examples.allSatisfy { $0.personID == other && $0.rejectedPersonIDs.contains(person) })
+        #expect(library.confirm(ids: [alias.id], personID: person))
+        #expect(
+            library.examples.allSatisfy {
+                $0.personID == person && !$0.rejectedPersonIDs.contains(person) && $0.rejectedPersonIDs.contains(other)
+            })
+        #expect(library.undo())
+        #expect(library.examples.allSatisfy { $0.personID == other && $0.rejectedPersonIDs.contains(person) })
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test(arguments: [false, true])
+    func correctingProposedIdentityRecordsTheSameDecisionForExistingAndNewPeople(createPerson: Bool) throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let proposed = UUID()
+        let replacement = UUID()
+        var sample = try example(root: directory)
+        sample.suggestedPersonID = proposed
+        sample.review = .suggested
+        var alias = sample
+        alias.id = UUID()
+        #expect(library.upsert([sample, alias]))
+        if createPerson {
+            #expect(library.nameGroup(ids: [sample.id], confirmedExampleID: sample.id, personID: replacement))
+        }
+        else {
+            #expect(library.confirm(ids: [sample.id], personID: replacement))
+        }
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(reopened.examples.count == 2)
+        #expect(
+            reopened.examples.allSatisfy {
+                $0.personID == replacement && $0.review == .confirmed && $0.suggestedPersonID == nil
+                    && $0.rejectedPersonIDs == [proposed]
+            })
+        #expect(reopened.undo())
+        #expect(
+            reopened.examples.allSatisfy {
+                $0.personID == nil && $0.review == .suggested && $0.suggestedPersonID == proposed
+                    && $0.rejectedPersonIDs.isEmpty
+            })
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func clearingExactAliasesKeepsProfilesReferencesAndMeetingProjectionConsistentThroughUndo() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = Person(name: "Alex")
+        let first = try example(root: directory)
+        var alias = first
+        alias.id = UUID()
+        alias.groupID = UUID()
+        let other = try example(root: directory, meetingID: first.meetingID, start: 10, end: 14)
+        var meeting = Meeting(id: first.meetingID, audioFiles: ["system.wav"])
+        let speaker = MeetingSpeaker(
+            id: first.speakerID, label: "Speaker 1", track: "system", providerName: "Synthetic")
+        meeting.speakers = [speaker]
+        meeting.transcript = [
+            .init(start: 0, end: 4, text: "First passage.", speakerID: speaker.id),
+            .init(start: 10, end: 14, text: "Another passage.", speakerID: speaker.id),
+        ]
+        #expect(library.upsert([first, alias, other]))
+        #expect(library.confirm(ids: [first.id, other.id], personID: person.id))
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.count == 2)
+        #expect(library.clear(ids: [first.id]))
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let cleared = reopened.examples.filter { [first.id, alias.id].contains($0.id) }
+        #expect(cleared.count == 2)
+        #expect(cleared.allSatisfy { $0.personID == nil && $0.manuallyCleared && $0.review == .unassigned })
+        #expect(reopened.examples.first { $0.id == other.id }?.personID == person.id)
+        #expect((try await reopened.matchingPeople(from: [person]))[0].voiceSamples.map(\.speakerID) == [other.id])
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(reopened.referenceEvidence(for: person.id), personID: person.id)
+                .map(\.id) == [other.id])
+        let projected = reopened.applyingDecisions(to: meeting)
+        let firstSpeaker = projected.transcript[0].speakerID
+        let secondSpeaker = projected.transcript[1].speakerID
+        #expect(projected.speakers.first { $0.id == firstSpeaker }?.personID == nil)
+        #expect(projected.speakers.first { $0.id == secondSpeaker }?.personID == person.id)
+        #expect(reopened.undo())
+        #expect(
+            reopened.examples.allSatisfy { $0.personID == person.id && !$0.manuallyCleared && $0.review == .confirmed })
+        #expect((try await reopened.matchingPeople(from: [person]))[0].voiceSamples.count == 2)
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(reopened.referenceEvidence(for: person.id), personID: person.id)
+                .count == 2)
+        let restored = reopened.applyingDecisions(to: projected)
+        #expect(
+            restored.transcript.allSatisfy { row in
+                restored.speakers.first { $0.id == row.speakerID }?.personID == person.id
+            })
+    }
+
+    @Test func restoringIgnoredExactAudioKeepsOtherExplicitIdentitiesUnchanged() throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        var first = try example(root: directory)
+        first.personID = UUID()
+        first.review = .confirmed
+        first.excluded = true
+        var alias = first
+        alias.id = UUID()
+        var conflict = first
+        conflict.id = UUID()
+        conflict.personID = UUID()
+        #expect(library.upsert([first, alias, conflict]))
+        #expect(library.exclude(ids: [first.id], excluded: false))
+        #expect(library.examples.filter { [first.id, alias.id].contains($0.id) }.allSatisfy { !$0.excluded })
+        #expect(library.examples.first(where: { $0.id == conflict.id })?.hasSameReviewEvidence(as: conflict) == true)
+        #expect(library.undo())
+        #expect(library.examples.allSatisfy { $0.excluded })
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func clearingConflictingIdentityPreservesTheRemainingConfirmationAndUndo() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let firstPerson = Person(name: "Alex")
+        let secondPerson = Person(name: "Sam")
+        var first = try example(root: directory)
+        first.personID = firstPerson.id
+        first.review = .confirmed
+        var conflict = first
+        conflict.id = UUID()
+        conflict.personID = secondPerson.id
+        var meeting = Meeting(id: first.meetingID, audioFiles: ["system.wav"])
+        let speaker = MeetingSpeaker(
+            id: first.speakerID, label: "Speaker 1", track: "system", providerName: "Synthetic")
+        meeting.speakers = [speaker]
+        meeting.transcript = [.init(start: 0, end: 4, text: "A passage.", speakerID: speaker.id)]
+        #expect(library.upsert([first, conflict]))
+        #expect(library.clear(ids: [first.id]))
+        let effective = VoiceExactReviewDecisions(library.examples)
+        let remaining = try #require(library.examples.first { $0.id == conflict.id })
+        #expect(!effective.applying(to: remaining).manuallyCleared)
+        #expect(effective.applying(to: remaining).personID == secondPerson.id)
+        #expect(
+            VoiceMatchReviewSession.referenceExamples(
+                library.referenceEvidence(for: secondPerson.id), personID: secondPerson.id
+            ).map(\.id) == [conflict.id])
+        let profiles = try await library.matchingPeople(from: [firstPerson, secondPerson])
+        #expect(profiles[0].voiceSamples.isEmpty)
+        #expect(profiles[1].voiceSamples.count == 1)
+        let projected = library.applyingDecisions(to: meeting)
+        let projectedSpeaker = projected.transcript[0].speakerID
+        #expect(projected.speakers.first { $0.id == projectedSpeaker }?.personID == secondPerson.id)
+        #expect(library.undo())
+        #expect(library.examples.first(where: { $0.id == first.id })?.personID == firstPerson.id)
+        #expect(library.examples.first(where: { $0.id == conflict.id })?.personID == secondPerson.id)
+        #expect(library.examples.allSatisfy { !$0.manuallyCleared })
+        #expect(
+            (try await library.matchingPeople(from: [firstPerson, secondPerson])).allSatisfy { $0.voiceSamples.isEmpty }
+        )
+        let restored = library.applyingDecisions(to: projected)
+        let restoredSpeaker = restored.transcript[0].speakerID
+        #expect(restored.speakers.first { $0.id == restoredSpeaker }?.personID == nil)
     }
 }

@@ -4,6 +4,15 @@ import Testing
 @testable import GdayMeetings
 
 struct VoiceExampleNavigationTests {
+    @Test func reviewTargetRequestsTranscriptEvenWhenPassageIsUnavailable() {
+        let meeting = Meeting(title: "Synthetic conversation")
+        let example = VoiceExample(meetingID: meeting.id, speakerID: UUID(), source: "system")
+        let review = VoiceExampleRecordingTarget(example: example, meeting: meeting)
+        #expect(review.transcriptRowID == nil)
+        #expect(review.opensTranscript)
+        #expect(!VoiceExampleRecordingTarget(meetingID: meeting.id).opensTranscript)
+    }
+
     @Test func legacyAssignmentOpensFirstChronologicalPassageForThatSpeaker() {
         var meeting = Meeting(title: "Saved conversation")
         let speaker = MeetingSpeaker(label: "sys_01", track: "system", providerName: "Synthetic Provider")
@@ -35,6 +44,10 @@ struct VoiceExampleNavigationTests {
         let example = VoiceExample(
             meetingID: meeting.id, speakerID: UUID(), source: "system", audioFile: "system.wav", start: 11, end: 14)
         #expect(VoiceExampleTranscriptNavigation.rowID(for: example, meeting: meeting) == expected.id)
+        let target = VoiceExampleRecordingTarget(example: example, meeting: meeting)
+        #expect(target.id == meeting.id)
+        #expect(target.transcriptRowID == expected.id)
+        #expect(target.opensTranscript)
     }
 
     @Test func projectedSpeakerRetainsItsOriginalNavigationIdentity() {

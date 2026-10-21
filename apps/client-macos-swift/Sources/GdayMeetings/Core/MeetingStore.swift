@@ -559,6 +559,7 @@ final class MeetingStore: ObservableObject {
             return false
         }
         if result.committed {
+            if !audioReplacements.isEmpty { voiceLibrary.invalidateReviewAudio() }
             let committedMeetings = result.meetings
             for committed in committedMeetings {
                 if let position = meetings.firstIndex(where: { $0.id == committed.id }),
@@ -974,6 +975,7 @@ final class MeetingStore: ObservableObject {
                     }
                     catch { return error.localizedDescription }
                 }.value
+                self.voiceLibrary.invalidateReviewAudio()
                 self.meetings.removeAll { $0.id == id }
                 self.lastSavedLibrary.meetings.removeAll { $0.id == id }
                 self.meetingCatalog.removeAll { $0.id == id }

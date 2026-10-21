@@ -108,7 +108,7 @@ struct PeopleView: View {
     }
     private var peopleActions: some View {
         Menu {
-            Button("Review Voices…") { reviewingVoices = true }
+            Button("Review Library") { reviewingVoices = true }
             Button("Merge Selected People…") { mergeRequest = MergeRequest(personIDs: selection) }
                 .disabled(selection.count < 2)
         } label: {

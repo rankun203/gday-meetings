@@ -193,7 +193,7 @@ New meetings use `meetings/YYYYMMDD_<base36 ID>/`, with the meeting date in the 
 
 `transcript.jsonl` holds one timed display segment per line. During recording, `transcript-checkpoint.json` commits saved rows and the recent replaceable tail. Before opening older development libraries, stop the previous app, back up the library, and run the [saved transcript migration command](scripts/migrations/README.md).
 
-For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR` is only a library-location override for development: it does not enable UI Preview, disable recording/network access, or suppress all credential access (server authentication can still read Keychain). Tests use temporary directories and synthetic data. Folder choices made in Preview or with an explicit development data root remain in memory and do not change the regular app’s saved folder.
+For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR` selects a development library and disables shared Keychain access. It does not enable UI Preview or disable recording or network access. Tests use temporary directories and synthetic data. Folder choices made in Preview or with an explicit development data root remain in memory and do not change the regular app’s saved folder.
 
 ## Data privacy and logs
 

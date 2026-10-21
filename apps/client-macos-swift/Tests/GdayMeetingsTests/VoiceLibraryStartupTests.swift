@@ -170,4 +170,24 @@ struct VoiceLibraryStartupTests {
         #expect(await store.deleteMeeting(id: id))
     }
 
+    @Test func deletingMeetingInvalidatesPlayableReviewSnapshot() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let id = await store.createMeeting(title: "Synthetic recording")
+        let file = store.directory(for: id).appendingPathComponent("system.wav")
+        try Data([1, 2, 3]).write(to: file)
+        let sample = VoiceExample(
+            meetingID: id, speakerID: UUID(), source: "system", audioFile: "system.wav",
+            audioRevision: VoiceLibraryStore.revision(url: file), start: 0, end: 3)
+        #expect(store.voiceLibrary.upsert([sample]))
+        #expect(try await store.voiceLibrary.reviewSnapshot(for: []).unnamedGroups.count == 1)
+        let revision = store.voiceLibrary.reviewEvidenceRevision
+        #expect(await store.deleteMeeting(id: id))
+        #expect(store.voiceLibrary.reviewEvidenceRevision > revision)
+        #expect(try await store.voiceLibrary.reviewSnapshot(for: []).unnamedGroups.isEmpty)
+    }
+
 }

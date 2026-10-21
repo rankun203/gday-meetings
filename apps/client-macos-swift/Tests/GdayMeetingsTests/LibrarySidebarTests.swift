@@ -206,6 +206,65 @@ struct LibrarySidebarTests {
         }
     }
 
+    @Test func personSelectionPreservesNativeWorkspaceDivider() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-person-divider-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let control = LibrarySidebarControl()
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        _ = await store.addPerson(name: "Alex Example")
+        _ = await store.addPerson(name: "Sam Example")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(
+            rootView: LibraryView(sidebar: control)
+                .environmentObject(store).environmentObject(MeetingPlayback()))
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            window.close()
+            control.disconnect()
+        }
+        func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+            ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants(type, in: $0) }
+        }
+        func settle() async {
+            _ = await SidebarPerformanceTests.run(seconds: 0.3, rate: 0, window: window) { _ in }
+        }
+        #expect(try await waitForMainActorTestCondition { control.isConnected })
+        control.toggle(reduceMotion: true)
+        await settle()
+        let sidebar = try #require(descendants(NSTableView.self, in: host).first { $0.numberOfRows == 5 })
+        sidebar.selectRowIndexes(IndexSet(integer: LibraryDestination.people.rawValue), byExtendingSelection: false)
+        #expect(
+            try await waitForMainActorTestCondition {
+                host.layoutSubtreeIfNeeded()
+                return descendants(DirectoryTable.self, in: host).contains { $0.numberOfRows >= 2 }
+            })
+        await settle()
+        let people = try #require(descendants(DirectoryTable.self, in: host).first)
+        let split = try #require(descendants(NSSplitView.self, in: host).last)
+        let pane = try #require(split.arrangedSubviews.first)
+        let detail = try #require(split.arrangedSubviews.last)
+        let target: CGFloat = 275 + pane.safeAreaInsets.left + pane.safeAreaInsets.right
+        split.setPosition(target, ofDividerAt: 0)
+        await settle()
+        let initialWidth = pane.frame.width
+        for row in [0, 1, 0, 1] {
+            people.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            await settle()
+            let current = try #require(descendants(NSSplitView.self, in: host).last)
+            #expect(current === split)
+            #expect(current.arrangedSubviews.first === pane)
+            #expect(current.arrangedSubviews.last === detail)
+            #expect(
+                abs(pane.frame.width - initialWidth) <= 1,
+                "Person selection changed directory width from \(initialWidth) to \(pane.frame.width)")
+        }
+    }
+
     @Test func rapidReversalKeepsNativeColumnContentAvailable() async {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gday-sidebar-\(UUID())")

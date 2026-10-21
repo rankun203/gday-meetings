@@ -49,11 +49,17 @@ struct CredentialIdentityMigration {
 enum KeychainStore {
     static let service = CredentialIdentityMigration.service
     private static let migration = CredentialIdentityMigration(storage: SecurityCredentialStorage())
-    static func get(_ account: String) throws -> String? { UIPreview.enabled ? nil : try migration.get(account) }
-    static func set(_ value: String, for account: String) throws {
-        if !UIPreview.enabled { try migration.set(value, for: account) }
+    static func isIsolated(environment: [String: String], preview: Bool) -> Bool {
+        preview || environment["GDAY_SWIFT_DATA_DIR"] != nil
     }
-    static func delete(_ account: String) throws { if !UIPreview.enabled { try migration.delete(account) } }
+    private static var isolated: Bool {
+        isIsolated(environment: ProcessInfo.processInfo.environment, preview: UIPreview.enabled)
+    }
+    static func get(_ account: String) throws -> String? { isolated ? nil : try migration.get(account) }
+    static func set(_ value: String, for account: String) throws {
+        if !isolated { try migration.set(value, for: account) }
+    }
+    static func delete(_ account: String) throws { if !isolated { try migration.delete(account) } }
 }
 
 private struct SecurityCredentialStorage: CredentialStorage {

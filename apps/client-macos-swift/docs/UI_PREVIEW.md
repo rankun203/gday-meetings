@@ -33,6 +33,8 @@ The bundle flag `GdayUIPreview` enables this mode; developers can also launch th
 
 Use `--preview-unavailable-track`, or the Boolean bundle key `GdayUnavailableTrackPreview`, to give the synthetic conversation an invalid microphone file and a playable system-audio file. Expand the player and choose All Tracks. Confirm that playback and seeking work, the microphone row shows a yellow warning and “Audio unavailable,” and the track picker offers only playable tracks. Muting the system audio must not select the failed microphone. Playback remains silent in Preview.
 
+Use `--synthetic-people-review`, or the Boolean bundle key `GdaySyntheticPeopleReview`, for the complete listening and naming workflow. This adds an existing confirmed reference for a person with candidates, a person with no candidates, and another unnamed group in a second recording. That group includes an exact duplicate record to verify it appears once. Source-specific transcript fixtures include real fixture word timings and unrelated simultaneous text on another track. Check named and unnamed people in the same chooser, candidate counts, reference playback, rapid sample switching, compact recording dates, status icons, group naming, creating a person, correcting one member, ignoring a sample, Undo, and stable progress. Verify word highlighting and that text from the other track stays absent. The fixture uses production views and silent synthetic audio; it does not measure voice similarity or noise detection accuracy.
+
 Choose **Components…** in the banner to inspect production content tabs, playback and native action buttons, the recording-source row, disclosure style, and inline feedback. **Enable Controls** switches the group between enabled and disabled states. The gallery uses local synthetic state and starts no audio capture or provider job. Check pointer, keyboard, light/dark, and accessibility settings there, then check the same controls in their screens. The gallery does not cover every provider, network, or recording state.
 
 Launch the exact rebuilt bundle when comparing appearances; an already running Preview does not update after a build. Keep screenshots and comparisons under ignored `tmp/`, with the bundle path, revision and dirty diff, build time, macOS version, window size, appearance, and fixture flags. Record untested states separately from successful captures.
@@ -43,11 +45,15 @@ The synthetic conversation includes multiple tags and manually assigned, automat
 
 ## People voice review
 
-The ordinary preview seeds synthetic confirmed, suggested, unnamed, and excluded voice examples. Open **People → Review Voices**. Check the Review, Unnamed, Named, and All filters; play an excerpt; open its recording at the timestamp; confirm or reject a suggestion; assign selected examples; separate or combine groups; and undo a correction. Grouping must not confirm unselected examples. One sample starts without a range and recovers a playable excerpt from saved speaker metadata when selected. Another has a compatible model representation but no identifiable audio source: Confirm and Assign remain available, while playback is unavailable. Voice Details presents one model list with no age-based categories.
+The ordinary preview seeds synthetic confirmed, suggested, unnamed, and excluded voice examples. Open **People → Review Library**, then choose a person. A selected person's details show **Review This Person (N)** when candidates exist and disable review when the queue is empty. Verify that the header, actions menu, chooser, and dialog agree after a decision and after preparation. Each chooser row uses one line for the person, sample count, newest pending meeting label, and additional-meeting count. Check that the first playable candidate starts automatically, choosing a different candidate changes playback, and **Confirm**, **Not [Name]**, and **Skip** advance through the stable session. **Undo** returns to the prior sample and restores its decision. Closing review stops playback; **Open Recording** closes review before showing the recording.
 
-Person details show voice samples above contact fields. Confirm that samples remain accessible while browsing associated meetings. Preview playback remains silent and uses the same source selection and excerpt boundary as production. During synthetic recording, playback and preparation controls must be disabled.
+Double-click a sample's name, use **Edit Sample Name…** in its context menu, or focus it and press Return. Playback pauses while the name editor is open. Search for an existing person or enter a new name. Saving confirms only that sample. Verify that a failed save leaves the sample available for review. **Voice Samples…** in person details separates all associated samples from explicitly confirmed samples; a confirmed sample's context menu offers **Not [Name]**. Voice profiles remain selected automatically from compatible confirmed samples.
 
-Expand **Speaker Association** to inspect supported providers and preparation progress. Preparation and discovery are real local operations when explicitly started; synthetic fixture audio does not establish model accuracy. Missing models and unavailable audio must produce actionable errors. No remote upload starts from opening this view.
+Open **Manage Samples…** from Review Library or Voice Samples to access ignored, cleared, and unavailable evidence. Check All and Ignored filters; restore an ignored sample, remove an assignment, separate or combine selections, and name a cleared sample with an existing or newly created person. Reopen the screen after another change and verify recovery remains available. **Undo Library Change** applies to the most recent durable library action and is disabled without a supported receipt.
+
+Unnamed groups follow named people in the same chooser and open the same sample review dialog. Name a proposed group once, then review its individual members. Short, invalid, and unavailable evidence stays out of listening queues. Exact audio offered in a named queue must not appear again as a visible unnamed candidate; hidden linked evidence remains available for group association. Ignored or cleared representations must not block valid review if their model data is corrupt.
+
+Preview playback remains silent and uses the production source selection and excerpt boundaries. During synthetic recording, playback and preparation controls must be disabled. Expand **Speaker Association** in Review Library to inspect providers and preparation progress. Preparation and discovery are real local operations when explicitly started; synthetic fixture audio does not establish model accuracy. Missing models and unavailable audio must produce actionable errors. Opening review starts no remote upload.
 
 ## Task queue
 
@@ -153,3 +159,20 @@ For end-to-end Local Search checks, use the full app with `GDAY_SWIFT_DATA_DIR` 
 Launch with `--synthetic-grouped-search`, or set the `GdayGroupedSearchPreview` Boolean bundle flag, to add overlapping and short transcript matches to the synthetic conversation. These synthetic passages cover grouped-result layout; end-to-end search needs a prepared Local Search provider and model. Check that notes, summary, and transcript matches share one meeting row; switch matches using the timeline, then open the selected match. Playback is silent.
 
 Launch with `--synthetic-search-loading` to exercise the production search field with an eight-second estimate and a ten-second simulated load. The fill reaches 95%, waits for completion, finishes, and fades out. The fixture repeats after three seconds without preparing a model or writing runtime observations. Check Command-F, typing, resizing, light/dark appearance, and Reduce Motion while the indicator is visible. This validates presentation; actual preparation time and database persistence require separate checks.
+
+The People page always shows a two-line library review bar above both panels. Verify Review Library remains visible when selecting a person with no candidates, while loading, after empty results, and on read failure. Counts distinguish people with new matches from unnamed people. Check the summary at narrow widths, keyboard access, and light/dark appearance.
+
+## People review lifecycle acceptance
+
+Implementation and independent review must trace and validate state transitions, not only screenshots of settled states. Record source inspection, automated coverage, and runtime evidence separately.
+
+- First People appearance: a visible loading state reaches the current queue without requiring another navigation action.
+- Person selection: completed or empty person queues do not hide global pending work.
+- Confirm, reject, ignore, name, and Undo: successful decisions update the authoritative queue and the bar; failed writes do not advance counts.
+- Completing the last named queue: remaining unnamed people stay visible. Completing all work shows the empty summary while retaining global access.
+- Background preparation: model-only refreshes retain the last completed summary; new metadata invalidates stale counts promptly.
+- Navigate away/back, close/reopen review, and relaunch: current committed state is restored; cancelled or older reads cannot replace newer results.
+- Failure then recovery: a successful chooser retry must clear the bar's old failure when review closes, without requiring navigation away.
+- Library changes: follow the actual restart-based library selection flow and verify counts belong to the selected library.
+
+A source audit does not establish that the UI lifecycle passes. Injected failures, cancellation, and final-item completion require targeted validation when those paths change.

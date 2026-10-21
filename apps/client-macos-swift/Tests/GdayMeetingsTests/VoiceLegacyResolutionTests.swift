@@ -178,7 +178,7 @@ struct VoiceLegacyResolutionTests {
         #expect(library.examples(for: person.id).isEmpty)
     }
 
-    @Test func rejectedRepresentationVetoesSuggestionsAcrossStorageFields() async throws {
+    @Test func rejectedLegacyRepresentationOnlyVetoesItsOwnPair() async throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (meeting, originalPerson, folder) = try fixture(root: directory)
@@ -192,7 +192,9 @@ struct VoiceLegacyResolutionTests {
         let candidate = VoiceExample(meetingID: UUID(), speakerID: UUID(), source: "system", embeddings: [vector])
         #expect(library.upsert([candidate]))
         #expect(library.suggest(exampleID: candidate.id, personID: person.id))
-        #expect(library.examples.first(where: { $0.id == candidate.id })?.suggestedPersonID == nil)
+        #expect(library.examples.first(where: { $0.id == candidate.id })?.suggestedPersonID == person.id)
+        #expect(library.suggest(exampleID: old.id, personID: person.id))
+        #expect(library.examples.first(where: { $0.id == old.id })?.suggestedPersonID == nil)
         #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
     }
 

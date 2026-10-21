@@ -1,5 +1,25 @@
 import Foundation
 
+/// Preserve the excerpt's transcript destination across review-sheet dismissal.
+struct VoiceExampleRecordingTarget: Identifiable, Equatable {
+    let id: UUID
+    var transcriptRowID: UUID? = nil
+    var opensTranscript = false
+
+    init(meetingID: UUID, transcriptRowID: UUID? = nil, opensTranscript: Bool = false) {
+        id = meetingID
+        self.transcriptRowID = transcriptRowID
+        self.opensTranscript = opensTranscript
+    }
+
+    init(example: VoiceExample, meeting: Meeting) {
+        self.init(
+            meetingID: meeting.id,
+            transcriptRowID: VoiceExampleTranscriptNavigation.rowID(for: example, meeting: meeting),
+            opensTranscript: true)
+    }
+}
+
 /// A recording link reveals related text without changing the shared player.
 enum VoiceExampleTranscriptNavigation {
     static func rowID(for example: VoiceExample, meeting: Meeting) -> UUID? {

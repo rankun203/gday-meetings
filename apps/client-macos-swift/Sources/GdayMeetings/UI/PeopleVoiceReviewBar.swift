@@ -1,39 +1,97 @@
 import SwiftUI
 
 struct PeopleVoiceReviewBar: View {
+    @EnvironmentObject private var store: MeetingStore
     @ObservedObject var library: VoiceLibraryStore
-    @ObservedObject private var notice: VoiceReviewNotice
     @Binding var reviewingVoices: Bool
 
-    init(library: VoiceLibraryStore, reviewingVoices: Binding<Bool>) {
-        self.library = library
-        _notice = ObservedObject(wrappedValue: library.reviewNotice)
-        _reviewingVoices = reviewingVoices
+    @ViewState private var peopleWithMatches = 0
+    @ViewState private var unnamedGroups = 0
+    @ViewState private var loaded: Request?
+    @ViewState private var failed: Request?
+    @ViewState private var failureMessage: String?
+
+    private struct Request: Equatable {
+        let people: Set<UUID>
+        let revision: Int
+        let metadataRevision: Int
+        let reviewingVoices: Bool
+    }
+
+    private var request: Request {
+        Request(
+            people: Set(store.people.map(\.id)), revision: library.reviewEvidenceRevision,
+            metadataRevision: library.reviewMetadataRevision, reviewingVoices: reviewingVoices)
+    }
+
+    private var hasCurrentMetadata: Bool {
+        loaded?.people == request.people && loaded?.metadataRevision == request.metadataRevision
+    }
+
+    private var hasPendingReviews: Bool {
+        failed != request && hasCurrentMetadata && (peopleWithMatches > 0 || unnamedGroups > 0)
+    }
+
+    private var summary: String {
+        if failed == request { return "Couldn’t load voice matches" }
+        guard hasCurrentMetadata else { return "Checking for voice matches" }
+        var parts: [String] = []
+        if peopleWithMatches > 0 {
+            parts.append("\(peopleWithMatches) \(peopleWithMatches == 1 ? "person" : "people") with new matches")
+        }
+        if unnamedGroups > 0 {
+            parts.append("\(unnamedGroups) unnamed \(unnamedGroups == 1 ? "person" : "people")")
+        }
+        return parts.isEmpty ? "No pending voice reviews" : parts.joined(separator: " · ")
     }
 
     var body: some View {
-        if notice.isVisible(for: library.examples) {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    let count = VoiceReviewNotice.voiceCount(in: library.examples)
-                    Text(count == 1 ? "1 voice to review" : "\(count) voices to review")
-                    Spacer(minLength: 12)
-                    Button("Review Voices…") { reviewingVoices = true }
-                        .buttonStyle(.bordered)
-                    Button("Dismiss Voice Review Notice", systemImage: "xmark") {
-                        notice.dismiss(examples: library.examples)
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Image(systemName: "person.2")
                     .foregroundStyle(.secondary)
-                    .help("Dismiss Voice Review Notice")
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(hasPendingReviews ? "People to Review" : "People Library")
+                        .font(.headline)
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-                .controlSize(.small)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                Divider()
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(hasPendingReviews ? "People to Review" : "People Library"), \(summary.replacingOccurrences(of: " · ", with: ", "))"
+                )
+                .help(failed == request ? (failureMessage ?? summary) : summary)
+                Spacer(minLength: 16)
+                Button("Review Library") { reviewingVoices = true }
+                    .buttonStyle(.bordered)
+                    .fixedSize()
             }
-            .background(.bar)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            Divider()
+        }
+        .background(.bar)
+        .task(id: request) {
+            let current = request
+            // The chooser owns refreshes while open. Re-read its result on close,
+            // including recovery that succeeded without changing library evidence.
+            failed = nil
+            failureMessage = nil
+            guard !current.reviewingVoices else { return }
+            do {
+                let snapshot = try await library.reviewSnapshot(for: current.people)
+                guard !Task.isCancelled, current == request else { return }
+                peopleWithMatches = snapshot.candidates.values.filter { !$0.isEmpty }.count
+                unnamedGroups = snapshot.unnamedGroups.count
+                loaded = current
+            }
+            catch {
+                guard !Task.isCancelled, current == request else { return }
+                failureMessage = error.localizedDescription
+                failed = current
+            }
         }
     }
 }

@@ -86,10 +86,12 @@ enum VoiceReviewConflicts {
 
 @MainActor
 final class VoiceLibraryStore: ObservableObject {
-    let reviewNotice: VoiceReviewNotice
     @Published private(set) var examples: [VoiceExample] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var canUndo = false
+    @Published private(set) var reviewUndoID: UUID?
+    var reviewUndoCreatedPerson: Person? { document.undo.last?.createdPerson }
+    var reviewUndoExampleIDs: Set<UUID> { Set(document.undo.last?.examples.map(\.id) ?? []) }
     @Published private(set) var jobs: [VoicePreparationJob] = []
     private var jobTimeEstimates: [UUID: Double] = [:]
     @Published private(set) var isLoaded = false
@@ -125,7 +127,30 @@ final class VoiceLibraryStore: ObservableObject {
     private var hydratedIDs: Set<UUID> = []
     private var exampleIndices: [UUID: Int] = [:]
     private var personExampleIDs: [UUID: Set<UUID>] = [:]
+    private var exactExampleIDs: [VoiceExactReviewDecisions.Key: Set<UUID>] = [:]
     @Published private(set) var representationsRevision = 0
+    @Published private(set) var reviewEvidenceRevision = 0
+    @Published private(set) var reviewMetadataRevision = 0
+    private var publishedRepresentationsRevision = 0
+    private var reviewRepresentationRefresh: Task<Void, Never>?
+    private var reviewRepresentationRefreshStarted: Date?
+    private var reviewSnapshotReaders = 0
+    /// Read seams run on the worker, outside filesystem locks.
+    var beforeReviewRead: (@Sendable () throws -> Void)?
+    var beforeReviewValidation: (@Sendable () throws -> Void)?
+    private struct ReviewEvidence: Sendable {
+        var metadata: [VoiceExample]
+        var hydrated: [VoiceExample]
+        var playableIDs: Set<UUID>
+    }
+    private struct ReviewRead {
+        var id = UUID()
+        var revision: Int
+        var task: Task<ReviewEvidence, Error>
+    }
+    private var reviewRead: ReviewRead?
+    private var reviewEvidence: ReviewEvidence?
+    private var reviewSnapshots: [Set<UUID>: VoiceReviewSnapshot] = [:]
     private var readable = true
     private var unavailableError: String?
     private var pendingDocument: VoiceLibraryDocument?
@@ -144,7 +169,6 @@ final class VoiceLibraryStore: ObservableObject {
         write: (@Sendable (Data, URL) throws -> Void)? = nil,
         beforeLoad: (@Sendable () throws -> Void)? = nil
     ) {
-        reviewNotice = VoiceReviewNotice(directory: directory)
         url = directory.appendingPathComponent("voice-library")
         self.canWrite = canWrite
         writeOverride = write
@@ -270,13 +294,26 @@ final class VoiceLibraryStore: ObservableObject {
         if examples != metadata || decisions != document.decisions || deletedPeople != document.deletedPersonIDs {
             projectionCache.removeAll()
         }
+        let representationsChanged = publishedRepresentationsRevision != representationsRevision
+        publishedRepresentationsRevision = representationsRevision
+        if examples != metadata || deletedPeople != document.deletedPersonIDs {
+            invalidateReviewAudio()
+        }
+        else if representationsChanged {
+            scheduleReviewRepresentationRefresh()
+        }
         deletedPeople = document.deletedPersonIDs
         if examples != metadata {
             examples = metadata
             exampleIndices = Dictionary(uniqueKeysWithValues: metadata.enumerated().map { ($0.element.id, $0.offset) })
             personExampleIDs = [:]
+            exactExampleIDs = [:]
             for example in metadata {
-                for personID in [example.personID, example.suggestedPersonID].compactMap({ $0 }) {
+                if let key = VoiceExactReviewDecisions.Key(example) {
+                    exactExampleIDs[key, default: []].insert(example.id)
+                }
+                for personID in [example.personID, example.suggestedPersonID, example.namedPersonID].compactMap({ $0 })
+                {
                     personExampleIDs[personID, default: []].insert(example.id)
                 }
             }
@@ -284,6 +321,7 @@ final class VoiceLibraryStore: ObservableObject {
         }
         if decisions != document.decisions { decisions = document.decisions }
         canUndo = !document.undo.isEmpty
+        reviewUndoID = document.undo.last?.id
         publishJobs()
     }
 
@@ -366,55 +404,68 @@ final class VoiceLibraryStore: ObservableObject {
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    private func edit(
-        ids: Set<UUID>, clusterPersonID: UUID? = nil, _ change: (inout VoiceExample) -> Void
-    ) -> Bool {
-        guard !ids.isEmpty else { return false }
-        var next = document
-        var previousDecisions = document.decisions
-        if clusterPersonID != nil {
-            for example in document.examples where ids.contains(example.id) && example.origin == .savedSpeaker {
-                if !previousDecisions.contains(where: {
-                    $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
-                }) {
-                    previousDecisions.append(
-                        .init(
-                            meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
-                }
+    /// Reference projection also needs exact aliases with cleared identities or
+    /// rejections. Resolve that small evidence set through publication indexes.
+    func referenceEvidence(for personID: UUID) -> [VoiceExample] {
+        let associated = examples(for: personID)
+        var ids = Set(associated.map(\.id))
+        for example in associated {
+            if let key = VoiceExactReviewDecisions.Key(example) {
+                ids.formUnion(exactExampleIDs[key] ?? [])
             }
         }
+        return ids.compactMap { id in exampleIndices[id].map { examples[$0] } }
+    }
+
+    /// Excerpt decisions update selected evidence and compatible exact aliases.
+    /// Whole-speaker edits use assign(meetingID:speakerID:personID:) explicitly.
+    private func edit(ids: Set<UUID>, _ change: (inout VoiceExample) -> Void) -> Bool {
+        guard !ids.isEmpty else { return false }
+        var next = document
         next.undo.append(
             .init(
                 examples: document.examples.filter { ids.contains($0.id) }.map(VoiceExampleReviewSnapshot.init),
-                decisions: previousDecisions))
+                decisions: document.decisions))
         next.undo = Array(next.undo.suffix(20))
         var changed = Set<UUID>()
         for index in next.examples.indices where ids.contains(next.examples[index].id) {
-            let previous = next.examples[index]
             change(&next.examples[index])
-            let example = next.examples[index]
-            if example.origin == .savedSpeaker,
-                clusterPersonID != nil || previous.personID != example.personID
-                    || (example.manuallyCleared && !previous.manuallyCleared)
-            {
-                next.decisions.removeAll {
-                    $0.meetingID == example.meetingID && $0.speakerID == example.speakerID
-                }
-                next.decisions.append(
-                    .init(
-                        meetingID: example.meetingID, speakerID: example.speakerID, personID: example.personID))
-            }
-            changed.insert(example.meetingID)
+            changed.insert(next.examples[index].meetingID)
         }
         guard !changed.isEmpty else { return false }
         return commit(next, changed: changed)
     }
 
+    /// Equivalent records retain provider provenance, but one excerpt decision
+    /// updates compatible aliases in the same transaction and Undo snapshot.
+    /// A different explicit identity remains a visible conflict for review.
+    private func exactReviewIDs(_ ids: Set<UUID>) -> Set<UUID> {
+        var identities: [VoiceExactReviewDecisions.Key: Set<UUID?>] = [:]
+        for example in document.examples where ids.contains(example.id) {
+            if let key = VoiceExactReviewDecisions.Key(example) {
+                identities[key, default: []].insert(example.personID ?? example.namedPersonID)
+            }
+        }
+        var result = ids
+        for example in document.examples {
+            guard let key = VoiceExactReviewDecisions.Key(example), let selected = identities[key] else { continue }
+            let identity = example.personID ?? example.namedPersonID
+            if identity == nil || selected.contains(identity) { result.insert(example.id) }
+        }
+        return result
+    }
+
     @discardableResult
     func confirm(ids: Set<UUID>, personID: UUID) -> Bool {
         guard !document.deletedPersonIDs.contains(personID) else { return false }
-        return edit(ids: ids, clusterPersonID: personID) {
+        return edit(ids: exactReviewIDs(ids)) {
+            if let previous = $0.personID ?? $0.namedPersonID ?? $0.suggestedPersonID,
+                previous != personID, !$0.rejectedPersonIDs.contains(previous)
+            {
+                $0.rejectedPersonIDs.append(previous)
+            }
             $0.personID = personID
+            $0.namedPersonID = nil
             $0.suggestedPersonID = nil
             $0.review = .confirmed
             $0.rejectedPersonIDs.removeAll { $0 == personID }
@@ -423,20 +474,93 @@ final class VoiceLibraryStore: ObservableObject {
         }
     }
 
+    /// Naming a proposed group is one reversible action. Only an explicitly
+    /// confirmed excerpt contributes identity evidence to automatic matching.
+    @discardableResult
+    func nameGroup(
+        ids: Set<UUID>, confirmedExampleID: UUID?, personID: UUID,
+        createdPerson: Person? = nil, staged: Bool = false
+    ) -> Bool {
+        guard admitVoiceWrite(), !document.deletedPersonIDs.contains(personID), !ids.isEmpty,
+            confirmedExampleID.map(ids.contains) ?? true
+        else { return false }
+        let anchorIDs = confirmedExampleID.map { exactReviewIDs([$0]) } ?? []
+        // Explicitly naming one stored sample has the same restorative intent
+        // as Confirm. Naming a proposed group still respects other exclusions.
+        let namesSingleSample = confirmedExampleID.map { ids == Set([$0]) } ?? false
+        let associatedIDs = ids.union(anchorIDs)
+        let indices = document.examples.indices.filter { associatedIDs.contains(document.examples[$0].id) }
+        guard indices.count == associatedIDs.count else { return false }
+        let exactDecisions = VoiceExactReviewDecisions(document.examples)
+        let eligible = indices.filter {
+            let original = document.examples[$0]
+            let example = exactDecisions.applying(to: original)
+            let anchor = anchorIDs.contains(example.id)
+            if namesSingleSample && anchor { return true }
+            return !example.excluded && (!example.manuallyCleared || (anchor && !original.manuallyCleared))
+                && (!example.rejectedPersonIDs.contains(personID) || anchorIDs.contains(example.id))
+                && (example.personID == nil || example.personID == personID || anchorIDs.contains(example.id))
+        }
+        guard !eligible.isEmpty,
+            confirmedExampleID.map({ id in eligible.contains { document.examples[$0].id == id } }) ?? true
+        else { return false }
+        var next = document
+        next.undo.append(
+            .init(
+                createdPerson: createdPerson,
+                examples: eligible.map { VoiceExampleReviewSnapshot(document.examples[$0]) },
+                decisions: document.decisions))
+        next.undo = Array(next.undo.suffix(20))
+        let groupID = eligible.map { document.examples[$0].groupID }.min { $0.uuidString < $1.uuidString }!
+        for index in eligible {
+            next.examples[index].groupID = groupID
+            next.examples[index].manuallyGrouped = true
+            if anchorIDs.contains(next.examples[index].id) {
+                let previous =
+                    next.examples[index].personID ?? next.examples[index].namedPersonID
+                    ?? next.examples[index].suggestedPersonID
+                if let previous, previous != personID, !next.examples[index].rejectedPersonIDs.contains(previous) {
+                    next.examples[index].rejectedPersonIDs.append(previous)
+                }
+                next.examples[index].rejectedPersonIDs.removeAll { $0 == personID }
+                next.examples[index].personID = personID
+                next.examples[index].namedPersonID = nil
+                next.examples[index].suggestedPersonID = nil
+                next.examples[index].review = .confirmed
+                next.examples[index].excluded = false
+                next.examples[index].manuallyCleared = false
+            }
+            else if next.examples[index].review != .confirmed {
+                next.examples[index].namedPersonID = personID
+                next.examples[index].suggestedPersonID = personID
+                next.examples[index].review = .suggested
+            }
+        }
+        if staged {
+            pendingDocument = next
+            return true
+        }
+        return commit(next, changed: Set(eligible.map { document.examples[$0].meetingID }))
+    }
+
     @discardableResult
     func reject(ids: Set<UUID>, personID: UUID) -> Bool {
-        edit(ids: ids) {
+        edit(ids: exactReviewIDs(ids)) {
             if !$0.rejectedPersonIDs.contains(personID) { $0.rejectedPersonIDs.append(personID) }
             if $0.personID == personID { $0.personID = nil }
+            if $0.namedPersonID == personID { $0.namedPersonID = nil }
             if $0.suggestedPersonID == personID { $0.suggestedPersonID = nil }
             $0.review = $0.personID == nil ? .rejected : .confirmed
         }
     }
 
     @discardableResult
+    // Removing an association applies to compatible records of the same audio,
+    // so profile evidence and review presentation retain the same decision.
     func clear(ids: Set<UUID>) -> Bool {
-        edit(ids: ids) {
+        edit(ids: exactReviewIDs(ids)) {
             $0.personID = nil
+            $0.namedPersonID = nil
             $0.suggestedPersonID = nil
             $0.review = .unassigned
             $0.manuallyCleared = true
@@ -445,7 +569,7 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func exclude(ids: Set<UUID>, excluded: Bool = true) -> Bool {
-        edit(ids: ids) { $0.excluded = excluded }
+        edit(ids: exactReviewIDs(ids)) { $0.excluded = excluded }
     }
 
     @discardableResult
@@ -533,8 +657,11 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func undo() -> Bool {
-        guard let previous = document.undo.last else { return false }
+    func undo(expectedUndoID: UUID? = nil, staged: Bool = false) -> Bool {
+        guard let previous = document.undo.last,
+            expectedUndoID == nil || previous.id == expectedUndoID
+        else { return false }
+        if staged, !admitVoiceWrite() { return false }
         var next = document
         next.undo.removeLast()
         // Keep newly discovered evidence and embeddings from background work.
@@ -548,6 +675,10 @@ final class VoiceLibraryStore: ObservableObject {
         let restoredIDs = Set(previous.examples.map(\.id))
         let changedMeetings = Set(next.examples.filter { restoredIDs.contains($0.id) }.map(\.meetingID))
             .union(changedDecisions.map(\.meetingID))
+        if staged {
+            pendingDocument = next
+            return true
+        }
         return commit(next, changed: changedMeetings)
     }
 
@@ -555,6 +686,176 @@ final class VoiceLibraryStore: ObservableObject {
     /// when their source recording is unavailable for playback.
     func matchingPeople(from people: [Person]) async throws -> [Person] {
         try await matchingResult(from: people, includeSuggestions: false).profiles
+    }
+
+    func reviewCandidates(for personID: UUID) async throws -> [VoiceExample] {
+        try await reviewSnapshot(for: [personID]).candidates[personID] ?? []
+    }
+
+    func reviewCandidates(for personIDs: Set<UUID>) async throws -> [UUID: [VoiceExample]] {
+        try await reviewSnapshot(for: personIDs).candidates
+    }
+
+    /// Counts and dialogs use these exact queues. Refresh also checks recording
+    /// files changed outside the library, such as a moved or replaced recording.
+    func reviewSnapshot(for personIDs: Set<UUID>, forceRefresh: Bool = false) async throws -> VoiceReviewSnapshot {
+        if forceRefresh { invalidateReviewAudio() }
+        reviewSnapshotReaders += 1
+        defer { reviewSnapshotReaders -= 1 }
+        while true {
+            let evidence = try await readReviewEvidence()
+            try Task.checkCancellation()
+            let activePeople = personIDs.subtracting(deletedPeople)
+            if let cached = reviewSnapshots[activePeople] { return cached }
+            let revision = reviewEvidenceRevision
+            let result = await Task.detached(priority: .utility) {
+                VoiceReviewSnapshot.make(
+                    hydrated: evidence.hydrated, metadata: evidence.metadata,
+                    playableIDs: evidence.playableIDs, personIDs: activePeople, revision: revision)
+            }.value
+            try Task.checkCancellation()
+            guard revision == reviewEvidenceRevision, reviewEvidence != nil else { continue }
+            reviewSnapshots[activePeople] = result
+            return result
+        }
+    }
+
+    /// Compatibility for workflows that inspect all stored groups. Ineligible
+    /// members remain linked evidence and never become playback questions.
+    func identificationGroups() async throws -> [VoiceIdentificationGroup] {
+        let evidence = try await readReviewEvidence()
+        return VoiceReviewSnapshot.groups(
+            hydrated: evidence.hydrated, metadata: evidence.metadata,
+            playableIDs: evidence.playableIDs)
+    }
+
+    /// Call after a recording is deleted or its audio is replaced. Decision and
+    /// audio changes invalidate immediately, including a pending model refresh.
+    func invalidateReviewAudio() {
+        reviewMetadataRevision += 1
+        refreshReviewEvidence()
+    }
+
+    private func refreshReviewEvidence() {
+        reviewRepresentationRefresh?.cancel()
+        reviewRepresentationRefresh = nil
+        reviewRepresentationRefreshStarted = nil
+        reviewEvidenceRevision += 1
+        invalidateReviewCache()
+    }
+
+    private func scheduleReviewRepresentationRefresh() {
+        let now = Date()
+        if reviewRepresentationRefreshStarted == nil { reviewRepresentationRefreshStarted = now }
+        // Publish after 300 ms of quiet, bounding continuous batches to two
+        // seconds. Let an active read finish before publishing its refresh.
+        let elapsed = now.timeIntervalSince(reviewRepresentationRefreshStarted!)
+        scheduleReviewRepresentationRefresh(after: max(0, min(0.3, 2 - elapsed)))
+    }
+
+    private func scheduleReviewRepresentationRefresh(after delay: Double) {
+        reviewRepresentationRefresh?.cancel()
+        reviewRepresentationRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) }
+            catch { return }
+            guard let self else { return }
+            if self.reviewRead != nil || self.reviewSnapshotReaders > 0 {
+                self.scheduleReviewRepresentationRefresh(after: 0.1)
+                return
+            }
+            self.refreshReviewEvidence()
+        }
+    }
+
+    private func invalidateReviewCache() {
+        reviewRead?.task.cancel()
+        reviewRead = nil
+        reviewEvidence = nil
+        reviewSnapshots.removeAll()
+    }
+
+    private func readReviewEvidence() async throws -> ReviewEvidence {
+        while true {
+            try Task.checkCancellation()
+            guard await awaitReady(), let persistence else {
+                throw ServiceError(errorMessage ?? "The voice library is unavailable. Try again.")
+            }
+            // A canonical save owns its pending document until publication.
+            // Waiting keeps an expected write race out of persistent UI errors.
+            if canonicalCommitInFlight || pendingDocument != nil {
+                try await Task.sleep(for: .milliseconds(20))
+                continue
+            }
+            if let reviewEvidence { return reviewEvidence }
+            let revision = reviewEvidenceRevision
+            let snapshot = persistence.snapshot()
+            if reviewRead == nil {
+                let metadata = examples
+                let directory = url.deletingLastPathComponent()
+                let beforeRead = beforeReviewRead
+                let beforeValidation = beforeReviewValidation
+                reviewRead = ReviewRead(
+                    revision: revision,
+                    task: Task.detached(priority: .utility) {
+                        let backend = try VoiceLibraryPersistence(directory: directory, writable: false)
+                        backend.adopt(snapshot)
+                        let exactDecisions = VoiceExactReviewDecisions(metadata)
+                        let active = metadata.map { exactDecisions.applying(to: $0) }.filter {
+                            !$0.excluded && !$0.manuallyCleared
+                        }
+                        let dependencies = try backend.profileDependencyRevisions(
+                            exampleIDs: active.map(\.id), includeRepresentations: false)
+                        try beforeRead?()
+                        var hydrated: [VoiceExample] = []
+                        var playable = Set<UUID>()
+                        for original in active {
+                            try Task.checkCancellation()
+                            var example = original
+                            if example.range != nil, example.audioRevision != nil,
+                                let folder = try? MeetingFolderLocation.resolve(
+                                    id: example.meetingID, directory: directory),
+                                let file = example.audioFile,
+                                Self.revision(url: folder.appendingPathComponent(file)) == example.audioRevision
+                            {
+                                playable.insert(example.id)
+                            }
+                            // Confirmed evidence can still identify other excerpts
+                            // when its original recording is unavailable.
+                            guard example.review == .confirmed || playable.contains(example.id) else { continue }
+                            example.embeddings =
+                                try backend.loadReviewRepresentations(
+                                    exampleID: example.id, dependencies: dependencies)?.embeddings ?? []
+                            hydrated.append(example)
+                        }
+                        try beforeValidation?()
+                        try backend.validateProfileDependencies(dependencies)
+                        return ReviewEvidence(metadata: metadata, hydrated: hydrated, playableIDs: playable)
+                    })
+            }
+            let operation = reviewRead!
+            do {
+                let result = try await operation.task.value
+                try Task.checkCancellation()
+                guard reviewRead?.id == operation.id, revision == reviewEvidenceRevision,
+                    !canonicalCommitInFlight, pendingDocument == nil
+                else { continue }
+                reviewRead = nil
+                reviewEvidence = result
+                return result
+            }
+            catch {
+                try Task.checkCancellation()
+                let invalidated = reviewRead?.id != operation.id
+                if reviewRead?.id == operation.id { reviewRead = nil }
+                if invalidated || revision != reviewEvidenceRevision
+                    || persistence.snapshot().revision != snapshot.revision
+                    || canonicalCommitInFlight || pendingDocument != nil
+                {
+                    continue
+                }
+                throw error
+            }
+        }
     }
 
     private func matchingResult(from people: [Person], includeSuggestions: Bool) async throws
@@ -754,28 +1055,26 @@ final class VoiceLibraryStore: ObservableObject {
         try Task.checkCancellation()
         var next = document
         for suggestion in result.suggestions {
-            guard let index = exampleIndices[suggestion.exampleID], !next.examples[index].isReviewed else { continue }
-            next.examples[index].suggestedPersonID = suggestion.personID
-            next.examples[index].review = suggestion.personID == nil ? .unassigned : .suggested
+            guard let index = exampleIndices[suggestion.exampleID], next.examples[index].acceptsSuggestions else {
+                continue
+            }
+            let personID = next.examples[index].namedPersonID ?? suggestion.personID
+            next.examples[index].suggestedPersonID = personID
+            next.examples[index].review = personID == nil ? .unassigned : .suggested
         }
         if next.examples != document.examples, !commit(next) {
             throw ServiceError(errorMessage ?? "Couldn’t save voice matches.")
         }
     }
 
-    /// Rejections are evidence, not global person bans. Exact reviewed audio is
-    /// authoritative; novel voices remain suggestions until explicitly reviewed.
-    func rejectedPeople(meetingID: UUID, speakerID: UUID) -> Set<UUID> {
-        Set(examples.filter { $0.meetingID == meetingID && $0.speakerID == speakerID }.flatMap(\.rejectedPersonIDs))
-    }
-
     @discardableResult
     func suggest(exampleID: UUID, personID: UUID?) -> Bool {
         defer { releaseRepresentations() }
         guard let index = document.examples.firstIndex(where: { $0.id == exampleID }),
-            !document.examples[index].isReviewed
+            document.examples[index].acceptsSuggestions
         else { return true }
-        let candidate = allowedSuggestion(for: document.examples[index], personID: personID)
+        let candidate = allowedSuggestion(
+            for: document.examples[index], personID: document.examples[index].namedPersonID ?? personID)
         var next = document
         guard next.examples[index].suggestedPersonID != candidate else { return true }
         next.examples[index].suggestedPersonID = candidate
@@ -784,34 +1083,10 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     private func allowedSuggestion(for example: VoiceExample, personID: UUID?) -> UUID? {
-        guard let personID else { return nil }
-        let candidate: VoiceExample
-        if exampleIndices[example.id] != nil {
-            guard let hydrated = hydratedExample(id: example.id) else { return nil }
-            candidate = hydrated
-        }
-        else {
-            candidate = example
-        }
-        let rejectedMetadata = examples.filter { $0.rejectedPersonIDs.contains(personID) }
-        let rejectedExamples = hydratedExamples(ids: Set(rejectedMetadata.map(\.id)))
-        guard rejectedExamples.count == rejectedMetadata.count else { return nil }
-        do {
-            if document.deletedPersonIDs.contains(personID) || candidate.rejectedPersonIDs.contains(personID)
-                || candidate.voiceEmbeddings.contains(where: { embedding in
-                    rejectedExamples.contains { rejected in
-                        rejected.rejectedPersonIDs.contains(personID)
-                            && rejected.voiceEmbeddings.contains {
-                                $0.type == embedding.type && $0.isValid && embedding.isValid
-                                    && (SpeakerRecognition.similarity($0.values, embedding.values) ?? -1)
-                                        >= SpeakerRecognition.threshold
-                            }
-                    }
-                })
-            {
-                return nil
-            }
-        }
+        let effective = VoiceExactReviewDecisions(document.examples).applying(to: example)
+        guard let personID, !document.deletedPersonIDs.contains(personID),
+            effective.acceptsSuggestions, !effective.rejectedPersonIDs.contains(personID)
+        else { return nil }
         return personID
     }
 
@@ -914,6 +1189,7 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].rejectedPersonIDs.append(rejected)
             }
             next.examples[index].personID = personID
+            next.examples[index].namedPersonID = nil
             next.examples[index].suggestedPersonID = nil
             next.examples[index].review = personID == nil ? .rejected : .confirmed
             if let personID { next.examples[index].rejectedPersonIDs.removeAll { $0 == personID } }
@@ -983,12 +1259,14 @@ final class VoiceLibraryStore: ObservableObject {
         var updated = meeting
         guard
             decisions.contains(where: { $0.meetingID == meeting.id })
-                || examples.contains(where: { $0.meetingID == meeting.id && $0.isReviewed })
+                || examples.contains(where: {
+                    $0.meetingID == meeting.id && ($0.isReviewed || !$0.rejectedPersonIDs.isEmpty)
+                })
                 || meeting.speakers.contains(where: { $0.voiceReviewOrigin != nil })
         else { return meeting }
         let evidence = examples.filter {
             $0.meetingID == meeting.id
-                && ($0.review == .confirmed || $0.review == .rejected
+                && ($0.review == .confirmed || !$0.rejectedPersonIDs.isEmpty
                     || $0.manuallyCleared)
                 && audioIsCurrent($0)
         }.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -1060,10 +1338,23 @@ final class VoiceLibraryStore: ObservableObject {
             }
             let relevant = evidence.filter {
                 guard let range = $0.range else { return false }
-                return range.audioFile == file && range.contains(start: row.start, end: row.end)
+                let applies =
+                    $0.review == .confirmed || $0.manuallyCleared
+                    || speaker.personID.map($0.rejectedPersonIDs.contains) == true
+                return applies && range.audioFile == file && range.contains(start: row.start, end: row.end)
             }
-            guard let first = relevant.first else { continue }
-            let people = Set(relevant.map { $0.review == .confirmed ? $0.personID : nil })
+            guard let first = relevant.first(where: { $0.review == .confirmed }) ?? relevant.first else { continue }
+            let confirmedPeople = Set(relevant.filter { $0.review == .confirmed }.map(\.personID))
+            var people: Set<UUID?> = confirmedPeople.isEmpty ? [nil] : confirmedPeople
+            // A negative answer about one person cannot contradict positive
+            // evidence for somebody else covering the same passage.
+            if relevant.contains(where: { example in
+                confirmedPeople.contains { person in
+                    person.map(example.rejectedPersonIDs.contains) == true
+                }
+            }) {
+                people.insert(nil)
+            }
             // Reviewing examples during a whole-label assignment confirms that
             // same decision; it does not create a distinct voice for each passage.
             // Conflicting or different exact-time reviews still need a projection.
@@ -1120,6 +1411,9 @@ final class VoiceLibraryStore: ObservableObject {
         next.deletedPersonIDs += ids.subtracting(next.deletedPersonIDs).sorted { $0.uuidString < $1.uuidString }
         for index in next.examples.indices {
             if next.examples[index].personID.map(ids.contains) == true { next.examples[index].personID = targetID }
+            if next.examples[index].namedPersonID.map(ids.contains) == true {
+                next.examples[index].namedPersonID = targetID
+            }
             if next.examples[index].suggestedPersonID.map(ids.contains) == true {
                 next.examples[index].suggestedPersonID = targetID
             }
@@ -1132,6 +1426,7 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].suggestedPersonID == targetID
             {
                 next.examples[index].suggestedPersonID = nil
+                if next.examples[index].namedPersonID == targetID { next.examples[index].namedPersonID = nil }
                 if next.examples[index].review == .suggested { next.examples[index].review = .rejected }
             }
         }
@@ -1161,6 +1456,7 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].review = .unassigned
             }
             if next.examples[index].suggestedPersonID == id { next.examples[index].suggestedPersonID = nil }
+            if next.examples[index].namedPersonID == id { next.examples[index].namedPersonID = nil }
             next.examples[index].rejectedPersonIDs.removeAll { $0 == id }
         }
         for index in next.decisions.indices where next.decisions[index].personID == id {

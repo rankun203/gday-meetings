@@ -177,6 +177,7 @@ enum UIPreview {
                 try live.save(at: store.directory(for: conversation.id))
                 try await seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
                 try await seedSpeakerIdentityReview(store: store, meeting: conversation)
+                try await seedPeopleReviewSession(store: store, meeting: conversation, personID: person)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true

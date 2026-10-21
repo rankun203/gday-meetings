@@ -125,11 +125,14 @@ final class VoiceLibraryPersistence {
         }
     }
 
-    /// Snapshot the precise reviewed records needed by a profile. Unrelated live
-    /// candidate commits must not cancel expensive reviewed-profile construction.
-    func profileDependencyRevisions(exampleIDs: [UUID]) throws -> [String: String] {
-        try locked { try validateRevision() }
-        let paths = exampleIDs.flatMap { ["examples/\($0.uuidString).json", representationPath($0)] }
+    /// Profiles pin their voice representations as well as decisions. Review
+    /// reads can pin decisions alone while independently versioned models update.
+    func profileDependencyRevisions(exampleIDs: [UUID], includeRepresentations: Bool = true) throws -> [String: String]
+    {
+        if includeRepresentations { try locked { try validateRevision() } }
+        let paths = exampleIDs.flatMap {
+            ["examples/\($0.uuidString).json"] + (includeRepresentations ? [representationPath($0)] : [])
+        }
         var result: [String: String] = [:]
         for start in stride(from: 0, to: paths.count, by: 32) {
             try Task.checkCancellation()
@@ -158,6 +161,22 @@ final class VoiceLibraryPersistence {
             result.merge(revisions, uniquingKeysWith: { _, new in new })
         }
         return result
+    }
+
+    /// Review questions depend on their captured decisions and audio metadata.
+    /// Model preparation can independently replace a representation while a large
+    /// review read proceeds; its next coalesced refresh picks up newer vectors.
+    func loadReviewRepresentations(exampleID: UUID, dependencies: [String: String]) throws
+        -> VoiceLibraryRepresentations?
+    {
+        try locked {
+            let overlay =
+                try pendingTransaction().map { Dictionary(uniqueKeysWithValues: $0.changes.map { ($0.path, $0) }) }
+                ?? [:]
+            let path = "examples/\(exampleID.uuidString).json"
+            guard try dependencyRevision(path, overlay: overlay) == dependencies[path] else { throw changedError() }
+            return try readRecord(path: representationPath(exampleID), overlay: overlay)
+        }
     }
 
     func loadProfileRepresentations(exampleID: UUID, dependencies: [String: String]) throws

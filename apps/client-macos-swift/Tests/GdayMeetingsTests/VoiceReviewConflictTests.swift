@@ -95,9 +95,12 @@ struct VoiceReviewConflictTests {
         #expect((try await library.matchingPeople(from: [person, other])).allSatisfy { $0.voiceSamples.isEmpty })
         #expect(library.confirm(ids: [second.id], personID: person.id))
         let matched = (try await library.matchingPeople(from: [person, other]))
-        #expect(Set(matched[0].voiceSamples.map(\.speakerID)) == [first.id, second.id])
+        #expect(matched[0].voiceSamples.count == 1)
+        #expect(Set(matched[0].voiceSamples.map(\.speakerID)).isSubset(of: [first.id, second.id]))
+        #expect(library.examples.filter { $0.personID == person.id && $0.review == .confirmed }.count == 2)
         #expect(matched[1].voiceSamples.isEmpty)
         #expect(library.clear(ids: [first.id]))
-        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.map(\.speakerID) == [second.id])
+        // Clearing one excerpt removes every compatible provider alias from the profile.
+        #expect((try await library.matchingPeople(from: [person]))[0].voiceSamples.isEmpty)
     }
 }

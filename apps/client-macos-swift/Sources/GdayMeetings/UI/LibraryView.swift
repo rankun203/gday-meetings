@@ -267,7 +267,9 @@ struct LibraryView: View {
                                 directoryColumn
                                     .frame(minWidth: 250, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
                                     .background(ListWidthPersistence(key: directoryWidthKey))
-                                selectedDetail
+                                // Keep the native split item stable when the selected detail
+                                // resets its person-, tag-, or meeting-scoped state.
+                                VStack(spacing: 0) { selectedDetail }
                                     .frame(
                                         minWidth: AppTheme.minimumDetailWidth, maxWidth: .infinity, maxHeight: .infinity
                                     )
@@ -281,7 +283,7 @@ struct LibraryView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(LibrarySidebarActionTarget(navigation: sidebarNavigation))
-            .sheet(isPresented: $reviewingVoices) { VoiceLibraryView(library: store.voiceLibrary) }
+            .sheet(isPresented: $reviewingVoices) { PeopleMatchReviewLauncher(library: store.voiceLibrary) }
         }
     }
 
@@ -337,7 +339,7 @@ struct LibraryView: View {
             let id = selectedPeople.first,
             let person = store.people.first(where: { $0.id == id })
         {
-            ContextDetailView(title: person.name, personID: id, tagID: nil).id(id)
+            ContextDetailView(title: person.name, personID: id, tagID: nil, reviewingLibrary: reviewingVoices).id(id)
         }
         else if destination == .people, selectedPeople.count > 1 {
             ContentUnavailableView {

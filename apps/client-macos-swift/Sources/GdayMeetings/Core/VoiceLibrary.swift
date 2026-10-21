@@ -87,6 +87,9 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var end: Double?
     var personID: UUID?
     var suggestedPersonID: UUID?
+    /// A person explicitly chosen for a proposed group. This association remains
+    /// inferred until this individual excerpt is confirmed.
+    var namedPersonID: UUID?
     var review: VoiceReviewState = .unassigned
     var rejectedPersonIDs: [UUID] = []
     var excluded = false
@@ -110,9 +113,21 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
         return value.isValid ? value : nil
     }
     var isPlayable: Bool { range != nil }
-    var needsReview: Bool {
-        personID == nil && !excluded && !manuallyCleared && (review == .unassigned || review == .suggested)
+    /// Rejection settles one sample-person pair; other people remain eligible.
+    var acceptsSuggestions: Bool { personID == nil && review != .confirmed && !excluded && !manuallyCleared }
+    var needsReview: Bool { acceptsSuggestions && (review != .rejected || suggestedPersonID != nil) }
+    /// Compare human decisions and the audio being reviewed. Background
+    /// suggestions and newly prepared embeddings do not invalidate a question.
+    func hasSameReviewEvidence(as other: VoiceExample) -> Bool {
+        id == other.id && personID == other.personID && namedPersonID == other.namedPersonID
+            && (review == .confirmed) == (other.review == .confirmed)
+            && Set(rejectedPersonIDs) == Set(other.rejectedPersonIDs)
+            && excluded == other.excluded && manuallyCleared == other.manuallyCleared
+            && range == other.range && audioRevision == other.audioRevision
+            && meetingID == other.meetingID && speakerID == other.speakerID
+            && manuallyGrouped == other.manuallyGrouped && (!manuallyGrouped || groupID == other.groupID)
     }
+
     var isReviewed: Bool { review == .confirmed || review == .rejected || excluded || manuallyCleared }
 }
 
@@ -144,6 +159,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
     var id: UUID
     var personID: UUID?
     var suggestedPersonID: UUID?
+    var namedPersonID: UUID?
     var review: VoiceReviewState
     var rejectedPersonIDs: [UUID]
     var excluded: Bool
@@ -155,6 +171,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
         id = example.id
         personID = example.personID
         suggestedPersonID = example.suggestedPersonID
+        namedPersonID = example.namedPersonID
         review = example.review
         rejectedPersonIDs = example.rejectedPersonIDs
         excluded = example.excluded
@@ -166,6 +183,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
     func restore(_ example: inout VoiceExample) {
         example.personID = personID
         example.suggestedPersonID = suggestedPersonID
+        example.namedPersonID = namedPersonID
         example.review = review
         example.rejectedPersonIDs = rejectedPersonIDs
         example.excluded = excluded
@@ -176,6 +194,10 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
 }
 
 struct VoiceLibraryUndo: Codable, Equatable {
+    // Optional so pre-existing undo records remain readable. New actions always
+    // have a token; sessions never claim an older unidentifiable action.
+    var id: UUID? = UUID()
+    var createdPerson: Person? = nil
     var examples: [VoiceExampleReviewSnapshot]
     var decisions: [VoiceSpeakerDecision]
 }

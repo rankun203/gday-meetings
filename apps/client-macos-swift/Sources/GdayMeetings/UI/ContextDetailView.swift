@@ -7,11 +7,14 @@ struct ContextDetailView: View {
     let title: String
     let personID: UUID?
     let tagID: UUID?
+    var reviewingLibrary = false
     @ViewState private var draft = ""
-    @ViewState private var selectedMeeting: UUID?
+    @ViewState private var selectedMeeting: VoiceExampleRecordingTarget?
     @ViewState private var listSelection: UUID?
     @ViewState private var deleting: Meeting?
     @ViewState private var reviewingVoices = false
+    @ViewState private var viewingSamples = false
+    @ViewState private var pendingVoiceRecording: VoiceExampleRecordingTarget?
     @ViewState private var editingProfile = false
     @ViewState private var showsConversation = false
     @StateObject private var loader = AssociatedMeetingLoader()
@@ -28,6 +31,9 @@ struct ContextDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             identityHeader
+            if let personID {
+                PersonSamplesSummary(library: store.voiceLibrary, personID: personID) { viewingSamples = true }
+            }
             Divider()
             HStack {
                 Text("Associated Meetings").font(.headline)
@@ -49,17 +55,40 @@ struct ContextDetailView: View {
             Divider()
             conversation
         }
+        .modifier(
+            PersonMatchReviewAvailability(
+                library: store.voiceLibrary, personID: personID, reviewingVoices: reviewingLibrary || reviewingVoices)
+        )
         .background(AppTheme.readingBackground)
         .focusedValue(\.directoryControlFocus, true)
         .task(id: store.meetingIndexRevision) {
             await loader.refresh(index: store.libraryIndex, personID: personID, tagID: tagID)
         }
-        .sheet(isPresented: $reviewingVoices) {
-            VoiceLibraryView(library: store.voiceLibrary, personID: personID)
+        .sheet(
+            isPresented: $reviewingVoices,
+            onDismiss: {
+                if let pendingVoiceRecording {
+                    selectedMeeting = pendingVoiceRecording
+                    self.pendingVoiceRecording = nil
+                }
+            }
+        ) {
+            if let personID {
+                PersonMatchReviewView(library: store.voiceLibrary, personID: personID) { id in
+                    pendingVoiceRecording = id
+                    reviewingVoices = false
+                }
+            }
+        }
+        .sheet(isPresented: $viewingSamples) {
+            if let personID { PersonSamplesView(library: store.voiceLibrary, personID: personID) }
         }
         .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
             if let selectedMeeting {
-                MeetingDetailSheet(meetingID: selectedMeeting) { self.selectedMeeting = nil }
+                MeetingDetailSheet(
+                    meetingID: selectedMeeting.id, initialTranscriptRowID: selectedMeeting.transcriptRowID,
+                    initialContentTab: selectedMeeting.opensTranscript ? .transcript : nil
+                ) { self.selectedMeeting = nil }
             }
         }
         .confirmationDialog(
@@ -94,9 +123,14 @@ struct ContextDetailView: View {
                 }
             }
             Spacer(minLength: 8)
+            if personID != nil {
+                PersonMatchReviewButton { reviewingVoices = true }
+            }
             Menu {
                 Button(personID == nil ? "Edit Tag…" : "Edit Profile…") { editingProfile = true }
-                if personID != nil { Button("Review Voice Samples…") { reviewingVoices = true } }
+                if personID != nil {
+                    PersonMatchReviewButton { reviewingVoices = true }
+                }
             } label: {
                 Label(personID == nil ? "Tag Actions" : "Person Actions", systemImage: "ellipsis.circle")
             }
@@ -124,10 +158,7 @@ struct ContextDetailView: View {
                         .onDisappear { Task { await store.flushProfileNotes() } }
                     }
                     PersonTagsView(personID: person.id)
-                    PersonVoiceSamplesView(library: store.voiceLibrary, personID: person.id) {
-                        editingProfile = false
-                        reviewingVoices = true
-                    }
+
                 }
                 if let tag {
                     CommittedProfileField("Name", value: tag.name) { value in
@@ -247,7 +278,7 @@ struct ContextDetailView: View {
     }
 
     private func open(_ id: UUID) {
-        selectedMeeting = id
+        selectedMeeting = VoiceExampleRecordingTarget(meetingID: id)
     }
     private func savePersonField(_ id: UUID, _ path: WritableKeyPath<Person, String>, _ value: String) {
         Task {

@@ -137,7 +137,16 @@ import Testing
         #expect(await store.updateMeeting(meeting))
         let staged = root.appendingPathComponent(collision ? "synthetic.opus" : "synthetic.m4a")
         try Data([2]).write(to: staged)
+        await store.voiceLibrary.awaitLoaded()
+        let sample = VoiceExample(
+            meetingID: id, speakerID: UUID(), source: "microphone", audioFile: original.lastPathComponent,
+            audioRevision: VoiceLibraryStore.revision(url: original), start: 0, end: 3)
+        #expect(store.voiceLibrary.upsert([sample]))
+        #expect(try await store.voiceLibrary.reviewSnapshot(for: []).unnamedGroups.count == 1)
+        let reviewRevision = store.voiceLibrary.reviewEvidenceRevision
         try await store.prepareAppleTranscriptionAudio(id: id) { _ in .init(url: staged, temporary: true) }
+        #expect(store.voiceLibrary.reviewEvidenceRevision > reviewRevision)
+        #expect(try await store.voiceLibrary.reviewSnapshot(for: []).unnamedGroups.isEmpty)
         let saved = try MeetingFolderStorage.read(id: id, directory: root)
         let output = folder.appendingPathComponent(try #require(saved.audioFiles.first))
         #expect(try Data(contentsOf: output) == Data([2]))

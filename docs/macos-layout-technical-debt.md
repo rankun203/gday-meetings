@@ -71,6 +71,6 @@ The search field owns its `NSSearchField` and loading layer. The sidebar owns it
 
 # Upgrade acceptance and current limits
 
-For each new SDK, compile with the supported deployment target and review deprecations. Ask the user to check sidebar reveal/hide, rapid reversal, resizing during motion, transport visible/hidden, page changes, and relaunch. Set distinct widths for Meetings, People, Tags, and Tasks in both sidebar states; also check Voice Library's sheet width. Use synthetic data for fixtures and preserve the active production session.
+For each new SDK, compile with the supported deployment target and review deprecations. Ask the user to check sidebar reveal/hide, rapid reversal, resizing during motion, transport visible/hidden, page changes, and relaunch. Set distinct widths for Meetings, People, Tags, and Tasks in both sidebar states; also check resizing the review dialog’s sample-list divider during the current session (that divider does not persist across launches). Use synthetic data for fixtures and preserve the active production session.
 
 At the audit baseline, the local release build and five persistence tests passed. The user previously validated the candidate layout; visual validation of the added persistence remains pending. Automated forced-layout sampling provides limited evidence about perceived transition smoothness. Treat LAYOUT-01 through LAYOUT-03 as open until their stated closure criteria are met.

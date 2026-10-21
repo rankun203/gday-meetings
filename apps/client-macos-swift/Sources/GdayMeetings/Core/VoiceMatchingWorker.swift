@@ -97,7 +97,7 @@ actor VoiceMatchingWorker {
                 .embeddings ?? []
             confirmed.append(example)
         }
-        let evidence = confirmed.flatMap { example in
+        let evidence = VoiceReviewSelection.distinctRepresentations(confirmed).flatMap { example in
             example.embeddings.filter(\.isValid).map {
                 SpeakerEvidenceSample(
                     id: example.id.uuidString, source: example.source,
@@ -200,39 +200,30 @@ actor VoiceMatchingWorker {
         // unchanged, including edits performed outside this process.
         try backend.validateProfileDependencies(dependencies)
         var hydrated: [UUID: VoiceExample] = [:]
+        let exactDecisions = VoiceExactReviewDecisions(input.examples)
         for var example in input.examples
         where input.includeSuggestions
-            && (!example.isReviewed || !example.rejectedPersonIDs.isEmpty)
+            && example.acceptsSuggestions
         {
             try Task.checkCancellation()
+            example = exactDecisions.applying(to: example)
+            guard example.acceptsSuggestions else { continue }
             example.embeddings = try backend.loadRepresentations(exampleID: example.id)?.embeddings ?? []
             hydrated[example.id] = example
         }
-        let rejected = hydrated.values.filter { !$0.rejectedPersonIDs.isEmpty }
         var suggestions: [Suggestion] = []
         if input.includeSuggestions {
-            for metadata in input.examples where !metadata.isReviewed {
+            for metadata in input.examples where metadata.acceptsSuggestions {
                 try Task.checkCancellation()
                 guard let example = hydrated[metadata.id] else { continue }
                 let matches = Set(
                     example.embeddings.compactMap {
-                        SpeakerRecognition.match(embedding: $0, people: profiles)?.personID
+                        SpeakerRecognition.match(
+                            embedding: $0,
+                            people: profiles.filter { !example.rejectedPersonIDs.contains($0.id) })?.personID
                     })
                 var person = matches.count == 1 ? matches.first : nil
                 if let candidate = person {
-                    for rejection in rejected where rejection.rejectedPersonIDs.contains(candidate) {
-                        try Task.checkCancellation()
-                        if example.embeddings.contains(where: { embedding in
-                            rejection.embeddings.contains {
-                                $0.type == embedding.type && $0.isValid && embedding.isValid
-                                    && (SpeakerRecognition.similarity($0.values, embedding.values) ?? -1)
-                                        >= SpeakerRecognition.threshold
-                            }
-                        }) {
-                            person = nil
-                            break
-                        }
-                    }
                     if input.deletedPeople.contains(candidate) || example.rejectedPersonIDs.contains(candidate) {
                         person = nil
                     }
