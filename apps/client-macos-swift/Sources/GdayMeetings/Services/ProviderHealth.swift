@@ -72,7 +72,8 @@ extension ThisMacProvider {
         guard settings.thisMacCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
         guard SpeechTranscriber.isAvailable else { return .notReady("Transcription is unavailable on this Mac.") }
         let locales = await SpeechTranscriber.supportedLocales
-        guard let locale = AppleSpeechLanguageMapping.locale(for: settings.defaultLanguage, supported: locales) else {
+        guard let locale = AppleSpeechLanguageMapping.locale(for: settings.effectiveDefaultLanguage, supported: locales)
+        else {
             return .notReady("Choose a supported transcription language.")
         }
         let status = await AssetInventory.status(forModules: [SpeechTranscriber(locale: locale, preset: .transcription)]
@@ -113,7 +114,7 @@ extension ThisMacProvider {
         let localCapabilities: Set<ProviderCapability>
         init(_ settings: AppSettings) {
             providers = settings.serviceProviders
-            language = settings.defaultLanguage
+            language = settings.effectiveDefaultLanguage
             localCapabilities = settings.thisMacCapabilities
         }
     }
@@ -315,7 +316,7 @@ extension MeetingStore {
         let results = await ProviderHealthStore.shared.checkProvider(providerID: providerID, settings: snapshot)
         guard settings.serviceProviders == snapshot.serviceProviders,
             settings.thisMacCapabilities == snapshot.thisMacCapabilities,
-            settings.defaultLanguage == snapshot.defaultLanguage
+            settings.effectiveDefaultLanguage == snapshot.effectiveDefaultLanguage
         else { return }
         let ready = Set(results.filter { $0.value.isReady }.map(\.key))
         if settings.assignInitiallyHealthyProvider(providerID, capabilities: ready) { saveSettings() }

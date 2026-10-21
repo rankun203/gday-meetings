@@ -81,6 +81,7 @@ final class MeetingStore: ObservableObject {
         try await ProviderLanguageService.catalog(for: $0)
     }
     @Published var recordingID: UUID?
+    private var lastStartedRecordingID: UUID?
     @Published var presentsRecordingSetup = false
     /// Transcription, summaries, chat, archiving, and imports in progress; see
     /// BackgroundJobs.swift. Change only through beginJob and endJob. Jobs never
@@ -856,7 +857,7 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func createMeeting(title: String = "Untitled Meeting", language: String? = nil) async -> UUID {
         guard canSave else { return UUID() }
-        let meeting = Meeting(title: title, language: language ?? settings.defaultLanguage)
+        let meeting = Meeting(title: title, language: language ?? settings.effectiveDefaultLanguage)
         do {
             _ = try MeetingFolderLocation.newFolder(id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
         }
@@ -890,8 +891,17 @@ final class MeetingStore: ObservableObject {
         guard canSave, !deletingMeetingIDs.contains(meeting.id),
             let index = meetings.firstIndex(where: { $0.id == meeting.id })
         else { return false }
+        let languageChanged = meetings[index].language != meeting.language
+        let editedDuringRecording = recordingID == meeting.id
+        let recordingSession = lastStartedRecordingID
         meetings[index] = meeting
-        return await save()
+        guard await save() else { return false }
+        if languageChanged, editedDuringRecording, lastStartedRecordingID == recordingSession,
+            self.meeting(id: meeting.id)?.language == meeting.language
+        {
+            rememberRecordingLanguage(meeting.language)
+        }
+        return true
     }
     func commitSourcePlaceholderRecovery(
         _ sources: [UUID: LiveAudioSource], expected snapshot: Meeting, generation: UUID
@@ -1207,7 +1217,7 @@ final class MeetingStore: ObservableObject {
         let suppliedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let meeting = Meeting(
             title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle,
-            language: language ?? settings.defaultLanguage)
+            language: language ?? settings.effectiveDefaultLanguage)
         do {
             let folder = try MeetingFolderLocation.newFolder(
                 id: meeting.id, date: meeting.createdAt, directory: dataDirectory)
@@ -1257,7 +1267,9 @@ final class MeetingStore: ObservableObject {
             latestCreatedMeetingID = meeting.id
             recorder = capture
             recordingID = meeting.id
+            lastStartedRecordingID = meeting.id
             recordingStartedAt = Date()
+            rememberRecordingLanguage(meeting.language)
             liveTranscript.begin(
                 meetingID: meeting.id, language: meeting.language, directory: directory(for: meeting.id),
                 sources: [microphone ? .microphone : nil, systemAudio ? .system : nil].compactMap { $0 },
@@ -1283,6 +1295,14 @@ final class MeetingStore: ObservableObject {
         }
         captureTransition = false
     }
+    func rememberRecordingLanguage(_ language: String) {
+        guard settings.lastRecordingLanguage != language else { return }
+        settings.lastRecordingLanguage = language
+        if !saveSettings() {
+            errorMessage = "Couldn’t save the recording language preference. " + (errorMessage ?? "")
+        }
+    }
+
     /// The live Voice Processing switch; explicit for the rest of the recording.
     func setRecordingVoiceProcessing(_ enabled: Bool) { recorder?.setVoiceProcessing(enabled) }
     func toggleRecordingMute(microphone: Bool) {
@@ -1573,7 +1593,8 @@ final class MeetingStore: ObservableObject {
             else {
                 let imported = additions.map {
                     Meeting(
-                        id: $0.id, title: $0.title, language: settings.defaultLanguage, createdAt: $0.createdAt,
+                        id: $0.id, title: $0.title, language: settings.effectiveDefaultLanguage,
+                        createdAt: $0.createdAt,
                         duration: $0.duration,
                         audioFiles: [$0.file])
                 }

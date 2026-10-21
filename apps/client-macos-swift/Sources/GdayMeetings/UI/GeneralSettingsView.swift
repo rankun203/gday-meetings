@@ -43,6 +43,9 @@ struct GeneralSettingsView: View {
                         group("Record") {
                             switchRow("Microphone", enabled: setting(\.captureMicrophone))
                             switchRow("System Audio", enabled: setting(\.captureSystemAudio))
+                            MeetingLanguagePicker(
+                                title: "Default Language", selection: setting(\.defaultLanguageSelection),
+                                includesLastRecording: true)
                             Picker("Audio Format", selection: setting(\.recordingFormat)) {
                                 Text("Opus").tag(RecordingFormat.opus)
                                 Text("M4A (AAC)").tag(RecordingFormat.m4a)
@@ -111,9 +114,6 @@ struct GeneralSettingsView: View {
                             provider("Search", capability: .search, selected: store.settings.searchProviderID)
                             Button("Configure Capability Providers") { settingsTab = "providers" }
                                 .buttonStyle(.link).font(.callout)
-                        }
-                        group("Transcription Language") {
-                            MeetingLanguagePicker(title: "Language", selection: setting(\.defaultLanguage))
                         }
                         Text(
                             "Speaker diarization distinguishes voices. Speaker association matches them to the People Library."

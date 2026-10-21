@@ -6,6 +6,7 @@ struct MeetingLanguagePicker: View {
     var title = "Language"
     @Binding var selection: String
     var compact = false
+    var includesLastRecording = false
     @ViewState private var showInformation = false
 
     var body: some View {
@@ -28,6 +29,9 @@ struct MeetingLanguagePicker: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Transcription Language").font(.headline)
                     Text("Choose the language spoken in the recording.")
+                    if includesLastRecording {
+                        Text("Use Last Recording uses the language from the most recent recording.")
+                    }
                     Text(
                         "Each transcription provider checks whether it supports this language before processing audio."
                     )
@@ -53,8 +57,14 @@ struct MeetingLanguagePicker: View {
                 set: { selection = $0 })
         ) {
             ForEach(AppLanguages.all) { Text($0.name).tag($0.code) }
-            if AppLanguages.canonicalCode(for: selection) == nil {
+            if AppLanguages.canonicalCode(for: selection) == nil,
+                !(includesLastRecording && selection == AppSettings.lastRecordingLanguageSelection)
+            {
                 Text(AppLanguages.name(for: selection)).tag(selection).disabled(true)
+            }
+            if includesLastRecording {
+                Divider()
+                Text("Use Last Recording").tag(AppSettings.lastRecordingLanguageSelection)
             }
         }.pickerStyle(.menu)
     }

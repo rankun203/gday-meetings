@@ -108,6 +108,19 @@ struct AppSettings: Codable, Equatable {
     var initializedProviderCapabilities: Set<ProviderCapability> = []
     var recognizeSpeakers = false
     var defaultLanguage = "en"
+    var useLastRecordingLanguage = true
+    var lastRecordingLanguage: String?
+    var effectiveDefaultLanguage: String {
+        useLastRecordingLanguage ? (lastRecordingLanguage ?? defaultLanguage) : defaultLanguage
+    }
+    static let lastRecordingLanguageSelection = "last-recording"
+    var defaultLanguageSelection: String {
+        get { useLastRecordingLanguage ? Self.lastRecordingLanguageSelection : defaultLanguage }
+        set {
+            useLastRecordingLanguage = newValue == Self.lastRecordingLanguageSelection
+            if !useLastRecordingLanguage { defaultLanguage = newValue }
+        }
+    }
     var autoSummarize = false
     var autoExtractTodos = true
     var autoTranscribe = false
@@ -135,7 +148,8 @@ struct AppSettings: Codable, Equatable {
             searchDefaultsVersion,
             recognizeSpeakers,
             initializedProviderCapabilities, explicitlyDisabledFeatures,
-            defaultLanguage, autoTranscribe, autoSummarize, autoExtractTodos,
+            defaultLanguage, useLastRecordingLanguage, lastRecordingLanguage, autoTranscribe, autoSummarize,
+            autoExtractTodos,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
             thisMacCapabilityVersion,
             captureSystemAudio,
@@ -290,6 +304,8 @@ extension AppSettings {
             initializedProviderCapabilities = []
         }
         defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
+        useLastRecordingLanguage = try values.decodeIfPresent(Bool.self, forKey: .useLastRecordingLanguage) ?? true
+        lastRecordingLanguage = try values.decodeIfPresent(String.self, forKey: .lastRecordingLanguage)
         autoSummarize = try values.decodeIfPresent(Bool.self, forKey: .autoSummarize) ?? false
         autoExtractTodos = try values.decodeIfPresent(Bool.self, forKey: .autoExtractTodos) ?? true
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false

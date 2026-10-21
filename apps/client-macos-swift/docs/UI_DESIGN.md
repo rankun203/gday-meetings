@@ -54,6 +54,8 @@ At the end of each collection list, show its total for the current filters as a 
 
 General settings includes “Display summary title on meetings,” enabled by default. When enabled, meeting rows show only the summary's first line, with leading `#` characters and whitespace removed, on one truncating line. When disabled or the first line is blank, omit that line and its extra row space. Keep the saved summary unchanged and preserve list selection and viewport when toggling.
 
+General → Record places **Default Language** after Microphone and System Audio. The menu lists supported language choices followed by **Use Last Recording**, selected by default. This mode uses the last successfully started recording's language, including saved language changes during capture. Until a recording is remembered, it uses the existing saved language or English. Choosing a fixed language keeps that default when an individual recording uses another language. New Recording remains editable; the menu-bar start action uses the same resolved default. New notes, media imports, and provider language checks also use this preference.
+
 ## Meeting keyboard and Finder actions
 
 - **New Recording…** in the File menu uses Command-N and opens the recording setup sheet. Cancel leaves the library unchanged; the command must not create empty meeting notes.

@@ -50,7 +50,7 @@ struct RecordingSetupView: View {
             systemAudio = store.settings.captureSystemAudio
             microphoneDevices.start()
             format = store.settings.recordingFormat
-            language = store.settings.defaultLanguage
+            language = store.settings.effectiveDefaultLanguage
         }
         .onDisappear { microphoneDevices.stop() }
     }
