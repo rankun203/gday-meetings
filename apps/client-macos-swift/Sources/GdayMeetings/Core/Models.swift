@@ -127,6 +127,7 @@ struct AppSettings: Codable, Equatable {
     var autoTranscribeEvenWithLiveTranscript = false
     var liveTranscriptionProviderID: UUID? = ThisMacProvider.id
     var thisMacCapabilityVersion = 2
+    var thisMacFavorAccuracy = false
     var thisMacCapabilities: Set<ProviderCapability> = ThisMacProvider.capabilities
     var liveTranscriptionEnabled: Bool {
         showLiveTranscript && liveTranscriptionProviderID == ThisMacProvider.id
@@ -151,7 +152,7 @@ struct AppSettings: Codable, Equatable {
             defaultLanguage, useLastRecordingLanguage, lastRecordingLanguage, autoTranscribe, autoSummarize,
             autoExtractTodos,
             autoTranscribeEvenWithLiveTranscript, showLiveTranscript, liveTranscriptionProviderID, thisMacCapabilities,
-            thisMacCapabilityVersion,
+            thisMacCapabilityVersion, thisMacFavorAccuracy,
             captureSystemAudio,
             captureMicrophone, recordingFormat, automaticVoiceProcessing, microphoneDevice
     }
@@ -315,6 +316,7 @@ extension AppSettings {
         thisMacCapabilities =
             try values.decodeIfPresent(Set<ProviderCapability>.self, forKey: .thisMacCapabilities)
             ?? ThisMacProvider.capabilities
+        thisMacFavorAccuracy = try values.decodeIfPresent(Bool.self, forKey: .thisMacFavorAccuracy) ?? false
         if (try values.decodeIfPresent(Int.self, forKey: .thisMacCapabilityVersion) ?? 1) < 2 {
             thisMacCapabilities.insert(.transcription)
         }

@@ -48,6 +48,18 @@ struct ThisMacProviderView: View {
                         }))
                 Text("Transcribes audio during recording.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Live Transcription") {
+                Toggle(
+                    "Favor Accuracy",
+                    isOn: Binding(
+                        get: { store.settings.thisMacFavorAccuracy },
+                        set: { value in
+                            store.settings.thisMacFavorAccuracy = value
+                            store.saveSettings()
+                        }))
+                Text("May improve accuracy with slower results, starting with the next live transcription session.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Readiness") {
                 ProviderHealthSummary(
                     title: "Transcription",

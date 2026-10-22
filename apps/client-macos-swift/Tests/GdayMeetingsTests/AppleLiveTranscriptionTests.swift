@@ -6,8 +6,8 @@ import Testing
 
 struct AppleLiveTranscriptionTests {
     /// Explicitly enabled only: generated speech, no microphone or cloud transcription.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_APPLE_LIVE_TEST"] == "1"))
-    func generatedEnglishAndMandarin() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GDAY_APPLE_LIVE_TEST"] == "1"), arguments: [false, true])
+    func generatedEnglishAndMandarin(favorAccuracy: Bool) async throws {
         for (language, voice, text) in [
             (
                 "en", "Karen",
@@ -29,6 +29,7 @@ struct AppleLiveTranscriptionTests {
             let collection = Results()
             try await provider.start(
                 locale: locale, sources: [.microphone, .system], sink: sink,
+                favorAccuracy: favorAccuracy,
                 receive: { phrase, final in await collection.receive(phrase, final: final) },
                 gap: { _ in }, failure: { message in await collection.fail(message) })
             let file = try AVAudioFile(forReading: fileURL)
@@ -53,7 +54,7 @@ struct AppleLiveTranscriptionTests {
             #expect(result.0.allSatisfy { $0.start.isFinite && $0.end >= $0.start && $0.locale == locale.identifier })
             // Output is generated test text only, useful for spotting empty or wrong-language results.
             print(
-                "Apple live smoke \(locale.identifier): \(result.0.filter { $0.source == .microphone }.map(\.text).joined())"
+                "Apple live smoke \(locale.identifier), favorAccuracy=\(favorAccuracy): \(result.0.filter { $0.source == .microphone }.map(\.text).joined())"
             )
         }
     }

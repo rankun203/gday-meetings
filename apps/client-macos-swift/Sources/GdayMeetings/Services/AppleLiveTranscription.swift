@@ -19,6 +19,12 @@ actor AppleLiveTranscription {
     private func markFailed() { failed = true }
     static let log = Logger(subsystem: "com.gdaymeetings.macos", category: "live-transcription")
 
+    nonisolated static func preset(favorAccuracy: Bool) -> SpeechTranscriber.Preset {
+        var preset = SpeechTranscriber.Preset.timeIndexedProgressiveTranscription
+        if favorAccuracy { preset.reportingOptions.remove(.fastResults) }
+        return preset
+    }
+
     static func locale(for language: String) async -> Locale? {
         AppleSpeechLanguageMapping.locale(for: language, supported: await SpeechTranscriber.supportedLocales)
     }
@@ -62,6 +68,7 @@ actor AppleLiveTranscription {
     @discardableResult func start(
         locale: Locale, sources: [LiveAudioSource], sink: LiveAudioSink,
         boundaries: [LiveAudioSource: Double] = [:],
+        favorAccuracy: Bool = false,
         receive: @escaping @Sendable (LiveTranscriptPhrase, Bool) async -> Void,
         gap: @escaping @Sendable (LiveTranscriptGap) async -> Void,
         failure: @escaping @Sendable (String) async -> Void
@@ -74,7 +81,7 @@ actor AppleLiveTranscription {
         for source in sources {
             try Task.checkCancellation()
             guard !cancelled else { throw CancellationError() }
-            let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
+            let transcriber = SpeechTranscriber(locale: locale, preset: Self.preset(favorAccuracy: favorAccuracy))
             guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
                 throw MeetingError.message("This Mac couldn’t prepare live transcription audio.")
             }

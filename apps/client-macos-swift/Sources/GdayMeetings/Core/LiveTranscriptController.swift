@@ -51,6 +51,7 @@ final class LiveTranscriptController: ObservableObject {
         return issues.filter { seen.insert($0).inserted }
     }
     private var peopleProvider: () -> [Person] = { [] }
+    private var favorAccuracy: () -> Bool = { false }
 
     var presentedRows: (finalized: [LiveTranscriptPhrase], partials: [LiveTranscriptPhrase]) {
         let people = Set(peopleProvider().map(\.id))
@@ -92,7 +93,8 @@ final class LiveTranscriptController: ObservableObject {
     /// is produced from the completed recording by the offline diarization job.
     func begin(
         meetingID: UUID, language: String, directory: URL, sources: [LiveAudioSource],
-        sink: LiveAudioSink, enabled: Bool, people: @escaping () -> [Person] = { [] }
+        sink: LiveAudioSink, enabled: Bool, people: @escaping () -> [Person] = { [] },
+        favorAccuracy: @escaping () -> Bool = { false }
     ) {
         transcriptionIssue = nil
         transcriptionFailures = []
@@ -105,6 +107,7 @@ final class LiveTranscriptController: ObservableObject {
         acceptedGenerations = []
         knownRecognitionSessions = []
         peopleProvider = people
+        self.favorAccuracy = favorAccuracy
         pendingFinalizations = [:]
         finalizationFailed = false
         boundaries = [:]
@@ -194,6 +197,7 @@ final class LiveTranscriptController: ObservableObject {
         status = "Preparing live transcript…"
         checkpoint()
         let provider = AppleLiveTranscription()
+        let favorAccuracy = self.favorAccuracy()
         let boundaries = self.boundaries
         cancelProvider = { await provider.cancel() }
         stopProvider = { await provider.finish() }
@@ -206,6 +210,7 @@ final class LiveTranscriptController: ObservableObject {
                 self.draft?.locale = locale.identifier
                 let result = try await provider.start(
                     locale: locale, sources: sources, sink: sink, boundaries: boundaries,
+                    favorAccuracy: favorAccuracy,
                     receive: { [weak self] phrase, final in await self?.receive(phrase, final: final, token: token) },
                     gap: { [weak self] gap in await self?.recordGap(gap, token: token) },
                     failure: { [weak self] message in await self?.receiveTranscriptionFailure(message, token: token) })

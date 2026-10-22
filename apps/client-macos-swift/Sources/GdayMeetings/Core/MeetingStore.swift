@@ -1274,7 +1274,8 @@ final class MeetingStore: ObservableObject {
                 meetingID: meeting.id, language: meeting.language, directory: directory(for: meeting.id),
                 sources: [microphone ? .microphone : nil, systemAudio ? .system : nil].compactMap { $0 },
                 sink: liveSink, enabled: settings.liveTranscriptionEnabled,
-                people: { [weak self] in self?.people ?? [] })
+                people: { [weak self] in self?.people ?? [] },
+                favorAccuracy: { [weak self] in self?.settings.thisMacFavorAccuracy ?? false })
             captureHealth = [
                 microphone
                     ? (capture.profile.microphoneVoiceProcessing
