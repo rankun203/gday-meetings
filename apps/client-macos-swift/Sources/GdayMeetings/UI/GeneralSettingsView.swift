@@ -45,11 +45,13 @@ struct GeneralSettingsView: View {
                             switchRow("System Audio", enabled: setting(\.captureSystemAudio))
                             MeetingLanguagePicker(
                                 title: "Default Language", selection: setting(\.defaultLanguageSelection),
-                                includesLastRecording: true)
-                            Picker("Audio Format", selection: setting(\.recordingFormat)) {
-                                Text("Opus").tag(RecordingFormat.opus)
-                                Text("M4A (AAC)").tag(RecordingFormat.m4a)
-                                Text("WAV").tag(RecordingFormat.wav)
+                                includesLastRecording: true, alignsPickerToTrailingEdge: true)
+                            pickerRow("Audio Format") {
+                                Picker("Audio Format", selection: setting(\.recordingFormat)) {
+                                    Text("Opus").tag(RecordingFormat.opus)
+                                    Text("M4A (AAC)").tag(RecordingFormat.m4a)
+                                    Text("WAV").tag(RecordingFormat.wav)
+                                }
                             }
                             switchRow(
                                 "Automatically Process Microphone Audio", enabled: setting(\.automaticVoiceProcessing))
@@ -90,10 +92,12 @@ struct GeneralSettingsView: View {
                             Text("Extracts to-dos from completed summaries.").font(.caption).foregroundStyle(.secondary)
                         }
                         group("General") {
-                            Picker("Appearance", selection: $appearance.selection) {
-                                ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
+                            pickerRow("Appearance") {
+                                Picker("Appearance", selection: $appearance.selection) {
+                                    ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
+                                }
+                                .pickerStyle(.menu)
                             }
-                            .pickerStyle(.menu)
                             switchRow(
                                 "Display Summary Title on Meetings", enabled: $displaySummaryTitleOnMeetings)
                         }
@@ -131,6 +135,14 @@ struct GeneralSettingsView: View {
             ProviderPanelWindowObserver {
                 Task { await health.checkSelected(settings: store.settings) }
             })
+    }
+
+    private func pickerRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            content().labelsHidden().fixedSize()
+        }
     }
 
     private var recordedLabelingPrerequisite: String? {
@@ -269,27 +281,31 @@ private struct GeneralProviderPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.callout)
-            Button {
-                isOpen.toggle()
-            } label: {
-                HStack {
-                    Text(selectedName).lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
-                }.frame(maxWidth: .infinity)
-            }
-            .accessibilityLabel(title).accessibilityValue(selectedName)
-            .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 4) {
-                    candidate(id: nil, name: "None", state: .ready)
-                    ForEach(candidates, id: \.id) { candidate in
-                        self.candidate(
-                            id: candidate.id, name: candidate.name,
-                            state: health.state(providerID: candidate.id, capability: capability))
-                    }
-                }.padding(8).frame(minWidth: 290)
-                    .task { await health.checkEligible(capability: capability, settings: store.settings) }
+            HStack {
+                Text(title).font(.callout).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
+                Button {
+                    isOpen.toggle()
+                } label: {
+                    HStack {
+                        Text(selectedName).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                    }.frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: 200)
+                .accessibilityLabel(title).accessibilityValue(selectedName)
+                .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        candidate(id: nil, name: "None", state: .ready)
+                        ForEach(candidates, id: \.id) { candidate in
+                            self.candidate(
+                                id: candidate.id, name: candidate.name,
+                                state: health.state(providerID: candidate.id, capability: capability))
+                        }
+                    }.padding(8).frame(minWidth: 290)
+                        .task { await health.checkEligible(capability: capability, settings: store.settings) }
+                }
             }
             if let selection {
                 let status = health.state(providerID: selection, capability: capability)

@@ -7,39 +7,51 @@ struct MeetingLanguagePicker: View {
     @Binding var selection: String
     var compact = false
     var includesLastRecording = false
+    var alignsPickerToTrailingEdge = false
     @ViewState private var showInformation = false
 
     var body: some View {
         HStack(spacing: 4) {
-            if compact {
+            if alignsPickerToTrailingEdge {
+                Text(title).fixedSize(horizontal: false, vertical: true)
+                informationButton
+                Spacer()
+                languagePicker.labelsHidden().fixedSize()
+            }
+            else if compact {
                 languagePicker.labelsHidden().frame(width: compactWidth)
+                informationButton
             }
             else {
                 languagePicker
+                informationButton
             }
-            Button {
-                showInformation.toggle()
-            } label: {
-                Image(systemName: "info.circle").frame(width: 28, height: 28).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Language Information")
-            .help("About transcription language")
-            .popover(isPresented: $showInformation) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Transcription Language").font(.headline)
-                    Text("Choose the language spoken in the recording.")
-                    if includesLastRecording {
-                        Text("Use Last Recording uses the language from the most recent recording.")
-                    }
-                    Text(
-                        "Each transcription provider checks whether it supports this language before processing audio."
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var informationButton: some View {
+        Button {
+            showInformation.toggle()
+        } label: {
+            Image(systemName: "info.circle").frame(width: 28, height: 28).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Language Information")
+        .help("About transcription language")
+        .popover(isPresented: $showInformation) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Transcription Language").font(.headline)
+                Text("Choose the language spoken in the recording.")
+                if includesLastRecording {
+                    Text("Use Last Recording uses the language from the most recent recording.")
                 }
-                .font(.callout).padding(16).frame(width: 280, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "Each transcription provider checks whether it supports this language before processing audio."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
+            .font(.callout).padding(16).frame(width: 280, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
     private var compactWidth: CGFloat {
