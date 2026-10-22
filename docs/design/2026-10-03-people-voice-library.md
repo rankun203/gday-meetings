@@ -1,6 +1,7 @@
 ---
 title: People voice library
 date: 2026-10-03
+updated: 2026-10-22
 status: implemented
 scope: swift-people-speaker-association
 ---
@@ -69,6 +70,12 @@ For an existing development library, use the data folder shown in Settings > Dat
 
 Treat unknown voices as expected. Match only compatible reviewed profiles, honor corrections, and withdraw unsupported automatic live assignments. Preserve a distinction between automatic association and user confirmation. Each embedding space requires its own evaluated decision policy; cosine similarity is not an identity probability.
 
+Transcript attribution and reference-sample review serve different purposes. A reference excerpt supplies evidence; its selected playback range does not bound the detected speaker's identity. A qualifying association applies to all supported passages of that detected speaker. Unresolved source-only passages remain unresolved. Discovery results from a separate scan must map unambiguously to the saved detected speaker before extending an attribution beyond the excerpt.
+
+Recorded transcript matching uses confirmed reference profiles. The default automatic rule requires similarity of at least 0.80 and a lead of 0.08 over the next comparable person. A positive score with that lead over another comparable person can produce a tentative attribution below the automatic threshold. Tentative names show a question mark; accessible help distinguishes tentative, automatic and assigned identities. These defaults are provisional policies, not calibrated confidence estimates. Explicit provider settings remain authoritative. Review suggestions retain their independent 0.55 threshold.
+
+Persist machine attribution separately from human confirmation, including its score, margin, tier and policy. Validate audio and policy before projecting it; saved-speaker evidence validates its diarization generation, while separate discovery validates configuration and current row coverage; preserve manual corrections and Undo. Automatic and tentative transcript names never enroll reference audio. Only explicitly confirmed suitable excerpts contribute to future matching. Tentative names stay outside meeting attendance and confirmed search metadata; speaker controls and exported or generated text identify them as tentative. A transcript correction changes speaker identity without approving every reference excerpt. Keep acoustic uncertainty separate from tentative person identity so a tentative name does not claim that an unresolved passage has a detected speaker.
+
 Validation must include unrelated video speakers, one-person galleries, mixed microphone/system conditions, short and overlapping speech, and held-out recordings. User confirmations improve the evidence library without retraining the base neural model. Threshold changes alone do not establish improved accuracy. Do not automatically tune thresholds on the same examples used for enrollment and claim independent validation.
 
 ## Implementation and validation
@@ -77,4 +84,4 @@ Implement durable evidence and decisions, playable review and corrections, and s
 
 Record exact delivered behavior, validation limits, compatibility bridges, and any remaining follow-up in the implementation worklog. Recognition accuracy and remote extraction support must not be implied by UI or unit-test success.
 
-Implementation and validation results are recorded in the [worklog](../worklogs/2026-10-03-people-voice-library.md). Automatic identity assignment remains deferred until held-out evaluation supports a calibrated policy for each embedding space.
+Earlier implementation and validation results are recorded in the [original worklog](../worklogs/2026-10-03-people-voice-library.md). The [review and transcript attribution worklog](../worklogs/2026-10-21-review-responsiveness.md) records the current policy, exploratory evaluation and its limits. Broader held-out evaluation remains required before claiming calibrated identification accuracy.

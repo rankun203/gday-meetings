@@ -93,6 +93,11 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     var apiKey = ""
     var model = ""
     var localSearch: LocalSearchConfiguration?
+    var voiceMatching: VoiceMatchingPolicy?
+    var voiceMatchingPolicy: VoiceMatchingPolicy {
+        get { (voiceMatching ?? .default).normalized }
+        set { voiceMatching = newValue.normalized }
+    }
     // Scoped to the exact endpoint/model; switching either returns to automatic detection.
     var summaryImageOverride: SummaryImageOverride?
     var summarizationPrompt: String?
@@ -112,7 +117,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
     }
     enum CodingKeys: String, CodingKey {
         case id, kind, name, endpoint, model, isEnabled, enabledCapabilities, uploadProviderID, summarizationPrompt
-        case summaryImageOverride, localSearch
+        case summaryImageOverride, localSearch, voiceMatching
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -122,6 +127,7 @@ struct ServiceProvider: Identifiable, Codable, Equatable {
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = try values.decode(String.self, forKey: .model)
         localSearch = try values.decodeIfPresent(LocalSearchConfiguration.self, forKey: .localSearch)
+        voiceMatching = try values.decodeIfPresent(VoiceMatchingPolicy.self, forKey: .voiceMatching)?.normalized
         if kind == .localSearch, ["Local Voice Search (CLSP)", "Local Voice Search"].contains(name) {
             name = "Local Search"
         }

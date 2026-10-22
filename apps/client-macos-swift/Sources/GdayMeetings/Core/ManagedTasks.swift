@@ -396,10 +396,25 @@ extension MeetingStore {
 
     func invalidateTaskHistory(previous: ManagedTaskRecord?, current: ManagedTaskRecord?) {
         guard previous != current else { return }
+        if previous?.meetingID != current?.meetingID
+            || TaskHistoryQuery.allCases.contains(where: {
+                previous.map($0.includes) != current.map($0.includes)
+            })
+        {
+            managedTaskFilterCountRevision += 1
+        }
+        var scopeRevisions = managedTaskScopeRevisions
         for scope in TaskHistoryScope.allCases
         where previous.map(scope.includes) == true || current.map(scope.includes) == true {
-            managedTaskScopeRevisions[scope, default: 0] += 1
+            scopeRevisions[scope, default: 0] += 1
         }
+        managedTaskScopeRevisions = scopeRevisions
+        var displayRevisions = managedTaskDisplayRevisions
+        for query in TaskHistoryQuery.allCases
+        where previous.map(query.includes) == true || current.map(query.includes) == true {
+            displayRevisions[query, default: 0] += 1
+        }
+        managedTaskDisplayRevisions = displayRevisions
     }
 
     /// Journal first: provider work must not start from an uncommitted intent.
@@ -1133,6 +1148,7 @@ extension MeetingStore {
     }
 
     func applyManagedTaskSnapshot(_ snapshot: ManagedTaskSnapshot) {
+        managedTaskFilterCountRevision += 1
         let recentIDs = Set(snapshot.recent.map(\.id))
         let pinned = managedTasks.filter {
             !recentIDs.contains($0.id) && ($0.isPreview || managedTaskOperations[$0.id] != nil)
@@ -1148,7 +1164,12 @@ extension MeetingStore {
         where !snapshot.activeIDs.contains(id) && managedTaskOperations[id] == nil {
             for waiter in managedTaskWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         }
-        for scope in TaskHistoryScope.allCases { managedTaskScopeRevisions[scope, default: 0] += 1 }
+        var scopeRevisions = managedTaskScopeRevisions
+        for scope in TaskHistoryScope.allCases { scopeRevisions[scope, default: 0] += 1 }
+        managedTaskScopeRevisions = scopeRevisions
+        var displayRevisions = managedTaskDisplayRevisions
+        for query in TaskHistoryQuery.allCases { displayRevisions[query, default: 0] += 1 }
+        managedTaskDisplayRevisions = displayRevisions
         managedTaskRevision += 1
     }
 

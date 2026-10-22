@@ -64,6 +64,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var accessibilityHelp: String? = nil
     var source: LiveAudioSource? = nil
     var isSourcePlaceholder = false
+    var transcriptAssociationTier: VoiceTranscriptAssociation.Tier? = nil
     var constituents: [TranscriptDisplayRow] = []
     var constituentTextRanges: [NSRange] = []
     var canonicalRows: [TranscriptDisplayRow] { constituents.isEmpty ? [self] : constituents }
@@ -82,7 +83,7 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
         personID: UUID? = nil, speakerColorIndex: Int? = nil, speakerColorKey: String? = nil,
         isProvisional: Bool = false, provisionalTextRanges: [NSRange]? = nil,
         recentWordRanges: [NSRange] = [], accessibilityHelp: String? = nil, isSourcePlaceholder: Bool = false,
-        source: LiveAudioSource? = nil
+        source: LiveAudioSource? = nil, transcriptAssociationTier: VoiceTranscriptAssociation.Tier? = nil
     ) {
         self.id = id
         self.start = start
@@ -99,12 +100,24 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
         self.accessibilityHelp = accessibilityHelp
         self.isSourcePlaceholder = isSourcePlaceholder
         self.source = source
+        self.transcriptAssociationTier = transcriptAssociationTier
         // Compute once when a row is constructed, never during a height lookup.
         self.textRevision = text.utf8.reduce(UInt64(14_695_981_039_346_656_037)) {
             ($0 ^ UInt64($1)) &* 1_099_511_628_211
         }
     }
     var canAssignPerson: Bool { speakerID != nil && !isSourcePlaceholder }
+    // Identity uncertainty is independent of an acoustically unresolved passage.
+    var hasTentativePerson: Bool { personID != nil && transcriptAssociationTier == .tentative }
+    var speakerBadgeLabel: String { hasTentativePerson ? speaker + " ?" : speaker }
+    var speakerAssignmentHelp: String? {
+        guard personID != nil else { return nil }
+        switch transcriptAssociationTier {
+        case .tentative: return "Tentative match. Assign a person to correct it."
+        case .automatic: return "Automatically matched. Assign a person to correct it."
+        case nil: return "Assigned person."
+        }
+    }
 }
 
 /// One selected transcript, reusable native rows, and the window's shared field
@@ -1492,12 +1505,19 @@ enum TranscriptSpeakerPalette {
         }
         time.stringValue = TranscriptRow<Text>.timestamp(row.start)
         updatePlaybackAccessibility()
-        speaker.stringValue = row.speaker
+        speaker.stringValue = row.speakerBadgeLabel
+        speaker.lineBreakMode = row.hasTentativePerson ? .byTruncatingMiddle : .byTruncatingTail
+        speaker.toolTip = row.speakerAssignmentHelp.map { "\(row.speaker). \($0)" }
+        speaker.setAccessibilityLabel(row.speaker)
+        speaker.setAccessibilityValue(row.hasTentativePerson ? "Tentative match" : nil)
+        speaker.setAccessibilityHelp(row.speakerAssignmentHelp)
+        badge.toolTip = speaker.toolTip
         speakerHeight = 20
-        speakerWidth = min(100, ceil((row.speaker as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
+        speakerWidth = min(
+            100, ceil((row.speakerBadgeLabel as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
         let colorKey = row.personID?.uuidString ?? row.speakerID?.uuidString ?? row.speaker
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey, index: row.speakerColorIndex)
-        badge.unresolved = row.personID == nil && !row.isSourcePlaceholder
+        badge.unresolved = row.hasTentativePerson || (row.personID == nil && !row.isSourcePlaceholder)
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
         if !body.isEditable {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]

@@ -31,6 +31,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
     private let report: @Sendable (Int?, Int64?, Bool, Int, String?) -> Void
     private let changed: @Sendable (Bool) -> Void
     private let directoryChanged: @Sendable ([URL], Bool) -> Void
+    private let filesChanged: @Sendable ([URL], Bool) -> Void
     private let documentsChanged: @Sendable ([URL], Bool) -> Void
     private let discoveryProgress: @Sendable (Int) -> Void
     private var cursor: URL { indexDirectory.appendingPathComponent(".index-events.json") }
@@ -40,6 +41,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         report: @escaping @Sendable (Int?, Int64?, Bool, Int, String?) -> Void,
         changed: @escaping @Sendable (Bool) -> Void,
         directoryChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
+        filesChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
         documentsChanged: @escaping @Sendable ([URL], Bool) -> Void = { _, _ in },
         discoveryProgress: @escaping @Sendable (Int) -> Void = { _ in }
     ) {
@@ -48,6 +50,7 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
         self.report = report
         self.changed = changed
         self.directoryChanged = directoryChanged
+        self.filesChanged = filesChanged
         self.documentsChanged = documentsChanged
         self.discoveryProgress = discoveryProgress
         let saved =
@@ -143,9 +146,17 @@ final class LibraryMonitorCoordinator: @unchecked Sendable {
             return path == libraryRoot || path == meetingsRoot
         }
         batch.requiresScan = batch.requiresScan || needsRecoveryScan || hasAncestorEvent
+        var notifiedFiles = false
+        defer {
+            // Audio invalidation remains available when the disposable index
+            // cannot open; recovery conservatively invalidates known projections.
+            if !notifiedFiles { filesChanged(batch.paths, true) }
+        }
         do {
             let index = try LibraryIndex(directory: self.root, indexDirectory: self.indexDirectory)
             batch.requiresScan = batch.requiresScan || index.requiresRebuild
+            filesChanged(batch.paths, batch.requiresScan)
+            notifiedFiles = true
             let existingCount = try index.count()
             if batch.requiresScan { self.report(existingCount, self.indexSize(), true, 0, nil) }
             var paths = batch.paths
@@ -338,6 +349,17 @@ extension MeetingStore {
             },
             directoryChanged: { [weak self] paths, rebuild in
                 Task { @MainActor in self?.refreshDirectoryIndex(paths: paths, rebuild: rebuild) }
+            },
+            filesChanged: { [weak self, root = dataDirectory] paths, rebuild in
+                Task { @MainActor in
+                    guard let self, self.dataDirectory == root else { return }
+                    let affected = self.voiceLibrary.invalidateDecisionProjections(
+                        paths: paths, root: root, rebuild: rebuild)
+                    let loaded = Set(self.meetings.map(\.id)).intersection(affected)
+                    if !loaded.isEmpty {
+                        self.scheduleVoiceAssignmentRefresh(meetingIDs: loaded, recomputeSuggestions: false)
+                    }
+                }
             },
             documentsChanged: { [weak self] paths, rebuild in
                 Task { @MainActor in self?.requestExternalLibraryReload(paths: paths, rebuild: rebuild) }

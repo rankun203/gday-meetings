@@ -1,7 +1,7 @@
 ---
 title: Repository instructions
 date: 2026-09-26
-updated: 2026-10-21
+updated: 2026-10-22
 status: active
 scope: repository-workflow
 ---
@@ -67,6 +67,15 @@ scope: repository-workflow
 
 ## Repository and test-data safety
 
+### Real-library trial data
+
+- While the user uses the main app, validate library-dependent changes with an isolated copy of the latest 20 completed meetings. Exclude active captures and incomplete finalization. Preserve the main app, its library, and active work.
+- Follow the preparation practice recorded in `docs/worklogs/2026-10-21-people-review.md`: copy relevant voice examples, representations, decisions, and legacy person references restricted to those meetings; omit copied pending tasks, resumable jobs, Undo history, and disposable indexes. Disable remote providers and automatic processing in the copy.
+- Use independent files (APFS clones or copies, never hard links or symlinks), a distinct app bundle identity, and an explicit isolated data directory. Check for pending source transactions and verify source files stayed unchanged during capture; discard an inconsistent fixture and retry later. Keep a reproducible baseline and back up trial work before an authorized reset.
+- Keep private fixtures, preparation scripts containing local paths, manifests, and builds under ignored `tmp/`. Record aggregate validation results only in tracked documents; use synthetic data in committed tests and previews. Verify the packaged app targets the isolated directory before launching it.
+
+### Repository changes
+
 - This is a single-maintainer repository. Work directly on the default branch (`master`).
 - Do not create feature branches or pull requests unless the user explicitly asks for one.
 - Use Conventional Commits format for commit messages (for example, `feat: add export support` or `fix(audio): handle device loss`).
@@ -105,7 +114,7 @@ approaches clearly, and distinguish proposed, implemented, and verified work.
 Keep unrelated tasks in their own worklogs.
 
 - **Problem:** what was wrong or missing.
-- **User Intention:** record the user's intention when it is known from the
+- **User Intention:** record the user's intention in full per topic when it is known from the
   conversation.
 - **Implemented solution:** what changed and where.
 - **Reasoning:** why this approach was chosen, including important tradeoffs or

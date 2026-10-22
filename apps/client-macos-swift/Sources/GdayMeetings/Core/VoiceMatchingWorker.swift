@@ -9,10 +9,12 @@ actor VoiceMatchingWorker {
         var people: [Person]
         var deletedPeople: [UUID]
         var includeSuggestions: Bool
+        var policy: VoiceMatchingPolicy = .default
     }
     struct Suggestion: Sendable {
         var exampleID: UUID
         var personID: UUID?
+        var transcriptAssociation: VoiceTranscriptAssociation? = nil
     }
     struct Output: Sendable {
         var profiles: [Person]
@@ -216,19 +218,24 @@ actor VoiceMatchingWorker {
             for metadata in input.examples where metadata.acceptsSuggestions {
                 try Task.checkCancellation()
                 guard let example = hydrated[metadata.id] else { continue }
-                let matches = Set(
-                    example.embeddings.compactMap {
-                        SpeakerRecognition.match(
-                            embedding: $0,
-                            people: profiles.filter { !example.rejectedPersonIDs.contains($0.id) })?.personID
-                    })
-                var person = matches.count == 1 ? matches.first : nil
-                if let candidate = person {
-                    if input.deletedPeople.contains(candidate) || example.rejectedPersonIDs.contains(candidate) {
-                        person = nil
-                    }
+                let profiles = profiles.filter { !example.rejectedPersonIDs.contains($0.id) }
+                let associations = example.embeddings.compactMap {
+                    Self.transcriptAssociation(embedding: $0, people: profiles, policy: input.policy.normalized)
                 }
-                suggestions.append(.init(exampleID: example.id, personID: person))
+                let associatedPeople = Set(associations.map(\.personID))
+                let association =
+                    associatedPeople.count == 1
+                    ? associations.first.map { first in
+                        VoiceTranscriptAssociation(
+                            personID: first.personID, score: associations.map(\.score).min()!,
+                            margin: associations.map(\.margin).min()!, policy: input.policy.normalized,
+                            tier: associations.contains { $0.tier == .tentative } ? .tentative : .automatic)
+                    } : nil
+                suggestions.append(
+                    .init(
+                        exampleID: example.id,
+                        personID: association?.tier == .automatic ? association?.personID : nil,
+                        transcriptAssociation: association))
             }
         }
         try beforeValidation?()
@@ -242,6 +249,28 @@ actor VoiceMatchingWorker {
         try backend.validateCurrentRevision()
         try Task.checkCancellation()
         return Output(profiles: profiles, suggestions: suggestions)
+    }
+
+    private static func transcriptAssociation(
+        embedding: TypedVoiceEmbedding, people: [Person], policy: VoiceMatchingPolicy
+    ) -> VoiceTranscriptAssociation? {
+        let scores = people.compactMap { person in
+            SpeakerRecognition.match(embedding: embedding, people: [person], threshold: -1, minimumMargin: 0)
+        }.sorted { $0.score == $1.score ? $0.personID.uuidString < $1.personID.uuidString : $0.score > $1.score }
+        guard let best = scores.first else { return nil }
+        let margin = best.score - (scores.dropFirst().first?.score ?? -1)
+        guard margin >= policy.minimumMargin else { return nil }
+        let tier: VoiceTranscriptAssociation.Tier
+        if best.score >= policy.automaticThreshold {
+            tier = .automatic
+        }
+        else {
+            // Relative evidence needs a real alternative; a lone known person
+            // must not win every unfamiliar voice through the -1 sentinel.
+            guard scores.count >= 2, best.score > 0 else { return nil }
+            tier = .tentative
+        }
+        return .init(personID: best.personID, score: best.score, margin: margin, policy: policy, tier: tier)
     }
 }
 

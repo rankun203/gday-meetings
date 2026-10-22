@@ -363,6 +363,17 @@ private struct ServiceProviderPanel: View {
             if draft.kind.capabilities.contains(.transcription) {
                 languagesSection
             }
+            if draft.kind == .runpod {
+                Section {
+                    DisclosureGroup("Advanced") {
+                        VoiceMatchingPolicyControls(
+                            policy: Binding(
+                                get: { draft.voiceMatchingPolicy },
+                                set: { draft.voiceMatchingPolicy = $0 }))
+                    }
+                    .disclosureGroupStyle(AppDisclosureStyle())
+                }
+            }
             Section {
                 HStack {
                     Button("Save") { saveAndCheck() }

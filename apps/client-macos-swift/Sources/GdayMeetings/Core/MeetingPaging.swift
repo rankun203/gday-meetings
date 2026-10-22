@@ -78,7 +78,7 @@ struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
         createdAt = meeting.createdAt
         duration = meeting.duration
         summary = String(meeting.summary.prefix(240))
-        personIDs = Array(Set(meeting.personIDs + meeting.speakers.compactMap(\.personID))).sorted {
+        personIDs = Array(Set(meeting.personIDs + meeting.speakers.compactMap(\.attendancePersonID))).sorted {
             $0.uuidString < $1.uuidString
         }
         tagIDs = meeting.tagIDs
@@ -242,11 +242,17 @@ extension MeetingStore {
             evictLoadedMeetings(keeping: id)
             if voiceLibrary.isLoaded { await recoverUnadoptedLiveTranscript(value) }
             guard generation == externalReloadGeneration, !deletingMeetingIDs.contains(id),
-                let latest = meeting(id: id)
+                meeting(id: id) != nil
             else { return .failed }
-            let resolved = voiceLibrary.applyingDecisions(to: latest)
-            if resolved != latest, libraryWritable, recordingID != id {
-                return await updateMeeting(resolved) ? .loaded : .failed
+            let library = voiceLibrary
+            if library.canProjectDecisions, libraryWritable, recordingID != id {
+                let result = await refreshLoadedVoiceAssignment(id: id, library: library)
+                guard operation.isNeeded, !Task.isCancelled, generation == externalReloadGeneration,
+                    meetingLoadRequests[id] == request, !isChangingLibrary, !deletingMeetingIDs.contains(id),
+                    meeting(id: id) != nil
+                else { return .superseded }
+                if result == .failed { return .failed }
+                if result == .stopped { return .superseded }
             }
             return .loaded
         }

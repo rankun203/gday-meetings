@@ -77,12 +77,96 @@ enum TaskHistoryRow: Identifiable, Equatable, @unchecked Sendable {
         }
     }
     var cursor: ManagedTaskJournal.Cursor { .init(createdAt: createdAt, id: id) }
+    var activityAt: Date {
+        switch self {
+        case .managed(let row): row.taskHistoryActivityAt
+        case .voice(let row): row.taskHistoryActivityAt
+        }
+    }
+    var displayCursor: ManagedTaskJournal.DisplayCursor { .init(activityAt: activityAt, id: id) }
+    static func recentActivityFirst(_ lhs: Self, _ rhs: Self) -> Bool {
+        lhs.activityAt == rhs.activityAt ? lhs.id.uuidString > rhs.id.uuidString : lhs.activityAt > rhs.activityAt
+    }
     static func newestFirst(_ lhs: Self, _ rhs: Self) -> Bool {
         lhs.createdAt == rhs.createdAt ? lhs.id.uuidString > rhs.id.uuidString : lhs.createdAt > rhs.createdAt
     }
 }
 
 extension MeetingStore {
+    func taskFilterCounts() async throws -> [TaskHistoryQuery: Int] {
+        let journal = managedTaskJournal
+        let visibility = taskVisibilityPredicate
+        let previews = visibleManagedTasks.filter(\.isPreview)
+        let voices = voiceLibrary.jobs
+        return try await Task.detached(priority: .utility) {
+            var counts = try journal.filterCounts(where: visibility)
+            for query in TaskHistoryQuery.allCases {
+                counts[query, default: 0] += previews.filter(query.includes).count + voices.filter(query.includes).count
+            }
+            return counts
+        }.value
+    }
+
+    /// Counts use the same predicates as display pages, without reading SQLite during view evaluation.
+    func taskDisplayCount(scope: TaskHistoryScope, type: TaskHistoryType = .all) async -> Int {
+        let query = TaskHistoryQuery(status: scope, type: type)
+        let journal = managedTaskJournal
+        let predicate = "(\(query.predicate)) AND (\(taskVisibilityPredicate))"
+        let extras =
+            visibleManagedTasks.filter { $0.isPreview && query.includes($0) }.count
+            + voiceLibrary.jobs.filter(query.includes).count
+        let count = await Task.detached(priority: .userInitiated) { journal.count(where: predicate) }.value
+        if let failure = journal.readFailure {
+            managedTaskJournalError = "Couldn’t read task history. \(failure.localizedDescription)"
+        }
+        return count + extras
+    }
+
+    func taskDisplayPage(
+        scope: TaskHistoryScope, type: TaskHistoryType = .all,
+        cursor: ManagedTaskJournal.DisplayCursor? = nil, newer: Bool = false, limit: Int = 50
+    ) async -> [TaskHistoryRow] {
+        let query = TaskHistoryQuery(status: scope, type: type)
+        let journal = managedTaskJournal
+        let predicate = "(\(query.predicate)) AND (\(taskVisibilityPredicate))"
+        let extras =
+            visibleManagedTasks.filter { $0.isPreview && query.includes($0) }.map(TaskHistoryRow.managed)
+            + voiceLibrary.jobs.filter(query.includes).map(TaskHistoryRow.voice)
+        let candidates = await Task.detached(priority: .userInitiated) {
+            journal.displayPage(after: cursor, limit: limit, predicate: predicate, newer: newer).map(
+                TaskHistoryRow.managed)
+                + extras
+        }.value
+        if let failure = journal.readFailure {
+            managedTaskJournalError = "Couldn’t read task history. \(failure.localizedDescription)"
+        }
+        // A transition may commit while disk paging is suspended. Reconcile both task
+        // stores and exclude rows that crossed the requested cursor boundary.
+        var result = candidates.compactMap { row -> TaskHistoryRow? in
+            switch row {
+            case .managed(let saved):
+                let current = managedTasks.first { $0.id == saved.id } ?? saved
+                return query.includes(current) && isTaskMeetingVisible(current.meetingID) ? .managed(current) : nil
+            case .voice(let saved):
+                guard let current = voiceLibrary.jobs.first(where: { $0.id == saved.id }), query.includes(current)
+                else {
+                    return nil
+                }
+                return .voice(current)
+            }
+        }
+        if let cursor {
+            result.removeAll { row in
+                let isNewer =
+                    row.activityAt > cursor.activityAt
+                    || (row.activityAt == cursor.activityAt && row.id.uuidString > cursor.id.uuidString)
+                return row.id == cursor.id || (newer ? !isNewer : isNewer)
+            }
+        }
+        result.sort(by: TaskHistoryRow.recentActivityFirst)
+        return newer ? Array(result.suffix(max(0, limit))) : Array(result.prefix(max(0, limit)))
+    }
+
     /// Use the complete indexed state counts, not the retained task page window.
     func taskHistoryCount(scope: TaskHistoryScope) -> Int {
         visibleManagedTaskCount(where: scope.predicate, unfiltered: managedTaskScopeCounts[scope, default: 0])

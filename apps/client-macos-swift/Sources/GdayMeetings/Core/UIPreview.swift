@@ -178,6 +178,7 @@ enum UIPreview {
                 try await seedTranscriptLabelingHistory(store: store, meeting: conversation, live: live)
                 try await seedSpeakerIdentityReview(store: store, meeting: conversation)
                 try await seedPeopleReviewSession(store: store, meeting: conversation, personID: person)
+                try seedLargePeopleReview(store: store, meeting: conversation)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
@@ -491,20 +492,32 @@ enum UIPreview {
         let unavailableIDs = store.voiceLibrary.examples.filter { !$0.isPlayable }.map(\.id)
         let pagedFailures = UIPreviewPerformanceFixtures.flag(
             "--synthetic-task-failures", infoKey: "GdaySyntheticTaskFailures")
-        let failureIDs = pagedFailures ? (0..<41).map { _ in UUID() } : unavailableIDs
+        let failureIDs = pagedFailures ? (0..<108).map { _ in UUID() } : unavailableIDs
+        if pagedFailures {
+            let examples = failureIDs.map { id in
+                var example = VoiceExample(
+                    meetingID: conversation.id, speakerID: UUID(), source: "system")
+                example.id = id
+                return example
+            }
+            store.voiceLibrary.upsert(examples)
+        }
         let failures = Dictionary(
             uniqueKeysWithValues: failureIDs.enumerated().map { index, id in
                 (
                     id.uuidString,
                     pagedFailures
-                        ? "Couldn’t prepare synthetic voice example \(index + 1)."
+                        ? "Couldn’t prepare synthetic voice example \(index + 1). The saved example has no audio range. Find a playable example in its recording."
                         : "The saved example has no audio range. Find a playable example in its recording."
                 )
             })
+        let taskOrdering = UIPreviewPerformanceFixtures.flag(
+            "--synthetic-task-ordering", infoKey: "GdaySyntheticTaskOrdering")
         store.voiceLibrary.setJobs([
             VoicePreparationJob(
                 providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
-                discover: false, exampleIDs: preparedIDs, state: .paused, createdAt: now.addingTimeInterval(-150)),
+                discover: taskOrdering, exampleIDs: preparedIDs, state: taskOrdering ? .running : .paused,
+                createdAt: now.addingTimeInterval(taskOrdering ? -86_400 : -150)),
             VoicePreparationJob(
                 providerID: providerID, providerName: "Synthetic Community-1", type: .community1,
                 discover: false, exampleIDs: failureIDs, failures: failures,

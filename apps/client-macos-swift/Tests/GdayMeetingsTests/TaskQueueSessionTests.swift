@@ -4,6 +4,298 @@ import Testing
 @testable import GdayMeetings
 
 struct TaskQueueSessionTests {
+    @MainActor @Test func returningToTasksPreservesSelectionUntilAnotherExplicitFocusRequest() {
+        let session = TaskQueueSession()
+        let target = UUID()
+        let firstRequest = UUID()
+        session.receiveFocusRequest(firstRequest)
+        #expect(session.handledFocusRequest == firstRequest)
+        session.handledFocusID = target
+        let laterSelection = UUID()
+        session.selection = laterSelection
+        session.scope = .paused
+
+        session.receiveFocusRequest(firstRequest)
+        #expect(session.handledFocusID == target)
+        #expect(session.selection == laterSelection)
+        #expect(session.scope == .paused)
+
+        session.receiveFocusRequest(UUID())
+        #expect(session.handledFocusID == nil)
+        #expect(session.selection == laterSelection)
+        #expect(session.scope == .paused)
+        session.handledFocusID = target
+        session.receiveFocusRequest(nil)
+        #expect(session.handledFocusID == target)
+    }
+
+    @MainActor @Test func revisionNotificationsLetAnInFlightPageFinish() async {
+        let session = TaskQueueSession()
+        let gate = PageGate()
+        let token = session.beginPageLoad()
+        let loaded = row("Loaded task")
+        var replacementLoads = 0
+        let page = Task { @MainActor in
+            defer { session.finishPageLoad(token) }
+            await gate.wait()
+            session.applyPage([loaded], token: token)
+        }
+        session.pageLoadTask = page
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while await !gate.isWaiting, clock.now < deadline { await Task.yield() }
+        #expect(await gate.isWaiting)
+        for _ in 0..<50 {
+            session.refreshWhenIdle {
+                replacementLoads += 1
+                _ = session.beginPageLoad()
+            }
+        }
+        #expect(!page.isCancelled)
+        #expect(session.generation == token)
+        #expect(replacementLoads == 0)
+        await gate.release()
+        await page.value
+        #expect(session.rows == [loaded])
+        #expect(!session.loadingPage)
+        session.refreshWhenIdle { replacementLoads += 1 }
+        #expect(replacementLoads == 1)
+    }
+
+    @MainActor @Test func refreshRetainsOffWindowDetailsUntilTheSelectionIsRemovedOrFiltered() {
+        let session = TaskQueueSession()
+        let selected = row("Selected task")
+        let remaining = row("Remaining task")
+        var token = session.beginPageLoad()
+        session.applyPage([selected, remaining], token: token)
+        session.select(selected)
+        session.replacePageRows([remaining], retainingCursors: true)
+        session.viewport.anchor = .init(id: remaining.id, offset: 7)
+        token = session.beginPageLoad()
+        session.applyPage([remaining], token: token, retainingSelection: selected)
+        #expect(session.selection == selected.id)
+        #expect(session.selectedRow == selected)
+        #expect(session.rows == [remaining])
+        #expect(session.viewport.anchor?.id == remaining.id)
+        #expect(session.viewport.anchor?.offset == 7)
+        #expect(session.revealID == nil)
+        token = session.beginPageLoad()
+        session.applyPage([remaining], token: token, retainingSelection: nil)
+        #expect(session.selection == remaining.id)
+        #expect(session.selectedRow == remaining)
+    }
+
+    @MainActor @Test(arguments: [false, true])
+    func revealingAMovingTargetRetriesOnceAndThenStops(movesAgain: Bool) async {
+        let session = TaskQueueSession()
+        let initial = row("Moving target")
+        var current = initial
+        var requested: [ManagedTaskJournal.DisplayCursor] = []
+        let token = session.beginFocusLoad(initial.id)
+        let result = await session.loadStableReveal(target: initial, token: token, currentTarget: { current }) {
+            target in
+            requested.append(target.displayCursor)
+            if requested.count == 1 || movesAgain {
+                guard case .managed(var changed) = current else { return target.id }
+                changed.timeline = [
+                    .init(kind: .resumed, date: .distantFuture.addingTimeInterval(Double(requested.count)), reason: nil)
+                ]
+                current = .managed(changed)
+            }
+            await Task.yield()
+            return target.id
+        }
+        #expect(requested.count == 2)
+        #expect(requested.first == initial.displayCursor)
+        #expect(requested.last != initial.displayCursor)
+        if movesAgain {
+            #expect(result == nil)
+        }
+        else {
+            #expect(result?.target == current)
+        }
+        _ = session.finishFocusLoad(token)
+        #expect(!session.loadingPage)
+    }
+
+    @MainActor @Test(arguments: [false, true])
+    func staleOrCancelledRevealCannotPublishAResult(cancel: Bool) async {
+        let session = TaskQueueSession()
+        let gate = PageGate()
+        let target = row("Requested task")
+        let token = session.beginFocusLoad(target.id)
+        let operation = Task { @MainActor in
+            defer { _ = session.finishFocusLoad(token) }
+            return await session.loadStableReveal(target: target, token: token, currentTarget: { target }) { _ in
+                await gate.wait()
+                return [target]
+            }
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while await !gate.isWaiting, clock.now < deadline { await Task.yield() }
+        #expect(await gate.isWaiting)
+        if cancel {
+            operation.cancel()
+        }
+        else {
+            session.cancelPageLoad()
+        }
+        await gate.release()
+        #expect(await operation.value == nil)
+        #expect(session.rows.isEmpty)
+        #expect(session.pendingFocusID == nil)
+        #expect(!session.loadingPage)
+    }
+
+    private enum ActionInterruption: CaseIterable, Sendable {
+        case none, selection, navigation, cancellation
+    }
+
+    @MainActor @Test(arguments: ActionInterruption.allCases)
+    private func suspendedActionPreservesUserNavigationAndFinishesMutation(interruption: ActionInterruption) async {
+        let session = TaskQueueSession()
+        let selected = row("Selected historical task")
+        let other = row("Different task")
+        session.select(selected)
+        let gate = PageGate()
+        var mutationFinished = false
+        let operation = Task { @MainActor in
+            await session.performTaskAction(id: selected.id) {
+                await gate.wait()
+                mutationFinished = true
+            }
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while await !gate.isWaiting, clock.now < deadline { await Task.yield() }
+        #expect(await gate.isWaiting)
+        #expect(session.deferRefreshUntilFocusCompletes())
+        #expect(session.selectedRow?.id == selected.id)
+        switch interruption {
+        case .none: break
+        case .selection: session.select(other)
+        case .navigation: session.cancelPageLoad()
+        case .cancellation: operation.cancel()
+        }
+        await gate.release()
+        let reveal = await operation.value
+        #expect(mutationFinished)
+        #expect(session.pendingFocusID == nil)
+        #expect(!session.loadingPage)
+        switch interruption {
+        case .none: #expect(reveal == true)
+        case .selection:
+            #expect(reveal == false)
+            #expect(session.selectedRow?.id == other.id)
+        case .navigation, .cancellation: #expect(reveal == nil)
+        }
+    }
+
+    @MainActor @Test func changingFilterClearsThePreviousCountWhileLoading() {
+        let session = TaskQueueSession()
+        session.totalCount = 42
+        session.scope = .attention
+        session.resetPagePresentation()
+        #expect(session.totalCount == 0)
+        #expect(session.rows.isEmpty)
+    }
+
+    @MainActor @Test func selectingStatusOrTypeUsesOneFilterAtATime() {
+        let session = TaskQueueSession()
+        session.scope = .paused
+        #expect(session.query == .init(status: .paused))
+        session.taskType = .findVoices
+        #expect(session.scope == .all)
+        #expect(session.query == .init(type: .findVoices))
+        session.scope = .failed
+        #expect(session.taskType == .all)
+        #expect(session.query == .init(status: .failed))
+        session.showAllTasks()
+        #expect(session.query == .init())
+    }
+
+    @MainActor @Test func pageCursorsRetainAppliedBoundariesDuringLiveTransitions() {
+        let session = TaskQueueSession()
+        let first = row("First task")
+        let last = row("Last task")
+        let token = session.beginPageLoad()
+        session.applyPage([first, last], token: token)
+        session.finishPageLoad(token)
+        let firstCursor = session.firstDisplayCursor
+        let lastCursor = session.lastDisplayCursor
+        guard case .managed(var changed) = first else { return }
+        changed.timeline = [.init(kind: .paused, date: .distantFuture, reason: nil)]
+        session.rows[0] = .managed(changed)
+        #expect(session.firstDisplayCursor == firstCursor)
+        #expect(session.lastDisplayCursor == lastCursor)
+        session.replacePageRows(session.rows + [row("Additional task")], retainingCursors: true)
+        #expect(session.firstDisplayCursor == firstCursor)
+        let replacement = session.beginPageLoad()
+        session.applyPage(session.rows, token: replacement)
+        #expect(session.firstDisplayCursor == TaskHistoryRow.managed(changed).displayCursor)
+        session.resetPagePresentation()
+        #expect(session.firstDisplayCursor == nil)
+        #expect(session.lastDisplayCursor == nil)
+    }
+
+    @MainActor @Test func selectedTransitionCanBeRevealedWhileScrolledAwaySelectionStaysUnforced() {
+        let session = TaskQueueSession()
+        let selected = row("Selected task")
+        let other = row("Another task")
+        let token = session.beginPageLoad()
+        session.applyPage([selected, other], token: token)
+        session.select(selected)
+        guard case .managed(var changed) = selected else { return }
+        changed.timeline = [.init(kind: .resumed, date: .distantFuture, reason: nil)]
+        #expect(session.hasMovedSinceDisplay(.managed(changed)))
+        session.replacePageRows([other], retainingCursors: true)
+        #expect(session.selection == selected.id)
+        #expect(!session.hasMovedSinceDisplay(.managed(changed)))
+    }
+
+    @MainActor @Test(arguments: [false, true]) func cappedPageMergeMovesOverlappingTransitionToItsNewEdge(newer: Bool)
+        throws
+    {
+        let rows = (0..<150).map { index in
+            TaskHistoryRow.managed(
+                .init(
+                    kind: .summary, meetingID: UUID(), meetingTitle: "Synthetic task", state: .completed,
+                    createdAt: Date(timeIntervalSince1970: Double(150 - index))))
+        }
+        let overlapping = newer ? rows.last! : rows.first!
+        guard case .managed(var transitioned) = overlapping else { return }
+        transitioned.timeline = [
+            .init(
+                kind: .ended, date: Date(timeIntervalSince1970: newer ? 500 : -100), reason: nil)
+        ]
+        if !newer { transitioned.createdAt = Date(timeIntervalSince1970: -101) }
+        let additional = (0..<49).map { index in
+            TaskHistoryRow.managed(
+                .init(
+                    kind: .summary, meetingID: UUID(), meetingTitle: "Synthetic additional task", state: .completed,
+                    createdAt: Date(timeIntervalSince1970: Double(newer ? 499 - index : -index))))
+        }
+        let incoming = newer ? [.managed(transitioned)] + additional : additional + [.managed(transitioned)]
+        let merged = try #require(TaskQueueSession.mergePage(incoming, into: rows, newer: newer))
+        #expect(merged.count == 150)
+        #expect(Set(merged.map(\.id)).count == 150)
+        #expect((newer ? merged.first?.id : merged.last?.id) == overlapping.id)
+        #expect(Set(incoming.map(\.id)).isSubset(of: Set(merged.map(\.id))))
+        let session = TaskQueueSession()
+        let token = session.beginPageLoad()
+        session.applyPage(rows, token: token)
+        session.replacePageRows(merged, retainingCursors: true, replacingCursors: Set(incoming.map(\.id)))
+        #expect(
+            (newer ? session.firstDisplayCursor : session.lastDisplayCursor)
+                == TaskHistoryRow.managed(transitioned).displayCursor)
+        let protected = newer ? rows.last!.id : rows.first!.id
+        // The moved overlap survives; protect a different row in the trimmed range.
+        let trimmed = newer ? rows[148].id : rows[1].id
+        #expect(trimmed != protected)
+        #expect(TaskQueueSession.mergePage(incoming, into: rows, newer: newer, visibleFirst: trimmed) == nil)
+    }
+
     private func row(_ title: String) -> TaskHistoryRow {
         .managed(.init(kind: .summary, meetingID: UUID(), meetingTitle: title, state: .completed))
     }

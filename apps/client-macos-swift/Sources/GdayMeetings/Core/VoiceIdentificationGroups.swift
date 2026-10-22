@@ -77,10 +77,11 @@ struct VoiceExactReviewDecisions {
 }
 
 enum VoiceIdentificationSelection {
-    /// Existing groups retain their identity. Additional proposed joins compare
-    /// unnamed samples with fixed anchors in the same recording and audio source.
-    /// At most 64 anchors per recording/source are searched; overflow stays separate.
-    static func groups(_ examples: [VoiceExample], includeExcluded: Bool = false) -> [VoiceIdentificationGroup] {
+    /// Human groups retain identity. Automatic proposals are recomputed from
+    /// captured vectors so changing policy can split or join old proposals.
+    static func groups(
+        _ examples: [VoiceExample], includeExcluded: Bool = false, policy: VoiceMatchingPolicy = .default
+    ) -> [VoiceIdentificationGroup] {
         let decisions = VoiceExactReviewDecisions(examples)
         let eligible = examples.filter { original in
             let value = decisions.applying(to: original)
@@ -89,46 +90,64 @@ enum VoiceIdentificationSelection {
                 && value.sourceResolutionIssue == nil
                 && (value.embeddings.isEmpty || value.embeddings.contains(where: \.isValid))
         }
-        let existing = Dictionary(grouping: eligible, by: \.groupID).values.sorted {
-            $0[0].groupID.uuidString < $1[0].groupID.uuidString
+        // Legacy records did not distinguish authored linkage from automatic
+        // proposals. Preserve linked evidence, including hidden recovery members,
+        // rather than reinterpret a historical group from today's vectors.
+        let legacyLinkedGroups = Set(
+            Dictionary(grouping: examples, by: \.groupID).compactMap { id, members in
+                members.count > 1 && members.contains { $0.origin == nil } ? id : nil
+            })
+        func automatic(_ value: VoiceExample) -> Bool {
+            !legacyLinkedGroups.contains(value.groupID) && !value.manuallyGrouped && value.personID == nil
+                && value.suggestedPersonID == nil
+                && value.namedPersonID == nil && !value.excluded
+                && value.review != .confirmed
         }
-        struct Recording: Hashable {
-            var meetingID: UUID
-            var file: String
-            var source: String
-        }
+        let protectedGroups = Dictionary(grouping: eligible.filter { !automatic($0) }, by: \.groupID).values
+        let proposals = VoiceAutomaticGrouping.groups(eligible.filter(automatic), policy: policy)
         var result: [VoiceIdentificationGroup] = []
-        var anchors: [Recording: [Int]] = [:]
-        for members in existing {
+        for members in Array(protectedGroups) + proposals {
             let ordered = members.sorted {
                 ($0.start ?? 0) == ($1.start ?? 0)
                     ? $0.id.uuidString < $1.id.uuidString : ($0.start ?? 0) < ($1.start ?? 0)
             }
-            let representative = ordered.max { ($0.range?.speechDuration ?? 0) < ($1.range?.speechDuration ?? 0) }!
-            let key = Recording(
-                meetingID: representative.meetingID, file: representative.audioFile!, source: representative.source)
-            let canJoin = ordered.allSatisfy {
-                !$0.manuallyGrouped && $0.personID == nil && $0.suggestedPersonID == nil && $0.namedPersonID == nil
-                    && $0.rejectedPersonIDs.isEmpty && !$0.excluded && $0.meetingID == key.meetingID
-                    && $0.audioFile == key.file && $0.source == key.source
-            }
-            let match =
-                canJoin
-                ? anchors[key, default: []].first { index in
-                    guard let anchor = result[index].examples.first(where: { $0.id == result[index].representativeID })
-                    else { return false }
-                    return ordered.allSatisfy { (VoiceReviewSelection.similarity($0, anchor) ?? -1) >= 0.95 }
-                } : nil
-            if let match {
-                result[match].examples.append(contentsOf: ordered)
-            }
-            else {
-                let index = result.count
-                result.append(.init(id: representative.groupID, examples: ordered, representativeID: representative.id))
-                if canJoin && anchors[key, default: []].count < 64 { anchors[key, default: []].append(index) }
-            }
+            guard
+                let representative = ordered.max(by: {
+                    let lhs = VoiceSampleQuality.priority(example: $0)
+                    let rhs = VoiceSampleQuality.priority(example: $1)
+                    if lhs != rhs { return lhs < rhs }
+                    let left = $0.range?.speechDuration ?? 0
+                    let right = $1.range?.speechDuration ?? 0
+                    return left == right ? $0.id.uuidString > $1.id.uuidString : left < right
+                })
+            else { continue }
+            let id =
+                automatic(representative)
+                ? members.map(\.id).min(by: { $0.uuidString < $1.uuidString })! : representative.groupID
+            result.append(.init(id: id, examples: ordered, representativeID: representative.id))
         }
-        return distinctExcerpts(result)
+        let distinct = distinctExcerpts(result.sorted { $0.id.uuidString < $1.id.uuidString })
+        let priorities = Dictionary(
+            uniqueKeysWithValues: distinct.map { group in
+                (
+                    group.id,
+                    group.examples.first { $0.id == group.representativeID }
+                        .map { VoiceSampleQuality.priority(example: $0) } ?? 1
+                )
+            })
+        let coverage = Dictionary(
+            uniqueKeysWithValues: distinct.map { ($0.id, Set($0.examples.map(\.meetingID)).count) })
+        return distinct.sorted { left, right in
+            let lhs =
+                priorities[left.id] ?? 1
+            let rhs =
+                priorities[right.id] ?? 1
+            if lhs != rhs { return lhs > rhs }
+            let leftMeetings = coverage[left.id] ?? 0
+            let rightMeetings = coverage[right.id] ?? 0
+            if leftMeetings != rightMeetings { return leftMeetings > rightMeetings }
+            return left.id.uuidString < right.id.uuidString
+        }
     }
 
     /// Collapse only equivalent human decisions. Provider IDs and automatic

@@ -163,18 +163,21 @@ struct PersonMatchReviewAvailability: ViewModifier {
     private struct Request: Equatable {
         let personID: UUID?
         let people: Set<UUID>
+        let policy: VoiceMatchingPolicy
         let revision: Int
         let metadataRevision: Int
         let reviewingVoices: Bool
     }
     private var request: Request {
         Request(
-            personID: personID, people: Set(store.people.map(\.id)), revision: library.reviewEvidenceRevision,
+            personID: personID, people: Set(store.people.map(\.id)),
+            policy: store.settings.serviceProviders.first { $0.id == store.settings.diarizationProviderID }?
+                .voiceMatchingPolicy ?? .default, revision: library.reviewEvidenceRevision,
             metadataRevision: library.reviewMetadataRevision, reviewingVoices: reviewingVoices)
     }
     private var hasCurrentMetadata: Bool {
         loaded?.personID == request.personID && loaded?.people == request.people
-            && loaded?.metadataRevision == request.metadataRevision
+            && loaded?.metadataRevision == request.metadataRevision && loaded?.policy == request.policy
     }
     func body(content: Content) -> some View {
         content.environment(
@@ -186,7 +189,7 @@ struct PersonMatchReviewAvailability: ViewModifier {
                         ? "Checking for matches…"
                         : count == 0
                             ? "No playable samples need review for this person."
-                            : "Review \(count) samples for this person."))
+                            : "Review \(count) \(count == 1 ? "sample" : "samples") for this person."))
         )
         .task(id: request) {
             let current = request
@@ -198,7 +201,7 @@ struct PersonMatchReviewAvailability: ViewModifier {
                 return
             }
             do {
-                let snapshot = try await library.reviewSnapshot(for: current.people)
+                let snapshot = try await library.reviewSnapshot(for: current.people, policy: current.policy)
                 guard !Task.isCancelled, current == request else { return }
                 count = snapshot.candidates[personID]?.count ?? 0
             }

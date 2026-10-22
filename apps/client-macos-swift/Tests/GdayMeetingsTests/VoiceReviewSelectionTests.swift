@@ -75,7 +75,7 @@ struct VoiceReviewSelectionTests {
     @Test func reviewIncludesBoundaryAndAmbiguousEvidenceWithoutChangingRecognition() {
         let person = UUID()
         let seed = sample(1, person: person)
-        let boundary = sample(0.80)
+        let boundary = sample(0.79)
         let easy = sample(0.999)
         let unrelated = sample(0.20)
         let ranked = VoiceReviewSelection.rank([seed, easy, unrelated, boundary], for: person)
@@ -89,6 +89,18 @@ struct VoiceReviewSelectionTests {
         let competitor = sample(0.9, person: UUID())
         let ambiguous = sample(0.95)
         #expect(VoiceReviewSelection.rank([seed, competitor, ambiguous], for: person).map(\.id) == [ambiguous.id])
+    }
+
+    @Test func measuredSignalIssueRanksBelowUnassessedCandidateDespiteHigherMatchPriority() {
+        let person = UUID()
+        let seed = sample(1, person: person)
+        var boundary = sample(0.80)
+        let easy = sample(0.999)
+        boundary.sampleQuality = VoiceSampleQuality.assess(
+            range: boundary.range!, audioRevision: boundary.audioRevision!, scanConfiguration: "synthetic-scan-v1",
+            samples: [Float](repeating: 0, count: 64000))
+        let ranked = VoiceReviewSelection.rank([seed, easy, boundary], for: person)
+        #expect(ranked.map(\.id) == [easy.id, boundary.id])
     }
 
     @Test func excludesDecisionsJunkAndRedundantExcerptsButKeepsDifferentPeopleEligible() {

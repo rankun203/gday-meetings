@@ -1,4 +1,5 @@
 import AVFoundation
+import FluidAudio
 import Foundation
 import Testing
 
@@ -31,10 +32,21 @@ private actor FakeVoiceRecordingDiscoverer: VoiceRecordingDiscovering {
     var calls = 0
     var lastFiles: [String] = []
     let result: LocalDiarizationResult
-    init(result: LocalDiarizationResult) { self.result = result }
+    let identity: VoiceDiscoveryConfiguration
+    let onDiscover: (@Sendable () async -> Void)?
+    init(
+        result: LocalDiarizationResult, configuration: VoiceDiscoveryConfiguration = .community,
+        onDiscover: (@Sendable () async -> Void)? = nil
+    ) {
+        self.result = result
+        self.identity = configuration
+        self.onDiscover = onDiscover
+    }
+    func configuration() async -> VoiceDiscoveryConfiguration { identity }
     func discover(files: [URL]) async throws -> LocalDiarizationResult {
         calls += 1
         lastFiles = files.map(\.lastPathComponent)
+        await onDiscover?()
         return result
     }
 }
@@ -208,7 +220,7 @@ struct VoiceLibraryPreparationTests {
         #expect(library.jobs.first?.state == .completed)
     }
 
-    @Test func discoveryGroupsUnknownExamplesWithoutEnrollingThemOrUndoingSplits() async throws {
+    @Test func discoveryPreparesGroupingEvidenceWithoutRewritingGroupsOrUndoingSplits() async throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
@@ -225,9 +237,11 @@ struct VoiceLibraryPreparationTests {
         let task = job([first, second, locked], discover: true)
         #expect(library.setJobs([task]))
         await preparation.run(jobID: task.id, directory: { _ in directory })
-        let group = library.examples.first(where: { $0.id == first.id })?.groupID
-        #expect(group == library.examples.first(where: { $0.id == second.id })?.groupID)
-        #expect(group != library.examples.first(where: { $0.id == locked.id })?.groupID)
+        #expect(library.examples.first(where: { $0.id == first.id })?.groupID == first.groupID)
+        #expect(library.examples.first(where: { $0.id == second.id })?.groupID == second.groupID)
+        let groups = try await library.identificationGroups()
+        #expect(groups.contains { Set($0.examples.map(\.id)) == [first.id, second.id] })
+        #expect(groups.contains { $0.examples.map(\.id) == [locked.id] })
         #expect(library.examples.allSatisfy { $0.review == .unassigned && $0.personID == nil })
     }
 
@@ -351,7 +365,7 @@ struct VoiceLibraryPreparationTests {
         #expect(await discovery.calls == 0)
         #expect(await extractor.calls == 0)
         #expect(library.jobs.first?.state == .failed)
-        #expect(library.jobs.first?.completedExampleIDs == [sample.id])
+        #expect(library.jobs.first?.completedExampleIDs.isEmpty == true)
         #expect(library.hydratedExample(id: sample.id)?.voiceEmbeddings == [embedding()])
     }
 
@@ -483,4 +497,382 @@ struct VoiceLibraryPreparationTests {
         #expect(await discovery.calls == 1)
         #expect(library.jobs.last?.state == .completed)
     }
+    @Test func durableAnalysisSurvivesHistoryRemovalAndReopenAndReusesEmbeddings() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var speaker = MeetingSpeaker(label: "sys_01", track: "track0", providerName: "Synthetic")
+        speaker.voiceSampleRange = sample.range
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: [speaker]))
+        let extractor = FakeVoiceExampleExtractor(result: embedding())
+        var task = job([], discover: true)
+        task.discoveryInputs = [.init(meetingID: sample.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, discoverer: discovery)
+        #expect(library.setJobs([task]))
+        await preparation.run(jobID: task.id, directory: { _ in folder })
+        #expect(await discovery.calls == 1)
+        #expect(await extractor.calls == 1)
+        #expect(library.jobs.first?.state == .completed)
+        preparation.discard(jobID: task.id)
+        #expect(library.jobs.isEmpty)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        task.id = UUID()
+        #expect(reopened.setJobs([task]))
+        let next = VoiceLibraryPreparation(library: reopened, extractor: extractor, discoverer: discovery)
+        var resumed = try #require(reopened.jobs.first)
+        resumed.state = .running
+        #expect(reopened.setJobs([resumed]))
+        await next.run(jobID: task.id, directory: { _ in folder })
+        #expect(await discovery.calls == 1)
+        #expect(await extractor.calls == 1)
+        #expect(reopened.jobs.first?.state == .completed)
+    }
+
+    @Test func discoveryCacheInvalidatesAudioModelAndConfigurationButRetainsOtherTiers() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var speaker = MeetingSpeaker(label: "sys_01", track: "track0", providerName: "Synthetic")
+        speaker.voiceSampleRange = sample.range
+        let result = LocalDiarizationResult(modelRevision: "synthetic", ranges: [], speakers: [speaker])
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let extractor = FakeVoiceExampleExtractor(result: embedding())
+        let discovery = FakeVoiceRecordingDiscoverer(result: result)
+        var task = job([], discover: true)
+        task.discoveryInputs = [.init(meetingID: sample.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        func run(
+            _ worker: FakeVoiceRecordingDiscoverer, using extractor: FakeVoiceExampleExtractor,
+            type: EmbeddingType = .community1
+        ) async {
+            task.id = UUID()
+            task.type = type
+            #expect(library.setJobs([task]))
+            let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, discoverer: worker)
+            var running = library.jobs[0]
+            running.state = .running
+            #expect(library.setJobs([running]))
+            await preparation.run(jobID: task.id, directory: { _ in folder })
+        }
+        await run(discovery, using: extractor)
+        let originalIDs = Set(library.examples.map(\.id))
+        let confirmedID = try #require(originalIDs.first)
+        let personID = UUID()
+        #expect(library.confirm(ids: [confirmedID], personID: personID))
+        var changedType = EmbeddingType.community1SpeechSpan
+        changedType.modelID = "synthetic-review-embedding-model"
+        let changedExtractor = FakeVoiceExampleExtractor(result: embedding(type: changedType))
+        await run(discovery, using: changedExtractor, type: changedType)
+        #expect(await discovery.calls == 1)
+        #expect(await changedExtractor.calls == 1)
+        #expect(Set(library.examples.map(\.id)) == originalIDs)
+        #expect(library.examples.first(where: { $0.id == confirmedID })?.personID == personID)
+        #expect(library.examples.first(where: { $0.id == confirmedID })?.review == .confirmed)
+        #expect(
+            library.hydratedExample(id: confirmedID)?.voiceEmbeddings.contains(where: { $0.type == changedType })
+                == true)
+        var model = VoiceDiscoveryConfiguration.community
+        model.revision += "-changed"
+        let changedModel = FakeVoiceRecordingDiscoverer(result: result, configuration: model)
+        await run(changedModel, using: extractor)
+        #expect(await changedModel.calls == 1)
+        #expect(await extractor.calls == 1)
+        model.pipeline += "-changed"
+        let changedConfig = FakeVoiceRecordingDiscoverer(result: result, configuration: model)
+        await run(changedConfig, using: extractor)
+        #expect(await changedConfig.calls == 1)
+        try Data("Changed synthetic source audio.".utf8).write(to: folder.appendingPathComponent("system.wav"))
+        await run(discovery, using: extractor)
+        #expect(await discovery.calls == 2)
+        #expect(await extractor.calls == 2)
+    }
+
+    @Test func savedLabelsArePartialEvidenceAndNeverSkipFullAnalysis() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory, embeddings: [embedding()])
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var meeting = try MeetingFolderStorage.read(id: sample.meetingID, directory: directory)
+        var speaker = MeetingSpeaker(id: sample.speakerID, label: "sys_01", track: "system", providerName: "Synthetic")
+        speaker.voiceSampleRange = sample.range
+        speaker.voiceEmbedding = embedding()
+        meeting.speakers = [speaker]
+        try MeetingFolderStorage.write(meeting, directory: directory)
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([sample]))
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: []))
+        let preparation = VoiceLibraryPreparation(
+            library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)
+        var task = job([sample], discover: true)
+        task.completedRecordingIDs = [sample.meetingID]
+        task.fullyAnalyzedRecordingIDs = [sample.meetingID]
+        task.discoveryInputs = [.init(meetingID: sample.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        #expect(library.setJobs([task]))
+        await preparation.run(jobID: task.id, directory: { _ in folder })
+        #expect(await discovery.calls == 1)
+        #expect(library.examples.first(where: { $0.id == sample.id })?.review == .confirmed)
+    }
+
+    @Test func cancellationCannotSaveAnAnalysisReceiptOrPublishExamples() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var speaker = MeetingSpeaker(label: "sys_01", track: "track0", providerName: "Synthetic")
+        speaker.voiceSampleRange = sample.range
+        let gate = VoiceRetirementGate()
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: [speaker]),
+            onDiscover: { await gate.wait() })
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let preparation = VoiceLibraryPreparation(
+            library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)
+        var task = job([], discover: true)
+        task.discoveryInputs = [.init(meetingID: sample.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        #expect(library.setJobs([task]))
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        while !(await gate.entered) { await Task.yield() }
+        preparation.pause(jobID: task.id)
+        await gate.open()
+        await preparation.shutdown()
+        #expect(library.examples.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("voice-analysis").path))
+        #expect(library.jobs.first?.state == .paused)
+    }
+
+    @Test func resumeChecksCurrentExtractionContractAndSelectedProvider() {
+        var provider = ServiceProvider(kind: .speakerLabeling)
+        var task = job([])
+        task.providerID = provider.id
+        #expect(VoiceLibraryPreparation.resumeUnavailableReason(for: task, provider: provider) != nil)
+        task.type = .community1SpeechSpan
+        #expect(VoiceLibraryPreparation.resumeUnavailableReason(for: task, provider: provider) == nil)
+        provider.id = UUID()
+        #expect(VoiceLibraryPreparation.resumeUnavailableReason(for: task, provider: provider) != nil)
+    }
+
+    @Test func effectiveDiscoveryConfigurationTracksInferenceOptions() {
+        let original = CommunityDiarizationWorker.discoveryConfiguration
+        let baseline = VoiceDiscoveryConfiguration.fingerprint(original)
+        #expect(baseline == VoiceDiscoveryConfiguration.fingerprint(original))
+        var segmentation = original
+        segmentation.segmentation.stepRatio = 0.4
+        #expect(baseline != VoiceDiscoveryConfiguration.fingerprint(segmentation))
+        var clustering = original
+        clustering.clustering.threshold = 0.8
+        #expect(baseline != VoiceDiscoveryConfiguration.fingerprint(clustering))
+        var embedding = original
+        embedding.embedding.skipStrategy = .maskSimilarity(threshold: 0.95)
+        #expect(baseline != VoiceDiscoveryConfiguration.fingerprint(embedding))
+    }
+
+    @Test func analysisCacheRejectsAnExternalSymlinkWithoutWritingOutsideRecording() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let outside = try self.directory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("voice-analysis"), withDestinationURL: outside)
+        let input = VoiceDiscoveryInput(
+            meetingID: UUID(), audioFiles: ["system.wav"], audioRevisions: ["system.wav": "synthetic"])
+        let cache = VoiceDiscoveryCache()
+        await #expect(throws: (any Error).self) {
+            try await cache.save(
+                .init(modelRevision: "synthetic", ranges: [], speakers: []), input: input,
+                configuration: .community, directory: directory)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+    }
+
+    @Test func engineReportsCompletedWithErrorsAfterOneRecordingFailsAndOneSucceeds() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try example(in: directory)
+        let second = try example(in: directory)
+        let failedFolder = try MeetingFolderLocation.resolve(id: second.meetingID, directory: directory)
+        try FileManager.default.removeItem(at: failedFolder.appendingPathComponent("system.wav"))
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: []))
+        let preparation = VoiceLibraryPreparation(
+            library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)
+        var task = job([], discover: true)
+        task.discoveryInputs = [first, second].map {
+            .init(meetingID: $0.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])
+        }
+        #expect(library.setJobs([task]))
+        await preparation.run(
+            jobID: task.id, directory: { try! MeetingFolderLocation.resolve(id: $0, directory: directory) })
+        let result = try #require(library.jobs.first)
+        #expect(result.state == .failed)
+        #expect(result.failures.count == 1)
+        #expect(result.completedRecordingIDs == [first.meetingID])
+        #expect(result.outcomeTitle == "Completed with Errors")
+    }
+
+    @Test func legacyReceiptRestartsAtZeroAndCurrentCheckpointSkipsReplayButChecksFreshness() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        let gate = VoiceRetirementGate()
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: []), onDiscover: { await gate.wait() })
+        let preparation = VoiceLibraryPreparation(
+            library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)
+        var task = job([], discover: true)
+        task.completedRecordingIDs = [sample.meetingID]
+        task.fullyAnalyzedRecordingIDs = [sample.meetingID]
+        task.discoveryInputs = [.init(meetingID: sample.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        #expect(library.setJobs([task]))
+        let run = Task { await preparation.run(jobID: task.id, directory: { _ in folder }) }
+        while !(await gate.entered) { await Task.yield() }
+        #expect(library.jobs.first?.completedRecordingIDs.isEmpty == true)
+        #expect(library.jobs.first?.fullyAnalyzedRecordingIDs?.isEmpty == true)
+        #expect(library.jobs.first?.progressDetails.completed == 0)
+        await gate.open()
+        await run.value
+        var resumed = try #require(library.jobs.first)
+        resumed.state = .running
+        #expect(library.setJobs([resumed]))
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("voice-analysis"))
+        await preparation.run(jobID: task.id, directory: { _ in folder })
+        #expect(await discovery.calls == 1)
+        resumed = try #require(library.jobs.first)
+        resumed.state = .running
+        #expect(library.setJobs([resumed]))
+        try Data("Changed synthetic completed recording.".utf8).write(to: folder.appendingPathComponent("system.wav"))
+        await preparation.run(jobID: task.id, directory: { _ in folder })
+        #expect(await discovery.calls == 1)
+        #expect(library.jobs.first?.state == .failed)
+        #expect(library.jobs.first?.completedRecordingIDs.isEmpty == true)
+        #expect(library.jobs.first?.outcomeTitle == "Failed")
+    }
+
+    @Test func automaticResumeAfterRecordingRechecksGeneralProvider() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var provider = ServiceProvider(kind: .speakerLabeling)
+        let gate = VoiceRetirementGate()
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([sample]))
+        let extractor = FakeVoiceExampleExtractor(
+            result: embedding(type: .community1SpeechSpan), onExtract: { await gate.wait() })
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, currentProvider: { provider })
+        var task = job([sample])
+        task.providerID = provider.id
+        task.type = .community1SpeechSpan
+        #expect(library.setJobs([task]))
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        while !(await gate.entered) { await Task.yield() }
+        preparation.suspendForRecording()
+        provider.id = UUID()
+        preparation.resumeAfterRecording(directory: { _ in folder })
+        #expect(library.jobs.first?.state == .paused)
+        #expect(preparation.errorMessage?.contains("provider changed") == true)
+        await gate.open()
+        await preparation.shutdown()
+        #expect(await extractor.calls == 1)
+    }
+
+    @Test func recordingCacheStoresRangesWithoutRepresentationsOrIdentityDecisions() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var speaker = MeetingSpeaker(label: "sys_01", track: "track0", providerName: "Synthetic")
+        speaker.voiceSampleRange = .init(audioFile: "system.wav", source: "system", start: 0, end: 3)
+        speaker.voiceEmbedding = embedding()
+        speaker.personID = UUID()
+        let input = VoiceDiscoveryInput(
+            meetingID: UUID(), audioFiles: ["system.wav"], audioRevisions: ["system.wav": "synthetic"])
+        let cache = VoiceDiscoveryCache()
+        try await cache.save(
+            .init(modelRevision: "synthetic", ranges: [], speakers: [speaker]), input: input,
+            configuration: .community, directory: directory)
+        let cached = try #require(try await cache.read(input: input, configuration: .community, directory: directory))
+        #expect(cached.speakers.count == 1)
+        #expect(cached.speakers.first?.voiceEmbedding == nil)
+        #expect(cached.speakers.first?.personID == nil)
+        #expect(cached.speakers.first?.voiceSampleRange == speaker.voiceSampleRange)
+    }
+
+    @Test func discoveryCacheEngineIdentityMatchesPinnedFluidAudioRevision() throws {
+        let package = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Package.resolved")
+        let document = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: package)) as? [String: Any])
+        let pins = try #require(document["pins"] as? [[String: Any]])
+        let fluid = try #require(pins.first { ($0["identity"] as? String)?.lowercased() == "fluidaudio" })
+        let state = try #require(fluid["state"] as? [String: Any])
+        let revision = try #require(state["revision"] as? String)
+        #expect(VoiceDiscoveryConfiguration.community.pipeline.hasPrefix("FluidAudio-" + revision + "|"))
+    }
+
+    @Test func allRecordingFailuresRemainFailedWhenEarlierExamplesWerePrepared() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let reference = try example(in: directory, embeddings: [embedding()])
+        let failed = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: failed.meetingID, directory: directory)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("system.wav"))
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([reference]))
+        let discovery = FakeVoiceRecordingDiscoverer(
+            result: .init(modelRevision: "synthetic", ranges: [], speakers: []))
+        let preparation = VoiceLibraryPreparation(
+            library: library, extractor: FakeVoiceExampleExtractor(result: embedding()), discoverer: discovery)
+        var task = job([reference], discover: true)
+        task.completedExampleIDs = [reference.id]
+        task.discoveryInputs = [.init(meetingID: failed.meetingID, audioFiles: ["system.wav"], audioRevisions: [:])]
+        #expect(library.setJobs([task]))
+        await preparation.run(
+            jobID: task.id, directory: { try! MeetingFolderLocation.resolve(id: $0, directory: directory) })
+        let result = try #require(library.jobs.first)
+        #expect(result.state == .failed)
+        #expect(result.completedRecordingIDs.isEmpty)
+        #expect(result.completedExampleIDs == [reference.id])
+        #expect(result.outcomeTitle == "Failed")
+        #expect(await discovery.calls == 0)
+    }
+
+    @Test func deferredResumePublishesProviderChangeAndClearsItAfterCorrection() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: sample.meetingID, directory: directory)
+        var provider = ServiceProvider(kind: .speakerLabeling)
+        let initialProvider = provider
+        let gate = VoiceRetirementGate()
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(library.upsert([sample]))
+        let extractor = FakeVoiceExampleExtractor(
+            result: embedding(type: .community1SpeechSpan), onExtract: { await gate.wait() })
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, currentProvider: { provider })
+        var task = job([sample])
+        task.providerID = provider.id
+        task.type = .community1SpeechSpan
+        #expect(library.setJobs([task]))
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        while !(await gate.entered) { await Task.yield() }
+        preparation.pause(jobID: task.id)
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        provider.id = UUID()
+        await gate.open()
+        while preparation.pendingRunCount > 0 { await Task.yield() }
+        #expect(library.jobs.first?.state == .paused)
+        #expect(library.jobs.first?.failures["configuration"]?.contains("provider changed") == true)
+        #expect(await extractor.calls == 1)
+        provider = initialProvider
+        preparation.resume(jobID: task.id, directory: { _ in folder })
+        #expect(library.jobs.first?.failures["configuration"] == nil)
+        preparation.pause(jobID: task.id)
+        await preparation.shutdown()
+    }
+
 }

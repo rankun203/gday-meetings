@@ -14,7 +14,6 @@ struct ContextDetailView: View {
     @ViewState private var deleting: Meeting?
     @ViewState private var reviewingVoices = false
     @ViewState private var viewingSamples = false
-    @ViewState private var pendingVoiceRecording: VoiceExampleRecordingTarget?
     @ViewState private var editingProfile = false
     @ViewState private var showsConversation = false
     @StateObject private var loader = AssociatedMeetingLoader()
@@ -64,20 +63,9 @@ struct ContextDetailView: View {
         .task(id: store.meetingIndexRevision) {
             await loader.refresh(index: store.libraryIndex, personID: personID, tagID: tagID)
         }
-        .sheet(
-            isPresented: $reviewingVoices,
-            onDismiss: {
-                if let pendingVoiceRecording {
-                    selectedMeeting = pendingVoiceRecording
-                    self.pendingVoiceRecording = nil
-                }
-            }
-        ) {
+        .sheet(isPresented: $reviewingVoices) {
             if let personID {
-                PersonMatchReviewView(library: store.voiceLibrary, personID: personID) { id in
-                    pendingVoiceRecording = id
-                    reviewingVoices = false
-                }
+                PersonMatchReviewView(library: store.voiceLibrary, personID: personID)
             }
         }
         .sheet(isPresented: $viewingSamples) {

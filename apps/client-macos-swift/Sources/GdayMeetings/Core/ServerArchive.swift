@@ -118,7 +118,7 @@ extension MeetingStore {
                     "people": try json(
                         people.filter { person in
                             meeting.personIDs.contains(person.id)
-                                || meeting.speakers.contains { $0.personID == person.id }
+                                || meeting.speakers.contains { $0.attendancePersonID == person.id }
                         }.map { person in
                             var archived = person
                             archived.voiceSamples = []

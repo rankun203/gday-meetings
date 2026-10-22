@@ -5,6 +5,12 @@ extension UIPreview {
     @MainActor static func seedSpeakerIdentityReview(store: MeetingStore, meeting: Meeting)
         async throws
     {
+        if UIPreviewPerformanceFixtures.flag(
+            "--synthetic-transcript-associations", infoKey: "GdaySyntheticTranscriptAssociations")
+        {
+            try await seedTranscriptAssociationPresentation(store: store, meeting: meeting)
+            return
+        }
         guard
             UIPreviewPerformanceFixtures.flag(
                 "--synthetic-speaker-identity", infoKey: "GdaySyntheticSpeakerIdentity")
@@ -74,6 +80,107 @@ extension UIPreview {
         await store.flushVoiceAssignmentRefresh()
         var checkpoint = LiveTranscriptDraft(meetingID: value.id, locale: "en-AU")
         checkpoint.savedSegments = value.transcript
+        checkpoint.complete = true
+        try checkpoint.save(at: folder)
+    }
+}
+
+extension UIPreview {
+    /// Presentation fixture uses production projection; no capture or model inference.
+    @MainActor static func seedTranscriptAssociationPresentation(store: MeetingStore, meeting: Meeting)
+        async throws
+    {
+        guard let firstPerson = store.people.first?.id, let secondPerson = store.people.dropFirst().first?.id else {
+            throw ServiceError("The transcript preview needs two synthetic people.")
+        }
+        // Ordinary Preview seeds reviewed examples first. Drain their matching
+        // work before replacing the speaker set, then provide real synthetic
+        // representations so later matching reproduces the same attribution.
+        await store.voiceLibrary.awaitLoaded()
+        await store.flushVoiceAssignmentRefresh()
+        var value = store.meeting(id: meeting.id) ?? meeting
+        let folder = store.directory(for: value.id)
+        let audioFile = "microphone.wav"
+        let revision = VoiceLibraryStore.revision(url: folder.appendingPathComponent(audioFile))
+        let manual = MeetingSpeaker(
+            label: "mic_01", track: "microphone", providerName: "Synthetic Speaker Analysis",
+            personID: firstPerson, manuallyAssigned: true)
+        let automatic = MeetingSpeaker(
+            label: "mic_02", track: "microphone", providerName: "Synthetic Speaker Analysis")
+        let tentative = MeetingSpeaker(
+            label: "mic_03", track: "microphone", providerName: "Synthetic Speaker Analysis")
+        value.replaceSpeakers([manual, automatic, tentative])
+        value.transcript = [
+            .init(
+                start: 1, end: 3, speaker: manual.label, text: "This person was assigned manually.",
+                speakerID: manual.id, source: .microphone),
+            .init(
+                start: 5, end: 8, speaker: automatic.label, text: "This speaker was matched automatically.",
+                speakerID: automatic.id, source: .microphone),
+            .init(
+                start: 10, end: 13, speaker: tentative.label, text: "This speaker has a tentative person match.",
+                speakerID: tentative.id, source: .microphone),
+            .init(
+                start: 15, end: 16, speaker: automatic.label, text: "This passage still has an uncertain voice.",
+                speakerID: automatic.id, source: .microphone, associationUncertain: true),
+            .init(
+                start: 17, end: 18, speaker: "mic", text: "This passage retains its audio source.",
+                source: .microphone, sourcePlaceholder: true),
+        ]
+        value.transcriptSource = .init(
+            id: UUID(), providerName: "Synthetic Transcription", generatedAt: value.createdAt)
+        value.speakerLabelSource = nil
+        guard await store.updateMeeting(value) else {
+            throw ServiceError("Couldn’t save the transcript preview.")
+        }
+        let type = EmbeddingType(
+            modelID: "synthetic-transcript-preview", revision: "one", compatibilityVersion: "one",
+            dimension: 3, normalization: "unitL2")
+        func embedding(_ values: [Double]) -> TypedVoiceEmbedding {
+            .init(type: type, values: values, provenance: "Synthetic transcript presentation")
+        }
+        let references = [
+            VoiceExample(
+                meetingID: value.id, speakerID: UUID(), source: "microphone", audioFile: audioFile,
+                audioRevision: revision, start: 21, end: 24, personID: firstPerson,
+                review: .confirmed, embeddings: [embedding([1, 0, 0])]),
+            VoiceExample(
+                meetingID: value.id, speakerID: UUID(), source: "microphone", audioFile: audioFile,
+                audioRevision: revision, start: 25, end: 28, personID: secondPerson,
+                review: .confirmed, embeddings: [embedding([0, 1, 0])]),
+        ]
+        let candidates = [
+            VoiceExample(
+                meetingID: value.id, speakerID: automatic.id, source: "microphone", audioFile: audioFile,
+                audioRevision: revision, start: 5, end: 8,
+                embeddings: [embedding([0, 0.94, sqrt(1 - 0.94 * 0.94)])], groupID: automatic.id),
+            VoiceExample(
+                meetingID: value.id, speakerID: tentative.id, source: "microphone", audioFile: audioFile,
+                audioRevision: revision, start: 10, end: 13,
+                embeddings: [embedding([0.4, 0, sqrt(1 - 0.4 * 0.4)])], groupID: tentative.id),
+        ]
+        guard store.voiceLibrary.upsert(references + candidates) else {
+            throw ServiceError("Couldn’t save the transcript match preview.")
+        }
+        await store.flushVoiceAssignmentRefresh()
+        // Matching publication schedules projection independently. Make that
+        // lifecycle boundary explicit before validating or saving the checkpoint.
+        await store.refreshVoiceAssignments(meetingIDs: [value.id], recomputeSuggestions: false)
+        let projected = store.meeting(id: value.id)
+        guard
+            projected?.speakers.contains(where: {
+                $0.id == automatic.id && $0.personID == secondPerson
+                    && $0.voiceReviewOrigin?.transcriptAssociationTier == .automatic
+            }) == true,
+            projected?.speakers.contains(where: {
+                $0.id == tentative.id && $0.personID == firstPerson
+                    && $0.voiceReviewOrigin?.transcriptAssociationTier == .tentative
+            }) == true
+        else {
+            throw ServiceError("Couldn’t prepare the transcript match preview.")
+        }
+        var checkpoint = LiveTranscriptDraft(meetingID: value.id, locale: "en-AU")
+        checkpoint.savedSegments = store.meeting(id: value.id)?.transcript ?? value.transcript
         checkpoint.complete = true
         try checkpoint.save(at: folder)
     }

@@ -1,5 +1,47 @@
 import Foundation
 
+/// Row identity follows the largest surviving part of an automatic proposal.
+/// Membership is authoritative; this session-local mapping changes no decisions.
+enum VoiceReviewGroupIdentity {
+    static func preserving(_ groups: [VoiceIdentificationGroup], previous: [VoiceIdentificationGroup])
+        -> [VoiceIdentificationGroup]
+    {
+        let owners = Dictionary(
+            previous.flatMap { group in group.evidenceExamples.map { ($0.id, group.id) } },
+            uniquingKeysWith: { first, _ in first })
+        func protected(_ group: VoiceIdentificationGroup) -> Bool {
+            group.evidenceExamples.contains { $0.manuallyGrouped || $0.origin == nil }
+        }
+        let ordered = groups.sorted {
+            if protected($0) != protected($1) { return protected($0) }
+            return $0.examples.count == $1.examples.count
+                ? $0.id.uuidString < $1.id.uuidString : $0.examples.count > $1.examples.count
+        }
+        var used = Set<UUID>()
+        return ordered.map { source in
+            var group = source
+            if !protected(source) {
+                var overlap: [UUID: Int] = [:]
+                for example in source.evidenceExamples {
+                    if let owner = owners[example.id], !used.contains(owner) { overlap[owner, default: 0] += 1 }
+                }
+                if let best = overlap.keys.sorted(by: {
+                    overlap[$0] == overlap[$1] ? $0.uuidString < $1.uuidString : overlap[$0]! > overlap[$1]!
+                }).first {
+                    group.id = best
+                }
+                if used.contains(group.id) {
+                    group.id =
+                        source.examples.map(\.id).sorted { $0.uuidString < $1.uuidString }.first { !used.contains($0) }
+                        ?? VoiceProjectionOrigin.identity(exampleID: source.id, segmentID: source.representativeID)
+                }
+            }
+            used.insert(group.id)
+            return group
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+}
+
 /// One library state supplies every review count and playback queue. Hidden
 /// evidence stays attached to a group so naming covers its original records.
 struct VoiceReviewSnapshot: Sendable {
@@ -9,43 +51,47 @@ struct VoiceReviewSnapshot: Sendable {
 
     static func make(
         hydrated: [VoiceExample], metadata: [VoiceExample], playableIDs: Set<UUID>,
-        personIDs: Set<UUID>, revision: Int
+        personIDs: Set<UUID>, revision: Int, policy: VoiceMatchingPolicy = .default,
+        preparedGroups: [VoiceIdentificationGroup]? = nil
     ) -> Self {
         let byID = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
         // Unavailable confirmed records remain reference evidence, but cannot
         // become review questions even if their metadata still has a range.
-        let ranked = VoiceReviewSelection.rank(hydrated, for: personIDs).mapValues { values in
+        let ranked = VoiceReviewSelection.rank(hydrated, for: personIDs, policy: policy).mapValues { values in
             values.filter { playableIDs.contains($0.id) }.compactMap { byID[$0.id] }
         }
         let namedAudio = Set(ranked.values.flatMap { $0 }.compactMap(VoiceExactReviewDecisions.Key.init))
         let namedIDs = Set(ranked.values.flatMap { $0 }.map(\.id))
-        let unnamedGroups = groups(hydrated: hydrated, metadata: metadata, playableIDs: playableIDs).compactMap {
-            source -> VoiceIdentificationGroup? in
-            func unnamed(_ example: VoiceExample) -> Bool {
-                example.personID == nil && example.namedPersonID == nil && example.suggestedPersonID == nil
-                    && !example.excluded && !example.manuallyCleared
+        let unnamedGroups =
+            (preparedGroups ?? groups(hydrated: hydrated, metadata: metadata, playableIDs: playableIDs, policy: policy))
+            .compactMap {
+                source -> VoiceIdentificationGroup? in
+                func unnamed(_ example: VoiceExample) -> Bool {
+                    example.personID == nil && example.namedPersonID == nil && example.suggestedPersonID == nil
+                        && !example.excluded && !example.manuallyCleared
+                }
+                let evidence = source.evidenceExamples.filter(unnamed)
+                let visible = source.examples.filter { example in
+                    unnamed(example) && !namedIDs.contains(example.id)
+                        && VoiceExactReviewDecisions.Key(example).map { !namedAudio.contains($0) } == true
+                }
+                guard let first = visible.first else { return nil }
+                let visibleIDs = Set(visible.map(\.id))
+                var group = source
+                group.examples = visible
+                group.duplicateExamples = evidence.filter { !visibleIDs.contains($0.id) }
+                if !visibleIDs.contains(group.representativeID) { group.representativeID = first.id }
+                return group
             }
-            let evidence = source.evidenceExamples.filter(unnamed)
-            let visible = source.examples.filter { example in
-                unnamed(example) && !namedIDs.contains(example.id)
-                    && VoiceExactReviewDecisions.Key(example).map { !namedAudio.contains($0) } == true
-            }
-            guard let first = visible.first else { return nil }
-            let visibleIDs = Set(visible.map(\.id))
-            var group = source
-            group.examples = visible
-            group.duplicateExamples = evidence.filter { !visibleIDs.contains($0.id) }
-            if !visibleIDs.contains(group.representativeID) { group.representativeID = first.id }
-            return group
-        }
         return Self(revision: revision, candidates: ranked, unnamedGroups: unnamedGroups)
     }
 
     static func groups(
-        hydrated: [VoiceExample], metadata: [VoiceExample], playableIDs: Set<UUID>
+        hydrated: [VoiceExample], metadata: [VoiceExample], playableIDs: Set<UUID>,
+        policy: VoiceMatchingPolicy = .default
     ) -> [VoiceIdentificationGroup] {
         let byID = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
-        var groups = VoiceIdentificationSelection.groups(hydrated).map { source in
+        var groups = VoiceIdentificationSelection.groups(hydrated, policy: policy).map { source in
             var group = source
             let visible = source.examples.filter { playableIDs.contains($0.id) }
             let hidden = source.duplicateExamples + source.examples.filter { !playableIDs.contains($0.id) }

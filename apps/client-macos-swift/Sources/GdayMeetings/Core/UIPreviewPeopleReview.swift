@@ -65,4 +65,22 @@ extension UIPreview {
         }
         await store.flushVoiceAssignmentRefresh()
     }
+    /// Opt-in scale fixture exercises production list reuse with independent candidates.
+    @MainActor static func seedLargePeopleReview(store: MeetingStore, meeting: Meeting) throws {
+        guard
+            UIPreviewPerformanceFixtures.flag(
+                "--synthetic-people-review-large", infoKey: "GdaySyntheticPeopleReviewLarge")
+        else { return }
+        let file = "system.wav"
+        let revision = VoiceLibraryStore.revision(url: store.directory(for: meeting.id).appendingPathComponent(file))
+        let examples = (0..<1000).map { index in
+            // Excerpts overlap but differ enough to retain separate exact-audio keys.
+            VoiceExample(
+                meetingID: meeting.id, speakerID: UUID(), source: "system",
+                audioFile: file, audioRevision: revision, start: Double(index) / 100, end: Double(index) / 100 + 3,
+                groupID: UUID())
+        }
+        guard store.voiceLibrary.upsert(examples) else { throw ServiceError("Couldn’t save the large review preview.") }
+    }
+
 }

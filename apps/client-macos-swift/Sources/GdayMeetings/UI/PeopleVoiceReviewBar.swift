@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PeopleVoiceReviewBar: View {
     @EnvironmentObject private var store: MeetingStore
+    @Environment(\.showManagedTask) private var showManagedTask
     @ObservedObject var library: VoiceLibraryStore
     @Binding var reviewingVoices: Bool
 
@@ -13,6 +14,7 @@ struct PeopleVoiceReviewBar: View {
 
     private struct Request: Equatable {
         let people: Set<UUID>
+        let policy: VoiceMatchingPolicy
         let revision: Int
         let metadataRevision: Int
         let reviewingVoices: Bool
@@ -20,12 +22,15 @@ struct PeopleVoiceReviewBar: View {
 
     private var request: Request {
         Request(
-            people: Set(store.people.map(\.id)), revision: library.reviewEvidenceRevision,
+            people: Set(store.people.map(\.id)),
+            policy: store.settings.serviceProviders.first { $0.id == store.settings.diarizationProviderID }?
+                .voiceMatchingPolicy ?? .default, revision: library.reviewEvidenceRevision,
             metadataRevision: library.reviewMetadataRevision, reviewingVoices: reviewingVoices)
     }
 
     private var hasCurrentMetadata: Bool {
         loaded?.people == request.people && loaded?.metadataRevision == request.metadataRevision
+            && loaded?.policy == request.policy
     }
 
     private var hasPendingReviews: Bool {
@@ -40,7 +45,7 @@ struct PeopleVoiceReviewBar: View {
             parts.append("\(peopleWithMatches) \(peopleWithMatches == 1 ? "person" : "people") with new matches")
         }
         if unnamedGroups > 0 {
-            parts.append("\(unnamedGroups) unnamed \(unnamedGroups == 1 ? "person" : "people")")
+            parts.append("\(unnamedGroups) unidentified \(unnamedGroups == 1 ? "voice" : "voices")")
         }
         return parts.isEmpty ? "No pending voice reviews" : parts.joined(separator: " · ")
     }
@@ -64,6 +69,9 @@ struct PeopleVoiceReviewBar: View {
                 )
                 .help(failed == request ? (failureMessage ?? summary) : summary)
                 Spacer(minLength: 16)
+                if hasCurrentMetadata && !hasPendingReviews && failed != request {
+                    PeopleScanStartButton(store: store, library: library, showTask: showManagedTask)
+                }
                 Button("Review Library") { reviewingVoices = true }
                     .buttonStyle(.bordered)
                     .fixedSize()
@@ -81,7 +89,7 @@ struct PeopleVoiceReviewBar: View {
             failureMessage = nil
             guard !current.reviewingVoices else { return }
             do {
-                let snapshot = try await library.reviewSnapshot(for: current.people)
+                let snapshot = try await library.reviewSnapshot(for: current.people, policy: current.policy)
                 guard !Task.isCancelled, current == request else { return }
                 peopleWithMatches = snapshot.candidates.values.filter { !$0.isEmpty }.count
                 unnamedGroups = snapshot.unnamedGroups.count

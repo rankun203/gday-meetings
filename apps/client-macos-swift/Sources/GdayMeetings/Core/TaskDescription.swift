@@ -114,7 +114,7 @@ extension ManagedTaskRecord {
 
 extension VoicePreparationJob {
     var needsAttention: Bool { state == .failed && !failures.isEmpty && attentionAcknowledged != true }
-    var operationTitle: String { discover ? "Find Voices" : "Prepare Voice Library" }
+    var operationTitle: String { discover ? "Scan Recordings" : "Prepare Reviewed Voices" }
     mutating func recordTransition(from previous: Self, now: Date = Date()) {
         guard state != previous.state else { return }
         var events = timeline ?? previous.timeline ?? []
@@ -164,7 +164,7 @@ struct TaskDescription {
                 progress = "Waiting for recording to finish"
             }
             attention = task.needsAttention
-            date = task.finishedAt ?? task.timeline?.last?.date ?? task.createdAt
+            date = row.activityAt
         case .voice(let job):
             operation = job.operationTitle
             affectedItem = "People Library · " + job.providerName
@@ -175,7 +175,7 @@ struct TaskDescription {
             if job.needsAttention { progress = "Review " + progress }
             if job.state == .paused, let reason = job.timeline?.last?.reason { progress = reason }
             attention = job.needsAttention
-            date = job.timeline?.last?.date ?? job.createdAt
+            date = row.activityAt
         }
     }
     static func operation(_ kind: BackgroundJob.Kind) -> String {

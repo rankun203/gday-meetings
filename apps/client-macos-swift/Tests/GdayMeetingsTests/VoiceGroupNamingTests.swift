@@ -168,7 +168,7 @@ import Testing
         #expect(try await library.reviewCandidates(for: person.id).isEmpty)
     }
 
-    @Test func proposedGroupsUseSameRecordingAnchorsAndBatchCountsMatchPlayableQueues() async throws {
+    @Test func proposedGroupsJoinMatchingRecordingsAndBatchCountsMatchPlayableQueues() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let library = VoiceLibraryStore(loading: .immediate, directory: root)
@@ -177,8 +177,9 @@ import Testing
         let otherRecording = try sample(root: root)
         #expect(library.upsert([first, second, otherRecording]))
         let groups = try await library.identificationGroups()
-        #expect(groups.contains { Set($0.examples.map(\.id)) == [first.id, second.id] })
-        #expect(groups.contains { $0.examples.map(\.id) == [otherRecording.id] })
+        // The shared complete-link policy joins compatible evidence across recordings.
+        #expect(groups.count == 1)
+        #expect(Set(groups.first?.examples.map(\.id) ?? []) == [first.id, second.id, otherRecording.id])
         let person = UUID()
         let emptyPerson = UUID()
         #expect(library.nameGroup(ids: [first.id, second.id], confirmedExampleID: first.id, personID: person))

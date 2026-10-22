@@ -42,6 +42,16 @@ The default budget is **2× cost over the tested history range**, not two times 
 
 Current large-document Notes and Summary paths are known to violate the desired flat-cost contract. The release lane is an explicit strict test, not a silently passing benchmark or an expected-failure exemption. Keep it out of the ordinary build gate until the product paths satisfy it; deterministic bounded-work checks remain enforced on every macOS build. Use failures to locate repeated work, repair it, and rerun the same cases.
 
+## People review refresh contract
+
+Review views consume prepared presentation snapshots. Playback progress belongs to transport controls and timed transcript highlighting; it must not rebuild review evidence or query the filesystem during view evaluation. The covered Review Library chooser defers presentation updates until review closes, while authoritative state continues updating.
+
+Voice projections use per-meeting evidence indexes and revision-based caches. File changes invalidate affected projections without requesting global suggestion matching. Review decisions may request matching; that intent must survive coalescing with filesystem refreshes, including requests arriving during preparation. Derived results validate their captured meeting and evidence inside the canonical mutation lane. User decisions and Undo retain their order. A failed canonical save stops the batch and restores still-owned projection state.
+
+Use the synthetic People review fixture to check candidate/reference switching, unavailable audio, Confirm, Undo, naming cancellation, dismissal and reopening. Regression coverage lives in the voice presentation, observation, launcher and projection test suites. Add Points of Interest to inspect `Load review candidates`, `Prepare review presentation`, `Project voice decisions` and `Commit voice review` intervals.
+
+For timing comparisons, record exact binary hashes and source diffs for both builds. Use the same fixture, action cadence, viewport, appearance and instrument set on a quiet desktop, with repeated runs. Keep compilation outside capture windows and export with one worker at a time. Separate cheap wrapper evaluations from substantive content evaluations. Report stall counts, durations and completed work alongside view-body time; reduced body work alone does not establish improved input responsiveness. Label unmatched diagnostic captures as inconclusive for performance acceptance.
+
 ## Agent-led checks
 
 An agent should run and interpret the automated report first, then spend UI time on what it cannot prove:

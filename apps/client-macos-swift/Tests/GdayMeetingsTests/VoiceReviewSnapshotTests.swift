@@ -5,6 +5,75 @@ import Testing
 @testable import GdayMeetings
 
 @MainActor struct VoiceReviewSnapshotTests {
+    @Test func groupingIsSharedAcrossPeopleAndObsoleteWorkCannotPublish() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
+        var candidate = try sample(root)
+        candidate.origin = .discovery
+        #expect(library.upsert([candidate]))
+        _ = try await library.reviewCandidates(for: UUID())
+        #expect(library.reviewGroupingComputationCount == 0)
+        _ = try await library.reviewSnapshot(for: [UUID()])
+        _ = try await library.reviewSnapshot(for: [UUID()])
+        #expect(library.reviewGroupingComputationCount == 1)
+        library.invalidateReviewAudio()
+        let (entered, continuation) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        library.beforeReviewGrouping = {
+            continuation.yield(())
+            release.wait()
+        }
+        let pending = Task { try await library.reviewSnapshot(for: []) }
+        var iterator = entered.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(library.confirm(ids: [candidate.id], personID: UUID()))
+        library.beforeReviewGrouping = nil
+        release.signal()
+        let current = try await pending.value
+        #expect(current.unnamedGroups.isEmpty)
+        #expect(current.revision == library.reviewEvidenceRevision)
+        #expect(library.reviewGroupingComputationCount == 3)
+    }
+
+    @Test func cancelledGroupingDoesNotCacheACompletionSentinel() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
+        #expect(library.upsert([try sample(root)]))
+        let (entered, continuation) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        library.beforeReviewGrouping = {
+            continuation.yield(())
+            release.wait()
+        }
+        let pending = Task { try await library.reviewSnapshot(for: []) }
+        var iterator = entered.makeAsyncIterator()
+        _ = await iterator.next()
+        pending.cancel()
+        library.beforeReviewGrouping = nil
+        release.signal()
+        do {
+            _ = try await pending.value
+            Issue.record("Cancelled grouping returned a presentation.")
+        }
+        catch {}
+        let current = try await library.reviewSnapshot(for: [])
+        #expect(current.unnamedGroups.count == 1)
+        #expect(library.reviewGroupingComputationCount == 2)
+    }
+
+    @Test func automaticRowIdentitySurvivesRemovalOfItsFirstMember() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var first = try sample(root)
+        var second = try sample(root)
+        first.origin = .discovery
+        second.origin = .discovery
+        let prior = VoiceIdentificationGroup(id: first.id, examples: [first, second], representativeID: first.id)
+        let remaining = VoiceIdentificationGroup(id: second.id, examples: [second], representativeID: second.id)
+        #expect(VoiceReviewGroupIdentity.preserving([remaining], previous: [prior]).first?.id == first.id)
+    }
     private let type = EmbeddingType(
         modelID: "synthetic", revision: "v1", compatibilityVersion: "v1", dimension: 2, normalization: "unitL2")
 
@@ -24,6 +93,26 @@ import Testing
             meetingID: meeting, speakerID: UUID(), source: "system", audioFile: "system.wav",
             audioRevision: VoiceLibraryStore.revision(url: file), start: start, end: start + 4,
             embeddings: [.init(type: type, values: [1, 0])], groupID: groupID)
+    }
+
+    @Test func policyChangeReusesEvidenceAndRebuildsSnapshot() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
+        let person = UUID()
+        var reference = try sample(root)
+        reference.personID = person
+        reference.review = .confirmed
+        var candidate = try sample(root)
+        candidate.embeddings = [.init(type: type, values: [0.8, 0.6])]
+        #expect(library.upsert([reference, candidate]))
+        let ordinary = try await library.reviewSnapshot(for: [person])
+        #expect(ordinary.candidates[person]?.map(\.id) == [candidate.id])
+        let stricter = VoiceMatchingPolicy(suggestionThreshold: 0.9, automaticThreshold: 0.95)
+        let changed = try await library.reviewSnapshot(for: [person], policy: stricter)
+        #expect(changed.candidates[person]?.isEmpty != false)
+        #expect(changed.revision == ordinary.revision)
+        #expect(try await library.reviewSnapshot(for: [person]).candidates == ordinary.candidates)
     }
 
     @Test func jobCheckpointDuringSharedReadPreservesQueuesAndEvidenceRevision() async throws {

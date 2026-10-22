@@ -47,7 +47,7 @@ final class ManagedTaskIndex {
     }
     func remove(_ id: UUID) throws { try execute("DELETE FROM task_offsets WHERE id=\(Self.literal(id.uuidString))") }
     func upsert(_ record: ManagedTaskRecord, offset: UInt64, length: Int, digest: String) throws {
-        let query = try statement("INSERT OR REPLACE INTO task_offsets VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+        let query = try statement("INSERT OR REPLACE INTO task_offsets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
         defer { sqlite3_finalize(query) }
         for (position, value) in [
             (1, record.id.uuidString), (3, record.state.rawValue), (4, record.kind.rawValue),
@@ -66,6 +66,7 @@ final class ManagedTaskIndex {
         sqlite3_bind_text(query, 10, contentDigest, -1, transient)
         sqlite3_bind_int(query, 11, record.needsAttention ? 1 : 0)
         sqlite3_bind_int(query, 12, record.isAutomatic ? 1 : 0)
+        sqlite3_bind_double(query, 13, record.taskHistoryActivityAt.timeIntervalSince1970)
         guard sqlite3_step(query) == SQLITE_DONE else { throw failure() }
     }
     func locations(where predicate: String = "1", order: String = "created DESC,id DESC", limit: Int) throws
@@ -98,5 +99,18 @@ final class ManagedTaskIndex {
         defer { sqlite3_finalize(query) }
         guard sqlite3_step(query) == SQLITE_ROW else { throw failure() }
         return Int(sqlite3_column_int64(query, 0))
+    }
+
+    /// One indexed pass computes menu counts without hydrating journal records.
+    func filterCounts(where visibility: String) throws -> [TaskHistoryQuery: Int] {
+        let filters = TaskHistoryQuery.allCases
+        let columns = filters.map { "COALESCE(SUM(CASE WHEN \($0.predicate) THEN 1 ELSE 0 END),0)" }
+        let query = try statement("SELECT \(columns.joined(separator: ",")) FROM task_offsets WHERE \(visibility)")
+        defer { sqlite3_finalize(query) }
+        guard sqlite3_step(query) == SQLITE_ROW else { throw failure() }
+        return Dictionary(
+            uniqueKeysWithValues: filters.enumerated().map {
+                ($0.element, Int(sqlite3_column_int64(query, Int32($0.offset))))
+            })
     }
 }

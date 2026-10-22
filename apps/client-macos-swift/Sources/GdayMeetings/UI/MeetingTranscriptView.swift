@@ -4,9 +4,13 @@ import SwiftUI
 /// remain readable, and the first edit adopts them through the same safe store API.
 struct MeetingTranscriptView: View {
     @Environment(\.transcriptLayoutService) private var layoutService
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @ObservedObject private var localModels = LocalModelManager.shared
+    @StateObject private var scanReadiness = DiarizationReadiness()
+    @AppStorage("settingsTab") private var settingsTab = "general"
     let meetingID: UUID
     var initialRowID: UUID? = nil
     @StateObject private var historyReader = TranscriptHistoryReader()
@@ -54,6 +58,24 @@ struct MeetingTranscriptView: View {
                 + labelingTasks.map {
                     $0.id.uuidString + ":" + $0.state.rawValue + ":" + ($0.speakerLabelingResultID?.uuidString ?? "")
                 })
+    }
+    private var scanProvider: ServiceProvider? {
+        store.settings.serviceProviders.first {
+            $0.id == store.settings.diarizationProviderID
+        }
+    }
+    private struct ScanReadinessRequest: Equatable {
+        let directory: URL
+        let configuration: ProviderHealthStore.Configuration
+        let providerID: UUID?
+        let model: LocalModelState.HealthIdentity
+        let active: Bool
+    }
+    private var scanReadinessRequest: ScanReadinessRequest {
+        .init(
+            directory: store.dataDirectory, configuration: .init(store.settings),
+            providerID: store.settings.diarizationProviderID,
+            model: localModels.state(for: .community1).healthIdentity, active: scenePhase == .active)
     }
     private var canRestore: Bool {
         store.libraryWritable && store.recordingID != meetingID && meeting?.transcriptionAttempt == nil
@@ -137,6 +159,8 @@ struct MeetingTranscriptView: View {
                                     TranscriptSpeakerPicker(
                                         meetingID: meeting.id, speaker: speaker, completed: completed,
                                         associationUncertain: segment?.associationUncertain == true,
+                                        identityAssociationTier: segment?.allowsPersonAssociation(from: speaker) == true
+                                            ? speaker.voiceReviewOrigin?.transcriptAssociationTier : nil,
                                         restorePassage: speaker.passageAssignmentOrigin == nil
                                             ? nil
                                             : {
@@ -183,6 +207,10 @@ struct MeetingTranscriptView: View {
                 await loadHistory()
             }
             .task(id: labelingHistoryKey) { await loadLabelingHistory() }
+            .task(id: scanReadinessRequest) {
+                guard scenePhase == .active else { return }
+                await checkScanReadiness()
+            }
             .onChange(of: meeting.transcript) { _, _ in
                 refreshHistoryChoices()
                 refreshRows()
@@ -197,13 +225,11 @@ struct MeetingTranscriptView: View {
     }
     @ViewBuilder private var speakerLabelAction: some View {
         if store.isJobRunning(.diarization, .meeting(meetingID)) {
-            Button("Cancel Speaker Diarization") { Task { await store.cancelLocalDiarization(id: meetingID) } }
+            Button("Cancel Scan") { Task { await store.cancelLocalDiarization(id: meetingID) } }
                 .help(labelingHistoryHelp)
         }
-        else if store.settings.serviceProviders.contains(where: {
-            $0.id == store.settings.diarizationProviderID && $0.kind == .speakerLabeling && $0.supports(.diarization)
-        }) {
-            Button("Diarize") {
+        else {
+            Button("Scan Recording") {
                 Task {
                     if usesCheckpoint, let draft, !(await store.adoptLiveTranscript(draft)) { return }
                     await store.diarizeLocally(id: meetingID)
@@ -212,40 +238,57 @@ struct MeetingTranscriptView: View {
             .disabled(
                 !canRestore
                     || meeting?.audioFiles.isEmpty != false || displayRows.isEmpty
-                    || localModels.state(for: .community1).phase != .ready
+                    || !scanReadiness.isReady(for: scanProvider)
             )
             .help(labelingHistoryHelp)
         }
     }
 
     private var labelingHistoryButton: some View {
-        Button("Diarizations", systemImage: "clock.arrow.circlepath") {
+        Button("Recording Scans", systemImage: "clock.arrow.circlepath") {
             showsLabelingHistory = true
         }
         .labelStyle(.titleAndIcon)
-        .help("Review diarizations and identify speakers")
-        .accessibilityLabel("Diarizations")
+        .help("Review scans and identify speakers")
+        .accessibilityLabel("Recording Scans")
         .popover(isPresented: $showsLabelingHistory) {
             SpeakerLabelingHistoryView(
                 history: $labelingHistory, restoreChoices: labelChoices,
                 currentSnapshotID: meeting.map { TranscriptRevisions.current($0).id }, canRestore: canRestore,
+                unavailableReason: scanReadiness.provider == scanProvider ? scanReadiness.result.reason : nil,
                 restore: { revision in
                     Task { if await store.restoreSpeakerLabels(revision, meetingID: meetingID) { await loadHistory() } }
                 }
             ) {
-                speakerLabelAction
+                VStack(alignment: .trailing, spacing: 4) {
+                    speakerLabelAction
+                    if scanReadiness.provider == scanProvider, scanReadiness.result.reason != nil {
+                        Button("Open Settings") {
+                            settingsTab = scanProvider?.kind.isLocalSpeaker == true ? "providers" : "general"
+                            ProviderHealthStore.shared.settingsProviderID =
+                                scanProvider?.kind.isLocalSpeaker == true ? scanProvider?.id : nil
+                            openSettings()
+                        }
+                    }
+                }
             }
         }
     }
 
+    private func checkScanReadiness() async {
+        // Presence checks read model metadata on its worker; execution still
+        // verifies and prepares the model when the requested scan acquires it.
+        await scanReadiness.refresh(provider: scanProvider, settings: store.settings, force: true)
+    }
+
     private var labelingHistoryHelp: String {
         let readiness =
-            localModels.state(for: .community1).phase == .ready
-            ? "Identify speakers in saved audio without changing the text."
-            : "Download and prepare Community-1 in Service Providers."
-        guard let labelingHistory else { return readiness + "\nLoading speaker diarization history…" }
+            scanReadiness.isReady(for: scanProvider)
+            ? "Identify speakers in this recording without changing its text."
+            : (scanReadiness.result.reason ?? "Checking the speaker provider…")
+        guard let labelingHistory else { return readiness + "\nLoading scan history…" }
         guard let latest = labelingHistory.entries.max(by: { $0.date < $1.date }) else {
-            return readiness + "\nNo recorded speaker diarization history."
+            return readiness + "\nNo recording scans."
         }
         let date = latest.date.formatted(date: .abbreviated, time: .shortened)
         return readiness
@@ -392,7 +435,11 @@ struct MeetingTranscriptView: View {
                 speakerColorIndex: segment.speakerID.flatMap { speakerOrigins[$0] }.flatMap { speakerSlots[$0] }
                     ?? colorIndices[colorKey(segment)],
                 speakerColorKey: colorKey(segment),
-                isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false)
+                isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false,
+                transcriptAssociationTier: segment.allowsPersonAssociation(
+                    from: segment.speakerID.flatMap { speakerMetadata[$0] })
+                    ? segment.speakerID.flatMap { speakerMetadata[$0]?.voiceReviewOrigin?.transcriptAssociationTier }
+                    : nil)
         }
         sourceRowIDs = Set(displayRows.map(\.id))
         refreshVisibleRows()

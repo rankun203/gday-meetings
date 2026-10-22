@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import Synchronization
 
 @MainActor
 final class MeetingStore: ObservableObject {
@@ -68,6 +69,7 @@ final class MeetingStore: ObservableObject {
     }
     @Published var tags: [MeetingTag] = [] { didSet { if oldValue != tags { tagsMutationRevision = UUID() } } }
     @Published var settings = AppSettings()
+    private var savedVoiceMatchingPolicy = VoiceMatchingPolicy.default
     @Published var providerLanguageStates: [ProviderLanguageIdentity: ProviderLanguageState] = [:]
     /// Saved language and model lists. providerLanguageStates holds only loading and failure.
     lazy var providerLanguageCache = ProviderMetadataCache<ProviderLanguageCatalog>(
@@ -96,6 +98,8 @@ final class MeetingStore: ObservableObject {
     @Published var managedTasks: [ManagedTaskRecord] = []
     @Published var managedTaskRevision = 0
     @Published var managedTaskScopeRevisions: [TaskHistoryScope: Int] = [:]
+    @Published var managedTaskDisplayRevisions: [TaskHistoryQuery: Int] = [:]
+    @Published var managedTaskFilterCountRevision = 0
     @Published var searchMaintenanceBatchActive = false
     @Published var managedTasksLoading = false
     @Published var managedTaskAttentionCount = 0
@@ -169,17 +173,35 @@ final class MeetingStore: ObservableObject {
     var profileNotesSaveTask: Task<Void, Never>?
     var profileNotesSavePending = false
     private var voiceAssignmentRefresh: Task<Void, Never>?
-    private var voiceAssignmentRefreshRevision = UUID()
+    private var voiceAssignmentRefreshRequested = 0
+    private var voiceAssignmentRefreshCompleted = 0
+    private var voiceAssignmentRefreshWaiters: [UUID: (Int, CheckedContinuation<Void, Never>)] = [:]
+    private var pendingVoiceAssignmentMeetingIDs: Set<UUID> = []
+    private var pendingVoiceSuggestionRefresh = false
+    private var pendingVoiceProjectionRepair = false
     @Published private var voiceAssignmentRefreshCount = 0
     lazy var voiceLibrary: VoiceLibraryStore = {
         let library = VoiceLibraryStore(
             loading: voiceLibraryLoading, directory: dataDirectory,
             canWrite: { [weak self] in self?.libraryWritable == true })
+        let policy =
+            settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.voiceMatchingPolicy ?? .default
+        library.invalidateMatchingPolicy(policy)
         library.didChange = { [weak self] ids in
             self?.scheduleVoiceAssignmentRefresh(meetingIDs: ids)
         }
-        voiceReadinessObservation = library.$isLoaded.dropFirst().sink { [weak self] _ in
+        library.didChangeProjection = { [weak self] ids in
+            self?.scheduleVoiceAssignmentRefresh(meetingIDs: ids, recomputeSuggestions: false)
+        }
+        voiceReadinessObservation = library.$isLoaded.dropFirst().sink { [weak self, weak library] ready in
             self?.objectWillChange.send()
+            guard ready, let self, library != nil else { return }
+            self.scheduleVoiceAssignmentRefresh(
+                meetingIDs: [], recomputeSuggestions: false, repairMissingAssociations: true)
+        }
+        if library.isLoaded {
+            scheduleVoiceAssignmentRefresh(
+                meetingIDs: [], recomputeSuggestions: false, repairMissingAssociations: true)
         }
         voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
             guard let self else { return }
@@ -204,7 +226,16 @@ final class MeetingStore: ObservableObject {
 
     private let voiceLibraryLoading: VoiceLibraryStore.Loading
     lazy var voicePreparation = VoiceLibraryPreparation(
-        library: voiceLibrary, performanceCache: taskPerformanceCache, people: { [weak self] in self?.people ?? [] })
+        library: voiceLibrary, performanceCache: taskPerformanceCache, people: { [weak self] in self?.people ?? [] },
+        alternativePreparationAllowed: { [weak self] in
+            guard let self else { return false }
+            return !self.isPreparingToQuit && self.recordingID == nil && !self.isStartingRecording
+                && !self.isFinalizingRecording
+        },
+        currentProvider: { [weak self] in
+            guard let self else { return nil }
+            return self.settings.serviceProviders.first { $0.id == self.settings.diarizationProviderID }
+        })
     private var recorder: AudioCapture?
     private var captureTransition = false
     private var activeRecordingFormat: RecordingFormat = .opus
@@ -288,9 +319,13 @@ final class MeetingStore: ObservableObject {
             if FileManager.default.fileExists(atPath: settingsURL.path) {
                 settings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsURL))
             }
+            savedVoiceMatchingPolicy =
+                settings.serviceProviders.first {
+                    $0.id == settings.diarizationProviderID
+                }?.voiceMatchingPolicy ?? .default
             for index in meetings.indices {
                 // Keep existing speaker snapshots unchanged for resumable transcription jobs.
-                for personID in meetings[index].speakers.compactMap(\.personID)
+                for personID in meetings[index].speakers.compactMap(\.attendancePersonID)
                 where !meetings[index].personIDs.contains(personID) {
                     meetings[index].personIDs.append(personID)
                 }
@@ -368,10 +403,10 @@ final class MeetingStore: ObservableObject {
         }
         await voiceLibrary.awaitLoaded()
         guard !isChangingLibrary, !isPreparingToQuit else { return }
+        let library = voiceLibrary
         for id in meetings.map(\.id) where id != recordingID {
-            guard let meeting = meeting(id: id) else { continue }
-            let resolved = voiceLibrary.applyingDecisions(to: meeting)
-            if resolved != meeting { _ = await updateMeeting(resolved) }
+            let result = await refreshLoadedVoiceAssignment(id: id, library: library)
+            if result == .stopped || result == .failed { break }
         }
         await recoverUnadoptedLiveTranscripts()
     }
@@ -560,7 +595,10 @@ final class MeetingStore: ObservableObject {
             return false
         }
         if result.committed {
-            if !audioReplacements.isEmpty { voiceLibrary.invalidateReviewAudio() }
+            if !audioReplacements.isEmpty {
+                voiceLibrary.invalidateReviewAudio()
+                voiceLibrary.invalidateDecisionProjections(meetingIDs: Set(audioReplacements.map(\.meetingID)))
+            }
             let committedMeetings = result.meetings
             for committed in committedMeetings {
                 if let position = meetings.firstIndex(where: { $0.id == committed.id }),
@@ -847,6 +885,15 @@ final class MeetingStore: ObservableObject {
         }
         ProviderHealthStore.shared.invalidateChangedConfiguration(settings: settings)
         searchConfigurationChanged()
+        let policy =
+            settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.voiceMatchingPolicy ?? .default
+        if policy != savedVoiceMatchingPolicy {
+            savedVoiceMatchingPolicy = policy
+            // Reuse captured embeddings. Reject an old-policy result before the
+            // coalesced suggestion refresh gets its next main-actor turn.
+            voiceLibrary.invalidateMatchingPolicy(policy)
+            scheduleVoiceAssignmentRefresh(meetingIDs: [], recomputeSuggestions: true)
+        }
         return true
     }
     func insertImportedMeeting(_ meeting: Meeting) async throws {
@@ -1671,34 +1718,289 @@ final class MeetingStore: ObservableObject {
     }
 }
 extension MeetingStore {
-    func refreshVoiceAssignments(meetingIDs: Set<UUID>) async {
-        guard await voiceLibrary.awaitReady() else { return }
-        for id in meetingIDs where id != recordingID {
+    enum VoiceProjectionCommitResult: Equatable { case committed, stale, skipped, stopped, failed }
+
+    func refreshVoiceAssignments(meetingIDs: Set<UUID>, recomputeSuggestions: Bool = true) async {
+        let library = voiceLibrary
+        guard await library.awaitReady() else { return }
+        for id in meetingIDs.sorted(by: { $0.uuidString < $1.uuidString }) where id != recordingID {
             guard await ensureMeetingLoaded(id: id) else { continue }
-            guard let meeting = meeting(id: id) else { continue }
-            let updated = voiceLibrary.applyingDecisions(to: meeting)
-            if updated != meeting { _ = await updateMeeting(updated) }
+            let result = await refreshLoadedVoiceAssignment(id: id, library: library)
+            if result == .stopped || result == .failed { return }
         }
-        await voiceLibrary.suggestReviewedPeople(from: people)
+        guard !Task.isCancelled, library === voiceLibrary, library.canProjectDecisions, !isChangingLibrary else {
+            return
+        }
+        if recomputeSuggestions {
+            let policy =
+                settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.voiceMatchingPolicy
+                ?? .default
+            await library.suggestReviewedPeople(from: people, policy: policy)
+        }
     }
 
-    private func scheduleVoiceAssignmentRefresh(meetingIDs: Set<UUID>) {
-        let previous = voiceAssignmentRefresh
-        voiceAssignmentRefreshRevision = UUID()
-        voiceAssignmentRefreshCount += 1
+    func refreshLoadedVoiceAssignment(id: UUID, library: VoiceLibraryStore) async -> VoiceProjectionCommitResult {
+        while !Task.isCancelled, library === voiceLibrary, library.canProjectDecisions, !isChangingLibrary {
+            guard id != recordingID, !deletingMeetingIDs.contains(id), let input = meeting(id: id) else {
+                return .skipped
+            }
+            guard let projection = await library.decisionProjection(to: input) else {
+                await Task.yield()
+                continue
+            }
+            if projection.meeting == input { return .committed }
+            let result = await commitVoiceProjection(projection, expected: input, library: library)
+            if result != .stale { return result }
+            await Task.yield()
+        }
+        return .stopped
+    }
+
+    func commitVoiceProjection(
+        _ projection: VoiceLibraryStore.DecisionProjection, expected input: Meeting, library: VoiceLibraryStore
+    ) async -> VoiceProjectionCommitResult {
+        let generation = externalReloadGeneration
+        var outcome = VoiceProjectionCommitResult.stopped
+        let cancelled = Mutex(Task.isCancelled)
+        _ = await withTaskCancellationHandler {
+            await enqueueCanonical { [self] in
+                guard !cancelled.withLock({ $0 }), canSave, library === voiceLibrary, library.canProjectDecisions,
+                    generation == externalReloadGeneration, !isChangingLibrary
+                else { return false }
+                guard input.id != recordingID, !deletingMeetingIDs.contains(input.id),
+                    let index = meetings.firstIndex(where: { $0.id == input.id })
+                else {
+                    outcome = .skipped
+                    return false
+                }
+                guard meetings[index] == input, library.isCurrentDecisionProjection(projection.token) else {
+                    outcome = .stale
+                    return false
+                }
+                let saved = lastSavedLibrary.meetings.first { $0.id == input.id }
+                let updated = MeetingSpeakerColors.assigning(projection.meeting, previous: saved)
+                meetings[index] = updated
+                invalidateExternalMeetingReloads(ids: [input.id])
+                let committed = await performCanonicalSave(meetingID: input.id)
+                if !committed, let current = meetings.firstIndex(where: { $0.id == input.id }),
+                    meetings[current] == updated
+                {
+                    meetings[current] = input
+                }
+                outcome = committed ? .committed : .failed
+                if committed { library.adoptCommittedProjection(projection, canonical: updated) }
+                return committed
+            }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
+        }
+        return outcome
+    }
+
+    private func missingReviewedVoiceAssociations() async -> Set<UUID> {
+        let library = voiceLibrary
+        let examples = library.examples
+        let decisions = library.decisions
+        let deletedPeople = library.deletedPersonIDs
+        let revision = library.reviewEvidenceRevision
+        let policy =
+            settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.voiceMatchingPolicy ?? .default
+        let index = libraryIndex
+        let root = dataDirectory
+        let generation = externalReloadGeneration
+        // Already-correct attendance uses lightweight metadata. Missing machine
+        // candidates need an off-main placement probe before loading UI state.
+        let repair = Task.detached(priority: .utility) { () -> Set<UUID> in
+            let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
+            let deleted = Set(deletedPeople)
+            let examplesByMeeting = Dictionary(grouping: examples, by: \.meetingID)
+            let decisionsByMeeting = Dictionary(grouping: decisions, by: \.meetingID)
+            var expected: [UUID: Set<UUID>] = [:]
+            for example in examples
+            where !example.excluded && !example.manuallyCleared
+                && !conflicts.contains(example.id) && example.range != nil
+            {
+                guard !Task.isCancelled else { return [] }
+                let machine = example.transcriptAssociation.flatMap { value in
+                    value.tier == .automatic && value.isValid && value.policy.normalized == policy.normalized
+                        && !example.rejectedPersonIDs.contains(value.personID) ? value.personID : nil
+                }
+                if let person = (example.review == .confirmed ? example.personID : machine), !deleted.contains(person) {
+                    expected[example.meetingID, default: []].insert(person)
+                }
+            }
+            for decision in decisions {
+                if let person = decision.personID, !deleted.contains(person) {
+                    expected[decision.meetingID, default: []].insert(person)
+                }
+            }
+            var result = Set<UUID>()
+            // Machine labels are disposable. A policy changed while this
+            // library was closed can leave a persisted attribution to remove,
+            // even though no new person is missing from the attendance index.
+            for (id, values) in examplesByMeeting {
+                guard !Task.isCancelled else { return [] }
+                let obsolete = Set(
+                    values.filter {
+                        guard let association = $0.transcriptAssociation else { return false }
+                        return !association.isValid || association.policy.normalized != policy.normalized
+                            || $0.excluded || $0.manuallyCleared || $0.rejectedPersonIDs.contains(association.personID)
+                            || deleted.contains(association.personID)
+                    }.map(\.id))
+                guard !obsolete.isEmpty else { continue }
+                struct AttributedSpeakers: Decodable { var speakers: [MeetingSpeaker]? }
+                guard let folder = try? MeetingFolderLocation.resolve(id: id, directory: root),
+                    let data = try? Data(contentsOf: folder.appendingPathComponent("content.json")),
+                    let content = try? JSONDecoder().decode(AttributedSpeakers.self, from: data)
+                else { continue }
+                if content.speakers?.contains(where: {
+                    $0.voiceReviewOrigin?.transcriptAssociationTier != nil
+                        && $0.voiceReviewExampleID.map(obsolete.contains) == true
+                }) == true {
+                    result.insert(id)
+                }
+            }
+            for (id, people) in expected {
+                guard !Task.isCancelled else { return [] }
+                do {
+                    let entry: MeetingListEntry
+                    if let indexed = try index?.entry(id: id) {
+                        entry = indexed
+                    }
+                    else {
+                        let folder = try MeetingFolderLocation.resolve(id: id, directory: root)
+                        entry = try JSONDecoder().decode(
+                            MeetingListEntry.self,
+                            from: Data(contentsOf: folder.appendingPathComponent("metadata.json")))
+                    }
+                    let missingPeople = people.subtracting(entry.personIDs)
+                    guard !missingPeople.isEmpty else { continue }
+                    let current = VoiceDecisionProjection.currentEvidence(
+                        (examplesByMeeting[id] ?? []).filter {
+                            !$0.excluded && !$0.manuallyCleared && !conflicts.contains($0.id)
+                                && (($0.review == .confirmed && $0.personID.map(missingPeople.contains) == true)
+                                    || $0.transcriptAssociation.map {
+                                        $0.tier == .automatic && $0.isValid && $0.policy.normalized == policy.normalized
+                                            && missingPeople.contains($0.personID)
+                                    } == true)
+                        }, directory: root)
+                    let confirmed = current.filter { $0.review == .confirmed && $0.personID != nil }
+                    if !confirmed.isEmpty {
+                        result.insert(id)
+                        continue
+                    }
+                    if !current.isEmpty {
+                        // Reuse production placement rules. Unresolved source
+                        // rows, manual assignments and conflicting candidates
+                        // must not schedule futile UI loads on every launch.
+                        let canonical = try MeetingFolderStorage.read(id: id, directory: root)
+                        let allCurrent = VoiceDecisionProjection.currentEvidence(
+                            examplesByMeeting[id] ?? [], directory: root)
+                        let projected = VoiceDecisionProjection.apply(
+                            to: canonical, evidence: allCurrent, decisions: decisionsByMeeting[id] ?? [],
+                            deletedPeople: deleted, policy: policy)
+                        if !missingPeople.intersection(projected.personIDs).isEmpty { result.insert(id) }
+                    }
+                    let missingDecisions = (decisionsByMeeting[id] ?? []).filter {
+                        $0.personID.map(missingPeople.contains) == true
+                    }
+                    guard !missingDecisions.isEmpty else { continue }
+                    // content.json contains speaker metadata; transcript.jsonl
+                    // is separate. A removed local label cannot be repaired by
+                    // repeatedly loading a transcript at every launch.
+                    struct SpeakerMetadata: Decodable { var speakers: [MeetingSpeaker]? }
+                    let folder = try MeetingFolderLocation.resolve(id: id, directory: root)
+                    let metadata = try JSONDecoder().decode(
+                        SpeakerMetadata.self, from: Data(contentsOf: folder.appendingPathComponent("content.json")))
+                    let restoredIDs = Set(
+                        (metadata.speakers ?? []).compactMap { speaker -> UUID? in
+                            if let origin = speaker.voiceReviewOrigin {
+                                return origin.evidenceOnly == true ? nil : origin.speakerID
+                            }
+                            return speaker.id
+                        })
+                    if missingDecisions.contains(where: { restoredIDs.contains($0.speakerID) }) { result.insert(id) }
+                }
+                // Missing/unreadable metadata cannot establish a valid repair
+                // target. Normal loading/reconciliation owns its recovery.
+                catch { continue }
+            }
+            return result
+        }
+        let missing = await withTaskCancellationHandler {
+            await repair.value
+        } onCancel: {
+            repair.cancel()
+        }
+        guard !Task.isCancelled, library === voiceLibrary, generation == externalReloadGeneration,
+            revision == library.reviewEvidenceRevision, decisions == library.decisions
+        else { return [] }
+        return missing
+    }
+
+    func scheduleVoiceAssignmentRefresh(
+        meetingIDs: Set<UUID>, recomputeSuggestions: Bool = true, repairMissingAssociations: Bool = false
+    ) {
+        pendingVoiceAssignmentMeetingIDs.formUnion(meetingIDs)
+        pendingVoiceProjectionRepair = pendingVoiceProjectionRepair || repairMissingAssociations
+        // A filesystem refresh only rebuilds projections. A human decision in
+        // the same batch still requests matching against the reviewed profiles.
+        pendingVoiceSuggestionRefresh = pendingVoiceSuggestionRefresh || recomputeSuggestions
+        guard !pendingVoiceAssignmentMeetingIDs.isEmpty || pendingVoiceSuggestionRefresh || pendingVoiceProjectionRepair
+        else { return }
+        voiceAssignmentRefreshRequested += 1
+        guard voiceAssignmentRefresh == nil else { return }
+        voiceAssignmentRefreshCount = 1
         voiceAssignmentRefresh = Task { [weak self] in
-            await previous?.value
-            await self?.refreshVoiceAssignments(meetingIDs: meetingIDs)
-            self?.voiceAssignmentRefreshCount -= 1
+            guard let self else { return }
+            while !self.pendingVoiceAssignmentMeetingIDs.isEmpty || self.pendingVoiceSuggestionRefresh
+                || self.pendingVoiceProjectionRepair
+            {
+                var ids = self.pendingVoiceAssignmentMeetingIDs
+                let suggestions = self.pendingVoiceSuggestionRefresh
+                let repair = self.pendingVoiceProjectionRepair
+                let sequence = self.voiceAssignmentRefreshRequested
+                self.pendingVoiceAssignmentMeetingIDs.removeAll()
+                self.pendingVoiceSuggestionRefresh = false
+                self.pendingVoiceProjectionRepair = false
+                if repair { ids.formUnion(await self.missingReviewedVoiceAssociations()) }
+                await self.refreshVoiceAssignments(meetingIDs: ids, recomputeSuggestions: suggestions)
+                self.completeVoiceAssignmentRefresh(through: sequence)
+            }
+            self.voiceAssignmentRefreshCount = 0
+            self.voiceAssignmentRefresh = nil
         }
     }
 
     func flushVoiceAssignmentRefresh() async {
-        var revision: UUID
-        repeat {
-            revision = voiceAssignmentRefreshRevision
-            await voiceAssignmentRefresh?.value
-        } while revision != voiceAssignmentRefreshRevision
+        let requested = voiceAssignmentRefreshRequested
+        guard requested > voiceAssignmentRefreshCompleted, !Task.isCancelled else { return }
+        let token = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if requested <= voiceAssignmentRefreshCompleted || Task.isCancelled {
+                    continuation.resume()
+                }
+                else {
+                    voiceAssignmentRefreshWaiters[token] = (requested, continuation)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.voiceAssignmentRefreshWaiters.removeValue(forKey: token)?.1.resume()
+            }
+        }
+    }
+
+    private func completeVoiceAssignmentRefresh(through sequence: Int) {
+        voiceAssignmentRefreshCompleted = max(voiceAssignmentRefreshCompleted, sequence)
+        for token in Array(voiceAssignmentRefreshWaiters.keys) {
+            guard let waiter = voiceAssignmentRefreshWaiters[token], waiter.0 <= voiceAssignmentRefreshCompleted else {
+                continue
+            }
+            voiceAssignmentRefreshWaiters.removeValue(forKey: token)
+            waiter.1.resume()
+        }
     }
 }
 

@@ -9,6 +9,25 @@ enum VoiceExampleOrigin: String, Codable, Sendable {
     case legacyProfile, savedSpeaker, liveSpeech, discovery
 }
 
+/// A reversible machine attribution. Only a separately confirmed excerpt may
+/// become reference evidence for future matching.
+struct VoiceTranscriptAssociation: Codable, Equatable, Sendable {
+    enum Tier: String, Codable, Sendable { case automatic, tentative }
+    var personID: UUID
+    var score: Double
+    var margin: Double
+    var policy: VoiceMatchingPolicy
+    var tier: Tier = .automatic
+
+    var isValid: Bool {
+        let policy = policy.normalized
+        return score.isFinite && (-1...1).contains(score)
+            && margin.isFinite && (0...2).contains(margin)
+            && margin >= policy.minimumMargin
+            && (tier == .automatic ? score >= policy.automaticThreshold : score > 0)
+    }
+}
+
 /// Optional playback location for a voice sample. Identity decisions and model
 /// representations remain usable when the source recording is unavailable.
 struct VoiceSampleRange: Codable, Equatable, Sendable {
@@ -87,6 +106,7 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var end: Double?
     var personID: UUID?
     var suggestedPersonID: UUID?
+    var transcriptAssociation: VoiceTranscriptAssociation? = nil
     /// A person explicitly chosen for a proposed group. This association remains
     /// inferred until this individual excerpt is confirmed.
     var namedPersonID: UUID?
@@ -104,6 +124,15 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var firstPassage: VoiceSampleRange?
     var sourceResolutionIssue: String?
     var spans: [SpeakerEvidenceSpan]? = nil
+
+    /// Full detected-speaker scope on this audio revision, independent of the
+    /// excerpt selected for playback and reference review.
+    var detectedSpeakerID: String? = nil
+    var detectedSpeakerResultID: UUID? = nil
+    var detectedSpeakerConfiguration: VoiceDiscoveryConfiguration? = nil
+    var detectedSpeakerSpans: [SpeakerEvidenceSpan]? = nil
+
+    var sampleQuality: VoiceSampleQuality? = nil
 
     var voiceEmbeddings: [TypedVoiceEmbedding] { embeddings }
 
@@ -144,6 +173,11 @@ struct VoiceProjectionOrigin: Codable, Equatable, Sendable {
     var manuallyAssigned: Bool?
     var confidence: Double?
     var manualReviewThrough: [String: Double]?
+    /// A reviewed discovery can establish attendance without a transcript label.
+    /// Rebuilding removes this derived speaker instead of restoring a base label.
+    var evidenceOnly: Bool? = nil
+    /// Machine identity confidence stays separate from acoustic uncertainty.
+    var transcriptAssociationTier: VoiceTranscriptAssociation.Tier? = nil
 
     static func identity(exampleID: UUID, segmentID: UUID) -> UUID {
         let hash = Array(SHA256.hash(data: Data((exampleID.uuidString + segmentID.uuidString).utf8)))
@@ -159,6 +193,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
     var id: UUID
     var personID: UUID?
     var suggestedPersonID: UUID?
+    var transcriptAssociation: VoiceTranscriptAssociation?
     var namedPersonID: UUID?
     var review: VoiceReviewState
     var rejectedPersonIDs: [UUID]
@@ -171,6 +206,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
         id = example.id
         personID = example.personID
         suggestedPersonID = example.suggestedPersonID
+        transcriptAssociation = example.transcriptAssociation
         namedPersonID = example.namedPersonID
         review = example.review
         rejectedPersonIDs = example.rejectedPersonIDs
@@ -183,6 +219,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
     func restore(_ example: inout VoiceExample) {
         example.personID = personID
         example.suggestedPersonID = suggestedPersonID
+        example.transcriptAssociation = transcriptAssociation
         example.namedPersonID = namedPersonID
         example.review = review
         example.rejectedPersonIDs = rejectedPersonIDs

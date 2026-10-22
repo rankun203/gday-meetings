@@ -65,6 +65,7 @@ final class MeetingPlayback: ObservableObject {
     private var seekGeneration = UUID()
     private var wantsPlayback = false
     private var playbackIntent = UUID()
+    private var reviewOwner: UUID?
     private var pendingPosition: Double = 0
     private var isSeeking = false
     init(
@@ -88,17 +89,39 @@ final class MeetingPlayback: ObservableObject {
     /// Resolve a cold meeting without allowing a late load to undo a newer transport action.
     @discardableResult
     func requestPlayback(
+        reviewOwner owner: UUID? = nil,
         load: @escaping @MainActor () async -> Meeting?,
         play: @escaping @MainActor (Meeting) -> Void
     ) -> Task<Void, Never> {
+        guard owner == nil || ownsReviewPlayback(owner) else { return Task {} }
         let intent = UUID()
         playbackIntent = intent
         return Task { @MainActor [weak self] in
             guard let meeting = await load(), let self, !Task.isCancelled,
-                self.playbackIntent == intent, !self.isPlaybackBlocked
+                self.playbackIntent == intent, !self.isPlaybackBlocked,
+                owner == nil || self.ownsReviewPlayback(owner)
             else { return }
             play(meeting)
         }
+    }
+
+    /// Review views can outlive their presentation while asynchronous loads finish.
+    /// A new session supersedes the previous owner before it can request audio.
+    func beginReviewPlayback() -> UUID {
+        pause()
+        let owner = UUID()
+        reviewOwner = owner
+        return owner
+    }
+
+    func ownsReviewPlayback(_ owner: UUID?) -> Bool {
+        owner != nil && owner == reviewOwner
+    }
+
+    func endReviewPlayback(_ owner: UUID?) {
+        guard ownsReviewPlayback(owner) else { return }
+        reviewOwner = nil
+        pause()
     }
 
     /// Selection prepares a paused item. Browsing elsewhere never needs to call this.
@@ -115,6 +138,18 @@ final class MeetingPlayback: ObservableObject {
         }
         let sameMeeting = meetingID == meeting.id
         load(meeting: meeting, files: files, track: track, position: sameMeeting ? currentTime : 0, autoplay: false)
+    }
+
+    /// Inspect the full source at an excerpt without inheriting its decoder bound.
+    func selectRecording(meeting: Meeting, files: [URL], audioFile: String?, at position: Double) {
+        guard !isPlaybackBlocked else { return }
+        pause()
+        excerptRange = nil
+        excerptRanges = []
+        excerptIndex = 0
+        let track = audioFile.flatMap { file in files.firstIndex { $0.lastPathComponent == file } } ?? -1
+        select(meeting: meeting, files: files, track: track)
+        seek(to: position)
     }
 
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {

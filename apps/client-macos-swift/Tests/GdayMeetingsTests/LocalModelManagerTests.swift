@@ -150,6 +150,62 @@ private final class ModelDownloadObservations: @unchecked Sendable {
         Issue.record("Model task did not settle")
     }
 
+    @Test func installedSpeakerModelEnablesColdStartScanWithoutPreparation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
+        try writeModel(manager.modelDirectory(for: .community1))
+        let provider = ServiceProvider(kind: .speakerLabeling)
+        var settings = AppSettings()
+        settings.serviceProviders = [provider]
+        settings.diarizationProviderID = provider.id
+        settings.labelRecordedSpeakers = false
+        let health = ProviderHealthStore { _, capability, captured in
+            await provider.health(for: capability, settings: captured, models: manager)
+        }
+        let readiness = DiarizationReadiness()
+        #expect(manager.state(for: .community1).phase == .missing)
+        await readiness.refresh(provider: provider, settings: settings, health: health)
+        #expect(readiness.isReady(for: provider))
+        #expect(manager.state(for: .community1).phase == .missing)
+        let before = await manager.lifecycleMetrics()
+        #expect(before.verificationPasses == 0)
+        #expect(before.hashedBytes == 0)
+        #expect(before.preparationCount == 0)
+        // Starting the operation retains the normal verification boundary.
+        let lease = try await manager.acquire(.community1)
+        manager.release(lease)
+        let after = await manager.lifecycleMetrics()
+        #expect(after.verificationPasses == 1)
+        #expect(after.hashedBytes > 0)
+    }
+
+    @Test func missingAndDisabledSpeakerProvidersOfferRecovery() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = LocalModelManager(root: root, descriptor: descriptor, preparer: { _, _ in [:] })
+        var provider = ServiceProvider(kind: .speakerLabeling)
+        var settings = AppSettings()
+        settings.serviceProviders = [provider]
+        let health = ProviderHealthStore { id, capability, captured in
+            guard let selected = captured.serviceProviders.first(where: { $0.id == id }) else {
+                return .notReady("Provider is unavailable.")
+            }
+            return await selected.health(for: capability, settings: captured, models: manager)
+        }
+        let readiness = DiarizationReadiness()
+        await readiness.refresh(provider: provider, settings: settings, health: health)
+        #expect(!readiness.isReady(for: provider))
+        #expect(readiness.result.reason?.contains("missing or incomplete") == true)
+        provider.isEnabled = false
+        settings.serviceProviders = [provider]
+        await readiness.refresh(provider: provider, settings: settings, health: health)
+        #expect(readiness.result == .notReady("Provider is turned off."))
+        await readiness.refresh(provider: nil, settings: settings, health: health)
+        #expect(readiness.result.reason?.contains("Choose a Speaker Diarization provider") == true)
+        #expect((await manager.lifecycleMetrics()).verificationPasses == 0)
+    }
+
     @Test func copiedFoldersVerifyAutomaticallyAndLeasesPreventRemoval() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

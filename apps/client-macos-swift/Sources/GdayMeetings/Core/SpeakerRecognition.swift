@@ -37,6 +37,11 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
         return row.start < (watermarks[source] ?? 0)
     }
 
+    /// Tentative transcript names do not establish meeting attendance.
+    var attendancePersonID: UUID? {
+        voiceReviewOrigin?.transcriptAssociationTier == .tentative ? nil : personID
+    }
+
     var canAssignPerson: Bool { sourcePlaceholder == nil }
     var canReviewVoice: Bool { canAssignPerson && resolvedVoiceEmbedding?.isValid == true }
     var displayLabel: String {
@@ -80,11 +85,12 @@ struct PersonVoiceSample: Codable, Equatable, Sendable {
 
 enum SpeakerRecognition {
     // Conservative initial policy; not a calibrated probability of identity.
-    static let threshold = 0.85
+    static let threshold = VoiceMatchingPolicy.default.automaticThreshold
 
     static func match(
         embedding: TypedVoiceEmbedding, people: [Person],
-        threshold: Double = 0.85, minimumMargin: Double = 0.08
+        threshold: Double = VoiceMatchingPolicy.default.automaticThreshold,
+        minimumMargin: Double = VoiceMatchingPolicy.default.minimumMargin
     ) -> VoiceMatch? {
         guard embedding.isValid, threshold.isFinite, minimumMargin.isFinite,
             (-1...1).contains(threshold), minimumMargin >= 0
@@ -215,7 +221,8 @@ extension Meeting {
             if segment.allowsPersonAssociation(from: speaker),
                 let person = people.first(where: { $0.id == speaker.personID })
             {
-                return person.name
+                return speaker.voiceReviewOrigin?.transcriptAssociationTier == .tentative
+                    ? "\(person.name) (Tentative)" : person.name
             }
             if speaker.sourcePlaceholder != nil { return speaker.displayLabel }
         }
@@ -223,19 +230,21 @@ extension Meeting {
     }
 
     mutating func replaceSpeakers(_ replacement: [MeetingSpeaker]) {
-        let previous = Set(speakers.compactMap(\.personID))
+        let previous = Set(speakers.compactMap(\.attendancePersonID))
         personIDs.removeAll { previous.contains($0) }
         speakers = replacement
-        for index in speakers.indices { speakers[index].confirmed = speakers[index].personID != nil }
+        for index in speakers.indices {
+            speakers[index].confirmed = speakers[index].attendancePersonID != nil
+        }
         for speaker in speakers {
-            if let id = speaker.personID, !personIDs.contains(id) { personIDs.append(id) }
+            if let id = speaker.attendancePersonID, !personIDs.contains(id) { personIDs.append(id) }
         }
     }
 }
 
 extension MeetingStore {
-    /// Save the assignment and explicitly assigned sample together through the library's
-    /// atomic save/rollback path. Reassignment removes its earlier training sample.
+    /// Save transcript identity through the library's atomic save/rollback path.
+    /// Correcting a derived name preserves independent reference reviews.
     @discardableResult func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async -> Bool {
         guard await voiceLibrary.awaitReady() else {
             errorMessage = voiceLibrary.errorMessage
@@ -249,6 +258,9 @@ extension MeetingStore {
             personID == nil || people.contains(where: { $0.id == personID })
         else { return false }
         var replacement = meeting.speakers
+        let speaker = meeting.speakers[index]
+        let wholeProjection = speaker.voiceReviewOrigin?.speakerID == speaker.id
+        replacement[index].voiceReviewOrigin?.transcriptAssociationTier = nil
         replacement[index].personID = personID
         replacement[index].confidence = nil
         replacement[index].confirmed = personID != nil
@@ -259,21 +271,26 @@ extension MeetingStore {
             voiceLibrary.assign(
                 meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true,
                 previousPersonID: meeting.speakers[index].personID,
-                exampleID: meeting.speakers[index].voiceReviewExampleID)
+                exampleID: wholeProjection ? nil : speaker.voiceReviewExampleID,
+                preservePreviousSpeakerDecision: !wholeProjection,
+                updateReferenceEvidence: !wholeProjection,
+                relatedExampleID: wholeProjection ? speaker.voiceReviewExampleID : nil)
         else {
             errorMessage = voiceLibrary.errorMessage
             return false
         }
-        for i in people.indices {
-            people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
+        if !wholeProjection {
+            for i in people.indices {
+                people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
+            }
         }
-        if let personIndex = people.firstIndex(where: { $0.id == personID }),
+        if !wholeProjection, let personIndex = people.firstIndex(where: { $0.id == personID }),
             let embedding = replacement[index].voiceEmbedding, embedding.isValid
         {
             people[personIndex].voiceSamples.append(
                 .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
         }
-        else if let personIndex = people.firstIndex(where: { $0.id == personID }),
+        else if !wholeProjection, let personIndex = people.firstIndex(where: { $0.id == personID }),
             let scope = replacement[index].voiceScope, let embedding = replacement[index].embedding,
             SpeakerRecognition.isValid(embedding)
         {

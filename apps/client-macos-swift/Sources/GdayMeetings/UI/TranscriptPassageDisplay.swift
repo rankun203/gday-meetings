@@ -32,7 +32,8 @@ extension TranscriptDisplayRow {
             speakerColorIndex: first.speakerColorIndex, speakerColorKey: first.speakerColorKey,
             accessibilityHelp: rows.contains(where: { $0.speakerID == nil })
                 ? "Some words have no speaker label." : nil,
-            isSourcePlaceholder: first.isSourcePlaceholder, source: first.source)
+            isSourcePlaceholder: first.isSourcePlaceholder, source: first.source,
+            transcriptAssociationTier: first.transcriptAssociationTier)
         composed.constituents = rows
         composed.constituentTextRanges = ranges
         return composed

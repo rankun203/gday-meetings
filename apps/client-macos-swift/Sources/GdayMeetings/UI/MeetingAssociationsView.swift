@@ -134,7 +134,8 @@ struct MeetingSpeakersView: View {
     }
 
     private func personName(for speaker: MeetingSpeaker) -> String? {
-        store.people.first(where: { $0.id == speaker.personID })?.name
+        guard let name = store.people.first(where: { $0.id == speaker.personID })?.name else { return nil }
+        return speaker.voiceReviewOrigin?.transcriptAssociationTier == .tentative ? "\(name) (Tentative)" : name
     }
 
     @ViewBuilder private func actions(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
@@ -189,7 +190,7 @@ struct MeetingSpeakersView: View {
                 )
                 .accessibilityValue(personName(for: speaker) ?? "Unassigned")
                 .help(
-                    "Assign a person to this speaker. Assignments with a saved voice sample can recognize them in future transcripts from this provider."
+                    "Assign a person to this speaker."
                 )
             }
         }

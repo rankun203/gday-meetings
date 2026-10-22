@@ -11,6 +11,7 @@ actor LocalVoiceRecordingDiscoverer: VoiceRecordingDiscovering {
     private var lease: LocalModelLease?
     private var leaseOwner: LocalModelManager?
     private let worker = CommunityDiarizationWorker()
+    func configuration() async -> VoiceDiscoveryConfiguration { .community }
     func discover(files: [URL]) async throws -> LocalDiarizationResult {
         let manager = await LocalModelManager.shared
         if lease == nil {
@@ -24,7 +25,7 @@ actor LocalVoiceRecordingDiscoverer: VoiceRecordingDiscovering {
         try Task.checkCancellation()
         let worker = worker
         return try await ProcessingCoordinator.shared.withPermit(for: .inference, priority: .processing) {
-            try await worker.run(files: files, lease: lease, recognize: true)
+            try await worker.run(files: files, lease: lease, recognize: false)
         }
     }
     func finish() async {

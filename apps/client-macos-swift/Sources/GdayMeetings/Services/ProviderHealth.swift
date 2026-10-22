@@ -331,3 +331,48 @@ extension ServiceProvider {
         return []
     }
 }
+
+/// Repeated requests reuse shared health estimates while preserving the visible result.
+/// Callers can force a metadata check after activation or model changes. Changed
+/// providers immediately lose the old provider's readiness and reason.
+@MainActor final class DiarizationReadiness: ObservableObject {
+    @Published private(set) var provider: ServiceProvider?
+    @Published private(set) var result = ProviderHealth.checking
+    private var request = UUID()
+
+    func isReady(for provider: ServiceProvider?) -> Bool { self.provider == provider && result.isReady }
+
+    func refresh(
+        provider: ServiceProvider?, settings: AppSettings, health: ProviderHealthStore? = nil, force: Bool = false
+    ) async {
+        let token = UUID()
+        request = token
+        if self.provider != provider {
+            self.provider = provider
+            result = .checking
+        }
+        guard let provider else {
+            result = .notReady("Choose a Speaker Diarization provider in General settings.")
+            return
+        }
+        guard provider.kind.isLocalSpeaker else {
+            result = .notReady(
+                VoiceLibraryPreparation.capability(for: provider).unavailableReason
+                    ?? "This provider does not support recording scans.")
+            return
+        }
+        // A missing model may have been installed while Settings was open.
+        // Retry that failed readiness estimate while keeping a ready result cached.
+        let retryUnavailable: Bool
+        if case .notReady = result {
+            retryUnavailable = true
+        }
+        else {
+            retryUnavailable = false
+        }
+        let value = await (health ?? .shared).check(
+            providerID: provider.id, capability: .diarization, settings: settings, force: force || retryUnavailable)
+        guard !Task.isCancelled, request == token, self.provider == provider else { return }
+        result = value
+    }
+}

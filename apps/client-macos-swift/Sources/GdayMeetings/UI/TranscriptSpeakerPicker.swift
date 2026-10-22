@@ -22,6 +22,7 @@ struct TranscriptSpeakerPicker: View {
     let speaker: MeetingSpeaker
     var completed: (() -> Void)? = nil
     var associationUncertain = false
+    var identityAssociationTier: VoiceTranscriptAssociation.Tier? = nil
     var restorePassage: (() async -> Bool)? = nil
     var assignment: ((UUID?) async -> Bool)? = nil
     var lineAssignment: ((UUID?) async -> Bool)? = nil
@@ -46,6 +47,10 @@ struct TranscriptSpeakerPicker: View {
                     "This passage’s voice match is uncertain. Assign just this passage, or explicitly apply the name to all speech with this label."
                 )
                 .font(.caption).foregroundStyle(.secondary)
+            }
+            else if let identityAssociationTier {
+                Text(identityAssociationTier == .tentative ? "Tentative match." : "Automatically matched.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let restorePassage {
                 Button("Undo Passage Assignment") {

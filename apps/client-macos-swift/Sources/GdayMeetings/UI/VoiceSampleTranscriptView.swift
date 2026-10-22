@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// A fixed-size excerpt leaves review decisions and the candidate list stationary.
+/// The review detail pane owns scrolling; the excerpt grows with its text while
+/// review decisions remain pinned outside that shared viewport.
 struct VoiceSampleTranscriptView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
@@ -15,11 +16,11 @@ struct VoiceSampleTranscriptView: View {
             Text("Transcript").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if loading || loadedExample != VoiceSampleTranscript.Request(example) {
                 ProgressView("Loading transcript…").controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             else if passages.isEmpty {
                 Text("Transcript unavailable.").font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             else {
                 VoiceSampleTranscriptContent(
@@ -30,7 +31,6 @@ struct VoiceSampleTranscriptView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity)
-        .frame(height: 156, alignment: .topLeading)
         .modifier(AppContentSurface())
         .task(id: VoiceSampleTranscript.Request(example)) { await load() }
         .onDisappear { request = UUID() }
@@ -93,15 +93,14 @@ private struct VoiceSampleTranscriptContent: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(passages) { passage in
-                    Text(highlighted(passage))
-                        .font(.body).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        LazyVStack(alignment: .leading, spacing: 8) {
+            ForEach(passages) { passage in
+                Text(highlighted(passage))
+                    .font(.body).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Sample transcript")
     }
 

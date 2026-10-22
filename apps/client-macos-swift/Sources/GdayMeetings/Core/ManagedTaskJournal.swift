@@ -9,6 +9,10 @@ final class ManagedTaskJournal: @unchecked Sendable {
         let createdAt: Date
         let id: UUID
     }
+    struct DisplayCursor: Equatable, Sendable {
+        let activityAt: Date
+        let id: UUID
+    }
     private struct Event: Codable {
         enum Operation: String, Codable { case upsert, delete, batch }
         var schemaVersion = 1
@@ -332,6 +336,12 @@ final class ManagedTaskJournal: @unchecked Sendable {
         defer { lock.unlock() }
         return (try? index?.count(where: predicate)) ?? 0
     }
+    func filterCounts(where visibility: String) throws -> [TaskHistoryQuery: Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        try prepare()
+        return try index?.filterCounts(where: visibility) ?? [:]
+    }
     func changedSinceRebuild(_ id: UUID) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -365,5 +375,26 @@ final class ManagedTaskJournal: @unchecked Sendable {
     }
     static func newestFirst(_ lhs: ManagedTaskRecord, _ rhs: ManagedTaskRecord) -> Bool {
         lhs.createdAt == rhs.createdAt ? lhs.id.uuidString > rhs.id.uuidString : lhs.createdAt > rhs.createdAt
+    }
+
+    /// UI ordering follows durable state transitions while execution/recovery retain creation ordering.
+    func displayPage(
+        after cursor: DisplayCursor? = nil, limit: Int = 50, predicate: String = "1", newer: Bool = false
+    ) -> [ManagedTaskRecord] {
+        var condition = predicate
+        if let cursor {
+            let comparison = newer ? ">" : "<"
+            let date = cursor.activityAt.timeIntervalSince1970
+            condition +=
+                " AND (activity \(comparison) \(date) OR (activity=\(date) AND id \(comparison) \(ManagedTaskIndex.literal(cursor.id.uuidString))))"
+        }
+        do {
+            let rows = try query(where: condition, order: newer ? "activity,id" : "activity DESC,id DESC", limit: limit)
+            return newer ? rows.reversed() : rows
+        }
+        catch {
+            readFailure = error
+            return []
+        }
     }
 }

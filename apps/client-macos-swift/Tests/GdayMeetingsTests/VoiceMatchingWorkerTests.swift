@@ -51,6 +51,43 @@ private final class VoiceMatchingGate: @unchecked Sendable {
         throw ServiceError("The synthetic matching worker did not start.")
     }
 
+    @Test func newPolicySupersedesPausedMatching() async throws {
+        let (root, library, person, reference) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var candidate = reference
+        candidate.id = UUID()
+        candidate.personID = nil
+        candidate.review = .unassigned
+        candidate.start = 5
+        candidate.end = 8
+        candidate.embeddings = [
+            .init(type: .community1SpeechSpan, values: [0.9, sqrt(0.19)] + Array(repeating: 0, count: 254))
+        ]
+        #expect(library.upsert([candidate]))
+        let gate = VoiceMatchingGate()
+        defer { gate.release() }
+        library.beforeMatchingRead = { gate.wait() }
+        let earlier = Task { try await library.suggestReviewedPeopleResult(from: [person]) }
+        try await awaitEntry(gate)
+        library.beforeMatchingRead = nil
+        let (newPolicyStarted, continuation) = AsyncStream<Void>.makeStream()
+        let latest = Task {
+            continuation.yield(())
+            try await library.suggestReviewedPeopleResult(
+                from: [person], policy: .init(automaticThreshold: 0.99))
+        }
+        var iterator = newPolicyStarted.makeAsyncIterator()
+        _ = await iterator.next()
+        gate.release()
+        try await latest.value
+        do {
+            try await earlier.value
+            Issue.record("Superseded matching published its earlier policy.")
+        }
+        catch {}
+        #expect(library.examples.first { $0.id == candidate.id }?.suggestedPersonID == nil)
+    }
+
     @Test func mainActorAndReviewRemainAvailableWhileWorkerIsPaused() async throws {
         let (root, library, person, example) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

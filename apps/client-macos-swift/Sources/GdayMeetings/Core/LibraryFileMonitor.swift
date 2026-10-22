@@ -89,6 +89,11 @@ final class LibraryFileMonitor: @unchecked Sendable {
         {
             return false
         }
+        // Per-recording analysis is disposable; publishing its authoritative
+        // examples already refreshes consumers through the voice library.
+        if first == "meetings", parts.dropFirst(2).contains(Substring(VoiceDiscoveryCache.directoryName)) {
+            return false
+        }
         return !parts.contains(where: { $0.hasPrefix(".") })
     }
 

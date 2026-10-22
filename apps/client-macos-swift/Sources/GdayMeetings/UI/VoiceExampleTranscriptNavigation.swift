@@ -1,6 +1,6 @@
 import Foundation
 
-/// Preserve the excerpt's transcript destination across review-sheet dismissal.
+/// Preserve the excerpt's transcript destination when presenting its source above review.
 struct VoiceExampleRecordingTarget: Identifiable, Equatable {
     let id: UUID
     var transcriptRowID: UUID? = nil

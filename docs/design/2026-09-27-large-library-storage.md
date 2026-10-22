@@ -25,6 +25,7 @@ com.gdaymeetings.macos/
     transcript-checkpoint.json  # live committed boundary and recent rows
     summary.md
     notes.md
+    voice-analysis/<fingerprint>.json  # disposable voice discovery results
     audio and attachments
   people/<id>.json
   tags/<id>.json
@@ -34,6 +35,8 @@ com.gdaymeetings.macos/
     languages.json
     search-log.jsonl
 ```
+
+Per-recording `voice-analysis` files cache discovery results by audio revision and model/configuration identity. They contain sample ranges, never human review decisions. They can be removed and regenerated; the filesystem monitor ignores these writes. Old configuration entries remain available for reuse; bounded pruning is deferred until retention is needed.
 
 Metadata contains only list fields and relationships; transcript, summary, notes, and other content stay separate. People and tags have stable IDs independent of display names. Meeting metadata stores person/tag IDs; reverse relationships are derived in the index. Task state remains in the task journal, not only index.db. Provider credentials retain existing secure storage.
 

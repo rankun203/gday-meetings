@@ -4,16 +4,82 @@ struct TaskQueueView: View {
     @EnvironmentObject private var store: MeetingStore
     let showMeeting: (UUID) -> Void
     var focusedTaskID: UUID? = nil
+    var focusedTaskRequest: UUID? = nil
     var sidebarExpanded = false
     @ViewState private var reviewingVoices = false
     @ViewState private var discardedTask: ManagedTaskRecord?
     @ViewState private var discardedVoiceJob: VoicePreparationJob?
+    @ViewState private var voiceActionErrorID: UUID?
+    @ViewState private var voiceActionError: String?
     @ViewState private var pendingRevisionRefresh: Task<Void, Never>?
+    @ViewState private var filterCounts: [TaskHistoryQuery: Int] = [:]
+    private struct FilterCountKey: Hashable {
+        struct Voice: Hashable {
+            let id: UUID
+            let state: String
+            let discover: Bool
+            let attention: Bool
+        }
+        let directory: URL
+        let managed: Int
+        let voices: [Voice]
+        let visibility: String
+        let library: UUID?
+    }
+    private var filterCountKey: FilterCountKey {
+        .init(
+            directory: store.dataDirectory, managed: store.managedTaskFilterCountRevision,
+            voices: store.voiceLibrary.jobs.map {
+                .init(id: $0.id, state: $0.state.rawValue, discover: $0.discover, attention: $0.needsAttention)
+            }, visibility: store.taskVisibilityPredicate,
+            library: store.excludedTagIDs.isEmpty ? nil : store.meetingIndexRevision)
+    }
+    private func countedTitle(_ title: String, query: TaskHistoryQuery) -> String {
+        filterCounts[query].map { "\(title) (\($0))" } ?? title
+    }
 
     @ObservedObject var session: TaskQueueSession
     private var scope: TaskHistoryScope {
         get { session.scope }
         nonmutating set { session.scope = newValue }
+    }
+    private var query: TaskHistoryQuery { session.query }
+    private struct VoicePageRevision: Equatable {
+        let id: UUID
+        let state: VoicePreparationState
+        let activityAt: Date
+        let attention: Bool
+    }
+    private struct DisplayRevision: Equatable {
+        let managed: Int
+        let voices: [VoicePageRevision]
+        let library: UUID?
+        let excludedTags: Set<UUID>
+        let meetingTags: [TaskVisibilityCache.MeetingTags]
+    }
+    private func voicePageRevisions(for query: TaskHistoryQuery) -> [VoicePageRevision] {
+        store.voiceLibrary.jobs.filter(query.includes).map {
+            .init(id: $0.id, state: $0.state, activityAt: $0.taskHistoryActivityAt, attention: $0.needsAttention)
+        }
+    }
+    private func displayRevision(for query: TaskHistoryQuery) -> DisplayRevision {
+        .init(
+            managed: store.managedTaskDisplayRevisions[query, default: 0], voices: voicePageRevisions(for: query),
+            library: store.excludedTagIDs.isEmpty ? nil : store.meetingIndexRevision,
+            excludedTags: store.excludedTagIDs,
+            meetingTags: store.excludedTagIDs.isEmpty ? [] : store.meetings.map { .init(id: $0.id, tags: $0.tagIDs) })
+    }
+    private func pageIsCurrent(_ revision: DisplayRevision, query requested: TaskHistoryQuery) -> Bool {
+        let current = displayRevision(for: requested)
+        return query == requested && revision.library == current.library
+            && revision.excludedTags == current.excludedTags && revision.meetingTags == current.meetingTags
+    }
+    private func refreshChangedData(_ revision: DisplayRevision, query requested: TaskHistoryQuery) {
+        let current = displayRevision(for: requested)
+        if revision.managed != current.managed || revision.voices != current.voices { scheduleRevisionRefresh() }
+    }
+    private var filterTitle: String {
+        session.taskType == .all ? scope.rawValue : session.taskType.rawValue
     }
     private var rows: [TaskHistoryRow] {
         get { session.rows }
@@ -54,10 +120,6 @@ struct TaskQueueView: View {
     private var canOpen: Bool {
         get { session.canOpen }
         nonmutating set { session.canOpen = newValue }
-    }
-    private var failureOffset: Int {
-        get { session.failureOffset }
-        nonmutating set { session.failureOffset = newValue }
     }
     private var ignoresNextScopeChange: Bool {
         get { session.ignoresNextScopeChange }
@@ -104,7 +166,7 @@ struct TaskQueueView: View {
                 ignoresNextScopeChange = false
                 session.handledFocusID = nil
             }
-            .onChange(of: scope) { _, _ in
+            .onChange(of: query) { _, _ in
                 if ignoresNextScopeChange {
                     ignoresNextScopeChange = false
                 }
@@ -140,13 +202,13 @@ struct TaskQueueView: View {
 
     private var observedContent: some View {
         lifecycleContent
-            .onChange(of: store.managedTaskScopeRevisions[scope, default: 0]) { _, _ in scheduleRevisionRefresh() }
+            .onChange(of: store.managedTaskDisplayRevisions[query, default: 0]) { _, _ in scheduleRevisionRefresh() }
             .onChange(of: store.settings.serviceProviders) { _, _ in refreshSelectedActions() }
             .onChange(of: store.meetingIndexRevision) { _, _ in refreshTaskVisibility() }
             .onChange(of: store.excludedTagIDs) { _, _ in refreshTaskVisibility() }
             .onChange(of: store.recordingID) { _, _ in refreshSelectedActions() }
             .onChange(of: store.backgroundJobs.map(\.key)) { _, _ in refreshSelectedActions() }
-            .onChange(of: store.voiceLibrary.jobs.filter(scope.includes)) { _, _ in
+            .onChange(of: voicePageRevisions(for: query)) { _, _ in
                 scheduleRevisionRefresh()
             }
             .onChange(of: selection) { _, id in if let row = rows.first(where: { $0.id == id }) { select(row) } }
@@ -154,7 +216,23 @@ struct TaskQueueView: View {
 
     private var focusedContent: some View {
         observedContent
-            .task(id: focusedTaskID) { await revealFocusedTask() }
+            .task(id: filterCountKey) {
+                let key = filterCountKey
+                do {
+                    let result = try await store.taskFilterCounts()
+                    guard !Task.isCancelled, filterCountKey == key else { return }
+                    filterCounts = result
+                }
+                catch {
+                    guard !Task.isCancelled, filterCountKey == key else { return }
+                    filterCounts = [:]
+                    store.managedTaskJournalError = "Couldn’t count tasks. \(error.localizedDescription)"
+                }
+            }
+            .task(id: focusedTaskRequest ?? focusedTaskID) {
+                session.receiveFocusRequest(focusedTaskRequest)
+                await revealFocusedTask()
+            }
     }
 
     private var confirmationContent: some View {
@@ -199,19 +277,33 @@ struct TaskQueueView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Menu {
-                    Picker("Show Tasks", selection: $session.scope) {
-                        ForEach(TaskHistoryScope.allCases) { Text($0.rawValue).tag($0) }
+                    Picker("Filter Tasks", selection: $session.filter) {
+                        Section("Status") {
+                            ForEach(TaskHistoryScope.allCases.filter { $0 != .maintenance }) { status in
+                                Text(countedTitle(status.rawValue, query: .init(status: status)))
+                                    .tag(TaskHistoryQuery(status: status))
+                            }
+                        }
+                        Section("Type") {
+                            ForEach(TaskHistoryType.menuCases) { type in
+                                Text(countedTitle(type.rawValue, query: .init(type: type)))
+                                    .tag(TaskHistoryQuery(type: type))
+                            }
+                        }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
                 } label: {
-                    Label(scope.rawValue, systemImage: "line.3.horizontal.decrease")
+                    Label(filterTitle, systemImage: "line.3.horizontal.decrease")
+                        .lineLimit(1)
                 }
-                .menuStyle(.borderlessButton).fixedSize()
+                .menuStyle(.borderlessButton).help(filterTitle)
                 Spacer()
-                if scope == .attention && store.taskAttentionCount > 0 {
-                    Button("Dismiss Alerts") { Task { await store.dismissAllTaskAlerts() } }
-                        .fixedSize()
+                if scope == .attention && session.totalCount > 0 {
+                    Button("Dismiss Alerts") {
+                        Task { await store.dismissAllTaskAlerts() }
+                    }
+                    .fixedSize()
                 }
             }.padding(16)
             Divider()
@@ -222,7 +314,7 @@ struct TaskQueueView: View {
                 revealToken: session.revealToken,
                 retainedViewport: session.viewport,
                 totalCount: session.footerCount(
-                    total: store.taskHistoryCount(scope: scope), historyLoading: store.managedTasksLoading,
+                    total: session.totalCount, historyLoading: store.managedTasksLoading,
                     hasHistoryError: store.managedTaskJournalError != nil)
             ) { first, last, newer in
                 visibleFirst = first
@@ -244,10 +336,14 @@ struct TaskQueueView: View {
                     }
                     else {
                         VStack(spacing: 12) {
-                            Text(store.hasTaskHistory ? scope.emptyMessage : "No tasks yet")
-                                .foregroundStyle(.secondary)
-                            if scope != .all && store.taskHistoryCount(scope: .all) > 0 {
-                                Button("Show All Tasks") { scope = .all }
+                            Text(
+                                store.hasTaskHistory
+                                    ? (session.taskType == .all ? scope.emptyMessage : "No tasks of this type")
+                                    : "No tasks yet"
+                            )
+                            .foregroundStyle(.secondary)
+                            if (scope != .all || session.taskType != .all) && store.hasTaskHistory {
+                                Button("Show All Tasks") { session.showAllTasks() }
                             }
                         }
                         .multilineTextAlignment(.center)
@@ -299,27 +395,20 @@ struct TaskQueueView: View {
         defer {
             if session.finishFocusLoad(token), !Task.isCancelled { refreshRows() }
         }
-        guard let record = await store.loadManagedTask(id: id), !Task.isCancelled,
-            focusedTaskID == id, generation == token, store.isTaskMeetingVisible(record.meetingID)
-        else { return }
-        if scope != .all {
-            ignoresNextScopeChange = true
-            scope = .all
+        let voice = store.voiceLibrary.jobs.contains { $0.id == id }
+        let record = voice ? nil : await store.loadManagedTask(id: id)
+        guard !Task.isCancelled, generation == token, focusedTaskID == id else { return }
+        guard voice || record.map({ store.isTaskMeetingVisible($0.meetingID) }) == true else {
+            _ = session.finishFocusLoad(token)
+            refreshRows()
+            return
         }
-        select(.managed(record))
-        let before = await store.taskHistoryPage(
-            scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), newer: true, limit: 25)
-        guard !Task.isCancelled, generation == token else { return }
-        let after = await store.taskHistoryPage(
-            scope: .all, cursor: .init(createdAt: record.createdAt, id: record.id), limit: 25)
-        guard !Task.isCancelled, generation == token else { return }
+        if scope != .all || session.taskType != .all {
+            ignoresNextScopeChange = true
+            session.showAllTasks()
+        }
         session.handledFocusID = id
-        session.applyPage(before + [.managed(record)] + after, token: token)
-        refreshSelectedActions()
-        session.revealID = id
-        session.revealToken = UUID()
-        hasNewer = before.count == 25
-        hasOlder = after.count == 25
+        resetRows(revealing: id)
     }
 
     private func select(_ row: TaskHistoryRow) {
@@ -350,21 +439,118 @@ struct TaskQueueView: View {
             canOpen = false
         }
     }
-    private func resetRows() {
+    private func currentRow(id: UUID) -> TaskHistoryRow? {
+        if let job = store.voiceLibrary.jobs.first(where: { $0.id == id }) { return .voice(job) }
+        if let record = store.managedTask(id: id) { return .managed(record) }
+        return nil
+    }
+    private func includesCurrentRow(_ row: TaskHistoryRow, query: TaskHistoryQuery) -> Bool {
+        switch row {
+        case .managed(let record): query.includes(record) && store.isTaskMeetingVisible(record.meetingID)
+        case .voice(let job): query.includes(job)
+        }
+    }
+    private func retainedSelection(
+        outside page: [TaskHistoryRow], previous: TaskHistoryRow?, query requested: TaskHistoryQuery
+    ) async -> TaskHistoryRow? {
+        guard let id = selection, !page.contains(where: { $0.id == id }) else { return nil }
+        if let current = currentRow(id: id) {
+            return includesCurrentRow(current, query: requested) ? current : nil
+        }
+        guard case .managed(let saved) = previous, saved.id == id,
+            let current = await store.loadManagedTask(id: id)
+        else { return nil }
+        let row = TaskHistoryRow.managed(current)
+        return includesCurrentRow(row, query: requested) ? row : nil
+    }
+    private func resetRows(revealing id: UUID? = nil) {
+        let target = id.flatMap { currentRow(id: $0) }
+        let previousSelection = target ?? selectedRow
         session.viewport.reset()
         session.revealID = nil
         session.resetPagePresentation()
         refreshSelectedActions()
-        let requestedScope = scope
-        let token = session.beginPageLoad()
+        let requestedQuery = query
+        if let target, includesCurrentRow(target, query: requestedQuery) { session.select(target) }
+        let token = id.map { session.beginFocusLoad($0) } ?? session.beginPageLoad()
         session.pageLoadTask = Task { @MainActor in
-            defer { session.finishPageLoad(token) }
-            let page = await store.taskHistoryPage(scope: requestedScope)
+            defer {
+                if id != nil {
+                    if session.finishFocusLoad(token), !Task.isCancelled { refreshRows() }
+                }
+                else {
+                    session.finishPageLoad(token)
+                }
+            }
+            let revision = displayRevision(for: requestedQuery)
+            let page: [TaskHistoryRow]
+            let total: Int
+            let newerAvailable: Bool
+            let olderAvailable: Bool
+            if let target, includesCurrentRow(target, query: requestedQuery) {
+                let prepared = await session.loadStableReveal(
+                    target: target, token: token,
+                    currentTarget: {
+                        guard query == requestedQuery, let current = currentRow(id: target.id),
+                            includesCurrentRow(current, query: requestedQuery)
+                        else {
+                            return nil
+                        }
+                        return current
+                    },
+                    load: { requested -> (before: [TaskHistoryRow], after: [TaskHistoryRow], total: Int)? in
+                        let before = await store.taskDisplayPage(
+                            scope: requestedQuery.status, type: requestedQuery.type,
+                            cursor: requested.displayCursor, newer: true, limit: 25)
+                        guard !Task.isCancelled, token == generation else { return nil }
+                        let after = await store.taskDisplayPage(
+                            scope: requestedQuery.status, type: requestedQuery.type,
+                            cursor: requested.displayCursor, limit: 25)
+                        guard !Task.isCancelled, token == generation else { return nil }
+                        let total = await store.taskDisplayCount(
+                            scope: requestedQuery.status, type: requestedQuery.type)
+                        return (before, after, total)
+                    })
+                guard !Task.isCancelled, token == generation else { return }
+                guard query == requestedQuery else { return }
+                guard let prepared, let loaded = prepared.page else {
+                    // A moving or removed target must not keep a focus load alive.
+                    // An ordinary page preserves valid details without another reveal retry.
+                    resetRows()
+                    return
+                }
+                var seen = Set<UUID>()
+                page = (loaded.before + [prepared.target] + loaded.after).filter { seen.insert($0.id).inserted }
+                total = loaded.total
+                newerAvailable = loaded.before.count == 25
+                olderAvailable = loaded.after.count == 25
+            }
+            else {
+                page = await store.taskDisplayPage(scope: requestedQuery.status, type: requestedQuery.type)
+                guard !Task.isCancelled, token == generation else { return }
+                total = await store.taskDisplayCount(scope: requestedQuery.status, type: requestedQuery.type)
+                newerAvailable = false
+                olderAvailable = page.count == 50
+            }
             guard !Task.isCancelled, token == generation else { return }
-            session.applyPage(page, token: token)
+            let selectionAtRead = selection
+            let retained = await retainedSelection(outside: page, previous: previousSelection, query: requestedQuery)
+            guard !Task.isCancelled, token == generation else { return }
+            guard pageIsCurrent(revision, query: requestedQuery), selection == selectionAtRead else {
+                scheduleRevisionRefresh()
+                return
+            }
+            session.totalCount = total
+            session.applyPage(page, token: token, retainingSelection: retained)
+            if let id, selection == id, let revealed = page.first(where: { $0.id == id }) {
+                session.select(revealed)
+                session.revealID = id
+                session.revealToken = UUID()
+            }
             refreshSelectedActions()
-            hasOlder = page.count == 50
-            hasNewer = false
+            hasOlder = olderAvailable
+            hasNewer = newerAvailable
+            refreshChangedData(revision, query: requestedQuery)
         }
     }
     private func scheduleRevisionRefresh() {
@@ -373,78 +559,113 @@ struct TaskQueueView: View {
             do { try await Task.sleep(for: .milliseconds(100)) }
             catch { return }
             pendingRevisionRefresh = nil
-            refreshRows()
+            session.refreshWhenIdle { refreshRows() }
         }
     }
 
     private func refreshRows() {
         guard !session.deferRefreshUntilFocusCompletes() else { return }
-        guard let first = rows.first else {
+        guard let firstCursor = session.firstDisplayCursor ?? rows.first?.displayCursor else {
             resetRows()
             return
         }
-        let requestedScope = scope
+        let requestedQuery = query
+        let wasAtNewestPage = !hasNewer
         let token = session.beginPageLoad()
         let count = max(50, rows.count)
         session.pageLoadTask = Task { @MainActor in
             defer { session.finishPageLoad(token) }
-            let before = await store.taskHistoryPage(scope: requestedScope, cursor: first.cursor, newer: true, limit: 1)
+            let revision = displayRevision(for: requestedQuery)
+            let before =
+                wasAtNewestPage
+                ? []
+                : await store.taskDisplayPage(
+                    scope: requestedQuery.status, type: requestedQuery.type,
+                    cursor: firstCursor, newer: true, limit: 1)
             guard !Task.isCancelled, token == generation else { return }
-            let page = await store.taskHistoryPage(scope: requestedScope, cursor: before.last?.cursor, limit: count)
+            let page = await store.taskDisplayPage(
+                scope: requestedQuery.status, type: requestedQuery.type, cursor: before.last?.displayCursor,
+                limit: count)
+            let total = await store.taskDisplayCount(scope: requestedQuery.status, type: requestedQuery.type)
             guard !Task.isCancelled, token == generation else { return }
+            let selectionAtRead = selection
+            let retained = await retainedSelection(outside: page, previous: selectedRow, query: requestedQuery)
+            guard !Task.isCancelled, token == generation else { return }
+            guard pageIsCurrent(revision, query: requestedQuery), selection == selectionAtRead else {
+                scheduleRevisionRefresh()
+                return
+            }
+            let revealNewest =
+                wasAtNewestPage
+                && page.first?.id != rows.first?.id
+                && (session.viewport.anchor.map {
+                    $0.id == rows.first?.id && $0.offset <= 0.5
+                } ?? true)
+            if let retained, session.hasMovedSinceDisplay(retained) {
+                resetRows(revealing: retained.id)
+                return
+            }
+            session.totalCount = total
             let previousPosition = rows.firstIndex { $0.id == selection } ?? 0
-            session.applyPage(page, token: token, preferredPosition: previousPosition)
+            session.applyPage(page, token: token, preferredPosition: previousPosition, retainingSelection: retained)
+            if revealNewest, let newest = page.first {
+                session.revealID = newest.id
+                session.revealToken = UUID()
+            }
             refreshSelectedActions()
             hasOlder = page.count == count
             hasNewer = !before.isEmpty
+            refreshChangedData(revision, query: requestedQuery)
         }
     }
     private func advance(newer: Bool) {
-        guard !loadingPage, let edge = newer ? rows.first : rows.last else { return }
-        let requestedScope = scope
+        guard !loadingPage,
+            let cursor = newer ? session.firstDisplayCursor : session.lastDisplayCursor
+        else { return }
+        let requestedQuery = query
         let token = session.beginPageLoad()
         session.pageLoadTask = Task { @MainActor in
             defer { session.finishPageLoad(token) }
-            let next = await store.taskHistoryPage(scope: requestedScope, cursor: edge.cursor, newer: newer)
+            let revision = displayRevision(for: requestedQuery)
+            let next = await store.taskDisplayPage(
+                scope: requestedQuery.status, type: requestedQuery.type, cursor: cursor, newer: newer)
             guard !Task.isCancelled, token == generation else { return }
-            let overflow = max(0, rows.count + next.count - 150)
-            if overflow > 0 {
-                let removingVisible =
-                    newer
-                    ? visibleLast.flatMap { id in rows.firstIndex { $0.id == id } }.map { $0 >= rows.count - overflow }
-                        == true
-                    : visibleFirst.flatMap { id in rows.firstIndex { $0.id == id } }.map { $0 < overflow } == true
-                if removingVisible { return }
+            guard pageIsCurrent(revision, query: requestedQuery) else {
+                scheduleRevisionRefresh()
+                return
             }
+            guard
+                let merged = TaskQueueSession.mergePage(
+                    next, into: rows, newer: newer, visibleFirst: visibleFirst, visibleLast: visibleLast)
+            else {
+                refreshChangedData(revision, query: requestedQuery)
+                return
+            }
+            let incomingIDs = Set(next.map(\.id))
+            let overflow = Set(rows.map(\.id)).union(incomingIDs).count > 150
             if newer {
-                rows = next + rows
                 hasNewer = next.count == 50
+                if overflow { hasOlder = true }
             }
             else {
-                rows += next
                 hasOlder = next.count == 50
+                if overflow { hasNewer = true }
             }
-            if rows.count > 150 {
-                if newer {
-                    rows.removeLast(rows.count - 150)
-                    hasOlder = true
-                }
-                else {
-                    rows.removeFirst(rows.count - 150)
-                    hasNewer = true
-                }
-            }
+            session.replacePageRows(merged, retainingCursors: true, replacingCursors: incomingIDs)
+            // Advance through the queried range even when a transitioned row was
+            // already retained, so a page of duplicates cannot stall navigation.
+            session.advanceDisplayCursor(newer ? next.first?.displayCursor : next.last?.displayCursor, newer: newer)
+            refreshChangedData(revision, query: requestedQuery)
         }
     }
 
     private func voiceTaskRow(_ job: VoicePreparationJob) -> some View {
-        let failures = TaskFailurePage(failures: job.failures, offset: failureOffset)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 if job.state == .running { ProgressView().controlSize(.small) }
-                Text(job.discover ? "Find Voices" : "Prepare Voice Library").font(.headline)
+                Text(job.operationTitle).font(.headline)
                 Spacer()
-                Text(job.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+                Text(job.outcomeTitle).font(.caption).foregroundStyle(.secondary)
             }
             Text(job.providerName).font(.subheadline).foregroundStyle(.secondary)
             Text(job.progress).font(.callout)
@@ -454,25 +675,18 @@ struct TaskQueueView: View {
             if job.state == .paused, let reason = job.timeline?.last?.reason {
                 Text(reason).font(.callout).foregroundStyle(.secondary)
             }
-            ForEach(voiceFailures(failures)) { failure in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(failure.title).font(.subheadline.weight(.semibold))
-                    AppInlineMessage(text: failure.message, systemImage: "exclamationmark.circle", tint: .orange)
-                    if let meetingID = failure.meetingID {
-                        Button("Open Meeting") { showMeeting(meetingID) }
-                    }
-                }
+            if [.paused, .failed, .cancelled].contains(job.state), let reason = voiceTaskResumeReason(job) {
+                Text(reason).font(.callout).foregroundStyle(.secondary)
+            }
+            if voiceActionErrorID == job.id, let voiceActionError {
+                AppInlineMessage(text: voiceActionError, systemImage: "exclamationmark.triangle", tint: .red)
+            }
+            if !job.failures.isEmpty {
+                VoicePreparationFailures(
+                    jobID: job.id, failures: job.failures, offset: $session.failureOffset, showMeeting: showMeeting)
             }
             if let timeline = job.timeline {
                 TaskAttemptHistory(events: timeline)
-            }
-            if failures.count > TaskFailurePage.size {
-                HStack {
-                    Button("Previous Errors") { failureOffset = failures.offset - TaskFailurePage.size }
-                        .disabled(!failures.hasPrevious)
-                    Button("Next Errors") { failureOffset = failures.offset + TaskFailurePage.size }
-                        .disabled(!failures.hasNext)
-                }
             }
             ViewThatFits(in: .horizontal) {
                 HStack { voiceTaskActions(job) }
@@ -481,33 +695,55 @@ struct TaskQueueView: View {
         }.padding(14).taskQueueCard().id(job.id)
     }
 
-    private struct VoiceFailure: Identifiable {
-        let id: String
-        let meetingID: UUID?
-        let title: String
-        let message: String
+    private func pauseAndReveal(_ job: VoicePreparationJob) {
+        store.voicePreparation.pause(jobID: job.id)
+        guard let paused = store.voiceLibrary.jobs.first(where: { $0.id == job.id }), paused.state == .paused else {
+            return
+        }
+        pendingRevisionRefresh?.cancel()
+        pendingRevisionRefresh = nil
+        if !query.includes(paused) {
+            ignoresNextScopeChange = true
+            scope = .paused
+        }
+        resetRows(revealing: job.id)
     }
 
-    private func voiceFailures(_ page: TaskFailurePage) -> [VoiceFailure] {
-        page.resolve { key, message in
-            let recordingID = key.hasPrefix("recording-") ? UUID(uuidString: String(key.dropFirst(10))) : nil
-            let exampleID = UUID(uuidString: key)
-            let meetingID = recordingID ?? store.voiceLibrary.examples.first { $0.id == exampleID }?.meetingID
-            let title =
-                meetingID.flatMap { id in store.meetings.first { $0.id == id }?.title }
-                ?? (recordingID == nil ? "Voice Example" : "Recording")
-            return VoiceFailure(id: key, meetingID: meetingID, title: title, message: message)
+    private func actAndReveal(id: UUID, operation: @escaping @MainActor () async -> Void) {
+        Task { @MainActor in
+            guard let reveal = await session.performTaskAction(id: id, operation: operation) else { return }
+            if reveal, let row = currentRow(id: id), includesCurrentRow(row, query: query) {
+                pendingRevisionRefresh?.cancel()
+                pendingRevisionRefresh = nil
+                resetRows(revealing: id)
+            }
+            else {
+                refreshRows()
+            }
         }
+    }
+
+    private func voiceTaskResumeReason(_ job: VoicePreparationJob) -> String? {
+        PeopleScanPresentation.resumeUnavailableReason(
+            for: job, provider: store.settings.serviceProviders.first { $0.id == store.settings.diarizationProviderID })
     }
 
     @ViewBuilder private func voiceTaskActions(_ job: VoicePreparationJob) -> some View {
         if job.state == .running || job.state == .queued {
-            Button("Pause") { store.voicePreparation.pause(jobID: job.id) }
-            Button("Cancel") { store.voicePreparation.cancel(jobID: job.id) }
+            Button("Pause") { pauseAndReveal(job) }
+            Button("Cancel") { actAndReveal(id: job.id) { store.voicePreparation.cancel(jobID: job.id) } }
         }
-        if job.state == .paused || job.state == .failed || job.state == .cancelled {
+        if job.state == .paused || job.state == .failed || job.state == .cancelled, voiceTaskResumeReason(job) == nil {
             Button(job.state == .paused ? "Resume" : "Retry") {
-                store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
+                voiceActionErrorID = job.id
+                voiceActionError = nil
+                actAndReveal(id: job.id) {
+                    guard let current = store.voiceLibrary.jobs.first(where: { $0.id == job.id }),
+                        voiceTaskResumeReason(current) == nil
+                    else { return }
+                    store.voicePreparation.resume(jobID: job.id, directory: { store.directory(for: $0) })
+                    voiceActionError = store.voicePreparation.errorMessage
+                }
             }
             .disabled(
                 !store.libraryWritable || store.recordingID != nil
@@ -541,13 +777,13 @@ struct TaskQueueView: View {
                         Text(record.operationTitle).font(.headline).textSelection(.enabled)
                         Spacer()
                         Text(
-                            (record.finishedAt ?? record.timeline?.last?.date ?? record.createdAt).formatted(
+                            record.taskHistoryActivityAt.formatted(
                                 date: .abbreviated, time: .shortened)
                         )
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityLabel(
                             "Last transition "
-                                + (record.finishedAt ?? record.timeline?.last?.date ?? record.createdAt).formatted(
+                                + record.taskHistoryActivityAt.formatted(
                                     date: .complete, time: .shortened))
                     }
                     Text(record.meetingTitle + providerSuffix(record)).font(.subheadline).foregroundStyle(.secondary)
@@ -598,12 +834,14 @@ struct TaskQueueView: View {
 
     @ViewBuilder private func actions(_ record: ManagedTaskRecord) -> some View {
         if canRestart {
-            Button("Restart") { Task { await store.restartManagedTask(id: record.id) } }
+            Button("Restart") { actAndReveal(id: record.id) { await store.restartManagedTask(id: record.id) } }
                 .buttonStyle(.borderedProminent)
         }
         if canRetry {
-            Button(store.managedTaskActionTitle(record)) { Task { await store.retryManagedTask(id: record.id) } }
-                .buttonStyle(.borderedProminent)
+            Button(store.managedTaskActionTitle(record)) {
+                actAndReveal(id: record.id) { await store.retryManagedTask(id: record.id) }
+            }
+            .buttonStyle(.borderedProminent)
         }
         if canOpen {
             Button("Open Meeting") { showMeeting(record.meetingID) }
@@ -615,7 +853,7 @@ struct TaskQueueView: View {
                 Button("Run Next") { Task { await store.prioritizeManagedTask(id: record.id) } }
             }
             Button("Cancel") {
-                Task { await store.cancelManagedTask(id: record.id) }
+                actAndReveal(id: record.id) { await store.cancelManagedTask(id: record.id) }
             }
         }
         if record.needsAttention {

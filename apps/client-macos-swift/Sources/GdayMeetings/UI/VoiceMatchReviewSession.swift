@@ -29,6 +29,13 @@ struct VoiceMatchReviewSession {
     private(set) var decisions: [UUID: Decision] = [:]
     private(set) var history: [Step] = []
     private(set) var unavailableIDs: Set<UUID> = []
+    private(set) var alternateExampleIDs: Set<UUID> = []
+
+    mutating func showAlternative(_ example: VoiceExample, currentEvidence: [VoiceExample]) {
+        alternateExampleIDs.insert(example.id)
+        refreshQueue([example], currentEvidence: currentEvidence)
+        selectCandidate(example.id)
+    }
 
     struct RefreshInput {
         var examples: [VoiceExample]
@@ -37,36 +44,50 @@ struct VoiceMatchReviewSession {
 
     func refreshInput(
         from snapshot: VoiceReviewSnapshot, initialGroup: VoiceIdentificationGroup?,
-        fallbackPersonID: UUID?, retainedGroupEvidence: [VoiceExample]
+        fallbackPersonID: UUID?, retainedGroupEvidence: [VoiceExample], currentEvidence: [VoiceExample]
     ) -> RefreshInput {
+        let current = Dictionary(currentEvidence.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        // Other surfaces can change or remove retained samples. Naming must use
+        // their current evidence, while the visible queue preserves unavailable rows.
+        let retained = retainedGroupEvidence.compactMap { current[$0.id] }
         if let person = personID ?? fallbackPersonID {
-            return RefreshInput(examples: snapshot.candidates[person] ?? [], groupEvidence: retainedGroupEvidence)
+            return RefreshInput(examples: snapshot.candidates[person] ?? [], groupEvidence: retained)
         }
-        guard let initialGroup else { return RefreshInput(examples: [], groupEvidence: retainedGroupEvidence) }
+        guard let initialGroup else { return RefreshInput(examples: [], groupEvidence: retained) }
         let ids = Set(initialGroup.examples.map(\.id))
         let group = snapshot.unnamedGroups.first {
             $0.id == initialGroup.id || $0.examples.contains { ids.contains($0.id) }
         }
         // Preserve naming evidence across completion/refresh so Undo can reopen naming.
-        return RefreshInput(
-            examples: group?.examples ?? [], groupEvidence: group?.evidenceExamples ?? retainedGroupEvidence)
+        var evidence = group?.evidenceExamples.compactMap { current[$0.id] } ?? retained
+        var evidenceIDs = Set(evidence.map(\.id))
+        // Prepared alternatives are separate persisted samples. Keep them in
+        // this session's naming evidence even if clustering puts them elsewhere.
+        evidence += retained.filter {
+            alternateExampleIDs.contains($0.id) && evidenceIDs.insert($0.id).inserted
+        }
+        return RefreshInput(examples: group?.examples ?? [], groupEvidence: evidence)
     }
 
     struct Actions {
         let canSkip: Bool
         let canConfirm: Bool
         let canReject: Bool
+        let canIgnore: Bool
     }
 
     static func actions(
         for example: VoiceExample, decision: Decision?, isReference: Bool, personID: UUID?
     ) -> Actions {
         let confirmedPerson: UUID?
-        if example.review == .confirmed {
-            confirmedPerson = example.personID
-        }
-        else if case .confirmed(let person) = decision {
+        if case .confirmed(let person) = decision {
             confirmedPerson = person
+        }
+        else if decision == .ignored || decision == .rejected {
+            confirmedPerson = nil
+        }
+        else if example.review == .confirmed {
+            confirmedPerson = example.personID
         }
         else {
             confirmedPerson = nil
@@ -74,7 +95,9 @@ struct VoiceMatchReviewSession {
         return Actions(
             canSkip: !isReference && decision == nil && confirmedPerson == nil,
             canConfirm: confirmedPerson == nil,
-            canReject: personID != nil && (confirmedPerson == nil || confirmedPerson == personID))
+            canReject: decision != .rejected && personID != nil
+                && (confirmedPerson == nil || confirmedPerson == personID),
+            canIgnore: decision != .ignored && !example.excluded)
     }
 
     init(examples: [VoiceExample] = [], personID: UUID? = nil) {
@@ -193,7 +216,6 @@ struct VoiceMatchReviewSession {
         personID: UUID, confirmedExampleID: UUID, updatedExamples: [VoiceExample], undoID: UUID?
     ) {
         guard self.personID == nil,
-            decisions[confirmedExampleID] == nil || decisions[confirmedExampleID] == .skipped,
             examples.contains(where: { $0.id == confirmedExampleID })
         else { return }
         let snapshot = NamingSnapshot(personID: self.personID, examples: examples, decisions: decisions)

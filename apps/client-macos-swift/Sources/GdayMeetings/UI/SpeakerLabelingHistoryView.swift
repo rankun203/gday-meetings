@@ -13,15 +13,19 @@ struct SpeakerLabelingHistoryView<DiarizationAction: View>: View {
     var restoreChoices: [TranscriptRevision] = []
     var currentSnapshotID: UUID? = nil
     var canRestore = false
+    var unavailableReason: String? = nil
     var restore: (TranscriptRevision) -> Void = { _ in }
     @ViewBuilder var diarizationAction: () -> DiarizationAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Diarizations").font(.headline)
+                Text("Recording Scans").font(.headline)
                 Spacer()
                 diarizationAction()
+            }
+            if let unavailableReason {
+                Text(unavailableReason).font(.callout).foregroundStyle(.secondary)
             }
             if !restoreChoices.isEmpty {
                 Menu("Restore Labels", systemImage: "arrow.uturn.backward") {
@@ -46,7 +50,7 @@ struct SpeakerLabelingHistoryView<DiarizationAction: View>: View {
             }
             if let history {
                 if history.entries.isEmpty {
-                    Text("No speaker diarization runs or saved analyses were found for this recording.")
+                    Text("No recording scans or saved analyses.")
                         .foregroundStyle(.secondary)
                     ListCountFooter(text: "0 Entries Shown")
                 }

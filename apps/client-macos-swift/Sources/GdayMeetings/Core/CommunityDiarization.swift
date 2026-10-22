@@ -28,6 +28,7 @@ struct LocalDiarizationResult: Codable, Sendable {
     var providerName: String?
     var unresolvedRanges: [UnresolvedSpeakerRange]?
     var audioReferences: [AnalysisAudioReference]?
+    var sampleQualities: [String: VoiceSampleQuality]?
 }
 
 enum LocalDiarizationInputPolicy {
@@ -76,6 +77,7 @@ enum LocalDiarizationInputPolicy {
 
 /// File processing and optional voice extraction run away from the main actor.
 actor CommunityDiarizationWorker {
+    nonisolated static var discoveryConfiguration: OfflineDiarizerConfig { OfflineDiarizerConfig() }
     func run(
         files: [URL], lease: LocalModelLease, recognize: Bool,
         progress: (@Sendable (String) async -> Void)? = nil,
@@ -105,7 +107,7 @@ actor CommunityDiarizationWorker {
         var values = [Float](repeating: 0, count: bytes.count / 4)
         _ = values.withUnsafeMutableBytes { bytes.copyBytes(to: $0) }
         guard values.allSatisfy(\.isFinite) else { throw ServiceError("The Community-1 model parameters are invalid.") }
-        let manager = OfflineDiarizerManager()
+        let manager = OfflineDiarizerManager(config: Self.discoveryConfiguration)
         manager.initialize(
             models: OfflineDiarizerModels(
                 segmentationModel: segmentation, fbankModel: fbank, embeddingModel: embedding,
@@ -188,39 +190,51 @@ actor CommunityDiarizationWorker {
                     guard start.isFinite, end.isFinite, start >= 0, end > start else { continue }
                     output.ranges.append(.init(track: track, label: label, start: start, end: end))
                 }
+                // This selection policy owns the speech-range-v1 cache identity.
+                // Bump that version in VoiceDiscoveryConfiguration when changing
+                // duration, overlap rejection, ordering, or sample boundaries here.
                 // Do not label FluidAudio's clustered/PLDA vectors as our live
                 // extractor's type. Extract the same raw WeSpeaker representation.
-                if let extractor,
-                    let span = segments.filter({
-                        LocalDiarizationInputPolicy.speechSamples(
-                            start: Double($0.startTimeSeconds), end: Double($0.endTimeSeconds),
-                            sampleCount: source.sampleCount) != nil
-                    }).sorted(by: { $0.durationSeconds > $1.durationSeconds }).first(where: {
-                        candidate in
-                        candidate.durationSeconds >= 2
-                            && !result.segments.contains { other in
-                                other.speakerId != modelLabel && other.startTimeSeconds < candidate.endTimeSeconds
-                                    && other.endTimeSeconds > candidate.startTimeSeconds
-                            }
-                    }),
+                if let span = segments.filter({
+                    LocalDiarizationInputPolicy.speechSamples(
+                        start: Double($0.startTimeSeconds), end: Double($0.endTimeSeconds),
+                        sampleCount: source.sampleCount) != nil
+                }).sorted(by: { $0.durationSeconds > $1.durationSeconds }).first(where: {
+                    candidate in
+                    candidate.durationSeconds >= 2
+                        && !result.segments.contains { other in
+                            other.speakerId != modelLabel && other.startTimeSeconds < candidate.endTimeSeconds
+                                && other.endTimeSeconds > candidate.startTimeSeconds
+                        }
+                }),
                     let range = LocalDiarizationInputPolicy.speechSamples(
                         start: Double(span.startTimeSeconds), end: Double(span.endTimeSeconds),
                         sampleCount: source.sampleCount)
                 {
                     let offset = range.lowerBound
                     let count = range.count
+                    speaker.voiceSampleRange = .init(
+                        audioFile: file.lastPathComponent, source: sourceName,
+                        start: Double(offset) / 16000, end: Double(offset + count) / 16000)
+                    speaker.voiceSampleRevision = sourceRevision
                     var samples = [Float](repeating: 0, count: count)
                     try samples.withUnsafeMutableBufferPointer { buffer in
                         try source.copySamples(into: buffer.baseAddress!, offset: offset, count: count)
                     }
-                    if let vector = try? await extractor.extract(samples: samples) {
-                        speaker.voiceEmbedding = TypedVoiceEmbedding.normalizing(
-                            type: CommunityVoiceEmbeddingExtractor.embeddingType, values: vector,
-                            provenance: "Community-1 selected speech")
-                        speaker.voiceSampleRange = .init(
-                            audioFile: file.lastPathComponent, source: sourceName,
-                            start: Double(offset) / 16000, end: Double(offset + count) / 16000)
-                        speaker.voiceSampleRevision = sourceRevision
+                    if let selected = speaker.voiceSampleRange,
+                        let quality = VoiceSampleQuality.assess(
+                            range: selected, audioRevision: sourceRevision,
+                            scanConfiguration: VoiceDiscoveryConfiguration.community.pipeline, samples: samples)
+                    {
+                        if output.sampleQualities == nil { output.sampleQualities = [:] }
+                        output.sampleQualities?[VoiceSampleQuality.speakerKey(track: track, label: label)] = quality
+                    }
+                    if let extractor {
+                        if let vector = try? await extractor.extract(samples: samples) {
+                            speaker.voiceEmbedding = TypedVoiceEmbedding.normalizing(
+                                type: CommunityVoiceEmbeddingExtractor.embeddingType, values: vector,
+                                provenance: "Community-1 selected speech")
+                        }
                     }
                     try Task.checkCancellation()
                 }
@@ -287,7 +301,7 @@ enum LocalDiarizationAssignment {
         _ row: TranscriptSegment, oldSpeaker old: MeetingSpeaker?, result: LocalDiarizationResult, fileCount: Int
     ) -> TranscriptSegment {
         if old?.protectsManualAssignment(to: row) == true
-            || (old?.personID != nil && old?.manualReviewThrough == nil)
+            || (old?.personID != nil && old?.manualReviewThrough == nil && old?.voiceReviewOrigin == nil)
         {
             return row
         }
@@ -459,13 +473,13 @@ extension MeetingStore {
                             sourceID: input.transcriptSource!.id, resultID: result.id, audio: audio),
                         name: "diarization-projection-\(result.id).json", meetingID: id, directory: folder))
                 var updated = LocalDiarizationAssignment.applying(result, to: input, fileCount: files.count)
+                updated.speakerLabelSource = .init(
+                    resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
                 guard voiceLibrary.ingest(meeting: updated, directory: folder) else {
                     throw ServiceError(
                         voiceLibrary.errorMessage ?? "Couldn’t save the speaker examples for People review.")
                 }
                 updated = voiceLibrary.applyingDecisions(to: updated)
-                updated.speakerLabelSource = .init(
-                    resultID: result.id, providerName: provider.name, generatedAt: result.generatedAt)
                 markManagedTaskCompletion(on: &updated, kind: .diarization)
                 meetings[index] = updated
                 invalidateExternalMeetingReloads(ids: [id])
@@ -483,7 +497,12 @@ extension MeetingStore {
             }
         }
         guard saved else { throw ServiceError(errorMessage ?? "Couldn’t save speaker labels.") }
-        if recognize { await self.voiceLibrary.suggestReviewedPeople(from: self.people) }
+        if recognize {
+            let policy =
+                settings.serviceProviders.first { $0.id == settings.diarizationProviderID }?.voiceMatchingPolicy
+                ?? .default
+            await self.voiceLibrary.suggestReviewedPeople(from: self.people, policy: policy)
+        }
         await commitAudioPerformance(
             measurement, kind: .diarization, meetingID: id, key: performanceKey, attemptID: progressAttempt)
     }

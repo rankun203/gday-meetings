@@ -13,14 +13,16 @@ struct VoiceMatchReviewSessionTests {
         session.recordNaming(personID: person, confirmedExampleID: first.id, updatedExamples: [first], undoID: UUID())
         let snapshot = VoiceReviewSnapshot(revision: 1, candidates: [person: [next]], unnamedGroups: [])
         let named = session.refreshInput(
-            from: snapshot, initialGroup: group, fallbackPersonID: nil, retainedGroupEvidence: group.evidenceExamples)
+            from: snapshot, initialGroup: group, fallbackPersonID: nil, retainedGroupEvidence: group.evidenceExamples,
+            currentEvidence: [first, next])
         #expect(named.examples.map(\.id) == [next.id])
         #expect(named.groupEvidence.map(\.id) == [first.id])
         session.refreshQueue(named.examples, currentEvidence: [first, next])
         session.restoreLast(updatedExamples: [first])
         #expect(session.personID == nil)
         let unnamed = session.refreshInput(
-            from: snapshot, initialGroup: group, fallbackPersonID: nil, retainedGroupEvidence: named.groupEvidence)
+            from: snapshot, initialGroup: group, fallbackPersonID: nil, retainedGroupEvidence: named.groupEvidence,
+            currentEvidence: [first, next])
         #expect(unnamed.groupEvidence.map(\.id) == [first.id])
         session.recordNaming(personID: person, confirmedExampleID: first.id, updatedExamples: [first], undoID: UUID())
         #expect(session.personID == person)
@@ -322,5 +324,117 @@ extension VoiceMatchReviewSessionTests {
         session.restoreLast(updatedExamples: [first, second])
         #expect(session.personID == nil && session.decisions[first.id] == .skipped)
         #expect(session.decidedCount == 0 && session.skippedCount == 1 && session.displayedID == first.id)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func ignoredAndRejectedRowsExposeCorrectionsWithinTheCurrentSession() {
+        let person = UUID()
+        var previouslyConfirmed = sample()
+        previouslyConfirmed.personID = person
+        previouslyConfirmed.review = .confirmed
+        previouslyConfirmed.excluded = true
+        for decision in [VoiceMatchReviewSession.Decision.ignored, .rejected] {
+            let actions = VoiceMatchReviewSession.actions(
+                for: previouslyConfirmed, decision: decision, isReference: false, personID: person)
+            #expect(actions.canConfirm && !actions.canSkip)
+            #expect(actions.canReject == (decision != .rejected))
+            #expect(!actions.canIgnore)
+        }
+        let first = sample()
+        let second = sample()
+        var session = VoiceMatchReviewSession(examples: [first, second], personID: person)
+        session.record(.ignored, for: first.id, undoID: UUID())
+        session.record(.confirmed(person), for: second.id, undoID: UUID())
+        session.selectCandidate(first.id)
+        session.correct(.rejected, for: first.id, undoID: UUID())
+        #expect(session.decidedCount == 2 && session.remainingCount == 0)
+        #expect(session.decisions[second.id] == .confirmed(person))
+        session.restoreLast(updatedExamples: [first, second])
+        #expect(session.decisions[first.id] == .ignored && session.displayedID == first.id)
+        #expect(session.decisions[second.id] == .confirmed(person))
+    }
+
+    @Test func ignoredUnnamedRowCanBeNamedAndUndoRestoresItsDecision() {
+        let first = sample()
+        let other = sample()
+        let person = UUID()
+        var session = VoiceMatchReviewSession(examples: [first, other])
+        session.record(.ignored, for: first.id, undoID: UUID())
+        session.selectCandidate(first.id)
+        session.recordNaming(
+            personID: person, confirmedExampleID: first.id, updatedExamples: [first, other], undoID: UUID())
+        #expect(session.personID == person && session.decisions[first.id] == .confirmed(person))
+        session.restoreLast(updatedExamples: [first, other])
+        #expect(session.personID == nil && session.decisions[first.id] == .ignored)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func alternateRemainsNamingEvidenceWhenSnapshotKeepsItInADifferentGroup() {
+        let first = sample()
+        let alternate = sample()
+        let group = VoiceIdentificationGroup(id: first.groupID, examples: [first], representativeID: first.id)
+        let otherGroup = VoiceIdentificationGroup(
+            id: alternate.groupID, examples: [alternate], representativeID: alternate.id)
+        var session = VoiceMatchReviewSession(examples: [first])
+        session.showAlternative(alternate, currentEvidence: [first, alternate])
+        var retained = [first, alternate]
+        let snapshot = VoiceReviewSnapshot(revision: 2, candidates: [:], unnamedGroups: [group, otherGroup])
+        for _ in 0..<2 {
+            let input = session.refreshInput(
+                from: snapshot, initialGroup: group, fallbackPersonID: nil, retainedGroupEvidence: retained,
+                currentEvidence: [first, alternate])
+            retained = input.groupEvidence
+            session.refreshQueue(input.examples, currentEvidence: [first, alternate])
+            #expect(retained.map(\.id) == [first.id, alternate.id])
+            #expect(session.displayedID == alternate.id)
+        }
+        let person = UUID()
+        session.recordNaming(
+            personID: person, confirmedExampleID: alternate.id,
+            updatedExamples: [first, alternate], undoID: UUID())
+        #expect(session.personID == person && session.decisions[alternate.id] == .confirmed(person))
+        session.restoreLast(updatedExamples: [first, alternate])
+        #expect(session.personID == nil && session.displayedID == alternate.id)
+    }
+
+    @Test func currentDecisionCannotBeRepeatedButOtherCorrectionsRemainAvailable() {
+        let person = UUID()
+        let example = sample()
+        let ignored = VoiceMatchReviewSession.actions(
+            for: example, decision: .ignored, isReference: false, personID: person)
+        #expect(!ignored.canIgnore && ignored.canReject && ignored.canConfirm)
+        let rejected = VoiceMatchReviewSession.actions(
+            for: example, decision: .rejected, isReference: false, personID: person)
+        #expect(rejected.canIgnore && !rejected.canReject && rejected.canConfirm)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func alternateNamingEvidenceUsesExternalChangesAndDropsDeletedSamples() {
+        let first = sample()
+        let alternate = sample()
+        let group = VoiceIdentificationGroup(id: first.groupID, examples: [first], representativeID: first.id)
+        var session = VoiceMatchReviewSession(examples: [first])
+        session.showAlternative(alternate, currentEvidence: [first, alternate])
+        var changed = alternate
+        changed.excluded = true
+        changed.rejectedPersonIDs = [UUID()]
+        let snapshot = VoiceReviewSnapshot(revision: 2, candidates: [:], unnamedGroups: [group])
+        let refreshed = session.refreshInput(
+            from: snapshot, initialGroup: group, fallbackPersonID: nil,
+            retainedGroupEvidence: [first, alternate], currentEvidence: [first, changed])
+        #expect(refreshed.groupEvidence.first { $0.id == alternate.id } == changed)
+        session.refreshQueue(refreshed.examples, currentEvidence: [first, changed])
+        #expect(session.examples.first { $0.id == alternate.id } == changed)
+        #expect(session.displayedID == alternate.id && session.unavailableIDs.isEmpty)
+        let removed = session.refreshInput(
+            from: snapshot, initialGroup: group, fallbackPersonID: nil,
+            retainedGroupEvidence: refreshed.groupEvidence, currentEvidence: [first])
+        #expect(removed.groupEvidence.map(\.id) == [first.id])
+        session.refreshQueue(removed.examples, currentEvidence: [first])
+        #expect(session.displayedID == alternate.id && session.unavailableIDs.contains(alternate.id))
+        #expect(session.decisions.isEmpty && session.history.isEmpty)
     }
 }

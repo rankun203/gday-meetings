@@ -4,7 +4,7 @@ import Foundation
 /// scores order questions; they never confirm an identity or enter its profile.
 enum VoiceReviewSelection {
     // Initial review heuristic, pending evaluation with reviewed recordings.
-    static let minimumSimilarity = 0.55
+    static let minimumSimilarity = VoiceMatchingPolicy.default.suggestionThreshold
 
     static func sameAudio(_ left: VoiceExample, _ right: VoiceExample) -> Bool {
         guard let key = VoiceExactReviewDecisions.Key(left) else { return false }
@@ -53,13 +53,18 @@ enum VoiceReviewSelection {
             && (example.embeddings.isEmpty || example.embeddings.contains(where: \.isValid))
     }
 
-    static func rank(_ examples: [VoiceExample], for personID: UUID, limit: Int = 48) -> [VoiceExample] {
-        rank(examples, for: [personID], limit: limit)[personID] ?? []
+    static func rank(
+        _ examples: [VoiceExample], for personID: UUID, limit: Int = 48, policy: VoiceMatchingPolicy = .default
+    ) -> [VoiceExample] {
+        rank(examples, for: [personID], limit: limit, policy: policy)[personID] ?? []
     }
 
     /// Hydration, representative selection and candidate-to-person distances are
     /// shared by the chooser and individual queues; counts describe these arrays.
-    static func rank(_ examples: [VoiceExample], for personIDs: Set<UUID>, limit: Int = 48) -> [UUID: [VoiceExample]] {
+    static func rank(
+        _ examples: [VoiceExample], for personIDs: Set<UUID>, limit: Int = 48, policy: VoiceMatchingPolicy = .default
+    ) -> [UUID: [VoiceExample]] {
+        let policy = policy.normalized
         guard !personIDs.isEmpty else { return [:] }
         let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
         let confirmed = examples.filter {
@@ -94,14 +99,15 @@ enum VoiceReviewSelection {
                 values.compactMap { similarity(example, $0) }.max()
             }
             let best = strengths.sorted { $0.value > $1.value }.prefix(2)
-            var plausible = Set(strengths.filter { $0.value >= minimumSimilarity }.keys).intersection(personIDs)
+            var plausible = Set(strengths.filter { $0.value >= policy.suggestionThreshold }.keys).intersection(
+                personIDs)
             if let suggested = example.namedPersonID ?? example.suggestedPersonID, personIDs.contains(suggested) {
                 plausible.insert(suggested)
             }
             for personID in plausible where !example.rejectedPersonIDs.contains(personID) {
-                let strength = strengths[personID] ?? minimumSimilarity
+                let strength = strengths[personID] ?? policy.suggestionThreshold
                 let competitor = best.first { $0.key != personID }?.value ?? -1
-                let boundary = max(0, 1 - abs(strength - SpeakerRecognition.threshold) / 0.30)
+                let boundary = max(0, 1 - abs(strength - policy.automaticThreshold) / 0.30)
                 let ambiguity = max(0, 1 - abs(strength - competitor) / 0.15)
                 scored[personID, default: []].append((original, 0.55 * boundary + 0.30 * ambiguity + 0.15 * strength))
             }
@@ -133,9 +139,15 @@ enum VoiceReviewSelection {
             return VoiceExactReviewDecisions.Key(candidate.example).map { !selectedKeys.contains($0) } ?? true
         }
         var meetings = Set(selected.map(\.meetingID))
+        let priorities = Dictionary(
+            scored.map { ($0.example.id, VoiceSampleQuality.priority(example: $0.example)) },
+            uniquingKeysWith: max)
         let automaticLimit = selected.count + max(0, limit)
         while !scored.isEmpty && selected.count < automaticLimit {
             scored.sort { left, right in
+                let leftQuality = priorities[left.example.id] ?? 1
+                let rightQuality = priorities[right.example.id] ?? 1
+                if leftQuality != rightQuality { return leftQuality > rightQuality }
                 let lhs = left.score + (meetings.contains(left.example.meetingID) ? 0 : 0.20)
                 let rhs = right.score + (meetings.contains(right.example.meetingID) ? 0 : 0.20)
                 return lhs == rhs ? left.example.id.uuidString < right.example.id.uuidString : lhs > rhs

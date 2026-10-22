@@ -61,7 +61,7 @@ enum SummaryPrompt {
             "Started: \(formatter.string(from: meeting.createdAt))\nDuration: \(duration / 60)m \(duration % 60)s\n"
         if !names.isEmpty { context += "Participants: \(names.sorted().joined(separator: ", "))\n" }
         if !meeting.notes.isEmpty { context += "\nSession notes\n\(NotesDocument(meeting.notes).citedText)\n" }
-        let participantIDs = Set(meeting.personIDs + meeting.speakers.compactMap(\.personID))
+        let participantIDs = Set(meeting.personIDs + meeting.speakers.compactMap(\.attendancePersonID))
         let participantNotes = people.filter { participantIDs.contains($0.id) && !$0.notes.isEmpty }
         if !participantNotes.isEmpty {
             context +=

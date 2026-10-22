@@ -3,7 +3,7 @@ import Foundation
 /// Captures the user's selection at click time, before any queued capture write.
 enum VoiceReviewAction: Sendable {
     case confirm(ids: Set<UUID>, personID: UUID)
-    case reject(ids: Set<UUID>, personID: UUID)
+    case reject(ids: Set<UUID>, personID: UUID, restoreExcluded: Bool = false)
     case clear(ids: Set<UUID>)
     case exclude(ids: Set<UUID>, excluded: Bool)
     case split(ids: Set<UUID>)
@@ -12,7 +12,7 @@ enum VoiceReviewAction: Sendable {
 
     var exampleIDs: Set<UUID>? {
         switch self {
-        case .confirm(let ids, _), .reject(let ids, _), .clear(let ids),
+        case .confirm(let ids, _), .reject(let ids, _, _), .clear(let ids),
             .exclude(let ids, _), .split(let ids), .merge(let ids):
             return ids
         case .undo: return nil
@@ -37,6 +37,9 @@ extension MeetingStore {
     func reviewVoiceExamplesResult(
         _ action: VoiceReviewAction, expectedExamples: [VoiceExample]? = nil, expectedUndoID: UUID? = nil
     ) async -> VoiceReviewReceipt? {
+        let interval = ReviewPerformance.signposter.beginInterval(
+            "Commit voice review", id: ReviewPerformance.signposter.makeSignpostID())
+        defer { ReviewPerformance.signposter.endInterval("Commit voice review", interval) }
         let library = voiceLibrary
         guard await library.awaitReady(), libraryWritable, voiceLibrary === library else { return nil }
         var undoMeetings = Set<UUID>()
@@ -73,8 +76,8 @@ extension MeetingStore {
                     return false
                 }
                 succeeded = voiceLibrary.confirm(ids: ids, personID: personID)
-            case .reject(let ids, let personID):
-                succeeded = voiceLibrary.reject(ids: ids, personID: personID)
+            case .reject(let ids, let personID, let restoreExcluded):
+                succeeded = voiceLibrary.reject(ids: ids, personID: personID, restoreExcluded: restoreExcluded)
             case .clear(let ids): succeeded = voiceLibrary.clear(ids: ids)
             case .exclude(let ids, let excluded): succeeded = voiceLibrary.exclude(ids: ids, excluded: excluded)
             case .split(let ids): succeeded = voiceLibrary.split(ids: ids)
@@ -102,7 +105,10 @@ extension MeetingStore {
             }
             return succeeded
         }
-        if result && !undoMeetings.isEmpty { await refreshVoiceAssignments(meetingIDs: undoMeetings) }
+        if result && !undoMeetings.isEmpty {
+            scheduleVoiceAssignmentRefresh(meetingIDs: undoMeetings)
+            await flushVoiceAssignmentRefresh()
+        }
         return result ? receipt : nil
     }
 
@@ -122,6 +128,9 @@ extension MeetingStore {
         exampleIDs: Set<UUID>, confirmedExampleID: UUID?, personID: UUID?, newPersonName: String?,
         expectedExamples: [VoiceExample]
     ) async -> VoiceReviewReceipt? {
+        let interval = ReviewPerformance.signposter.beginInterval(
+            "Commit voice review", id: ReviewPerformance.signposter.makeSignpostID())
+        defer { ReviewPerformance.signposter.endInterval("Commit voice review", interval) }
         let library = voiceLibrary
         guard await library.awaitReady(), libraryWritable, voiceLibrary === library else { return nil }
         let cleanName = newPersonName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -164,7 +173,10 @@ extension MeetingStore {
             }
             return committed
         }
-        if saved { await refreshVoiceAssignments(meetingIDs: Set(expectedExamples.map(\.meetingID))) }
+        if saved {
+            scheduleVoiceAssignmentRefresh(meetingIDs: Set(expectedExamples.map(\.meetingID)))
+            await flushVoiceAssignmentRefresh()
+        }
         return saved ? receipt : nil
     }
 
@@ -172,6 +184,11 @@ extension MeetingStore {
         let library = voiceLibrary
         let ids = library.reviewUndoExampleIDs
         let affectedMeetings = Set(library.examples.filter { ids.contains($0.id) }.map(\.meetingID))
+        let machineMeetings = Set(
+            library.examples.filter {
+                $0.transcriptAssociation?.personID == created.id
+            }.map(\.meetingID))
+        let allowedMeetings = affectedMeetings.union(machineMeetings)
         guard people.first(where: { $0.id == created.id }) == created,
             !library.examples.contains(where: {
                 !ids.contains($0.id) && ($0.personID == created.id || $0.namedPersonID == created.id)
@@ -181,8 +198,8 @@ extension MeetingStore {
             return false
         }
         do {
-            let related = try libraryIndex?.page(limit: affectedMeetings.count + 1, personID: created.id) ?? []
-            guard Set(related.map(\.id)).isSubset(of: affectedMeetings) else {
+            let related = try libraryIndex?.page(limit: allowedMeetings.count + 1, personID: created.id) ?? []
+            guard Set(related.map(\.id)).isSubset(of: allowedMeetings) else {
                 errorMessage = "This person is used in another recording. Edit the samples individually."
                 return false
             }
@@ -194,20 +211,23 @@ extension MeetingStore {
                 meetingSnapshot.filter {
                     $0.personIDs.contains(created.id) || $0.speakers.contains { $0.personID == created.id }
                 }.map(\.id))
-            guard relatedIDs.isSubset(of: affectedMeetings) else {
+            guard relatedIDs.isSubset(of: allowedMeetings) else {
                 errorMessage = "This person is used in another recording. Edit the samples individually."
                 return false
             }
             let relatedMeetings = try await Task.detached(priority: .utility) {
                 try relatedIDs.map { try loaded[$0] ?? reader($0, root) }
             }.value
-            let latestRelated = try libraryIndex?.page(limit: affectedMeetings.count + 1, personID: created.id) ?? []
+            let latestRelated = try libraryIndex?.page(limit: allowedMeetings.count + 1, personID: created.id) ?? []
             guard meetings == meetingSnapshot, Set(latestRelated.map(\.id)) == Set(related.map(\.id)),
                 relatedMeetings.allSatisfy({ meeting in
                     let assigned = meeting.speakers.filter { $0.personID == created.id }
                     return !assigned.isEmpty
                         && assigned.allSatisfy {
                             $0.voiceReviewExampleID.map(ids.contains) == true
+                                || ($0.voiceReviewOrigin?.transcriptAssociationTier != nil
+                                    && $0.manuallyAssigned != true
+                                    && machineMeetings.contains(meeting.id))
                         } && !meeting.transcript.contains { $0.personID == created.id }
                 }), library.reviewUndoID == expectedUndoID || expectedUndoID == nil,
                 people.first(where: { $0.id == created.id }) == created

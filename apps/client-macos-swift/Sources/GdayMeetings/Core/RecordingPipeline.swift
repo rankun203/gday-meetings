@@ -224,7 +224,11 @@ extension MeetingStore {
             throw ServiceError(voiceLibrary.errorMessage ?? "Couldn’t prepare speaker examples.")
         }
         setJobProgress(.speakerAssociation, .meeting(id), "Comparing voices with the People Library…")
-        try await voiceLibrary.suggestReviewedPeopleResult(from: people)
+        let policy =
+            settings.serviceProviders.first {
+                $0.id == settings.diarizationProviderID
+            }?.voiceMatchingPolicy ?? .default
+        try await voiceLibrary.suggestReviewedPeopleResult(from: people, policy: policy)
         try Task.checkCancellation()
         setJobProgress(.speakerAssociation, .meeting(id), "Saving speaker associations…")
         let saved = await enqueueCanonical {

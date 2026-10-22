@@ -35,6 +35,7 @@ struct LibraryView: View {
     @AppStorage("displaySummaryTitleOnMeetings") private var displaySummaryTitleOnMeetings = true
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var focusedTaskID: UUID?
+    @ViewState private var focusedTaskRequest = UUID()
     @ViewState private var selectedMeeting: UUID?
     @ViewState private var meetingCountResult: (request: MeetingCountRequest, count: Int)?
     @ViewState private var selectedPeople: Set<UUID> = []
@@ -247,7 +248,8 @@ struct LibraryView: View {
                 }
                 else if destination == .tasks {
                     TaskQueueView(
-                        showMeeting: showMeeting, focusedTaskID: focusedTaskID, sidebarExpanded: sidebarExpanded,
+                        showMeeting: showMeeting, focusedTaskID: focusedTaskID, focusedTaskRequest: focusedTaskRequest,
+                        sidebarExpanded: sidebarExpanded,
                         session: workspace.tasks
                     )
                     .navigationTitle("Tasks")
@@ -544,6 +546,7 @@ struct LibraryView: View {
         .focusedSceneValue(\.newMeetingNotesAction, createMeetingNotes)
         .environment(\.showTag, showTag)
         .environment(\.showManagedTask) { id in
+            focusedTaskRequest = UUID()
             focusedTaskID = id
             showsSearchResults = false
             openedSearchResult = nil

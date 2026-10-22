@@ -471,18 +471,17 @@ struct VoiceLibraryTests {
         #expect(projected.speakers[0].voiceReviewOrigin == nil)
         #expect(projected.transcript.allSatisfy { $0.speakerID == speaker.id })
         #expect(library.applyingDecisions(to: projected) == projected)
-        // An explicit conflicting excerpt remains narrower than the whole label.
+        // Reference review stays independent of an explicit transcript decision.
         let other = UUID()
         #expect(library.confirm(ids: [second.id], personID: other))
         let conflicted = library.applyingDecisions(to: projected)
-        #expect(conflicted.transcript[0].speakerID == speaker.id)
-        let exactID = try #require(conflicted.transcript[1].speakerID)
-        #expect(exactID != speaker.id)
-        #expect(conflicted.speakers.first { $0.id == exactID }?.personID == other)
-        #expect(conflicted.speakers.count == 2)
+        #expect(conflicted.transcript.allSatisfy { $0.speakerID == speaker.id })
+        #expect(conflicted.speakers.first { $0.id == speaker.id }?.personID == person)
+        #expect(library.examples.first { $0.id == second.id }?.personID == other)
+        #expect(conflicted.speakers.filter { $0.voiceReviewOrigin?.evidenceOnly != true }.count == 1)
     }
 
-    @Test func exactReviewProjectionIsIdempotentAndUndoRestoresSpeaker() throws {
+    @Test func reviewedDetectedSpeakerLabelsAllRowsAndUndoRestoresSpeaker() throws {
         let directory = try root()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = VoiceLibraryStore(loading: .immediate, directory: directory)
@@ -502,9 +501,14 @@ struct VoiceLibraryTests {
         #expect(library.decisions.isEmpty)
         let projected = library.applyingDecisions(to: meeting)
         #expect(projected.transcript.map(\.text) == meeting.transcript.map(\.text))
-        #expect(projected.transcript[0].speakerID == speaker.id)
-        #expect(projected.transcript[1].speakerID != speaker.id)
-        #expect(projected.transcript[2].speakerID == speaker.id)
+        // The excerpt confirms the detected speaker identity. Every passage
+        // assigned to that speaker inherits its name, including passages beyond
+        // the selected review excerpt. Passage-specific corrections remain
+        // covered by the conflicting-excerpt regression above.
+        #expect(projected.transcript.allSatisfy { $0.speakerID == speaker.id })
+        #expect(projected.speakers.count == 1)
+        #expect(projected.speakers[0].personID == personID)
+        #expect(projected.speakers[0].voiceReviewOrigin?.speakerID == speaker.id)
         #expect(library.applyingDecisions(to: projected) == projected)
         #expect(library.undo())
         let restored = library.applyingDecisions(to: projected)
@@ -983,5 +987,29 @@ extension VoiceLibraryTests {
         let restored = library.applyingDecisions(to: projected)
         let restoredSpeaker = restored.transcript[0].speakerID
         #expect(restored.speakers.first { $0.id == restoredSpeaker }?.personID == nil)
+    }
+}
+
+extension VoiceLibraryTests {
+    @Test func correctingIgnoreToRejectionRestoresAudioForOtherPeopleAndUndoKeepsOtherDecisions() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let person = UUID()
+        let sample = try example(root: directory)
+        let other = try example(root: directory)
+        #expect(library.upsert([sample, other]))
+        #expect(library.exclude(ids: [sample.id]))
+        #expect(library.confirm(ids: [other.id], personID: person))
+        #expect(library.reject(ids: [sample.id], personID: person, restoreExcluded: true))
+        let updated = try #require(library.examples.first { $0.id == sample.id })
+        #expect(!updated.excluded && updated.rejectedPersonIDs.contains(person))
+        #expect(try await library.reviewCandidates(for: person).isEmpty)
+        #expect(library.undo())
+        #expect(library.examples.first { $0.id == sample.id }?.excluded == true)
+        #expect(library.examples.first { $0.id == other.id }?.personID == person)
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(try await reopened.reviewCandidates(for: person).isEmpty)
+        #expect(try await reopened.identificationGroups().flatMap(\.examples).allSatisfy { $0.id != sample.id })
     }
 }

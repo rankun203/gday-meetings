@@ -18,9 +18,12 @@ struct VoiceSampleManagementView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.showManagedTask) private var showManagedTask
     @ObservedObject var library: VoiceLibraryStore
     var personID: UUID? = nil
     @ViewState private var ignoredOnly = false
+    @ViewState private var preparing = false
+    @ViewState private var preparationRequest: UUID?
     @ViewState private var selected = Set<UUID>()
     @ViewState private var saving = false
     @ViewState private var editingName = false
@@ -31,13 +34,20 @@ struct VoiceSampleManagementView: View {
         let examples: [VoiceExample]
     }
     @ViewState private var combining: CombineRequest?
-    private var examples: [VoiceExample] {
-        VoiceSampleMaintenance.examples(library.examples, personID: personID, ignoredOnly: ignoredOnly)
+    @ViewState private var examples: [VoiceExample] = []
+    @ViewState private var preparingSamples = true
+    private struct SampleRequest: Equatable {
+        let revision: Int
+        let personID: UUID?
+        let ignoredOnly: Bool
+    }
+    private var sampleRequest: SampleRequest {
+        SampleRequest(revision: library.reviewMetadataRevision, personID: personID, ignoredOnly: ignoredOnly)
     }
     private var selectedExamples: [VoiceExample] { examples.filter { selected.contains($0.id) } }
     private var canEdit: Bool {
         library.isLoaded && store.libraryWritable && store.recordingID == nil && !store.isStartingRecording
-            && !store.isFinalizingRecording && !saving
+            && !store.isFinalizingRecording && !saving && !preparingSamples
     }
 
     var body: some View {
@@ -54,6 +64,31 @@ struct VoiceSampleManagementView: View {
             }
             Text("Restore ignored samples, remove assignments, or organize samples. Recordings are kept.")
                 .font(.callout).foregroundStyle(.secondary)
+            if personID == nil {
+                HStack {
+                    Button("Prepare Reviewed Voices") { prepareReviewedVoices() }
+                        .disabled(
+                            !canEdit || preparing
+                                || library.jobs.contains { $0.state == .running || $0.state == .queued }
+                                || store.settings.serviceProviders.first(where: {
+                                    $0.id == store.settings.diarizationProviderID
+                                })
+                                .map { VoiceLibraryPreparation.capability(for: $0).isAvailable } != true)
+                    if preparing { ProgressView().controlSize(.small) }
+                    Spacer()
+                }
+                if let job = library.jobs.last(where: { !$0.discover }) {
+                    HStack {
+                        Text("Prepare Reviewed Voices · \(job.outcomeTitle)").font(.callout)
+                        Text(job.progress).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer()
+                        Button("View Task") {
+                            dismiss()
+                            showManagedTask(job.id)
+                        }
+                    }
+                }
+            }
             Picker("Show Samples", selection: $ignoredOnly) {
                 Text("All").tag(false)
                 Text("Ignored").tag(true)
@@ -90,7 +125,7 @@ struct VoiceSampleManagementView: View {
                 }
             }.listStyle(.inset).disabled(saving)
                 .overlay {
-                    if !library.isLoaded {
+                    if !library.isLoaded || preparingSamples {
                         ProgressView("Loading samples…")
                     }
                     else if examples.isEmpty {
@@ -142,7 +177,20 @@ struct VoiceSampleManagementView: View {
             .onChange(of: ignoredOnly) { _, _ in selected.removeAll() }
             .onChange(of: examples.map(\.id)) { _, ids in selected.formIntersection(ids) }
             .onDisappear { playback.pause() }
-            .task(id: Set(library.examples.map(\.meetingID))) {
+            .task(id: sampleRequest) {
+                let input = sampleRequest
+                let snapshot = library.examples
+                // Retained rows keep their identities and editors while new
+                // evidence prepares; only the initial empty presentation waits.
+                let result = await Task.detached {
+                    VoiceSampleMaintenance.examples(
+                        snapshot, personID: input.personID, ignoredOnly: input.ignoredOnly)
+                }.value
+                guard !Task.isCancelled, input == sampleRequest else { return }
+                examples = result
+                preparingSamples = false
+            }
+            .task(id: library.reviewMetadataRevision) {
                 guard let index = store.libraryIndex else { return }
                 let ids = Set(library.examples.map(\.meetingID))
                 let loaded = await Task.detached {
@@ -155,6 +203,42 @@ struct VoiceSampleManagementView: View {
             .sheet(item: $combining) { request in
                 combineSheet(request)
             }
+    }
+
+    private func prepareReviewedVoices() {
+        guard canEdit, !preparing,
+            let provider = store.settings.serviceProviders.first(where: {
+                $0.id == store.settings.diarizationProviderID
+            }),
+            VoiceLibraryPreparation.capability(for: provider).isAvailable
+        else { return }
+        let directory = store.dataDirectory
+        let token = UUID()
+        preparationRequest = token
+        preparing = true
+        error = nil
+        Task { @MainActor in
+            defer { preparing = false }
+            do {
+                let health = await ProviderHealthStore.shared.check(
+                    providerID: provider.id, capability: .diarization, settings: store.settings)
+                guard health.isReady else {
+                    error = health.reason ?? "Check the provider in Service Providers settings."
+                    return
+                }
+                let meetings = try await store.voicePreparationMeetings()
+                guard !Task.isCancelled, preparationRequest == token, canEdit, store.voiceLibrary === library,
+                    store.dataDirectory == directory,
+                    store.settings.serviceProviders.first(where: { $0.id == store.settings.diarizationProviderID })
+                        == provider,
+                    !library.jobs.contains(where: { $0.state == .running || $0.state == .queued })
+                else { return }
+                store.voicePreparation.start(
+                    provider: provider, meetings: meetings, directory: { store.directory(for: $0) }, discover: false)
+                error = store.voicePreparation.errorMessage
+            }
+            catch let failure { error = "Couldn’t load recordings. " + failure.localizedDescription }
+        }
     }
 
     private func combineSheet(_ request: CombineRequest) -> some View {

@@ -46,16 +46,16 @@ extension IndexDatabase.Module {
         initialValues: "INSERT OR IGNORE INTO state VALUES(1,0)")
 
     static let tasks = Self(
-        namespace: "core_tasks", version: 4,
+        namespace: "core_tasks", version: 5,
         tables: [
             .init(
                 name: "task_offsets",
                 definition:
-                    "(id TEXT PRIMARY KEY,created REAL NOT NULL,state TEXT NOT NULL,kind TEXT NOT NULL,meeting TEXT NOT NULL,priority INTEGER NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL,digest TEXT NOT NULL,intent_digest TEXT NOT NULL,attention INTEGER NOT NULL,automatic INTEGER NOT NULL)"
+                    "(id TEXT PRIMARY KEY,created REAL NOT NULL,state TEXT NOT NULL,kind TEXT NOT NULL,meeting TEXT NOT NULL,priority INTEGER NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL,digest TEXT NOT NULL,intent_digest TEXT NOT NULL,attention INTEGER NOT NULL,automatic INTEGER NOT NULL,activity REAL NOT NULL)"
             ),
             .init(name: "journal_revision", definition: "(id INTEGER PRIMARY KEY,revision TEXT,committed INTEGER)"),
         ],
         indexes:
-            "CREATE INDEX IF NOT EXISTS task_history ON task_offsets(created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_state ON task_offsets(state,created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_queue ON task_offsets(kind,state,priority DESC,created,id); CREATE INDEX IF NOT EXISTS task_meeting ON task_offsets(meeting,kind,created DESC,id DESC)",
+            "CREATE INDEX IF NOT EXISTS task_history ON task_offsets(created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_state ON task_offsets(state,created DESC,id DESC); CREATE INDEX IF NOT EXISTS task_display ON task_offsets(activity DESC,id DESC); CREATE INDEX IF NOT EXISTS task_display_state ON task_offsets(state,activity DESC,id DESC); CREATE INDEX IF NOT EXISTS task_display_kind ON task_offsets(kind,automatic,activity DESC,id DESC); CREATE INDEX IF NOT EXISTS task_queue ON task_offsets(kind,state,priority DESC,created,id); CREATE INDEX IF NOT EXISTS task_meeting ON task_offsets(meeting,kind,created DESC,id DESC)",
         initialValues: "")
 }

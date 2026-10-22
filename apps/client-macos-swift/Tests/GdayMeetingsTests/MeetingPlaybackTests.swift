@@ -361,3 +361,83 @@ struct MeetingPlaybackTests {
         file = nil
     }
 }
+
+extension MeetingPlaybackTests {
+    @Test func lateReviewLoadCannotPlayAfterAnotherReviewClaimsTheTransport() async {
+        let playback = MeetingPlayback()
+        let first = playback.beginReviewPlayback()
+        let gate = PlaybackPreparationGate()
+        var playedOld = false
+        let oldRequest = playback.requestPlayback(
+            reviewOwner: first,
+            load: {
+                await gate.suspend()
+                return Meeting(title: "Earlier example")
+            },
+            play: { _ in playedOld = true })
+        await gate.waitUntilStarted()
+        let second = playback.beginReviewPlayback()
+        playback.endReviewPlayback(first)
+        #expect(playback.ownsReviewPlayback(second))
+        var playedCurrent = false
+        await playback.requestPlayback(
+            reviewOwner: second, load: { Meeting(title: "Current example") },
+            play: { _ in playedCurrent = true }
+        ).value
+        await gate.release()
+        await oldRequest.value
+        #expect(playedCurrent && !playedOld)
+        playback.endReviewPlayback(second)
+        #expect(!playback.ownsReviewPlayback(second))
+    }
+
+    @Test func dismissedReviewCannotLoadOrPlayAndSourceHandoffInvalidatesPendingAudio() async {
+        let playback = MeetingPlayback()
+        let owner = playback.beginReviewPlayback()
+        let gate = PlaybackPreparationGate()
+        var played = false
+        let pending = playback.requestPlayback(
+            reviewOwner: owner,
+            load: {
+                await gate.suspend()
+                return Meeting(title: "Example source")
+            }, play: { _ in played = true })
+        await gate.waitUntilStarted()
+        playback.endReviewPlayback(owner)
+        await gate.release()
+        await pending.value
+        var loaded = false
+        await playback.requestPlayback(
+            reviewOwner: owner,
+            load: {
+                loaded = true
+                return Meeting(title: "Stale source")
+            },
+            play: { _ in played = true }
+        ).value
+        #expect(!loaded && !played)
+    }
+
+    @Test func sourceInspectionClearsExcerptBoundsAndSelectsPausedTrackAtItsStart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mic = directory.appendingPathComponent("microphone.wav")
+        let system = directory.appendingPathComponent("system.wav")
+        try makeSilence(mic, seconds: 2)
+        try makeSilence(system, seconds: 2)
+        let meeting = Meeting(title: "Example source", audioFiles: ["microphone.wav", "system.wav"])
+        let playback = MeetingPlayback()
+        defer { playback.clear() }
+        playback.playExcerpt(meeting: meeting, directory: directory, audioFile: "system.wav", start: 0.5, end: 1)
+        playback.selectRecording(meeting: meeting, files: [mic, system], audioFile: "system.wav", at: 0.5)
+        await playback.waitForPreparation()
+        #expect(playback.excerptRange == nil && playback.excerptRanges.isEmpty)
+        #expect(playback.selectedTrack == 1 && playback.currentTime == 0.5 && !playback.isPlaying)
+        playback.setRecordingActive(true)
+        playback.selectRecording(
+            meeting: Meeting(title: "Another source"), files: [mic], audioFile: nil, at: 1.5)
+        #expect(playback.meetingID == meeting.id)
+        #expect(playback.currentTime == 0.5 && playback.selectedTrack == 1)
+    }
+}

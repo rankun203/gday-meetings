@@ -44,6 +44,15 @@ struct LocalSpeakerProviderView: View {
                 Text("Speaker diarization runs after recording using Community-1.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                DisclosureGroup("Advanced") {
+                    VoiceMatchingPolicyControls(
+                        policy: Binding(
+                            get: { draft.voiceMatchingPolicy },
+                            set: { draft.voiceMatchingPolicy = $0 }))
+                }
+                .disclosureGroupStyle(AppDisclosureStyle())
+            }
             Section("Readiness") {
                 ForEach(ProviderCapability.allCases.filter { draft.kind.capabilities.contains($0) }) { capability in
                     let result = health.validationState(providerID: draft.id, capability: capability)
@@ -227,6 +236,44 @@ extension LocalModelPhase {
         case .verifying: "Verifying…"
         case .preparing: "Preparing…"
         case .ready: "Ready"
+        }
+    }
+}
+
+/// Draft-only controls: Save persists one coherent policy update.
+struct VoiceMatchingPolicyControls: View {
+    @Binding var policy: VoiceMatchingPolicy
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
+            threshold(
+                "Suggestion Threshold",
+                value: Binding(
+                    get: { policy.suggestionThreshold },
+                    set: { policy.suggestionThreshold = min($0, policy.automaticThreshold) }))
+            threshold(
+                "Automatic Match Threshold",
+                value: Binding(
+                    get: { policy.automaticThreshold },
+                    set: { policy.automaticThreshold = max($0, policy.suggestionThreshold) }))
+            threshold("Minimum Match Margin", value: $policy.minimumMargin)
+            Text("Lower thresholds offer more matches. The margin separates the best match from the next alternative.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Restore Defaults") { policy = .default }
+        }
+    }
+
+    private func threshold(_ title: String, value: Binding<Double>) -> some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(2))))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: 0...1, step: 0.01)
+                .accessibilityLabel(title)
+                .accessibilityValue(value.wrappedValue.formatted(.number.precision(.fractionLength(2))))
         }
     }
 }
