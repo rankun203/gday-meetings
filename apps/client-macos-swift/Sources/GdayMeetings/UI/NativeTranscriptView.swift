@@ -1353,22 +1353,24 @@ enum TranscriptSpeakerPalette {
         case "sys", "system", "system audio": normalized = "system"
         default: normalized = source
         }
-        return "\(normalized):\(label)"
+        return "\(normalized):\(SpeakerLabelPresentation.display(label))"
+    }
+
+    static func displayKey(for segment: TranscriptSegment, speaker: MeetingSpeaker?) -> String {
+        displayKey(
+            personID: segment.allowsPersonAssociation(from: speaker) ? speaker?.personID : nil,
+            track: speaker?.track ?? segment.source?.rawValue ?? "", label: segment.speaker)
     }
 
     static func index(for key: String) -> Int {
         let hash = key.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
-        return Int(hash % 8)
+        return Int(hash % 1_000_003)
     }
     static func indices(for keys: [String], preserving previous: [String: Int] = [:]) -> [String: Int] {
         var result = previous
-        var used = Set(previous.values)
-        for key in Set(keys).sorted() where result[key] == nil {
-            var slot = 0
-            while used.contains(slot) { slot += 1 }
-            result[key] = slot
-            used.insert(slot)
-        }
+        // Derive each slot independently so reopening a subset or adding another
+        // speaker cannot change an existing identity's color.
+        for key in keys where result[key] == nil { result[key] = index(for: key) }
         return result
     }
 
@@ -1377,8 +1379,36 @@ enum TranscriptSpeakerPalette {
             var resolved = NSColor.labelColor
             appearance.performAsCurrentDrawingAppearance {
                 let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let source = tint.usingColorSpace(.sRGB) ?? tint
-                resolved = source.blended(withFraction: 0.45, of: isDark ? .white : .black) ?? .labelColor
+                guard let source = tint.usingColorSpace(.sRGB) else { return }
+                let channels = [source.redComponent, source.greenComponent, source.blueComponent]
+                func luminance(_ components: [CGFloat]) -> CGFloat {
+                    let linear = components.map { value in
+                        value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+                    }
+                    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+                }
+                let backgrounds = [
+                    NSColor.windowBackgroundColor, .textBackgroundColor, .unemphasizedSelectedContentBackgroundColor,
+                ].compactMap { base -> CGFloat? in
+                    guard let base = base.usingColorSpace(.sRGB) else { return nil }
+                    return luminance(
+                        zip(channels, [base.redComponent, base.greenComponent, base.blueComponent])
+                            .map { $0 * 0.12 + $1 * 0.88 })
+                }
+                // Preserve the identity hue while adjusting its text contrast against
+                // the translucent badge, including a selected transcript row.
+                for step in 9...20 {
+                    let fraction = CGFloat(step) / 20
+                    let components = channels.map { $0 * (1 - fraction) + (isDark ? fraction : 0) }
+                    let foreground = luminance(components)
+                    resolved = NSColor(
+                        srgbRed: components[0], green: components[1], blue: components[2], alpha: 1)
+                    if backgrounds.allSatisfy({
+                        (max(foreground, $0) + 0.05) / (min(foreground, $0) + 0.05) >= 4.5
+                    }) {
+                        break
+                    }
+                }
             }
             return resolved
         }
@@ -1398,15 +1428,16 @@ enum TranscriptSpeakerPalette {
 @MainActor final class TranscriptSpeakerBadge: NSView {
     var tint: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
     var unresolved = false { didSet { needsDisplay = true } }
+    var outlined = false { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 9, yRadius: 9)
         tint.withAlphaComponent(0.12).setFill()
         path.fill()
-        if unresolved {
+        if unresolved || outlined {
             TranscriptSpeakerPalette.foreground(for: tint).withAlphaComponent(0.8).setStroke()
             path.lineWidth = 1
             path.lineCapStyle = .round
-            path.setLineDash([1, 3], count: 2, phase: 0)
+            if unresolved { path.setLineDash([1, 3], count: 2, phase: 0) }
             path.stroke()
         }
     }
@@ -1515,8 +1546,11 @@ enum TranscriptSpeakerPalette {
         speakerHeight = 20
         speakerWidth = min(
             100, ceil((row.speakerBadgeLabel as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
-        let colorKey = row.personID?.uuidString ?? row.speakerID?.uuidString ?? row.speaker
-        badge.tint = TranscriptSpeakerPalette.color(for: colorKey, index: row.speakerColorIndex)
+        let colorKey =
+            row.personID?.uuidString ?? row.speakerColorKey
+            ?? TranscriptSpeakerPalette.displayKey(personID: nil, track: row.source?.rawValue ?? "", label: row.speaker)
+        badge.tint = TranscriptSpeakerPalette.color(for: colorKey)
+        badge.outlined = row.personID != nil
         badge.unresolved = row.hasTentativePerson || (row.personID == nil && !row.isSourcePlaceholder)
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
         if !body.isEditable {

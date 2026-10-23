@@ -1,7 +1,7 @@
 ---
 title: People voice library
 date: 2026-10-03
-updated: 2026-10-22
+updated: 2026-10-23
 status: implemented
 scope: swift-people-speaker-association
 ---
@@ -15,6 +15,12 @@ People currently shows contact details and associated meetings, without the audi
 The existing People screen was inspected on October 3 before implementation. Its split layout has a person list, contact form, meeting list, and contextual chat. Keep that navigation and the persistent player; make voice review discoverable without replacing familiar meeting access.
 
 ## Experience
+
+Associations organize the library automatically; confirmation improves recognition when useful. The intended outcome is useful automatic transcripts, correction when needed, and selective voice-library review. Recognizing a familiar speaker must not require confirmation in every meeting. Review should prioritize ambiguous identities and useful new reference evidence rather than repeatedly requesting approval of redundant examples.
+
+A person's Meetings list includes every meeting with a transcript line associated with that person, including tentative associations, plus explicit attendance assignments. Count each meeting once. Corrections update derived membership automatically; removing the last associated line removes the derived link while preserving explicit attendance. This navigation rule does not promote machine associations into confirmed training evidence.
+
+Named transcript badges use solid borders for strong or confirmed associations and dotted borders for tentative associations. Both support correction. Color identifies the person using a stable person ID, or the audio source and speaker index for an unidentified voice. Color generation is deterministic across meetings and launches, supports arbitrary identities without a fixed palette cycle, and uses readable light and dark variants. Color alone never communicates identity or confidence.
 
 People provides **Review Library** for named and unnamed people. A permanent compact horizontal bar above the person list and detail shows people with new pending matches and unnamed people, with one Review Library action. Loading, empty, and error states keep this entry point visible. The bar is navigation and cannot be dismissed. **Review This Person** is scoped to the selected person; both labels omit ellipses. The chooser shows named people with playable candidates first, followed by unnamed proposed people. Each chooser row is one line: person name, sample count, the most recent pending meeting’s title in a quiet label, and a count of additional meetings. Both open the same sample list and detail panel. Person-level review controls show the actionable candidate count and are disabled when no playable candidates exist. An unnamed group offers **Name This Person…**. A person's review includes existing samples as listening references, labeled by confirmation state. Recording titles, dates, sources, timestamps, and review states provide context. Opening or selecting an excerpt starts playback and cancels the previous excerpt, including pending loads. Excerpts stop at their boundary. Recording continues to block playback.
 
@@ -74,7 +80,9 @@ Transcript attribution and reference-sample review serve different purposes. A r
 
 Recorded transcript matching uses confirmed reference profiles. The default automatic rule requires similarity of at least 0.80 and a lead of 0.08 over the next comparable person. A positive score with that lead over another comparable person can produce a tentative attribution below the automatic threshold. Tentative names show a question mark; accessible help distinguishes tentative, automatic and assigned identities. These defaults are provisional policies, not calibrated confidence estimates. Explicit provider settings remain authoritative. Review suggestions retain their independent 0.55 threshold.
 
-Persist machine attribution separately from human confirmation, including its score, margin, tier and policy. Validate audio and policy before projecting it; saved-speaker evidence validates its diarization generation, while separate discovery validates configuration and current row coverage; preserve manual corrections and Undo. Automatic and tentative transcript names never enroll reference audio. Only explicitly confirmed suitable excerpts contribute to future matching. Tentative names stay outside meeting attendance and confirmed search metadata; speaker controls and exported or generated text identify them as tentative. A transcript correction changes speaker identity without approving every reference excerpt. Keep acoustic uncertainty separate from tentative person identity so a tentative name does not claim that an unresolved passage has a detected speaker.
+Persist machine attribution separately from human confirmation, including its score, margin, tier and policy. Validate audio and policy before projecting it; saved-speaker evidence validates its diarization generation, while separate discovery validates configuration and current row coverage; preserve manual corrections and Undo. Automatic and tentative transcript names never enroll reference audio. Only explicitly confirmed suitable excerpts contribute to future matching. People meeting membership includes tentative transcript associations; this supersedes the earlier exclusion of tentative names from that navigation. Keep confirmed search evidence distinct from tentative identity. A transcript correction changes speaker identity without approving every reference excerpt. Keep acoustic uncertainty separate from tentative person identity so a tentative name does not claim that an unresolved passage has a detected speaker.
+
+Summary generation includes all associated named speakers. Mark tentative transcript names with `?` and explain once in the prompt that this suffix denotes low-confidence speaker attribution. The summarizing model can then account for uncertainty without losing named-speaker context. The prompt's participant context and transcript labels must agree; this does not establish verified attendance or voice enrollment.
 
 Validation must include unrelated video speakers, one-person galleries, mixed microphone/system conditions, short and overlapping speech, and held-out recordings. User confirmations improve the evidence library without retraining the base neural model. Threshold changes alone do not establish improved accuracy. Do not automatically tune thresholds on the same examples used for enrollment and claim independent validation.
 

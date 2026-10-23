@@ -174,18 +174,23 @@ import Testing
         for name in [NSAppearance.Name.aqua, .darkAqua] {
             let appearance = NSAppearance(named: name)!
             appearance.performAsCurrentDrawingAppearance {
-                for index in 0..<8 {
+                for index in Array(0..<32) + (0..<64).map({ TranscriptSpeakerPalette.index(for: "person-\($0)") }) {
                     let tint = TranscriptSpeakerPalette.color(for: "", index: index)
                     let foreground = TranscriptSpeakerPalette.foreground(for: tint).usingColorSpace(.sRGB)!
                     let fill = tint.usingColorSpace(.sRGB)!
-                    let base = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)!
                     let fg = luminance([foreground.redComponent, foreground.greenComponent, foreground.blueComponent])
-                    let bg = luminance(
-                        zip(
-                            [fill.redComponent, fill.greenComponent, fill.blueComponent],
-                            [base.redComponent, base.greenComponent, base.blueComponent]
-                        ).map { $0 * 0.12 + $1 * 0.88 })
-                    #expect((max(fg, bg) + 0.05) / (min(fg, bg) + 0.05) >= 4.5)
+                    for background in [
+                        NSColor.windowBackgroundColor, .textBackgroundColor,
+                        .unemphasizedSelectedContentBackgroundColor,
+                    ] {
+                        let base = background.usingColorSpace(.sRGB)!
+                        let bg = luminance(
+                            zip(
+                                [fill.redComponent, fill.greenComponent, fill.blueComponent],
+                                [base.redComponent, base.greenComponent, base.blueComponent]
+                            ).map { $0 * 0.12 + $1 * 0.88 })
+                        #expect((max(fg, bg) + 0.05) / (min(fg, bg) + 0.05) >= 4.5)
+                    }
                 }
             }
         }
@@ -301,6 +306,11 @@ import Testing
         #expect(colors == TranscriptSpeakerPalette.indices(for: keys.reversed()))
         #expect(Set(colors.values).count == keys.count)
         for key in keys {
+            #expect(TranscriptSpeakerPalette.indices(for: [key])[key] == colors[key])
+            #expect(TranscriptSpeakerPalette.indices(for: ["new-speaker", key])[key] == colors[key])
+        }
+        #expect(TranscriptSpeakerPalette.index(for: "system:sys_02") == 963710)
+        for key in keys {
             #expect(TranscriptSpeakerPalette.indices(for: [key], preserving: colors)[key] == colors[key])
             #expect(
                 TranscriptSpeakerPalette.indices(for: ["new-speaker", key], preserving: colors)[key] == colors[key])
@@ -319,13 +329,62 @@ import Testing
         cell.layout()
         let tint = cell.badge.tint
         #expect(!cell.badge.unresolved)
+        #expect(cell.badge.outlined)
+        #expect(first.canAssignPerson)
         #expect(cell.badge.frame.width < 100)
         cell.configure(second, showsSpeakers: true)
         #expect(cell.badge.tint == tint)
+        var tentative = second
+        tentative.transcriptAssociationTier = .tentative
+        tentative.speakerColorIndex = 2
+        cell.configure(tentative, showsSpeakers: true)
+        #expect(cell.badge.tint == tint)
+        #expect(cell.badge.unresolved)
+        #expect(tentative.canAssignPerson)
+        #expect(cell.speaker.stringValue == "Alex ?")
         cell.configure(
             TranscriptDisplayRow(id: UUID(), start: 2, end: 3, speaker: "mic_00", speakerID: UUID(), text: ""),
             showsSpeakers: true)
         #expect(cell.badge.unresolved)
+    }
+
+    @Test func savedColorIdentityUsesSegmentSourceWhenSpeakerMetadataIsAbsent() {
+        let speaker = MeetingSpeaker(label: "sys_01", track: "system", providerName: "Synthetic")
+        let segment = TranscriptSegment(
+            start: 0, end: 1, speaker: "sys_01", text: "Synthetic passage.", source: .system)
+        #expect(
+            TranscriptSpeakerPalette.displayKey(for: segment, speaker: nil)
+                == TranscriptSpeakerPalette.displayKey(for: segment, speaker: speaker))
+    }
+
+    @Test func sourceColorIdentityCanonicalizesRecognizedProviderLabels() {
+        #expect(
+            TranscriptSpeakerPalette.displayKey(personID: nil, track: "SYS", label: "sys_SPEAKER_01")
+                == TranscriptSpeakerPalette.displayKey(personID: nil, track: "system", label: "sys_01"))
+        #expect(
+            TranscriptSpeakerPalette.displayKey(personID: nil, track: "mic", label: "mic_SPEAKER_01")
+                == TranscriptSpeakerPalette.displayKey(personID: nil, track: "microphone", label: "mic_01"))
+        #expect(
+            TranscriptSpeakerPalette.displayKey(personID: nil, track: "system", label: "Custom SPEAKER_01")
+                == "system:Custom SPEAKER_01")
+    }
+
+    @Test func sourceSpeakerColorsSurviveNewMeetingsAndSeparateSources() {
+        let cell = TranscriptNativeCell(frame: NSRect(x: 0, y: 0, width: 600, height: 28))
+        func row(track: String, label: String, slot: Int) -> TranscriptDisplayRow {
+            TranscriptDisplayRow(
+                id: UUID(), start: 0, end: 1, speaker: label, speakerID: UUID(), text: "",
+                speakerColorIndex: slot,
+                speakerColorKey: TranscriptSpeakerPalette.displayKey(personID: nil, track: track, label: label))
+        }
+        cell.configure(row(track: "system", label: "sys_02", slot: 1), showsSpeakers: true)
+        let tint = cell.badge.tint
+        cell.configure(row(track: "SYS", label: "sys_02", slot: 7), showsSpeakers: true)
+        #expect(cell.badge.tint == tint)
+        cell.configure(row(track: "system", label: "sys_03", slot: 1), showsSpeakers: true)
+        #expect(cell.badge.tint != tint)
+        cell.configure(row(track: "microphone", label: "sys_02", slot: 1), showsSpeakers: true)
+        #expect(cell.badge.tint != tint)
     }
 
     @Test func manualScrollCancelsAndTemporarilySuppressesPlaybackFollow() async throws {

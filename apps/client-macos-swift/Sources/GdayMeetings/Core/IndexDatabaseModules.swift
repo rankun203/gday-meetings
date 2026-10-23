@@ -2,7 +2,7 @@ import Foundation
 
 extension IndexDatabase.Module {
     static let library = Self(
-        namespace: "core_library", version: 4,
+        namespace: "core_library", version: 5,
         tables: [
             .init(
                 name: "meetings",

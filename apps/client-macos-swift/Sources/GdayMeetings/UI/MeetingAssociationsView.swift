@@ -95,9 +95,8 @@ struct MeetingSpeakersView: View {
                 let speakers = meeting.speakers.filter {
                     $0.canReviewVoice
                 }
-                let slots = MeetingSpeakerColors.slots(for: meeting.speakers)
                 ForEach(speakers) { speaker in
-                    speakerRow(speaker, slots: slots)
+                    speakerRow(speaker)
                 }
             }
         }
@@ -118,7 +117,7 @@ struct MeetingSpeakersView: View {
         }
     }
 
-    private func speakerRow(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
+    private func speakerRow(_ speaker: MeetingSpeaker) -> some View {
         HStack(spacing: 12) {
             Text(speaker.displayLabel.isEmpty ? "Unlabeled" : speaker.displayLabel)
                 .font(.callout.monospaced())
@@ -128,7 +127,7 @@ struct MeetingSpeakersView: View {
             if !speaker.canAssignPerson {
                 Text(personName(for: speaker) ?? "Unassigned").lineLimit(1)
             }
-            actions(speaker, slots: slots)
+            actions(speaker)
         }
         .frame(minHeight: 28)
     }
@@ -138,7 +137,7 @@ struct MeetingSpeakersView: View {
         return speaker.voiceReviewOrigin?.transcriptAssociationTier == .tentative ? "\(name) (Tentative)" : name
     }
 
-    @ViewBuilder private func actions(_ speaker: MeetingSpeaker, slots: [UUID: Int]) -> some View {
+    @ViewBuilder private func actions(_ speaker: MeetingSpeaker) -> some View {
         if !speaker.canAssignPerson {
             Button("Remove Assignment") {
                 Task { await store.assignSpeaker(meetingID: meetingID, speakerID: speaker.id, personID: nil) }
@@ -169,7 +168,7 @@ struct MeetingSpeakersView: View {
                     }
                 } label: {
                     if let name = personName(for: speaker),
-                        let tint = TranscriptSpeakerPalette.assignmentTint(for: speaker, slots: slots)
+                        let tint = TranscriptSpeakerPalette.assignmentTint(for: speaker)
                     {
                         Text(name)
                             .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
@@ -181,7 +180,7 @@ struct MeetingSpeakersView: View {
                 .modifier(
                     SpeakerAssignmentMenuStyle(
                         tint: personName(for: speaker) == nil
-                            ? nil : TranscriptSpeakerPalette.assignmentTint(for: speaker, slots: slots))
+                            ? nil : TranscriptSpeakerPalette.assignmentTint(for: speaker))
                 )
                 .lineLimit(1)
                 .frame(maxWidth: 240, alignment: .trailing)
@@ -209,11 +208,10 @@ struct MeetingSpeakersView: View {
 }
 
 extension TranscriptSpeakerPalette {
-    /// Use the same complete-meeting allocation as saved transcript badges.
-    static func assignmentTint(for speaker: MeetingSpeaker, slots: [UUID: Int]) -> NSColor? {
-        guard speaker.personID != nil else { return nil }
-        let identity = MeetingSpeakerColors.identity(speaker)
-        return color(for: identity.uuidString, index: slots[identity])
+    /// A person keeps the same color across meetings and assignment changes.
+    static func assignmentTint(for speaker: MeetingSpeaker) -> NSColor? {
+        guard let personID = speaker.personID else { return nil }
+        return color(for: personID.uuidString)
     }
 }
 

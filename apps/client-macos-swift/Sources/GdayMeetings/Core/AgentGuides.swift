@@ -77,7 +77,7 @@ enum AgentGuides {
 
         ## Authority and missing files
 
-        - `metadata.json` owns `id`, `title`, `createdAt`, `duration`, `audioFiles`, `personIDs`, and `tagIDs`. Its `summary` is a short list preview, not the full summary. It does not contain `language`.
+        - `metadata.json` owns `id`, `title`, `createdAt`, `duration`, `audioFiles`, `personIDs`, and `tagIDs`. Optional `associatedPersonIDs` is derived People navigation membership, including tentative transcript associations. Its `summary` is a short list preview, not the full summary. It does not contain `language`.
         - `notes.md`, `transcript.jsonl`, and `summary.md` hold current full content. `transcript.jsonl` contains one `{id, start, end, text, speaker, speakerID?}` object per line, not a JSON array or an object with a `segments` field.
         - `content.json` owns speakers, to-dos, retained meeting chat, language, recording details, provenance, and processing checkpoints. Its notes/transcript/summary fields are normally empty; use the separate files. Metadata overrides duplicated identity fields here.
         - An empty canonical transcript means deliberately empty current content. Do not substitute history or older live files. Older transcript formats require verified migration before opening the library.
@@ -112,7 +112,7 @@ enum AgentGuides {
         - Ordinary JSON calendar dates, including revision/task dates, are seconds since **2001-01-01 UTC**. Add `978307200` for Unix seconds, then apply the display timezone. Data-event `startedAt`/`endedAt` use **milliseconds since 1970-01-01 UTC**; divide by 1000 for Unix seconds.
         - Duration and transcript `start`/`end` are seconds; transcript times are relative to recording start. Cite `MM:SS` or `H:MM:SS`, not search-result line numbers.
         - Resolve `segment.speakerID` to `content.json.speakers[].id`, then that speaker's `personID` to `people/<personID>.json.name`. If unresolved, retain the segment's `speaker` label and state that identity is unknown. Labels are scoped to a meeting/result/track; matching labels across meetings do not identify the same person.
-        - Metadata `personIDs` include speaker assignments but do not prove that every participant spoke. Voice embeddings/samples are private recognition data, not useful text evidence; skip them.
+        - Metadata `personIDs` include speaker assignments but do not prove that every participant spoke. `associatedPersonIDs` additionally includes tentative transcript identities; consult transcript association state before asserting who spoke. Voice embeddings/samples are private recognition data, not useful text evidence; skip them.
 
         ## Notes and transcript quality
 

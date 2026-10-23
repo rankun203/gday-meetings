@@ -27,12 +27,15 @@ import Testing
                 VoiceExample(
                     meetingID: older, speakerID: UUID(), source: "system", personID: second, review: .confirmed),
             ]))
+        await store.flushVoiceAssignmentRefresh()
         store.clearLoadedMeetingCache()
         if failSave {
             try Data("broken".utf8).write(to: store.directory(for: older).appendingPathComponent("content.json"))
         }
         #expect(!(await store.mergePeople(ids: [first, second], into: unrelated)))
-        #expect(await store.mergePeople(ids: [first, second, kept], into: kept) == !failSave)
+        #expect(
+            await store.mergePeople(ids: [first, second, kept], into: kept) == !failSave,
+            Comment(rawValue: store.errorMessage ?? "No error"))
         let diskPeople = try FileEntityStorage.load(Person.self, kind: "people", directory: root)
         #expect(Set(diskPeople.map(\.id)) == (failSave ? [first, second, kept, unrelated] : [kept, unrelated]))
         let meeting = try MeetingFolderStorage.read(id: newer, directory: root)

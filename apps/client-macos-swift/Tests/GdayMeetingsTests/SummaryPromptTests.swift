@@ -4,6 +4,87 @@ import Testing
 @testable import GdayMeetings
 
 struct SummaryPromptTests {
+    @Test func includesCertainAndTentativeParticipantsWithTheirNotes() {
+        var certain = Person(name: "Alex")
+        certain.notes = "Coordinates scheduling."
+        var tentative = Person(name: "Sam")
+        tentative.notes = "Maintains release notes."
+        let unassociated = Person(name: "Taylor")
+        let certainSpeaker = MeetingSpeaker(
+            label: "mic_01", track: "microphone", providerName: "Synthetic", personID: certain.id)
+        var tentativeSpeaker = MeetingSpeaker(
+            label: "sys_01", track: "system", providerName: "Synthetic", personID: tentative.id)
+        tentativeSpeaker.voiceReviewOrigin = .init(
+            speakerID: tentativeSpeaker.id, transcriptAssociationTier: .tentative)
+        var meeting = Meeting(title: "Planning")
+        meeting.speakers = [certainSpeaker, tentativeSpeaker]
+        meeting.transcript = [
+            .init(start: 0, end: 2, speaker: "mic_01", text: "Choose a date.", speakerID: certainSpeaker.id),
+            .init(start: 3, end: 5, speaker: "sys_01", text: "I will draft notes.", speakerID: tentativeSpeaker.id),
+        ]
+        let context = SummaryPrompt.messages(
+            provider: ServiceProvider(kind: .openAICompatible), meeting: meeting,
+            people: [certain, tentative, unassociated])[1].content
+        #expect(context.contains("Participants: Alex, Sam ?\n"))
+        #expect(context.contains("Alex: Coordinates scheduling."))
+        #expect(context.contains("Sam ?: Maintains release notes."))
+        #expect(context.contains("[00:03] Sam ?: I will draft notes."))
+        #expect(context.components(separatedBy: "A name followed by `?`").count == 2)
+        #expect(context.contains("preserve `?` whenever attributing speech or actions"))
+        #expect(!context.contains(unassociated.name))
+    }
+
+    @Test(arguments: [false, true])
+    func independentAttendanceRetainsCertainParticipantContextWithTentativeSpeech(storedAttendance: Bool) {
+        var person = Person(name: "Alex")
+        person.notes = "Coordinates scheduling."
+        var speaker = MeetingSpeaker(
+            label: "sys_01", track: "system", providerName: "Synthetic", personID: person.id)
+        speaker.voiceReviewOrigin = .init(speakerID: speaker.id, transcriptAssociationTier: .tentative)
+        var meeting = Meeting(title: "Planning")
+        if storedAttendance { meeting.personIDs = [person.id] }
+        meeting.speakers = [speaker]
+        if !storedAttendance {
+            meeting.speakers.append(
+                MeetingSpeaker(label: "sys_02", track: "system", providerName: "Synthetic", personID: person.id))
+        }
+        meeting.transcript = [
+            .init(start: 0, end: 2, speaker: "sys_01", text: "Choose a date.", speakerID: speaker.id)
+        ]
+        let context = SummaryPrompt.messages(
+            provider: ServiceProvider(kind: .openAICompatible), meeting: meeting, people: [person])[1].content
+        #expect(context.contains("Participants: Alex\n"))
+        #expect(context.contains("Alex: Coordinates scheduling."))
+        #expect(context.contains("[00:00] Alex ?: Choose a date."))
+        #expect(meeting.speakerName(for: meeting.transcript[0], people: [person]) == "Alex (Tentative)")
+    }
+
+    @Test func strongSpeakerWithoutCurrentRowsKeepsCertainParticipantContext() {
+        var person = Person(name: "Alex")
+        person.notes = "Coordinates scheduling."
+        var meeting = Meeting(title: "Planning")
+        meeting.speakers = [
+            MeetingSpeaker(label: "sys_01", track: "system", providerName: "Synthetic", personID: person.id)
+        ]
+        let context = SummaryPrompt.messages(
+            provider: ServiceProvider(kind: .openAICompatible), meeting: meeting, people: [person])[1].content
+        #expect(context.contains("Participants: Alex\n"))
+        #expect(context.contains("Alex: Coordinates scheduling."))
+        #expect(!context.contains("Alex ?"))
+        #expect(!context.contains("low-confidence speaker association"))
+    }
+
+    @Test func certainAndLegacyNamesNeedNoAssociationExplanation() {
+        let person = Person(name: "Alex")
+        var meeting = Meeting(title: "Planning")
+        meeting.personIDs = [person.id]
+        meeting.transcript = [.init(start: 0, end: 2, speaker: "Sam", text: "Choose a date.")]
+        let context = SummaryPrompt.messages(
+            provider: ServiceProvider(kind: .openAICompatible), meeting: meeting, people: [person])[1].content
+        #expect(context.contains("Participants: Alex, Sam\n"))
+        #expect(!context.contains("low-confidence speaker association"))
+    }
+
     @Test func requestInstructionsOverrideLanguageWithoutChangingMeetingOrProvider() throws {
         let provider = ServiceProvider(kind: .openAICompatible)
         var meeting = Meeting()

@@ -199,6 +199,19 @@ enum SpeakerRecognition {
 }
 
 extension Meeting {
+    /// People includes every attributed passage while retaining independent attendees.
+    var associatedPersonIDs: [UUID] {
+        let byID = Dictionary(speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let attributed = transcript.compactMap { row -> UUID? in
+            guard let id = row.speakerID, let speaker = byID[id], row.allowsPersonAssociation(from: speaker)
+            else { return nil }
+            return speaker.personID
+        }
+        return Array(Set(personIDs + speakers.compactMap(\.attendancePersonID) + attributed)).sorted {
+            $0.uuidString < $1.uuidString
+        }
+    }
+
     /// Old Swift transcripts stored display names only. Preserve them as labels,
     /// without guessing a Person link or creating a voice recognition sample.
     mutating func restoreSpeakerIdentities() {
@@ -215,14 +228,15 @@ extension Meeting {
 
     func speakerName(
         for segment: TranscriptSegment, people: [Person],
-        compactProviderLabel: Bool = false
+        compactProviderLabel: Bool = false,
+        tentativeNameSuffix: String = " (Tentative)"
     ) -> String {
         if let speaker = speakers.first(where: { $0.id == segment.speakerID }) {
             if segment.allowsPersonAssociation(from: speaker),
                 let person = people.first(where: { $0.id == speaker.personID })
             {
                 return speaker.voiceReviewOrigin?.transcriptAssociationTier == .tentative
-                    ? "\(person.name) (Tentative)" : person.name
+                    ? person.name + tentativeNameSuffix : person.name
             }
             if speaker.sourcePlaceholder != nil { return speaker.displayLabel }
         }

@@ -1,7 +1,7 @@
 ---
 title: Review responsiveness
 date: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-23
 status: validated
 scope: swift-app
 ---
@@ -11,6 +11,22 @@ scope: swift-app
 The supplied 280.23-second startup and usage trace contains 423 responsiveness events over 33 ms: 324 under 100 ms, 97 between 100 and 250 ms, and two over 250 ms (maximum 279.62 ms). Repeated SwiftUI graph and layout work dominates review interactions. The case-by-case report, including all 423 events, is in ignored `tmp/review-responsiveness/startup-analysis.html`. These flags describe the recorded workload, not a general launch benchmark.
 
 ## User Intention
+
+### Automatic organization and stable transcript labels
+
+The accepted principle is: associations organize the library automatically; confirmation improves recognition when useful. The intended outcome is useful automatic transcripts, correction when needed, and selective voice-library review, with minimal user intervention. Familiar voices should not require approval in every meeting. People must include every meeting with a line associated with that person, including tentative names, counted once. Corrections update derived membership while explicit attendance remains intact. This supersedes the previous exclusion of tentative names from People navigation; confirmed training evidence remains separate.
+
+Strong named transcript labels should have solid borders and weaker matches dotted borders; both remain editable. Source/index colors must remain stable across meetings, and named speakers use stable person identity. Generate additional hues deterministically with readable light/dark variants. Summary prompts include every associated named speaker and explain the low-confidence `?` suffix once.
+
+**Implementation:** shared derived association membership is stored in meeting metadata and the disposable People index. Legacy metadata derives membership from saved transcript associations during index reconciliation; unreadable content retains attendance-only navigation and still reports its opening error. Person merging and deletion include tentative links. Startup recovery distinguishes missing tentative membership from missing strong attendance, allowing confidence upgrades to repair without unnecessary repeated loads. Summary participant context includes tentative names and notes with a single explanation of the `?` suffix; chat and exports retain the self-explanatory “Tentative” qualifier. Native labels use deterministic identity colors and solid/dotted borders. The design document records the revised contract. Existing running trial data and bundles remain unchanged.
+
+**Validation:** the initial 63-test membership/projection run passed. Expanded tests exposed insufficient contrast for generated hues and a merge fixture that attempted mutation before its background refresh finished. Foreground colors now meet the contrast target against tinted window, text and selected-row backgrounds; 32 native transcript tests passed, including 576 theme/background/hue combinations. The merge fixture waits for refresh completion, preserving the production guard. Final integrated validation passed 129 tests across 12 suites, repository macOS lint and whitespace checks. The isolated release build passed in 156.41 seconds (macOS 26 minimum, SDK 27); staged source matched the build snapshot and both packaged bundles passed strict signature verification. Native light/dark captures were inspected. A tentative label opened correction controls and changed to a solid named label with the same color as the existing identity; strong labels remained editable. Synthetic silent fixtures do not establish real-audio recognition accuracy or summary-model output quality. Existing Command Line Tools linker-directory warnings and unrelated transcription-test Sendable warnings remain.
+
+**Independent review:** Claude Code Opus 5.5 identified the tentative-to-strong startup upgrade gap, legacy indexing failure fallback, summary certainty for strong speakers without rows, and ambiguous `?` outside summary prompts. Each was addressed with regression coverage. Rejected per-meeting hue reassignment because it violates stable cross-meeting identity; labels remain authoritative when hues are similar. Removed redundant saved-view color-index computation. Stored color slots and legacy live plumbing remain backward-readable; current production live capture performs no speaker matching, so tentative live matching is not an active path. Follow-up Claude Code Opus 5.5 review found no remaining material correctness or lifecycle regressions in the scoped changes.
+
+**Technical debt:** existing legacy attendance records do not identify every explicit-versus-derived overlap. Preserve that limitation rather than infer historical user intent; a future provenance migration must reconcile those overlaps conservatively. Legacy metadata can require repeated transcript reads during full reconciliation until rewritten; measure this cost before adding migration receipts. Tentative association quality remains an uncalibrated matching policy. Color generation supports arbitrary keys; perceptually distinct colors cannot be guaranteed for an unlimited number of identities, so text labels remain authoritative. Stored color slots and legacy live color plumbing remain for compatibility and can be removed together after their remaining consumers are retired.
+
+**Trial data:** the independent follow-up copy retains 24 completed recordings, 20 people, 113 voice examples and 60 confirmed examples. Verified source inventory and hashes stayed stable during capture. No labels were reset; pending jobs, Undo history and disposable indexes were omitted. Remote providers and automatic remote processing are disabled. Private data and manifests stay ignored. Test8 and its focused testing instructions are under ignored `tmp/review-test8/`; the prior running trial is unchanged.
 
 ### Responsiveness and correctness
 

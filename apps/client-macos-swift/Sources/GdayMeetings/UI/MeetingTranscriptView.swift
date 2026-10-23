@@ -393,10 +393,6 @@ struct MeetingTranscriptView: View {
         }
         let people = Dictionary(uniqueKeysWithValues: store.people.map { ($0.id, $0.name) })
         let speakers = usesCheckpoint ? draft?.speakers ?? [] : meeting.speakers
-        let speakerTracks = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.track) })
-        let speakerSlots = MeetingSpeakerColors.slots(for: speakers)
-        let speakerOrigins = Dictionary(
-            uniqueKeysWithValues: speakers.map { ($0.id, MeetingSpeakerColors.identity($0)) })
         let assignedPeople = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0.personID) })
         let speakerMetadata = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0) })
         let sourceIDs = Set(speakers.filter { !$0.canAssignPerson }.map(\.id))
@@ -415,13 +411,9 @@ struct MeetingTranscriptView: View {
             checkpoint
             || (draft?.hasUsableText == true && Set(source.map(\.id)) == Set(draft?.segments.map(\.id) ?? []))
         func colorKey(_ segment: TranscriptSegment) -> String {
-            if let speakerID = segment.speakerID { return (speakerOrigins[speakerID] ?? speakerID).uuidString }
-            return TranscriptSpeakerPalette.displayKey(
-                personID: nil, track: segment.speakerID.flatMap { speakerTracks[$0] } ?? "", label: segment.speaker)
+            TranscriptSpeakerPalette.displayKey(
+                for: segment, speaker: segment.speakerID.flatMap { speakerMetadata[$0] })
         }
-        let colorIndices = TranscriptSpeakerPalette.indices(
-            for: source.map(colorKey),
-            preserving: Dictionary(uniqueKeysWithValues: speakerSlots.map { ($0.key.uuidString, $0.value) }))
         displayRows = source.map { segment in
             TranscriptDisplayRow(
                 id: segment.id, start: segment.start, end: segment.end,
@@ -432,8 +424,6 @@ struct MeetingTranscriptView: View {
                 text: String(segment.text.drop(while: { $0.isWhitespace })),
                 personID: !segment.allowsPersonAssociation(from: segment.speakerID.flatMap { speakerMetadata[$0] })
                     ? nil : segment.speakerID.flatMap { assignedPeople[$0] ?? nil },
-                speakerColorIndex: segment.speakerID.flatMap { speakerOrigins[$0] }.flatMap { speakerSlots[$0] }
-                    ?? colorIndices[colorKey(segment)],
                 speakerColorKey: colorKey(segment),
                 isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false,
                 transcriptAssociationTier: segment.allowsPersonAssociation(

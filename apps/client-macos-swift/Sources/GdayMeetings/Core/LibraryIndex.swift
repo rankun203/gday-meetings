@@ -106,6 +106,15 @@ final class LibraryIndex: @unchecked Sendable {
             try quarantine(id: entry.id)
             throw MeetingFolderLocation.AccessError.duplicate
         }
+        var entry = entry
+        // Older metadata has attendance only. Rebuild derived membership from
+        // its transcript without rewriting the authoritative meeting files.
+        if entry.associatedPersonIDs == nil {
+            // Content can be damaged while list metadata remains valid. Keep
+            // attendance discoverable; opening the recording reports that damage.
+            entry.associatedPersonIDs =
+                (try? MeetingFolderStorage.read(folder: folder, entry: entry).associatedPersonIDs) ?? entry.personIDs
+        }
         let passages =
             refreshSearch ? try MeetingFolderStorage.searchPassages(folder: folder, directory: directory) : []
         if try self.entry(id: entry.id) == entry,
@@ -183,7 +192,7 @@ final class LibraryIndex: @unchecked Sendable {
             }
             let relation = try statement("INSERT OR IGNORE INTO relations VALUES(?,?,?,?)")
             defer { release(relation) }
-            for (kind, ids) in [("person", entry.personIDs), ("tag", entry.tagIDs)] {
+            for (kind, ids) in [("person", entry.effectiveAssociatedPersonIDs), ("tag", entry.tagIDs)] {
                 for id in ids {
                     sqlite3_reset(relation)
                     bind(entry.id.uuidString, 1, relation)
@@ -217,7 +226,7 @@ final class LibraryIndex: @unchecked Sendable {
         let query = try statement("SELECT kind,target,sortTime FROM relations WHERE meeting=?")
         defer { release(query) }
         bind(entry.id.uuidString, 1, query)
-        var people = Set(entry.personIDs.map(\.uuidString))
+        var people = Set(entry.effectiveAssociatedPersonIDs.map(\.uuidString))
         var tags = Set(entry.tagIDs.map(\.uuidString))
         while true {
             let status = sqlite3_step(query)

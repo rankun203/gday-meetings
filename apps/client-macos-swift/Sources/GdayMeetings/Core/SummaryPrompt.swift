@@ -54,18 +54,49 @@ enum SummaryPrompt {
                 "For this summary, these instructions take precedence over the default language and format above.\n\n"
             system += instructions
         }
-        let names = Set(meeting.transcript.map { meeting.speakerName(for: $0, people: people) }.filter { !$0.isEmpty })
+        let participantIDs = Set(meeting.associatedPersonIDs)
+        let speakersByID = Dictionary(meeting.speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let associatedSpeakers = meeting.transcript.compactMap { segment -> MeetingSpeaker? in
+            guard let id = segment.speakerID, let speaker = speakersByID[id],
+                segment.allowsPersonAssociation(from: speaker)
+            else { return nil }
+            return speaker
+        }
+        let certainParticipantIDs = Set(MeetingListEntry(meeting).personIDs)
+        let participants = people.filter { participantIDs.contains($0.id) }
+        let participantNames = Dictionary(
+            uniqueKeysWithValues: participants.map {
+                ($0.id, certainParticipantIDs.contains($0.id) ? $0.name : "\($0.name) ?")
+            })
+        let unnamedTranscriptLabels = meeting.transcript.compactMap { segment -> String? in
+            if let id = segment.speakerID, let speaker = speakersByID[id],
+                segment.allowsPersonAssociation(from: speaker),
+                let personID = speaker.personID, participantNames[personID] != nil
+            {
+                return nil
+            }
+            let name = meeting.speakerName(for: segment, people: people, tentativeNameSuffix: " ?")
+            return name.isEmpty ? nil : name
+        }
+        let names = Set(unnamedTranscriptLabels + participantNames.values)
         let duration = max(0, Int(meeting.duration))
         var context = "Here is the meeting transcript:\n\nMeeting info\nMeeting: \(meeting.title)\n"
         context +=
             "Started: \(formatter.string(from: meeting.createdAt))\nDuration: \(duration / 60)m \(duration % 60)s\n"
         if !names.isEmpty { context += "Participants: \(names.sorted().joined(separator: ", "))\n" }
+        if associatedSpeakers.contains(where: {
+            $0.voiceReviewOrigin?.transcriptAssociationTier == .tentative
+                && $0.personID.map { participantNames[$0] != nil } == true
+        }) {
+            context +=
+                "\nA name followed by `?` is a low-confidence speaker association. Include these participants and preserve `?` whenever attributing speech or actions to them.\n"
+        }
         if !meeting.notes.isEmpty { context += "\nSession notes\n\(NotesDocument(meeting.notes).citedText)\n" }
-        let participantIDs = Set(meeting.personIDs + meeting.speakers.compactMap(\.attendancePersonID))
-        let participantNotes = people.filter { participantIDs.contains($0.id) && !$0.notes.isEmpty }
+        let participantNotes = participants.filter { !$0.notes.isEmpty }
         if !participantNotes.isEmpty {
             context +=
-                "\nParticipant notes\n" + participantNotes.map { "\($0.name): \($0.notes)" }.joined(separator: "\n")
+                "\nParticipant notes\n"
+                + participantNotes.map { "\(participantNames[$0.id] ?? $0.name): \($0.notes)" }.joined(separator: "\n")
                 + "\n"
         }
         // Meeting tags currently have no notes field.
@@ -78,7 +109,7 @@ enum SummaryPrompt {
         context += meeting.transcript.map { segment in
             let seconds = max(0, Int(segment.start))
             let timestamp = String(format: "[%02d:%02d]", seconds / 60, seconds % 60)
-            let name = meeting.speakerName(for: segment, people: people)
+            let name = meeting.speakerName(for: segment, people: people, tentativeNameSuffix: " ?")
             return "\(timestamp) \(name.isEmpty ? "" : name + ": ")\(segment.text)"
         }.joined(separator: "\n")
         return [.init(role: "system", content: system), .init(role: "user", content: context)]

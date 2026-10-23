@@ -52,6 +52,60 @@ struct VoiceDecisionProjectionTests {
             #expect(try reopened.libraryIndex?.count(personID: person) == (kind == "validSpeaker" ? 1 : 0))
         }
     }
+    @Test(arguments: ["automatic", "tentative", "confirmed"], [false, true])
+    func startupRepairsAssociationMembershipAndAttendance(target: String, alreadyTentative: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let person = await store.addPerson(name: "Example Person")
+        var (meeting, original) = try fixture(directory: directory)
+        if alreadyTentative {
+            var tentative = original
+            tentative.personID = nil
+            tentative.review = .suggested
+            tentative.transcriptAssociation = .init(
+                personID: person, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+            meeting = VoiceDecisionProjection.apply(
+                to: meeting, evidence: [tentative], decisions: [], deletedPeople: [])
+        }
+        try await store.insertImportedMeeting(meeting)
+        let tier: VoiceTranscriptAssociation.Tier = target == "automatic" ? .automatic : .tentative
+        var example = original
+        example.personID = nil
+        example.review = .suggested
+        example.transcriptAssociation = .init(
+            personID: person, score: tier == .automatic ? 0.9 : 0.4, margin: 0.3, policy: .default, tier: tier)
+        if target == "confirmed" {
+            example.personID = person
+            example.review = .confirmed
+            example.transcriptAssociation = nil
+        }
+        store.voiceLibrary.didChange = nil
+        store.voiceLibrary.didChangeProjection = nil
+        #expect(store.voiceLibrary.upsert([example]))
+        for launch in 0..<2 {
+            let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+            await reopened.libraryMonitor?.stop()
+            reopened.libraryMonitor = nil
+            let reads = Mutex(0)
+            reopened.meetingLoadReader = { id, root in
+                reads.withLock { $0 += 1 }
+                return try MeetingFolderStorage.read(id: id, directory: root)
+            }
+            await reopened.flushVoiceAssignmentRefresh()
+            let needsRepair = !(alreadyTentative && target == "tentative")
+            #expect(reads.withLock { $0 } == (launch == 0 && needsRepair ? 1 : 0))
+            #expect(try reopened.libraryIndex?.count(personID: person) == 1)
+            let saved = try MeetingFolderStorage.read(id: meeting.id, directory: directory)
+            #expect(saved.associatedPersonIDs == [person])
+            #expect(
+                saved.speakers[0].voiceReviewOrigin?.transcriptAssociationTier == (target == "confirmed" ? nil : tier))
+            #expect(saved.personIDs.contains(person) == (target != "tentative"))
+        }
+    }
+
     @Test func refreshWaiterCompletesBeforeLaterUnrelatedBatch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -247,11 +301,13 @@ struct VoiceDecisionProjectionTests {
         #expect(result.transcript[1].associationUncertain == nil)
         #expect(result.transcript[2] == meeting.transcript[2])
         #expect(result.personIDs.contains(person) == (tier == .automatic))
+        #expect(result.associatedPersonIDs == [person])
         #expect(
             VoiceDecisionProjection.apply(to: result, evidence: [example], decisions: [], deletedPeople: []) == result)
         let restored = VoiceDecisionProjection.apply(to: result, evidence: [], decisions: [], deletedPeople: [])
         #expect(restored.speakers == meeting.speakers)
         #expect(restored.transcript == meeting.transcript)
+        #expect(restored.associatedPersonIDs.isEmpty)
     }
 
     @Test func machineAssociationRespectsPolicyChangesManualAssignmentAndRejection() throws {
@@ -637,7 +693,7 @@ struct VoiceDecisionProjectionTests {
         }
     }
 
-    @Test func tentativeSharedNamesMarkUncertaintyAndExcludeParticipantNotes() {
+    @Test func tentativeSharedNamesMarkUncertaintyAndIncludeParticipantNotes() {
         var person = Person(name: "Example Person")
         person.notes = "Private reference notes"
         var meeting = Meeting(title: "Synthetic recording")
@@ -650,8 +706,8 @@ struct VoiceDecisionProjectionTests {
         #expect(meeting.speakerName(for: meeting.transcript[0], people: [person]) == "Example Person (Tentative)")
         let messages = SummaryPrompt.messages(
             provider: ServiceProvider(kind: .openAICompatible), meeting: meeting, people: [person])
-        #expect(messages.contains { $0.content.contains("Example Person (Tentative)") })
-        #expect(!messages.contains { $0.content.contains(person.notes) })
+        #expect(messages.contains { $0.content.contains("Example Person ?") })
+        #expect(messages.contains { $0.content.contains(person.notes) })
     }
 
     @Test func explicitPassageCorrectionOutranksIndependentReferenceReview() throws {
@@ -720,6 +776,10 @@ struct VoiceDecisionProjectionTests {
             to: meeting, evidence: [example], decisions: [], deletedPeople: [])
         #expect(projected.personIDs == [person])
         #expect(projected.speakers[0].attendancePersonID == nil)
+        let corrected = VoiceDecisionProjection.apply(
+            to: projected, evidence: [], decisions: [], deletedPeople: [])
+        #expect(corrected.personIDs == [person])
+        #expect(corrected.associatedPersonIDs == [person])
     }
 
     private func fixture(directory: URL) throws -> (Meeting, VoiceExample) {

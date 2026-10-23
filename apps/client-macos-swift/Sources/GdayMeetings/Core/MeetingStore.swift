@@ -1156,7 +1156,9 @@ final class MeetingStore: ObservableObject {
                     let entry = MeetingListEntry(meeting)
                     guard cursor.map({ MeetingListEntry.newestFirst($0, entry) }) ?? true else { continue }
                     let matches =
-                        personID.map { entry.personIDs.contains($0) } ?? tagID.map { entry.tagIDs.contains($0) }
+                        personID.map { entry.effectiveAssociatedPersonIDs.contains($0) } ?? tagID.map {
+                            entry.tagIDs.contains($0)
+                        }
                         ?? false
                     if matches {
                         candidates[entry.id] = entry
@@ -1808,7 +1810,7 @@ extension MeetingStore {
         let index = libraryIndex
         let root = dataDirectory
         let generation = externalReloadGeneration
-        // Already-correct attendance uses lightweight metadata. Missing machine
+        // Already-correct association membership uses lightweight metadata. Missing machine
         // candidates need an off-main placement probe before loading UI state.
         let repair = Task.detached(priority: .utility) { () -> Set<UUID> in
             let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
@@ -1816,22 +1818,27 @@ extension MeetingStore {
             let examplesByMeeting = Dictionary(grouping: examples, by: \.meetingID)
             let decisionsByMeeting = Dictionary(grouping: decisions, by: \.meetingID)
             var expected: [UUID: Set<UUID>] = [:]
+            var expectedCertain: [UUID: Set<UUID>] = [:]
             for example in examples
             where !example.excluded && !example.manuallyCleared
                 && !conflicts.contains(example.id) && example.range != nil
             {
                 guard !Task.isCancelled else { return [] }
                 let machine = example.transcriptAssociation.flatMap { value in
-                    value.tier == .automatic && value.isValid && value.policy.normalized == policy.normalized
+                    value.isValid && value.policy.normalized == policy.normalized
                         && !example.rejectedPersonIDs.contains(value.personID) ? value.personID : nil
                 }
                 if let person = (example.review == .confirmed ? example.personID : machine), !deleted.contains(person) {
                     expected[example.meetingID, default: []].insert(person)
+                    if example.review == .confirmed || example.transcriptAssociation?.tier == .automatic {
+                        expectedCertain[example.meetingID, default: []].insert(person)
+                    }
                 }
             }
             for decision in decisions {
                 if let person = decision.personID, !deleted.contains(person) {
                     expected[decision.meetingID, default: []].insert(person)
+                    expectedCertain[decision.meetingID, default: []].insert(person)
                 }
             }
             var result = Set<UUID>()
@@ -1873,14 +1880,16 @@ extension MeetingStore {
                             MeetingListEntry.self,
                             from: Data(contentsOf: folder.appendingPathComponent("metadata.json")))
                     }
-                    let missingPeople = people.subtracting(entry.personIDs)
+                    let missingAssociations = people.subtracting(entry.effectiveAssociatedPersonIDs)
+                    let missingAttendance = (expectedCertain[id] ?? []).subtracting(entry.personIDs)
+                    let missingPeople = missingAssociations.union(missingAttendance)
                     guard !missingPeople.isEmpty else { continue }
                     let current = VoiceDecisionProjection.currentEvidence(
                         (examplesByMeeting[id] ?? []).filter {
                             !$0.excluded && !$0.manuallyCleared && !conflicts.contains($0.id)
                                 && (($0.review == .confirmed && $0.personID.map(missingPeople.contains) == true)
                                     || $0.transcriptAssociation.map {
-                                        $0.tier == .automatic && $0.isValid && $0.policy.normalized == policy.normalized
+                                        $0.isValid && $0.policy.normalized == policy.normalized
                                             && missingPeople.contains($0.personID)
                                     } == true)
                         }, directory: root)
@@ -1899,7 +1908,11 @@ extension MeetingStore {
                         let projected = VoiceDecisionProjection.apply(
                             to: canonical, evidence: allCurrent, decisions: decisionsByMeeting[id] ?? [],
                             deletedPeople: deleted, policy: policy)
-                        if !missingPeople.intersection(projected.personIDs).isEmpty { result.insert(id) }
+                        if !missingAssociations.intersection(projected.associatedPersonIDs).isEmpty
+                            || !missingAttendance.intersection(projected.personIDs).isEmpty
+                        {
+                            result.insert(id)
+                        }
                     }
                     let missingDecisions = (decisionsByMeeting[id] ?? []).filter {
                         $0.personID.map(missingPeople.contains) == true

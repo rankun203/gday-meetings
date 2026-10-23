@@ -66,6 +66,9 @@ struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
     var duration: TimeInterval
     var summary: String
     var personIDs: [UUID]
+    /// Separate from attendance so tentative transcript associations remain discoverable.
+    var associatedPersonIDs: [UUID]?
+    var effectiveAssociatedPersonIDs: [UUID] { associatedPersonIDs ?? personIDs }
     var tagIDs: [UUID]
     var audioFiles: [String]
     var hasTranscriptionAttempt: Bool
@@ -81,6 +84,7 @@ struct MeetingListEntry: Codable, Identifiable, Equatable, Sendable {
         personIDs = Array(Set(meeting.personIDs + meeting.speakers.compactMap(\.attendancePersonID))).sorted {
             $0.uuidString < $1.uuidString
         }
+        associatedPersonIDs = meeting.associatedPersonIDs
         tagIDs = meeting.tagIDs
         audioFiles = meeting.audioFiles
         hasTranscriptionAttempt = meeting.transcriptionAttempt != nil
@@ -104,6 +108,9 @@ enum MeetingFolderStorage {
         let entry = try JSONDecoder().decode(
             MeetingListEntry.self, from: Data(contentsOf: folder.appendingPathComponent("metadata.json")))
         guard entry.id == id else { throw MeetingError.message("The meeting ID does not match its folder.") }
+        return try read(folder: folder, entry: entry)
+    }
+    static func read(folder: URL, entry: MeetingListEntry) throws -> Meeting {
         let content = folder.appendingPathComponent("content.json")
         var meeting =
             FileManager.default.fileExists(atPath: content.path)

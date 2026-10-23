@@ -80,6 +80,7 @@ struct PersonMerge {
         let originalEntry = entry
         apply(to: &content)
         entry.personIDs = replacing(entry.personIDs)
+        entry.associatedPersonIDs = entry.associatedPersonIDs.map(replacing)
         guard content != original || entry != originalEntry else { return nil }
         try transaction.remember(metadataURL)
         if contentBytes != nil { try transaction.remember(contentURL) }
