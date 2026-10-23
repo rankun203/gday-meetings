@@ -83,6 +83,12 @@ Use `--synthetic-pagination`, or the `GdaySyntheticPagination` Boolean bundle fl
 
 For task progress checks, launch with `--synthetic-tasks --synthetic-task-progress`. This uses production Tasks views with fixed measured indexing and diarization progress, provider waiting, generation, and saving phases. It starts no provider requests. Check the list and detail percentage agreement, remaining-time labels, indeterminate bars, elapsed time, terminal states, and keyboard selection in light and dark appearances.
 
+## Summary history
+
+The ordinary synthetic conversation has two saved summaries. Open **Summary History**, select the older version, choose **Use This Summary**, and reopen history to check the current marker and preserved versions. Launch with `--synthetic-summary-history=empty` to clear its summary and saved versions, or `--synthetic-summary-history=current` to keep its current summary without saved versions. Both should show a compact sheet with **Done** and guidance appropriate to the current summary. These fixtures change only the temporary Preview library and start no provider work.
+
+Use `--synthetic-summary-history=error` for an unreadable history file, or `--synthetic-summary-history=selection-error` for readable history with unreadable saved summaries. Check the error message, **Reload History**, and **Done**. To check history recovery while the sheet remains open, remove the corrupt `summary-history.json` from that meeting's temporary Preview folder, then choose **Reload History**; the sheet should show the empty state for a meeting with a current summary. Fixture tests verify the storage states and repaired-file reads; they do not exercise the sheet's retry action.
+
 ## Large library
 
 Launch with `--synthetic-library-size=1000` or `--synthetic-library-size=10000`, or set the integer bundle key `GdaySyntheticLibrarySize` to the same count. The count includes the two ordinary Preview meetings. This option replaces the 45-meeting pagination fixture when both are enabled.

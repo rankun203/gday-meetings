@@ -53,13 +53,19 @@ struct SummaryHistoryView: View {
             if loadingHistory && history.entries.isEmpty {
                 ProgressView("Loading History…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            else if historyError != nil && history.entries.isEmpty {
-                Spacer()
+            else if let historyError, history.entries.isEmpty {
+                VStack(spacing: 12) {
+                    AppInlineMessage(text: historyError, systemImage: "exclamationmark.triangle", tint: .red)
+                    reloadButton
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else if history.entries.isEmpty {
                 ContentUnavailableView(
                     "No Saved Versions", systemImage: "clock.arrow.circlepath",
-                    description: Text("Generate a summary to save a version here."))
+                    description: Text(emptyHistoryDescription)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else {
                 HStack(spacing: 0) {
@@ -109,35 +115,35 @@ struct SummaryHistoryView: View {
                         Spacer()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let errorMessage = restoreError ?? historyError ?? selectionError {
+            if !history.entries.isEmpty, let errorMessage = restoreError ?? historyError ?? selectionError {
                 AppInlineMessage(text: errorMessage, systemImage: "exclamationmark.triangle", tint: .red)
-                Button("Reload History") {
-                    restoreError = nil
-                    reloadID = UUID()
-                }
-                .disabled(restoring)
+                reloadButton
             }
             HStack {
-                Button("Use This Summary") {
-                    guard let selectedID else { return }
-                    restoring = true
-                    restoreError = nil
-                    Task {
-                        if await store.restoreSummaryGeneration(id: selectedID, meetingID: meetingID) {
-                            reloadID = UUID()
+                if !history.entries.isEmpty {
+                    Button("Use This Summary") {
+                        guard let selectedID else { return }
+                        restoring = true
+                        restoreError = nil
+                        Task {
+                            if await store.restoreSummaryGeneration(id: selectedID, meetingID: meetingID) {
+                                reloadID = UUID()
+                            }
+                            else {
+                                restoreError = store.errorMessage ?? "Couldn’t restore this summary. Try again."
+                            }
+                            restoring = false
                         }
-                        else {
-                            restoreError = store.errorMessage ?? "Couldn’t restore this summary. Try again."
-                        }
-                        restoring = false
                     }
+                    .disabled(
+                        !store.libraryWritable || selected?.result == nil || restoring || loadingSelection
+                            || loadingHistory
+                            || historyError != nil
+                            || selected?.result == store.meeting(id: meetingID)?.summary)
+                    if restoring { ProgressView().controlSize(.small) }
                 }
-                .disabled(
-                    !store.libraryWritable || selected?.result == nil || restoring || loadingSelection || loadingHistory
-                        || historyError != nil
-                        || selected?.result == store.meeting(id: meetingID)?.summary)
-                if restoring { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -145,9 +151,33 @@ struct SummaryHistoryView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 720, idealWidth: 820, minHeight: 460, idealHeight: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            minWidth: history.entries.isEmpty ? 480 : 720,
+            idealWidth: history.entries.isEmpty ? 480 : 820,
+            minHeight: history.entries.isEmpty ? 280 : 460,
+            idealHeight: history.entries.isEmpty ? 280 : 560
+        )
         .task(id: readKey) { await loadHistory() }
         .task(id: SelectionReadKey(id: selectedID, reloadID: reloadID)) { await loadSelection() }
+    }
+
+    private var emptyHistoryDescription: String {
+        if let summary = store.meeting(id: meetingID)?.summary,
+            !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return
+                "This meeting has a summary, but no saved versions are available. Generate another summary to save versions here."
+        }
+        return "Generate a summary to save a version here."
+    }
+
+    private var reloadButton: some View {
+        Button("Reload History") {
+            restoreError = nil
+            reloadID = UUID()
+        }
+        .disabled(restoring)
     }
 
     private func loadHistory() async {

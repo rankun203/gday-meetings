@@ -298,6 +298,7 @@ enum UIPreview {
                 store.settings.transcriptionProviderID = providers.first { $0.kind == .runpod }?.id
             }
             if let meeting = store.meetings.first(where: { $0.title == "Synthetic conversation" }) {
+                try await configureSummaryHistoryScenario(store: store, meetingID: meeting.id)
                 let folder = store.directory(for: meeting.id)
                 let now = Date()
                 for index in 0..<12 {
