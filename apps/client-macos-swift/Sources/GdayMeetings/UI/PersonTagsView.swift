@@ -13,7 +13,7 @@ struct PersonTagsView: View {
                 HStack(spacing: 6) {
                     ForEach(store.tags.filter { person?.tagIDs.contains($0.id) ?? false }) { tag in
                         TagAssociationChip(
-                            name: tag.name, removalHelp: "Remove \(tag.name) from this person",
+                            id: tag.id, name: tag.name, removalHelp: "Remove \(tag.name) from this person",
                             open: { showTag(tag.id) }, remove: { setTag(tag.id, selected: false) })
                     }
                     Menu {

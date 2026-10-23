@@ -109,9 +109,8 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var canAssignPerson: Bool { speakerID != nil && !isSourcePlaceholder }
     // Identity uncertainty is independent of an acoustically unresolved passage.
     var hasTentativePerson: Bool { personID != nil && transcriptAssociationTier == .tentative }
-    var speakerBadgeLabel: String { hasTentativePerson ? speaker + " ?" : speaker }
     var speakerAssignmentHelp: String? {
-        guard personID != nil else { return nil }
+        guard personID != nil, canAssignPerson else { return nil }
         switch transcriptAssociationTier {
         case .tentative: return "Tentative match. Assign a person to correct it."
         case .automatic: return "Automatically matched. Assign a person to correct it."
@@ -1341,8 +1340,21 @@ struct NativeTranscriptView: NSViewRepresentable {
     }
 }
 
-/// Resolve semantic colors during drawing, rather than caching a CGColor before
-/// the reused cell has joined a window with its effective appearance.
+/// Identity hues stay independent of the quieter fill levels used by each kind of label.
+enum IdentityLabelRole: CaseIterable, Sendable {
+    case person, source, tag, context
+
+    var fillOpacity: CGFloat {
+        switch self {
+        case .person: return 0.12
+        case .source: return 0.07
+        case .tag: return 0.09
+        case .context: return 0.06
+        }
+    }
+}
+
+/// Resolve semantic colors during drawing, after reused cells join their window.
 enum TranscriptSpeakerPalette {
     static func displayKey(personID: UUID?, track: String, label: String) -> String {
         if let personID { return personID.uuidString }
@@ -1374,7 +1386,15 @@ enum TranscriptSpeakerPalette {
         return result
     }
 
-    static func foreground(for tint: NSColor) -> NSColor {
+    static func fill(for tint: NSColor, role: IdentityLabelRole = .person) -> NSColor {
+        tint.withAlphaComponent(role.fillOpacity)
+    }
+
+    static func outline(for tint: NSColor, tentative: Bool = false, increasedContrast: Bool) -> NSColor {
+        foreground(for: tint).withAlphaComponent(increasedContrast || tentative ? 0.8 : 0.4)
+    }
+
+    static func foreground(for tint: NSColor, role: IdentityLabelRole = .person) -> NSColor {
         NSColor(name: nil) { appearance in
             var resolved = NSColor.labelColor
             appearance.performAsCurrentDrawingAppearance {
@@ -1393,7 +1413,7 @@ enum TranscriptSpeakerPalette {
                     guard let base = base.usingColorSpace(.sRGB) else { return nil }
                     return luminance(
                         zip(channels, [base.redComponent, base.greenComponent, base.blueComponent])
-                            .map { $0 * 0.12 + $1 * 0.88 })
+                            .map { $0 * role.fillOpacity + $1 * (1 - role.fillOpacity) })
                 }
                 // Preserve the identity hue while adjusting its text contrast against
                 // the translucent badge, including a selected transcript row.
@@ -1427,14 +1447,18 @@ enum TranscriptSpeakerPalette {
 
 @MainActor final class TranscriptSpeakerBadge: NSView {
     var tint: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
+    var role: IdentityLabelRole = .person { didSet { needsDisplay = true } }
     var unresolved = false { didSet { needsDisplay = true } }
     var outlined = false { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 9, yRadius: 9)
-        tint.withAlphaComponent(0.12).setFill()
+        TranscriptSpeakerPalette.fill(for: tint, role: role).setFill()
         path.fill()
         if unresolved || outlined {
-            TranscriptSpeakerPalette.foreground(for: tint).withAlphaComponent(0.8).setStroke()
+            TranscriptSpeakerPalette.outline(
+                for: tint, tentative: unresolved,
+                increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            ).setStroke()
             path.lineWidth = 1
             path.lineCapStyle = .round
             if unresolved { path.setLineDash([1, 3], count: 2, phase: 0) }
@@ -1525,19 +1549,21 @@ enum TranscriptSpeakerPalette {
         self.showsSources = showsSources
         sourceBadge.isHidden = !showsSources || row.source == nil
         if let source = row.source {
+            sourceBadge.role = .source
             sourceBadge.tint = TranscriptSpeakerPalette.color(
-                for: source.rawValue, index: source == .microphone ? 0 : 1)
+                for: TranscriptSpeakerPalette.displayKey(
+                    personID: nil, track: source.rawValue, label: source == .microphone ? "mic" : "sys"))
             sourceIcon.image = NSImage(
                 systemSymbolName: source == .microphone ? "mic.fill" : "speaker.wave.2.fill",
                 accessibilityDescription: source.title)
-            sourceIcon.contentTintColor = TranscriptSpeakerPalette.foreground(for: sourceBadge.tint)
+            sourceIcon.contentTintColor = TranscriptSpeakerPalette.foreground(for: sourceBadge.tint, role: .source)
             sourceIcon.setAccessibilityLabel(source.title)
             sourceBadge.toolTip = source.title
         }
         time.stringValue = TranscriptRow<Text>.timestamp(row.start)
         updatePlaybackAccessibility()
-        speaker.stringValue = row.speakerBadgeLabel
-        speaker.lineBreakMode = row.hasTentativePerson ? .byTruncatingMiddle : .byTruncatingTail
+        speaker.stringValue = row.speaker
+        speaker.lineBreakMode = .byTruncatingTail
         speaker.toolTip = row.speakerAssignmentHelp.map { "\(row.speaker). \($0)" }
         speaker.setAccessibilityLabel(row.speaker)
         speaker.setAccessibilityValue(row.hasTentativePerson ? "Tentative match" : nil)
@@ -1545,14 +1571,15 @@ enum TranscriptSpeakerPalette {
         badge.toolTip = speaker.toolTip
         speakerHeight = 20
         speakerWidth = min(
-            100, ceil((row.speakerBadgeLabel as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
+            100, ceil((row.speaker as NSString).size(withAttributes: [.font: speaker.font!]).width) + 16)
         let colorKey =
             row.personID?.uuidString ?? row.speakerColorKey
             ?? TranscriptSpeakerPalette.displayKey(personID: nil, track: row.source?.rawValue ?? "", label: row.speaker)
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey)
-        badge.outlined = row.personID != nil
-        badge.unresolved = row.hasTentativePerson || (row.personID == nil && !row.isSourcePlaceholder)
-        speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint)
+        badge.role = row.canAssignPerson || row.personID != nil ? .person : .source
+        badge.outlined = row.canAssignPerson && row.personID != nil
+        badge.unresolved = row.canAssignPerson && (row.hasTentativePerson || row.personID == nil)
+        speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint, role: badge.role)
         if !body.isEditable {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
             let text = NSMutableAttributedString(string: row.text, attributes: attributes)

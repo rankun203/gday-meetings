@@ -38,8 +38,10 @@ struct ContextDetailView: View {
                 Text("Associated Meetings").font(.headline)
                 Text(loader.window.page.total.formatted()).foregroundStyle(.secondary)
                 Spacer()
-                Button("Open Meeting") { if let listSelection { open(listSelection) } }
-                    .disabled(listSelection == nil)
+                if personID == nil {
+                    Button("Open Meeting") { if let listSelection { open(listSelection) } }
+                        .disabled(listSelection == nil)
+                }
             }
             .padding(.horizontal, AppTheme.contentInset).padding(.vertical, 12)
             associatedMeetings
@@ -208,7 +210,7 @@ struct ContextDetailView: View {
                     guard await store.ensureMeetingLoaded(id: id) else { return }
                     deleting = store.meeting(id: id)
                 }
-            }, open: open,
+            }, open: open, opensOnSingleClick: personID != nil,
             totalCount: !loader.loading && loader.error == nil && !loader.window.page.hasOlder
                 && !loader.window.page.entries.isEmpty ? loader.window.page.total : nil
         )

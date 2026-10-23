@@ -44,9 +44,9 @@ import Testing
         let cell = TranscriptNativeCell(frame: NSRect(x: 0, y: 0, width: 600, height: 28))
         cell.configure(row, showsSpeakers: true)
         let identityTint = cell.badge.tint
-        #expect(cell.speaker.stringValue == "Person A ?")
+        #expect(cell.speaker.stringValue == "Person A")
         #expect(cell.badge.unresolved)
-        #expect(cell.speaker.lineBreakMode == .byTruncatingMiddle)
+        #expect(cell.speaker.lineBreakMode == .byTruncatingTail)
         #expect(cell.speaker.accessibilityLabel() == "Person A")
         #expect(cell.speaker.accessibilityHelp() == "Tentative match. Assign a person to correct it.")
         #expect(cell.badge.toolTip == "Person A. Tentative match. Assign a person to correct it.")
@@ -82,7 +82,7 @@ import Testing
         let row = TranscriptDisplayRow(
             id: UUID(), start: 0, end: 1, speaker: "sys_01", speakerID: UUID(), text: "Unresolved passage.",
             transcriptAssociationTier: .tentative)
-        #expect(row.speakerBadgeLabel == "sys_01")
+        #expect(row.speaker == "sys_01")
         #expect(!row.hasTentativePerson)
         #expect(row.speakerAssignmentHelp == nil)
     }
@@ -100,7 +100,7 @@ import Testing
                 personID: person, transcriptAssociationTier: .tentative)
         }
         let composed = try #require(TranscriptDisplayRow.passage(rows: rows, segments: segments))
-        #expect(composed.speakerBadgeLabel == "Person A ?")
+        #expect(composed.speaker == "Person A")
         #expect(composed.transcriptAssociationTier == .tentative)
         #expect(composed.canonicalRows.map(\.id) == segments.map(\.id))
         #expect(composed.sourceRow(atUTF16: composed.text.utf16.count - 1).id == segments[1].id)

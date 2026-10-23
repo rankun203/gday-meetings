@@ -19,6 +19,7 @@ struct NativeMeetingList: NSViewRepresentable {
     var export: (UUID) -> Void
     var delete: (UUID) -> Void
     var open: ((UUID) -> Void)? = nil
+    var opensOnSingleClick = false
     var retainedViewport: NativeListViewport? = nil
     var totalCount: Int? = nil
 
@@ -45,6 +46,7 @@ struct NativeMeetingList: NSViewRepresentable {
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
         table.target = context.coordinator
+        table.action = #selector(Coordinator.clicked(_:))
         table.doubleAction = #selector(Coordinator.doubleClicked(_:))
         table.deleteSelected = { [weak coordinator = context.coordinator] in
             guard let coordinator else { return }
@@ -218,7 +220,12 @@ struct NativeMeetingList: NSViewRepresentable {
             guard !updating, let table else { return }
             parent.selection = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].id : nil
         }
+        @objc func clicked(_ sender: NSTableView) {
+            guard parent.opensOnSingleClick, rows.indices.contains(sender.clickedRow) else { return }
+            parent.open?(rows[sender.clickedRow].id)
+        }
         @objc func doubleClicked(_ sender: NSTableView) {
+            guard !parent.opensOnSingleClick else { return }
             guard rows.indices.contains(sender.clickedRow) else { return }
             let id = rows[sender.clickedRow].id
             if let open = parent.open {

@@ -16,6 +16,51 @@ private final class MeetingSelectionReads: @unchecked Sendable {
 
 @MainActor @Suite(.serialized)
 struct MeetingSelectionTests {
+    @Test func associatedMeetingActivationIsExplicitAndRepeatable() {
+        _ = NSApplication.shared
+        let entry = MeetingListEntry(Meeting(title: "Synthetic meeting"))
+        var opened: [UUID] = []
+        var played: [UUID] = []
+        var list = NativeMeetingList(
+            entries: [entry], selection: .constant(nil), isFinalizing: false,
+            isPlaying: false, canPlay: true, archiveStatuses: [:], viewportChanged: { _ in },
+            play: { played.append($0) }, reveal: { _ in }, export: { _ in }, delete: { _ in },
+            open: { opened.append($0) }, opensOnSingleClick: true, totalCount: 1)
+        let coordinator = list.makeCoordinator()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let table = MeetingNativeTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("meeting")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.scroll = scroll
+        coordinator.update(list)
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        coordinator.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification))
+        #expect(opened.isEmpty)  // Keyboard selection and background reloads never open a sheet.
+        let sender = MeetingClickTestTable()
+        sender.pointedRow = 0
+        coordinator.clicked(sender)
+        coordinator.doubleClicked(sender)
+        #expect(opened == [entry.id])
+        coordinator.clicked(sender)  // Reopen the same row after dismissing its sheet.
+        #expect(opened == [entry.id, entry.id])
+        sender.pointedRow = 1  // Count footer.
+        coordinator.clicked(sender)
+        sender.pointedRow = -1  // Empty space.
+        coordinator.clicked(sender)
+        #expect(opened.count == 2)
+        #expect(played.isEmpty)
+        list.opensOnSingleClick = false
+        coordinator.update(list)
+        sender.pointedRow = 0
+        coordinator.clicked(sender)
+        #expect(opened.count == 2)
+        coordinator.doubleClicked(sender)
+        #expect(opened.count == 3)  // Other meeting lists keep their existing activation.
+    }
+
     @Test func selectingUncachedMeetingLoadsDetailWithoutPlayback() async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("meeting-selection-\(UUID())")
@@ -78,4 +123,9 @@ struct MeetingSelectionTests {
             #expect(!playback.isPlaying)
         }
     }
+}
+
+private final class MeetingClickTestTable: NSTableView {
+    var pointedRow = -1
+    override var clickedRow: Int { pointedRow }
 }

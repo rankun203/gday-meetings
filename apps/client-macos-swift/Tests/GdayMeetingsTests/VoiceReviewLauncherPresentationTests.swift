@@ -47,6 +47,7 @@ struct VoiceReviewLauncherPresentationTests {
         #expect(byRecording.people.map(\.id) == [person.id])
         #expect(byRecording.groups.map(\.id) == [group.id])
         #expect(byRecording.people.first?.recordingTitle == "Sample Recording")
+        #expect(byRecording.people.first?.recordingID == example.meetingID)
         #expect(missing.people.isEmpty && missing.groups.isEmpty)
         #expect(restored.people.map(\.id) == catalog.people.map(\.id))
         #expect(restored.groups.map(\.id) == catalog.groups.map(\.id))
@@ -69,6 +70,8 @@ struct VoiceReviewLauncherPresentationTests {
         #expect(all.people.first?.count == 2)
         #expect(all.people.first?.meetingCount == 2)
         #expect(all.people.first?.recordingTitle == "Second Recording")
+        #expect(all.people.first?.recordingID == newer.meetingID)
+        #expect(all.groups.first?.recordingID == older.meetingID)
         #expect(all.groups.first?.id == group.id)
         #expect(all.groups.first?.group?.evidenceExamples == group.evidenceExamples)
         let filtered = await VoiceReviewLauncherPresentation.prepare(

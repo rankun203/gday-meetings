@@ -1091,7 +1091,8 @@ struct VoiceSampleNameLabel: View {
     }
     private var tint: NSColor {
         let personID = example.personID ?? example.namedPersonID ?? example.suggestedPersonID
-        return personID.map { TranscriptSpeakerPalette.color(for: $0.uuidString) } ?? .systemBlue
+        return personID.map { TranscriptSpeakerPalette.color(for: $0.uuidString) }
+            ?? TranscriptSpeakerPalette.color(for: "unidentified-voice")
     }
     var body: some View {
         Text(name).font(.headline)
@@ -1268,11 +1269,14 @@ private struct VoiceSampleNameEditor: View {
 /// Quiet context labels share speaker colors without adopting button chrome.
 struct VoiceReviewLabelStyle: ViewModifier {
     let tint: NSColor
+    var role: IdentityLabelRole = .person
     func body(content: Content) -> some View {
         content
-            .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
+            .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint, role: role)))
             .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color(nsColor: tint).opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
+            .background(
+                Color(nsColor: TranscriptSpeakerPalette.fill(for: tint, role: role)),
+                in: RoundedRectangle(cornerRadius: 4))
     }
 }
 

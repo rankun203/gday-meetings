@@ -124,7 +124,9 @@ struct LibrarySearchResultsView: View {
                     Text(candidate.name).lineLimit(1)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
-                        .background(Color(nsColor: tint).opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                        .background(
+                            Color(nsColor: TranscriptSpeakerPalette.fill(for: tint)),
+                            in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain)
                     .help(
                         "Matched “\(candidate.matchedPhrase)”. "
@@ -416,6 +418,7 @@ private final class SearchResultCell: NSTableCellView {
     let metadata = NSTextField(wrappingLabelWithString: "")
     let source = NSTextField(labelWithString: "")
     private let sourceBadge = NSView()
+    private var sourceTint = NSColor.secondaryLabelColor
     private let columns = NSStackView()
     private var wideConstraints: [NSLayoutConstraint] = []
     private var compactConstraints: [NSLayoutConstraint] = []
@@ -433,7 +436,7 @@ private final class SearchResultCell: NSTableCellView {
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
             timeline.emphasized = backgroundStyle == .emphasized
-            source.textColor = backgroundStyle == .emphasized ? .alternateSelectedControlTextColor : .labelColor
+            updateSourceBadgeAppearance()
         }
     }
     override init(frame frameRect: NSRect) {
@@ -572,6 +575,19 @@ private final class SearchResultCell: NSTableCellView {
         }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateSourceBadgeAppearance()
+    }
+    private func updateSourceBadgeAppearance() {
+        source.textColor =
+            backgroundStyle == .emphasized
+            ? .alternateSelectedControlTextColor
+            : TranscriptSpeakerPalette.foreground(for: sourceTint, role: .context)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            sourceBadge.layer?.backgroundColor = TranscriptSpeakerPalette.fill(for: sourceTint, role: .context).cgColor
+        }
+    }
     @objc private func playResult() { play?() }
     @objc private func navigateToResult() { navigate?() }
     func configure(
@@ -584,9 +600,8 @@ private final class SearchResultCell: NSTableCellView {
         title.toolTip = result.title
         metadata.stringValue = result.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? ""
         source.stringValue = result.sourceLabel
-        let tint: NSColor = result.passage?.kind == .title ? .systemPurple : .systemBlue
-        source.textColor = tint
-        sourceBadge.layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
+        sourceTint = TranscriptSpeakerPalette.color(for: "content:\(result.sourceLabel)")
+        updateSourceBadgeAppearance()
         summary.stringValue = summaryTitle ?? ""
         summary.toolTip = summaryTitle
         summary.isHidden = summary.stringValue.isEmpty

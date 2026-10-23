@@ -12,12 +12,14 @@ extension EnvironmentValues {
 }
 
 struct TagAssociationChip: View {
+    let id: UUID
     let name: String
     let removalHelp: String
     var open: () -> Void
     var remove: () -> Void
 
     var body: some View {
+        let tint = TranscriptSpeakerPalette.color(for: "tag:\(id.uuidString)")
         HStack(spacing: 0) {
             Button(action: remove) {
                 Image(systemName: "xmark.circle.fill")
@@ -37,6 +39,7 @@ struct TagAssociationChip: View {
         }
         .font(.callout)
         .buttonStyle(.plain)
-        .background(.quaternary, in: Capsule())
+        .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint, role: .tag)))
+        .background(Color(nsColor: TranscriptSpeakerPalette.fill(for: tint, role: .tag)), in: Capsule())
     }
 }

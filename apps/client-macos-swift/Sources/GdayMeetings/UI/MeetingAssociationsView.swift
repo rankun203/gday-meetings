@@ -16,7 +16,7 @@ struct MeetingTagsView: View {
                 HStack(spacing: 6) {
                     ForEach(store.tags.filter { meeting?.tagIDs.contains($0.id) ?? false }) { tag in
                         TagAssociationChip(
-                            name: tag.name, removalHelp: "Remove \(tag.name) from this meeting",
+                            id: tag.id, name: tag.name, removalHelp: "Remove \(tag.name) from this meeting",
                             open: { showTag(tag.id) }, remove: { setTag(tag.id, selected: false) })
                     }
                     Menu {
@@ -225,7 +225,8 @@ private struct SpeakerAssignmentMenuStyle: ViewModifier {
                 .foregroundStyle(Color(nsColor: TranscriptSpeakerPalette.foreground(for: tint)))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(Color(nsColor: tint).opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                .background(
+                    Color(nsColor: TranscriptSpeakerPalette.fill(for: tint)), in: RoundedRectangle(cornerRadius: 9))
         }
         else {
             content

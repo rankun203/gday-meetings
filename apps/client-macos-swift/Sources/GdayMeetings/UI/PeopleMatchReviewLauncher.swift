@@ -257,7 +257,8 @@ private struct VoiceReviewLauncherRow: View, Equatable {
     static func == (left: Self, right: Self) -> Bool {
         left.row.id == right.row.id && left.row.title == right.row.title
             && left.row.count == right.row.count && left.row.meetingCount == right.row.meetingCount
-            && left.row.recordingTitle == right.row.recordingTitle && left.unnamed == right.unnamed
+            && left.row.recordingID == right.row.recordingID && left.row.recordingTitle == right.row.recordingTitle
+            && left.unnamed == right.unnamed
             && left.row.qualityIssue == right.row.qualityIssue && left.row.qualityHelp == right.row.qualityHelp
             && left.height == right.height
     }
@@ -270,7 +271,13 @@ private struct VoiceReviewLauncherRow: View, Equatable {
         HStack(spacing: 8) {
             Image(systemName: unnamed ? "person.crop.circle.badge.questionmark" : "person.crop.circle")
                 .foregroundStyle(.secondary)
-            Text(row.title).font(.headline).lineLimit(1).truncationMode(.tail)
+            if unnamed {
+                Text(row.title).font(.headline).lineLimit(1).truncationMode(.tail)
+            }
+            else {
+                Text(row.title).font(.headline).lineLimit(1).truncationMode(.tail)
+                    .modifier(VoiceReviewLabelStyle(tint: TranscriptSpeakerPalette.color(for: row.id.uuidString)))
+            }
             Text("· \(row.count) \(row.count == 1 ? "sample" : "samples") to review")
                 .font(.callout).foregroundStyle(.secondary).fixedSize()
             if let issue = row.qualityIssue {
@@ -280,7 +287,11 @@ private struct VoiceReviewLauncherRow: View, Equatable {
             }
             if let title = row.recordingTitle {
                 Text(title).font(.callout).lineLimit(1).truncationMode(.tail)
-                    .modifier(VoiceReviewLabelStyle(tint: .systemBlue))
+                    .modifier(
+                        VoiceReviewLabelStyle(
+                            tint: TranscriptSpeakerPalette.color(
+                                for: row.recordingID.map { "recording:\($0.uuidString)" } ?? "recording"),
+                            role: .context))
             }
             if row.meetingCount > 1 {
                 Text("+\(row.meetingCount - 1) \(row.meetingCount == 2 ? "meeting" : "meetings")")

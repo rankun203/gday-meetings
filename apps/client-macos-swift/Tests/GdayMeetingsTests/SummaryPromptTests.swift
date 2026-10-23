@@ -4,6 +4,50 @@ import Testing
 @testable import GdayMeetings
 
 struct SummaryPromptTests {
+    @Test(arguments: [false, true])
+    func audioSourcesRemainTranscriptContextRatherThanParticipants(storedMetadata: Bool) {
+        let person = Person(name: "Alex")
+        let namedSpeaker = MeetingSpeaker(
+            label: "sys_01", track: "system", providerName: "Synthetic", personID: person.id)
+        var sourceSpeaker = MeetingSpeaker(label: "sys", track: "system", providerName: "Synthetic")
+        sourceSpeaker.sourcePlaceholder = .system
+        var meeting = Meeting(title: "Planning")
+        meeting.speakers = [namedSpeaker] + (storedMetadata ? [sourceSpeaker] : [])
+        meeting.transcript = [
+            .init(start: 0, end: 2, speaker: "sys_01", text: "I will prepare the draft.", speakerID: namedSpeaker.id),
+            .init(
+                start: 2, end: 3, speaker: "sys", text: "And send it tomorrow.",
+                speakerID: storedMetadata ? sourceSpeaker.id : nil,
+                source: .system, sourcePlaceholder: storedMetadata ? true : nil),
+            .init(start: 4, end: 5, speaker: "mic", text: "Thank you.", source: .microphone),
+        ]
+        var provider = ServiceProvider(kind: .openAICompatible)
+        provider.summaryPrompt = "List decisions."
+        let messages = SummaryPrompt.messages(provider: provider, meeting: meeting, people: [person])
+        let context = messages[1].content
+        #expect(messages[0].content.hasPrefix("List decisions.\n"))
+        #expect(context.contains("Participants: Alex\n"))
+        #expect(context.contains("[00:02] sys: And send it tomorrow."))
+        #expect(context.contains("[00:04] mic: Thank you."))
+        #expect(context.components(separatedBy: "Unidentified-speaker labels").count == 2)
+        #expect(context.contains("Unidentified-speaker labels (mic, sys) mark speech without a recognized person."))
+        #expect(context.contains("Each source can contain several people"))
+        #expect(context.contains("Infer a speaker from surrounding lines only when the context supports it."))
+        #expect(context.contains("Keep the speaker unidentified or state uncertainty"))
+    }
+
+    @Test func detectedSpeakerLabelsRemainDistinctFromAudioSources() {
+        var meeting = Meeting(title: "Planning")
+        meeting.transcript = [
+            .init(start: 0, end: 2, speaker: "sys_01", text: "Choose a date."),
+            .init(start: 3, end: 5, speaker: "mic_01", text: "Next week."),
+        ]
+        let context = SummaryPrompt.messages(
+            provider: ServiceProvider(kind: .openAICompatible), meeting: meeting, people: [])[1].content
+        #expect(context.contains("Participants: mic_01, sys_01\n"))
+        #expect(!context.contains("Unidentified-speaker labels"))
+    }
+
     @Test func includesCertainAndTentativeParticipantsWithTheirNotes() {
         var certain = Person(name: "Alex")
         certain.notes = "Coordinates scheduling."

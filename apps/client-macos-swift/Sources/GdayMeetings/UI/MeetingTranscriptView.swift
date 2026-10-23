@@ -416,7 +416,8 @@ struct MeetingTranscriptView: View {
                 personID: !segment.allowsPersonAssociation(from: segment.speakerID.flatMap { speakerMetadata[$0] })
                     ? nil : segment.speakerID.flatMap { assignedPeople[$0] ?? nil },
                 speakerColorKey: colorKey(segment),
-                isSourcePlaceholder: segment.speakerID.map { sourceIDs.contains($0) } ?? false,
+                isSourcePlaceholder: segment.sourcePlaceholder == true
+                    || (segment.speakerID.map { sourceIDs.contains($0) } ?? false),
                 transcriptAssociationTier: segment.allowsPersonAssociation(
                     from: segment.speakerID.flatMap { speakerMetadata[$0] })
                     ? segment.speakerID.flatMap { speakerMetadata[$0]?.voiceReviewOrigin?.transcriptAssociationTier }

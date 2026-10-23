@@ -176,20 +176,25 @@ import Testing
             appearance.performAsCurrentDrawingAppearance {
                 for index in Array(0..<32) + (0..<64).map({ TranscriptSpeakerPalette.index(for: "person-\($0)") }) {
                     let tint = TranscriptSpeakerPalette.color(for: "", index: index)
-                    let foreground = TranscriptSpeakerPalette.foreground(for: tint).usingColorSpace(.sRGB)!
-                    let fill = tint.usingColorSpace(.sRGB)!
-                    let fg = luminance([foreground.redComponent, foreground.greenComponent, foreground.blueComponent])
-                    for background in [
-                        NSColor.windowBackgroundColor, .textBackgroundColor,
-                        .unemphasizedSelectedContentBackgroundColor,
-                    ] {
-                        let base = background.usingColorSpace(.sRGB)!
-                        let bg = luminance(
-                            zip(
-                                [fill.redComponent, fill.greenComponent, fill.blueComponent],
-                                [base.redComponent, base.greenComponent, base.blueComponent]
-                            ).map { $0 * 0.12 + $1 * 0.88 })
-                        #expect((max(fg, bg) + 0.05) / (min(fg, bg) + 0.05) >= 4.5)
+                    for role in IdentityLabelRole.allCases {
+                        let foreground = TranscriptSpeakerPalette.foreground(for: tint, role: role).usingColorSpace(
+                            .sRGB)!
+                        let fill = tint.usingColorSpace(.sRGB)!
+                        let fg = luminance([
+                            foreground.redComponent, foreground.greenComponent, foreground.blueComponent,
+                        ])
+                        for background in [
+                            NSColor.windowBackgroundColor, .textBackgroundColor,
+                            .unemphasizedSelectedContentBackgroundColor,
+                        ] {
+                            let base = background.usingColorSpace(.sRGB)!
+                            let bg = luminance(
+                                zip(
+                                    [fill.redComponent, fill.greenComponent, fill.blueComponent],
+                                    [base.redComponent, base.greenComponent, base.blueComponent]
+                                ).map { $0 * role.fillOpacity + $1 * (1 - role.fillOpacity) })
+                            #expect((max(fg, bg) + 0.05) / (min(fg, bg) + 0.05) >= 4.5)
+                        }
                     }
                 }
             }
@@ -341,11 +346,45 @@ import Testing
         #expect(cell.badge.tint == tint)
         #expect(cell.badge.unresolved)
         #expect(tentative.canAssignPerson)
-        #expect(cell.speaker.stringValue == "Alex ?")
+        #expect(cell.speaker.stringValue == "Alex")
         cell.configure(
             TranscriptDisplayRow(id: UUID(), start: 2, end: 3, speaker: "mic_00", speakerID: UUID(), text: ""),
             showsSpeakers: true)
         #expect(cell.badge.unresolved)
+    }
+
+    @Test func sourceOnlyBadgesRemainBorderlessWhenCellsAreReused() {
+        let cell = TranscriptNativeCell(frame: NSRect(x: 0, y: 0, width: 600, height: 28))
+        cell.configure(
+            TranscriptDisplayRow(
+                id: UUID(), start: 0, end: 1, speaker: "Person A", speakerID: UUID(), text: "", personID: UUID()),
+            showsSpeakers: true)
+        #expect(cell.badge.outlined)
+        for source in [LiveAudioSource.microphone, .system] {
+            let label = source == .microphone ? "mic" : "sys"
+            for sourceID in [nil, UUID()] {
+                let row = TranscriptDisplayRow(
+                    id: UUID(), start: 0, end: 1, speaker: label, speakerID: sourceID, text: "",
+                    isSourcePlaceholder: sourceID != nil, source: source)
+                cell.configure(row, showsSpeakers: true, showsSources: true)
+                #expect(!cell.badge.outlined && !cell.badge.unresolved)
+                #expect(cell.badge.role == .source)
+                #expect(cell.badge.tint == cell.sourceBadge.tint)
+                #expect(!row.canAssignPerson)
+            }
+        }
+        let solid = TranscriptSpeakerPalette.outline(for: .systemBlue, increasedContrast: false).alphaComponent
+        let dotted = TranscriptSpeakerPalette.outline(
+            for: .systemBlue, tentative: true, increasedContrast: false
+        ).alphaComponent
+        #expect(dotted > solid)
+        #expect(TranscriptSpeakerPalette.outline(for: .systemBlue, increasedContrast: true).alphaComponent >= dotted)
+        cell.configure(
+            TranscriptDisplayRow(
+                id: UUID(), start: 0, end: 1, speaker: "mic", speakerID: UUID(), text: "",
+                personID: UUID(), isSourcePlaceholder: true), showsSpeakers: true)
+        #expect(!cell.badge.outlined && !cell.badge.unresolved)
+        #expect(cell.speaker.accessibilityHelp() == nil)
     }
 
     @Test func savedColorIdentityUsesSegmentSourceWhenSpeakerMetadataIsAbsent() {

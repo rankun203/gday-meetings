@@ -7,6 +7,7 @@ struct VoiceReviewLauncherPresentation: Sendable {
         let title: String
         let count: Int
         let meetingCount: Int
+        let recordingID: UUID?
         let recordingTitle: String?
         let group: VoiceIdentificationGroup?
         let recordingSearchTitles: [String]
@@ -16,12 +17,13 @@ struct VoiceReviewLauncherPresentation: Sendable {
         init(
             id: UUID, title: String, count: Int, meetingCount: Int, recordingTitle: String?,
             group: VoiceIdentificationGroup?, recordingSearchTitles: [String],
-            qualityIssue: String? = nil, qualityHelp: String? = nil
+            qualityIssue: String? = nil, qualityHelp: String? = nil, recordingID: UUID? = nil
         ) {
             self.id = id
             self.title = title
             self.count = count
             self.meetingCount = meetingCount
+            self.recordingID = recordingID
             self.recordingTitle = recordingTitle
             self.group = group
             self.recordingSearchTitles = recordingSearchTitles
@@ -52,7 +54,7 @@ struct VoiceReviewLauncherPresentation: Sendable {
                     id: id, title: title, count: examples.count, meetingCount: Set(examples.map(\.meetingID)).count,
                     recordingTitle: meeting.map { titles[$0] ?? "Saved Recording" }, group: group,
                     recordingSearchTitles: Array(Set(examples.compactMap { titles[$0.meetingID] })),
-                    qualityIssue: issue, qualityHelp: qualityHelp)
+                    qualityIssue: issue, qualityHelp: qualityHelp, recordingID: meeting)
             }
             let named = people.compactMap { person -> Row? in
                 let examples = snapshot.candidates[person.id] ?? []

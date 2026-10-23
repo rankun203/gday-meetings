@@ -68,6 +68,21 @@ enum SummaryPrompt {
             uniqueKeysWithValues: participants.map {
                 ($0.id, certainParticipantIDs.contains($0.id) ? $0.name : "\($0.name) ?")
             })
+        let sourceLabels = Set(
+            meeting.transcript.compactMap { segment -> String? in
+                let speaker = segment.speakerID.flatMap { speakersByID[$0] }
+                if segment.allowsPersonAssociation(from: speaker),
+                    let personID = speaker?.personID, participantNames[personID] != nil
+                {
+                    return nil
+                }
+                let name = meeting.speakerName(for: segment, people: people, tentativeNameSuffix: " ?")
+                guard !name.isEmpty,
+                    segment.sourcePlaceholder == true || speaker?.sourcePlaceholder != nil
+                        || ["sys", "mic"].contains(name.lowercased())
+                else { return nil }
+                return name
+            })
         let unnamedTranscriptLabels = meeting.transcript.compactMap { segment -> String? in
             if let id = segment.speakerID, let speaker = speakersByID[id],
                 segment.allowsPersonAssociation(from: speaker),
@@ -76,7 +91,7 @@ enum SummaryPrompt {
                 return nil
             }
             let name = meeting.speakerName(for: segment, people: people, tentativeNameSuffix: " ?")
-            return name.isEmpty ? nil : name
+            return name.isEmpty || sourceLabels.contains(name) ? nil : name
         }
         let names = Set(unnamedTranscriptLabels + participantNames.values)
         let duration = max(0, Int(meeting.duration))
@@ -84,6 +99,10 @@ enum SummaryPrompt {
         context +=
             "Started: \(formatter.string(from: meeting.createdAt))\nDuration: \(duration / 60)m \(duration % 60)s\n"
         if !names.isEmpty { context += "Participants: \(names.sorted().joined(separator: ", "))\n" }
+        if !sourceLabels.isEmpty {
+            context +=
+                "\nUnidentified-speaker labels (\(sourceLabels.sorted().joined(separator: ", "))) mark speech without a recognized person. `sys` means system audio; `mic` means microphone audio. Each source can contain several people; these labels are not participant names. Infer a speaker from surrounding lines only when the context supports it. Keep the speaker unidentified or state uncertainty when the evidence is insufficient.\n"
+        }
         if associatedSpeakers.contains(where: {
             $0.voiceReviewOrigin?.transcriptAssociationTier == .tentative
                 && $0.personID.map { participantNames[$0] != nil } == true
