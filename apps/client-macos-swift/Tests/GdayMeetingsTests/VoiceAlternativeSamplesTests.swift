@@ -128,6 +128,219 @@ struct VoiceAlternativeSamplesTests {
         return (root, folder, library, original)
     }
 
+    @Test(arguments: [false, true])
+    func manualIdentitySelectsSupportedAudioAndRejectsLateCorrection(transcriptChanged: Bool) async throws {
+        let (root, folder, library, initial) = try await storedFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Start with independent pending evidence rather than the ignored sample
+        // used by the alternate-excerpt tests.
+        var original = initial
+        original.excluded = false
+        original.id = UUID()
+        original.start = 10
+        original.end = 20
+        #expect(library.upsert([original]))
+        var saved = Meeting()
+        saved.id = original.meetingID
+        saved.audioFiles = ["system.wav"]
+        saved.speakers = [.init(id: original.speakerID, label: "voice_a", track: "system", providerName: "Synthetic")]
+        saved.transcript = [
+            .init(start: 0, end: 24, speaker: "voice_a", text: "Synthetic speech", speakerID: original.speakerID)
+        ]
+        try MeetingFolderStorage.write(saved, directory: root)
+        let person = Person(name: "Alex")
+        #expect(
+            library.assign(
+                meetingID: original.meetingID, speakerID: original.speakerID,
+                personID: person.id, updateReferenceEvidence: false))
+        let firstExtractor = AlternativeSampleExtractor()
+        let preparation = VoiceLibraryPreparation(
+            library: library, people: { [person] }, referenceExtractor: firstExtractor,
+            referenceReadSamples: { _, range in .init(repeating: 0.1, count: Int(range.speechDuration * 16000)) })
+        preparation.suspendForRecording()
+        preparation.selectReference(
+            meetingID: original.meetingID, speakerID: original.speakerID,
+            personID: person.id, exampleID: original.id, directory: folder)
+        #expect(library.decisions.first?.referenceSelectionPending == true)
+        #expect(!library.examples.contains { $0.selectedReference != nil })
+        preparation.resumeAfterRecording(directory: { _ in folder })
+        await preparation.awaitReferenceSelections()
+        #expect(library.decisions.first?.referenceSelectionPending == false)
+        #expect(library.examples.contains { $0.selectedReference?.personID == person.id && $0.review == .confirmed })
+        #expect(
+            library.assign(
+                meetingID: original.meetingID, speakerID: original.speakerID,
+                personID: person.id, updateReferenceEvidence: false))
+        preparation.selectReference(
+            meetingID: original.meetingID, speakerID: original.speakerID,
+            personID: person.id, exampleID: original.id, directory: folder)
+        await preparation.awaitReferenceSelections()
+        #expect(await firstExtractor.calls == 1)
+        #expect(
+            library.examples.filter { $0.selectedReference?.personID == person.id && $0.review == .confirmed }.count
+                == 1)
+
+        #expect(
+            library.assign(
+                meetingID: original.meetingID, speakerID: original.speakerID,
+                personID: nil, updateReferenceEvidence: false))
+        #expect(!library.examples.contains { $0.selectedReference != nil && $0.review == .confirmed })
+        #expect(
+            library.assign(
+                meetingID: original.meetingID, speakerID: original.speakerID,
+                personID: person.id, updateReferenceEvidence: false))
+        let frozenOriginal = original
+        var revised = saved
+        revised.transcript[0].associationUncertain = true
+        let revisedTranscript = revised
+        let delayed = VoiceLibraryPreparation(
+            library: library, people: { [person] },
+            referenceExtractor: AlternativeSampleExtractor(onExtract: {
+                await MainActor.run {
+                    if transcriptChanged {
+                        try? MeetingFolderStorage.write(revisedTranscript, directory: root)
+                        return
+                    }
+                    _ = library.assign(
+                        meetingID: frozenOriginal.meetingID, speakerID: frozenOriginal.speakerID,
+                        personID: nil, updateReferenceEvidence: false)
+                }
+            }),
+            referenceReadSamples: { _, range in .init(repeating: 0.1, count: Int(range.speechDuration * 16000)) })
+        // Startup uses the same persisted pending receipt, without a new naming action.
+        delayed.resumePendingReferences(directory: { _ in folder })
+        await delayed.awaitReferenceSelections()
+        #expect(!library.examples.contains { $0.selectedReference != nil && $0.review == .confirmed })
+    }
+
+    @Test func clipsSupportedSpeechAndSkipsStaleOriginalAndUnsupportedWindows() async throws {
+        let (root, folder, library, initial) = try await storedFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let canonical = UUID()
+        var stale = initial
+        stale.id = UUID()
+        stale.speakerID = canonical
+        stale.excluded = false
+        stale.start = 40
+        stale.end = 44
+        stale.audioRevision = "old-audio-revision"
+        var current = stale
+        current.id = UUID()
+        current.audioRevision = initial.audioRevision
+        #expect(library.upsert([stale, current]))
+        var saved = Meeting()
+        saved.id = initial.meetingID
+        saved.audioFiles = ["system.wav"]
+        saved.speakers = [.init(id: canonical, label: "voice_a", track: "system", providerName: "Synthetic")]
+        saved.transcript = [.init(start: 40.003, end: 44, speaker: "voice_a", text: "Speech", speakerID: canonical)]
+        try MeetingFolderStorage.write(saved, directory: root)
+        var detected = saved.speakers[0]
+        detected.voiceSampleRange = current.range
+        let analysis = LocalDiarizationResult(
+            modelRevision: "synthetic-v1",
+            ranges: [.init(track: "system", label: "voice_a", start: 0, end: 70)], speakers: [detected])
+        let input = VoiceDiscoveryInput(
+            meetingID: initial.meetingID, audioFiles: ["system.wav"],
+            audioRevisions: ["system.wav": initial.audioRevision!])
+        try await VoiceDiscoveryCache().save(analysis, input: input, configuration: .community, directory: folder)
+        let person = Person(name: "Alex")
+        #expect(
+            library.assign(
+                meetingID: initial.meetingID, speakerID: canonical, personID: person.id, updateReferenceEvidence: false)
+        )
+        let extractor = AlternativeSampleExtractor()
+        let preparation = VoiceLibraryPreparation(
+            library: library, people: { [person] }, referenceExtractor: extractor,
+            referenceReadSamples: { _, range in
+                .init(repeating: 0.1, count: Int((range.speechDuration * 16000).rounded()))
+            })
+        preparation.selectReference(
+            meetingID: initial.meetingID, speakerID: canonical, personID: person.id,
+            exampleID: stale.id, directory: folder)
+        await preparation.awaitReferenceSelections()
+        let selected = try #require(
+            library.examples.first { $0.selectedReference?.speakerID == canonical && $0.review == .confirmed })
+        #expect(abs((selected.start ?? 0) - 40.003) <= 1.0 / 16000 + 1e-9)
+        #expect(selected.end == 44)
+        #expect(await extractor.calls == 1)
+        #expect(library.decisions.first?.referenceSelectionPending == false)
+    }
+
+    @Test(arguments: ["unusable", "missing-analysis", "removed"])
+    func selectionReceiptDistinguishesCompletedAnalysisFromMissingPrerequisite(scenario: String) async throws {
+        let (root, folder, library, initial) = try await storedFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let person = Person(name: "Alex")
+        #expect(
+            library.assign(
+                meetingID: initial.meetingID, speakerID: initial.speakerID, personID: person.id,
+                updateReferenceEvidence: false))
+        if scenario == "removed" {
+            try FileManager.default.removeItem(at: folder)
+        }
+        else if scenario == "missing-analysis" {
+            try FileManager.default.removeItem(at: folder.appendingPathComponent(VoiceDiscoveryCache.directoryName))
+        }
+        else {
+            var speaker = MeetingSpeaker(label: "voice_a", track: "track0", providerName: "Synthetic")
+            speaker.voiceSampleRange = initial.range
+            let analysis = LocalDiarizationResult(
+                modelRevision: "synthetic-v1",
+                ranges: [.init(track: "track0", label: "voice_a", start: 0, end: 24, associationUncertain: true)],
+                speakers: [speaker])
+            let input = VoiceDiscoveryInput(
+                meetingID: initial.meetingID, audioFiles: ["system.wav"],
+                audioRevisions: ["system.wav": initial.audioRevision!])
+            try await VoiceDiscoveryCache().save(analysis, input: input, configuration: .community, directory: folder)
+        }
+        let preparation = VoiceLibraryPreparation(
+            library: library, people: { [person] }, referenceExtractor: AlternativeSampleExtractor(),
+            referenceReadSamples: { _, range in
+                .init(repeating: 0.1, count: Int((range.speechDuration * 16000).rounded()))
+            })
+        preparation.selectReference(
+            meetingID: initial.meetingID, speakerID: initial.speakerID, personID: person.id,
+            exampleID: initial.id, directory: folder)
+        await preparation.awaitReferenceSelections()
+        #expect(library.decisions.first?.referenceSelectionPending == (scenario == "missing-analysis"))
+        #expect(!library.examples.contains { $0.selectedReference != nil })
+    }
+
+    @Test func triesAnotherCurrentOriginalWhenPreferredExcerptCannotMapToAnalysis() async throws {
+        let (root, folder, library, initial) = try await storedFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var preferred = initial
+        preferred.id = UUID()
+        preferred.start = 22
+        preferred.end = 28
+        preferred.excluded = false
+        #expect(library.upsert([preferred]))
+        var saved = Meeting()
+        saved.id = initial.meetingID
+        saved.audioFiles = ["system.wav"]
+        saved.speakers = [.init(id: initial.speakerID, label: "voice_a", track: "system", providerName: "Synthetic")]
+        saved.transcript = [.init(start: 0, end: 24, speaker: "voice_a", text: "Speech", speakerID: initial.speakerID)]
+        try MeetingFolderStorage.write(saved, directory: root)
+        let person = Person(name: "Alex")
+        #expect(
+            library.assign(
+                meetingID: initial.meetingID, speakerID: initial.speakerID,
+                personID: person.id, updateReferenceEvidence: false))
+        let extractor = AlternativeSampleExtractor()
+        let preparation = VoiceLibraryPreparation(
+            library: library, people: { [person] }, referenceExtractor: extractor,
+            referenceReadSamples: { _, range in
+                .init(repeating: 0.1, count: Int((range.speechDuration * 16000).rounded()))
+            })
+        preparation.selectReference(
+            meetingID: initial.meetingID, speakerID: initial.speakerID,
+            personID: person.id, exampleID: preferred.id, directory: folder)
+        await preparation.awaitReferenceSelections()
+        #expect(await extractor.calls == 1)
+        #expect(library.examples.contains { $0.selectedReference?.personID == person.id && $0.review == .confirmed })
+        #expect(library.decisions.first?.referenceSelectionPending == false)
+    }
+
     @Test func preparesRepresentationBeforePublishingAndPreservesIgnoredDecision() async throws {
         let (root, folder, library, original) = try await storedFixture()
         defer { try? FileManager.default.removeItem(at: root) }

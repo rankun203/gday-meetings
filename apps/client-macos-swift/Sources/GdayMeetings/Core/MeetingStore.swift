@@ -198,10 +198,18 @@ final class MeetingStore: ObservableObject {
             guard ready, let self, library != nil else { return }
             self.scheduleVoiceAssignmentRefresh(
                 meetingIDs: [], recomputeSuggestions: false, repairMissingAssociations: true)
+            Task { [weak self] in
+                guard let self else { return }
+                self.voicePreparation.resumePendingReferences(directory: self.directory(for:))
+            }
         }
         if library.isLoaded {
             scheduleVoiceAssignmentRefresh(
                 meetingIDs: [], recomputeSuggestions: false, repairMissingAssociations: true)
+            Task { [weak self] in
+                guard let self else { return }
+                self.voicePreparation.resumePendingReferences(directory: self.directory(for:))
+            }
         }
         voiceJobObservation = library.$jobs.dropFirst().sink { [weak self] jobs in
             guard let self else { return }
@@ -235,6 +243,10 @@ final class MeetingStore: ObservableObject {
         currentProvider: { [weak self] in
             guard let self else { return nil }
             return self.settings.serviceProviders.first { $0.id == self.settings.diarizationProviderID }
+        },
+        referenceWriteReady: { [weak self] in
+            guard let self else { return false }
+            return await self.flushCanonicalWrites()
         })
     private var recorder: AudioCapture?
     private var captureTransition = false

@@ -50,10 +50,13 @@ struct VoiceReviewSnapshot: Sendable {
     var unnamedGroups: [VoiceIdentificationGroup]
 
     static func make(
-        hydrated: [VoiceExample], metadata: [VoiceExample], playableIDs: Set<UUID>,
+        hydrated allHydrated: [VoiceExample], metadata allMetadata: [VoiceExample], playableIDs: Set<UUID>,
         personIDs: Set<UUID>, revision: Int, policy: VoiceMatchingPolicy = .default,
         preparedGroups: [VoiceIdentificationGroup]? = nil
     ) -> Self {
+        let metadata = selectiveEvidence(allMetadata)
+        let availableIDs = Set(metadata.map(\.id))
+        let hydrated = allHydrated.filter { availableIDs.contains($0.id) }
         let byID = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
         // Unavailable confirmed records remain reference evidence, but cannot
         // become review questions even if their metadata still has a range.
@@ -67,7 +70,8 @@ struct VoiceReviewSnapshot: Sendable {
             .compactMap {
                 source -> VoiceIdentificationGroup? in
                 func unnamed(_ example: VoiceExample) -> Bool {
-                    example.personID == nil && example.namedPersonID == nil && example.suggestedPersonID == nil
+                    availableIDs.contains(example.id) && example.personID == nil && example.namedPersonID == nil
+                        && example.suggestedPersonID == nil
                         && !example.excluded && !example.manuallyCleared
                 }
                 let evidence = source.evidenceExamples.filter(unnamed)
@@ -86,10 +90,37 @@ struct VoiceReviewSnapshot: Sendable {
         return Self(revision: revision, candidates: ranked, unnamedGroups: unnamedGroups)
     }
 
+    /// A manually identified speaker with selected recognition evidence does
+    /// not need repeated approval of its arbitrary initial excerpt. Keep stored
+    /// decisions intact so corrections and later reopening remain reversible.
+    static func selectiveEvidence(_ examples: [VoiceExample]) -> [VoiceExample] {
+        let selected = Dictionary(
+            grouping: examples.filter {
+                $0.selectedReference != nil && $0.review == .confirmed && !$0.excluded && !$0.manuallyCleared
+            }, by: \.meetingID)
+        return examples.filter { example in
+            if example.selectedReference != nil && example.review != .confirmed { return false }
+            guard example.acceptsSuggestions else { return true }
+            return !(selected[example.meetingID] ?? []).contains { reference in
+                guard let origin = reference.selectedReference,
+                    example.meetingID == origin.meetingID,
+                    example.audioRevision == reference.audioRevision,
+                    example.namedPersonID == nil || example.namedPersonID == origin.personID
+                else { return false }
+                // A scan cluster may span multiple transcript identities. Only
+                // suppress questions belonging to this exact detected speaker.
+                return example.speakerID == origin.speakerID
+            }
+        }
+    }
+
     static func groups(
-        hydrated: [VoiceExample], metadata: [VoiceExample], playableIDs: Set<UUID>,
+        hydrated allHydrated: [VoiceExample], metadata allMetadata: [VoiceExample], playableIDs: Set<UUID>,
         policy: VoiceMatchingPolicy = .default
     ) -> [VoiceIdentificationGroup] {
+        let metadata = selectiveEvidence(allMetadata)
+        let visibleIDs = Set(metadata.map(\.id))
+        let hydrated = allHydrated.filter { visibleIDs.contains($0.id) }
         let byID = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
         var groups = VoiceIdentificationSelection.groups(hydrated, policy: policy).map { source in
             var group = source

@@ -50,7 +50,7 @@ import Testing
         #expect(recognized.speakers.allSatisfy { $0.personID == nil && !$0.confirmed })
     }
 
-    @Test func assigningReassigningAndRemovingPersistWithoutDuplicatingSamples() async throws {
+    @Test func assigningReassigningAndRemovingPersistWithoutApprovingArbitraryVectors() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
@@ -65,10 +65,10 @@ import Testing
         try await store.insertImportedMeeting(meeting)
         await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
         await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: first)
-        #expect(store.people.first { $0.id == first }?.voiceSamples.count == 1)
+        #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
         await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: second)
         #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
-        #expect(store.people.first { $0.id == second }?.voiceSamples.count == 1)
+        #expect(store.people.first { $0.id == second }?.voiceSamples.isEmpty == true)
         let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))
@@ -80,6 +80,48 @@ import Testing
         #expect(reopened.meetings.first?.personIDs.isEmpty == true)
         #expect(reopened.people.allSatisfy { $0.voiceSamples.isEmpty })
         #expect(reopened.meetings.first?.speakers[0].personID == nil)
+    }
+
+    @Test func editingProjectedSpeakerUpdatesItsWholeDetectedIdentity() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
+        let person = await store.addPerson(name: "Alex")
+        let otherPerson = await store.addPerson(name: "Sam")
+        let thirdPerson = await store.addPerson(name: "Taylor")
+        var meeting = Meeting(title: "Speaker correction")
+        let base = MeetingSpeaker(label: "voice_01", track: "system", providerName: "Synthetic")
+        var projected = MeetingSpeaker(label: "voice_01", track: "system", providerName: "Synthetic")
+        projected.voiceReviewOrigin = .init(speakerID: base.id)
+        var passage = MeetingSpeaker(label: "voice_01", track: "system", providerName: "Passage review")
+        passage.personID = otherPerson
+        passage.manuallyAssigned = true
+        passage.passageAssignmentOrigin = .init(speakerID: base.id, speaker: base.label)
+        meeting.speakers = [base, projected, passage]
+        meeting.transcript = [
+            .init(start: 0, end: 4, speaker: base.label, text: "First passage", speakerID: base.id),
+            .init(start: 5, end: 9, speaker: projected.label, text: "Second passage", speakerID: projected.id),
+            .init(start: 10, end: 12, speaker: passage.label, text: "Corrected passage", speakerID: passage.id),
+        ]
+        try await store.insertImportedMeeting(meeting)
+        #expect(await store.assignSpeaker(meetingID: meeting.id, speakerID: projected.id, personID: person))
+        let updated = try #require(store.meeting(id: meeting.id))
+        #expect(
+            updated.transcript.prefix(2).allSatisfy { updated.speakerName(for: $0, people: store.people) == "Alex" })
+        #expect(updated.speakerName(for: updated.transcript[2], people: store.people) == "Sam")
+        #expect(store.people[0].voiceSamples.isEmpty)
+        #expect(await store.assignSpeaker(meetingID: meeting.id, speakerID: passage.id, personID: thirdPerson))
+        let passageEdit = try #require(store.meeting(id: meeting.id))
+        #expect(
+            passageEdit.transcript.prefix(2).allSatisfy {
+                passageEdit.speakerName(for: $0, people: store.people) == "Alex"
+            })
+        #expect(passageEdit.speakerName(for: passageEdit.transcript[2], people: store.people) == "Taylor")
+        let restored = try #require(
+            TranscriptPassageAssignment.applying(
+                to: passageEdit, rowID: passageEdit.transcript[2].id, personID: nil,
+                people: Set(store.people.map(\.id)), restore: true))
+        #expect(restored.speakerName(for: restored.transcript[2], people: store.people) == "Alex")
     }
 
     @Test func unknownEndpointVectorsNeverAutomaticallyMatch() {

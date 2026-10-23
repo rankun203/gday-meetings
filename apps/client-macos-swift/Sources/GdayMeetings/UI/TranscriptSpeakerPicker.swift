@@ -25,8 +25,6 @@ struct TranscriptSpeakerPicker: View {
     var identityAssociationTier: VoiceTranscriptAssociation.Tier? = nil
     var restorePassage: (() async -> Bool)? = nil
     var assignment: ((UUID?) async -> Bool)? = nil
-    var lineAssignment: ((UUID?) async -> Bool)? = nil
-    @ViewState private var appliesToSpeaker = true
     @ViewState private var query = ""
     @ViewState private var saving = false
     @ViewState private var saveError: String?
@@ -42,11 +40,13 @@ struct TranscriptSpeakerPicker: View {
             Text("Assign Person").font(.headline)
             TextField("Search people", text: $query)
                 .onSubmit { if let person = matches.first { assign(person.id) } }
+            Text(
+                restorePassage == nil ? "Applies to this speaker throughout the recording." : "Applies to this passage."
+            )
+            .font(.caption).foregroundStyle(.secondary)
             if associationUncertain {
-                Text(
-                    "This passage’s voice match is uncertain. Assign just this passage, or explicitly apply the name to all speech with this label."
-                )
-                .font(.caption).foregroundStyle(.secondary)
+                Text("Uncertain speaker match.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             else if let identityAssociationTier {
                 Text(identityAssociationTier == .tentative ? "Tentative match." : "Automatically matched.")
@@ -84,10 +84,6 @@ struct TranscriptSpeakerPicker: View {
                     }
                 }
             }.frame(maxHeight: 220)
-            if lineAssignment != nil {
-                Toggle("Apply to All Speech with This Speaker Label", isOn: $appliesToSpeaker)
-                    .toggleStyle(.checkbox)
-            }
             if !newName.isEmpty && !hasExactMatch {
                 Button("Create and Assign \(newName)") {
                     guard !saving else { return }
@@ -111,9 +107,6 @@ struct TranscriptSpeakerPicker: View {
         }
         .padding(16).frame(width: 320)
         .disabled(saving)
-        .task {
-            appliesToSpeaker = !associationUncertain
-        }
     }
 
     private func assign(_ personID: UUID?) {
@@ -128,10 +121,7 @@ struct TranscriptSpeakerPicker: View {
 
     private func performAssignment(_ personID: UUID?) async {
         let succeeded: Bool
-        if !appliesToSpeaker, let lineAssignment {
-            succeeded = await lineAssignment(personID)
-        }
-        else if let assignment {
+        if let assignment {
             succeeded = await assignment(personID)
         }
         else {

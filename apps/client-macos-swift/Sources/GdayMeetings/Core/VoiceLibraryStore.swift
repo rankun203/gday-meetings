@@ -286,6 +286,11 @@ final class VoiceLibraryStore: ObservableObject {
             try beforeLoad?()
             let persistence = try VoiceLibraryPersistence(directory: directory, writable: writable, write: write)
             var document = try persistence.load() ?? VoiceLibraryDocument()
+            let previousReferences = document
+            document.withdrawInvalidSelectedReferences()
+            if writable, document != previousReferences {
+                try persistence.commit(previous: previousReferences, next: document)
+            }
             if recoverInterruptedJobs {
                 let previous = document
                 for index in document.jobs.indices
@@ -391,7 +396,9 @@ final class VoiceLibraryStore: ObservableObject {
         return affected
     }
 
-    private func commit(_ next: VoiceLibraryDocument, changed: Set<UUID> = []) -> Bool {
+    private func commit(_ documentToSave: VoiceLibraryDocument, changed: Set<UUID> = []) -> Bool {
+        var next = documentToSave
+        next.withdrawInvalidSelectedReferences()
         guard admitVoiceWrite() else { return false }
         guard !canonicalCommitInFlight, pendingDocument == nil, readable, canWrite(), let persistence else {
             errorMessage = "The voice library is read-only. Check the data folder before saving changes."
@@ -588,6 +595,7 @@ final class VoiceLibraryStore: ObservableObject {
                 $0.rejectedPersonIDs.append(previous)
             }
             $0.personID = personID
+            $0.selectedReference = nil
             $0.namedPersonID = nil
             $0.suggestedPersonID = nil
             $0.review = .confirmed
@@ -651,6 +659,7 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].namedPersonID = nil
                 next.examples[index].suggestedPersonID = nil
                 next.examples[index].review = .confirmed
+                next.examples[index].selectedReference = nil
                 next.examples[index].excluded = false
                 next.examples[index].manuallyCleared = false
             }
@@ -674,7 +683,10 @@ final class VoiceLibraryStore: ObservableObject {
             // other people in the same atomic, reversible decision.
             if restoreExcluded { $0.excluded = false }
             if !$0.rejectedPersonIDs.contains(personID) { $0.rejectedPersonIDs.append(personID) }
-            if $0.personID == personID { $0.personID = nil }
+            if $0.personID == personID {
+                $0.personID = nil
+                $0.selectedReference = nil
+            }
             if $0.namedPersonID == personID { $0.namedPersonID = nil }
             if $0.suggestedPersonID == personID { $0.suggestedPersonID = nil }
             $0.review = $0.personID == nil ? .rejected : .confirmed
@@ -687,6 +699,7 @@ final class VoiceLibraryStore: ObservableObject {
     func clear(ids: Set<UUID>) -> Bool {
         edit(ids: exactReviewIDs(ids)) {
             $0.personID = nil
+            $0.selectedReference = nil
             $0.namedPersonID = nil
             $0.suggestedPersonID = nil
             $0.review = .unassigned
@@ -696,7 +709,9 @@ final class VoiceLibraryStore: ObservableObject {
 
     @discardableResult
     func exclude(ids: Set<UUID>, excluded: Bool = true) -> Bool {
-        edit(ids: exactReviewIDs(ids)) { $0.excluded = excluded }
+        edit(ids: exactReviewIDs(ids)) {
+            $0.excluded = excluded
+        }
     }
 
     @discardableResult
@@ -1478,7 +1493,10 @@ final class VoiceLibraryStore: ObservableObject {
         next.undo = Array(next.undo.suffix(20))
         if exampleID == nil {
             next.decisions.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
-            next.decisions.append(.init(meetingID: meetingID, speakerID: speakerID, personID: personID))
+            next.decisions.append(
+                .init(
+                    meetingID: meetingID, speakerID: speakerID, personID: personID,
+                    referenceSelectionPending: !updateReferenceEvidence && personID != nil ? true : nil))
         }
         for index in next.examples.indices
         where next.examples[index].id == exampleID || relatedIDs.contains(next.examples[index].id)
@@ -1512,6 +1530,62 @@ final class VoiceLibraryStore: ObservableObject {
         return commit(next, changed: [meetingID])
     }
 
+    func hasManualIdentity(meetingID: UUID, speakerID: UUID, personID: UUID) -> Bool {
+        !document.deletedPersonIDs.contains(personID)
+            && document.decisions.contains {
+                $0.meetingID == meetingID && $0.speakerID == speakerID && $0.personID == personID
+            }
+    }
+
+    private var canSaveSelectedReference: Bool {
+        isLoaded && !canonicalCommitInFlight && pendingDocument == nil && readable && canWrite() && persistence != nil
+    }
+
+    @discardableResult
+    func finishReferenceSelection(meetingID: UUID, speakerID: UUID, personID: UUID) -> Bool {
+        guard canSaveSelectedReference,
+            let index = document.decisions.firstIndex(where: {
+                $0.meetingID == meetingID && $0.speakerID == speakerID && $0.personID == personID
+            })
+        else { return false }
+        guard document.decisions[index].referenceSelectionPending == true else { return true }
+        var next = document
+        next.decisions[index].referenceSelectionPending = false
+        return commit(next)
+    }
+
+    /// The worker cannot promote stale identity or replace an explicit excerpt review.
+    func acceptSelectedReference(_ example: VoiceExample, personID: UUID, speakerID: UUID) -> Bool {
+        guard canSaveSelectedReference,
+            hasManualIdentity(meetingID: example.meetingID, speakerID: speakerID, personID: personID),
+            example.currentSampleQuality?.issue == nil, example.currentSampleQuality != nil,
+            audioIsCurrent(example), !example.embeddings.isEmpty,
+            example.embeddings.allSatisfy(\.isValid),
+            !document.examples.contains(where: {
+                $0.meetingID == example.meetingID && $0.audioRevision == example.audioRevision
+                    && $0.range == example.range && $0.isReviewed && $0.selectedReference == nil
+            })
+        else { return false }
+        var selected = example
+        selected.personID = personID
+        selected.review = .confirmed
+        selected.selectedReference = .init(meetingID: example.meetingID, speakerID: speakerID, personID: personID)
+        var next = document
+        if let index = next.examples.firstIndex(where: { $0.id == selected.id }) {
+            guard next.examples[index].selectedReference != nil else { return false }
+            next.examples[index] = selected
+        }
+        else {
+            next.examples.append(selected)
+        }
+        if let decision = next.decisions.firstIndex(where: {
+            $0.meetingID == example.meetingID && $0.speakerID == speakerID && $0.personID == personID
+        }) {
+            next.decisions[decision].referenceSelectionPending = false
+        }
+        return commit(next)
+    }
+
     struct CanonicalCommit: Sendable {
         var previous: VoiceLibraryDocument
         var next: VoiceLibraryDocument
@@ -1530,7 +1604,8 @@ final class VoiceLibraryStore: ObservableObject {
         return true
     }
     func beginCanonicalCommit() throws -> CanonicalCommit? {
-        guard let pendingDocument else { return nil }
+        guard var pendingDocument else { return nil }
+        pendingDocument.withdrawInvalidSelectedReferences()
         guard !canonicalCommitInFlight, let persistence else { throw ServiceError("The voice library is unavailable.") }
         canonicalCommitInFlight = true
         return CanonicalCommit(previous: document, next: pendingDocument, persistence: persistence.snapshot())
@@ -1766,6 +1841,9 @@ final class VoiceLibraryStore: ObservableObject {
                 next.examples[index].transcriptAssociation = nil
             }
             if next.examples[index].personID.map(ids.contains) == true { next.examples[index].personID = targetID }
+            if next.examples[index].selectedReference.map({ ids.contains($0.personID) }) == true {
+                next.examples[index].selectedReference?.personID = targetID
+            }
             if next.examples[index].namedPersonID.map(ids.contains) == true {
                 next.examples[index].namedPersonID = targetID
             }

@@ -175,15 +175,6 @@ struct MeetingTranscriptView: View {
                                             }
                                             return await store.assignSpeaker(
                                                 meetingID: meeting.id, speakerID: id, personID: personID)
-                                        },
-                                        lineAssignment: { personID in
-                                            if let editableCheckpoint {
-                                                guard await store.adoptLiveTranscript(editableCheckpoint) else {
-                                                    return false
-                                                }
-                                            }
-                                            return await store.assignTranscriptPassage(
-                                                meetingID: meeting.id, rowID: rowID, personID: personID)
                                         }
                                     )
                                     .environmentObject(store))

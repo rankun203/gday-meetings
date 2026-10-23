@@ -267,13 +267,21 @@ extension MeetingStore {
         guard await ensureMeetingLoaded(id: meetingID) else { return false }
         guard await flushCanonicalWrites() else { return false }
         guard libraryWritable, var meeting = self.meeting(id: meetingID),
-            let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }),
+            let selected = meeting.speakers.first(where: { $0.id == speakerID })
+        else { return false }
+        // Existing passage corrections retain their independent identity and
+        // Undo scope. New whole-speaker choices only unwrap machine projections.
+        let originID = selected.passageAssignmentOrigin == nil ? selected.voiceReviewOrigin?.speakerID : nil
+        let canonicalID =
+            originID.flatMap { origin in
+                meeting.speakers.contains(where: { $0.id == origin }) ? origin : nil
+            } ?? speakerID
+        guard let index = meeting.speakers.firstIndex(where: { $0.id == canonicalID }),
             meeting.speakers[index].canAssignPerson || personID == nil,
             personID == nil || people.contains(where: { $0.id == personID })
         else { return false }
         var replacement = meeting.speakers
         let speaker = meeting.speakers[index]
-        let wholeProjection = speaker.voiceReviewOrigin?.speakerID == speaker.id
         replacement[index].voiceReviewOrigin?.transcriptAssociationTier = nil
         replacement[index].personID = personID
         replacement[index].confidence = nil
@@ -283,40 +291,46 @@ extension MeetingStore {
         _ = voiceLibrary.ingest(meeting: meeting, directory: directory(for: meetingID))
         guard
             voiceLibrary.assign(
-                meetingID: meetingID, speakerID: speakerID, personID: personID, staged: true,
+                meetingID: meetingID, speakerID: canonicalID, personID: personID, staged: true,
                 previousPersonID: meeting.speakers[index].personID,
-                exampleID: wholeProjection ? nil : speaker.voiceReviewExampleID,
-                preservePreviousSpeakerDecision: !wholeProjection,
-                updateReferenceEvidence: !wholeProjection,
-                relatedExampleID: wholeProjection ? speaker.voiceReviewExampleID : nil)
+                preservePreviousSpeakerDecision: speaker.voiceReviewOrigin?.speakerID != canonicalID,
+                updateReferenceEvidence: false,
+                relatedExampleID: speaker.voiceReviewExampleID)
         else {
             errorMessage = voiceLibrary.errorMessage
             return false
         }
-        if !wholeProjection {
-            for i in people.indices {
-                people[i].voiceSamples.removeAll { $0.meetingID == meetingID && $0.speakerID == speakerID }
-            }
-        }
-        if !wholeProjection, let personIndex = people.firstIndex(where: { $0.id == personID }),
-            let embedding = replacement[index].voiceEmbedding, embedding.isValid
-        {
-            people[personIndex].voiceSamples.append(
-                .init(meetingID: meetingID, speakerID: speakerID, voiceEmbedding: embedding))
-        }
-        else if !wholeProjection, let personIndex = people.firstIndex(where: { $0.id == personID }),
-            let scope = replacement[index].voiceScope, let embedding = replacement[index].embedding,
-            SpeakerRecognition.isValid(embedding)
-        {
-            people[personIndex].voiceSamples.append(
-                PersonVoiceSample(meetingID: meetingID, speakerID: speakerID, scope: scope, embedding: embedding))
+        // Legacy profile vectors carry no excerpt-quality decision. New evidence
+        // is selected from supported audio after the transcript identity is saved.
+        let legacySpeakerIDs = Set(
+            meeting.speakers.filter {
+                $0.id == canonicalID
+                    || ($0.passageAssignmentOrigin == nil && $0.voiceReviewOrigin?.speakerID == canonicalID)
+            }.map(\.id))
+        for i in people.indices {
+            people[i].voiceSamples.removeAll { $0.meetingID == meetingID && legacySpeakerIDs.contains($0.speakerID) }
         }
         for index in replacement.indices
-        where replacement[index].passageAssignmentOrigin?.speakerID == speakerID {
+        where replacement[index].passageAssignmentOrigin?.speakerID == canonicalID
+            || replacement[index].voiceReviewOrigin?.speakerID == canonicalID
+        {
             replacement[index].passageAssignmentOrigin?.labelDecisionChanged = true
+            // Preserve independently corrected passages when the base speaker is
+            // renamed. A passage explicitly selected for this action follows it.
+            if replacement[index].passageAssignmentOrigin != nil && replacement[index].id != speakerID { continue }
+            replacement[index].voiceReviewOrigin?.transcriptAssociationTier = nil
+            replacement[index].personID = personID
+            replacement[index].manuallyAssigned = true
         }
         meeting.replaceSpeakers(replacement)
-        return await updateMeeting(meeting)
+        guard await updateMeeting(meeting) else { return false }
+        voicePreparation.cancelReference(speakerID: canonicalID)
+        if let personID {
+            voicePreparation.selectReference(
+                meetingID: meetingID, speakerID: canonicalID, personID: personID,
+                exampleID: speaker.voiceReviewExampleID, directory: directory(for: meetingID))
+        }
+        return true
     }
 }
 

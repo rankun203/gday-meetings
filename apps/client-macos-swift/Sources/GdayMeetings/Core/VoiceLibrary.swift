@@ -133,6 +133,9 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var detectedSpeakerSpans: [SpeakerEvidenceSpan]? = nil
 
     var sampleQuality: VoiceSampleQuality? = nil
+    /// Automatic evidence selection follows a manual recording-speaker identity.
+    /// Explicit excerpt confirmation clears this dependency.
+    var selectedReference: VoiceSelectedReference? = nil
 
     var voiceEmbeddings: [TypedVoiceEmbedding] { embeddings }
 
@@ -143,7 +146,9 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     }
     var isPlayable: Bool { range != nil }
     /// Rejection settles one sample-person pair; other people remain eligible.
-    var acceptsSuggestions: Bool { personID == nil && review != .confirmed && !excluded && !manuallyCleared }
+    var acceptsSuggestions: Bool {
+        selectedReference == nil && personID == nil && review != .confirmed && !excluded && !manuallyCleared
+    }
     var needsReview: Bool { acceptsSuggestions && (review != .rejected || suggestedPersonID != nil) }
     /// Compare human decisions and the audio being reviewed. Background
     /// suggestions and newly prepared embeddings do not invalidate a question.
@@ -152,6 +157,7 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
             && (review == .confirmed) == (other.review == .confirmed)
             && Set(rejectedPersonIDs) == Set(other.rejectedPersonIDs)
             && excluded == other.excluded && manuallyCleared == other.manuallyCleared
+            && selectedReference == other.selectedReference
             && range == other.range && audioRevision == other.audioRevision
             && meetingID == other.meetingID && speakerID == other.speakerID
             && manuallyGrouped == other.manuallyGrouped && (!manuallyGrouped || groupID == other.groupID)
@@ -165,6 +171,7 @@ struct VoiceSpeakerDecision: Codable, Hashable, Sendable {
     var meetingID: UUID
     var speakerID: UUID
     var personID: UUID?
+    var referenceSelectionPending: Bool? = nil
 }
 
 struct VoiceProjectionOrigin: Codable, Equatable, Sendable {
@@ -201,6 +208,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
     var manuallyCleared: Bool
     var groupID: UUID
     var manuallyGrouped: Bool
+    var selectedReference: VoiceSelectedReference?
 
     init(_ example: VoiceExample) {
         id = example.id
@@ -214,6 +222,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
         manuallyCleared = example.manuallyCleared
         groupID = example.groupID
         manuallyGrouped = example.manuallyGrouped
+        selectedReference = example.selectedReference
     }
 
     func restore(_ example: inout VoiceExample) {
@@ -227,6 +236,7 @@ struct VoiceExampleReviewSnapshot: Codable, Equatable {
         example.manuallyCleared = manuallyCleared
         example.groupID = groupID
         example.manuallyGrouped = manuallyGrouped
+        example.selectedReference = selectedReference
     }
 }
 
@@ -246,4 +256,31 @@ struct VoiceLibraryDocument: Codable, Equatable {
     var undo: [VoiceLibraryUndo] = []
     var jobs: [VoicePreparationJob] = []
     var deletedPersonIDs: [UUID] = []
+}
+
+/// Provenance of a bounded, local selection after the user names a detected speaker.
+struct VoiceSelectedReference: Codable, Equatable, Sendable {
+    static let policy = "manual-speaker-exclusive-pcm-v1"
+    var meetingID: UUID
+    var speakerID: UUID
+    var personID: UUID
+    var policy: String = Self.policy
+}
+
+extension VoiceLibraryDocument {
+    /// Undo, deletion and corrections withdraw dependent evidence atomically.
+    /// Independent excerpt confirmations have no selection dependency.
+    mutating func withdrawInvalidSelectedReferences() {
+        for index in examples.indices {
+            guard let origin = examples[index].selectedReference,
+                deletedPersonIDs.contains(origin.personID)
+                    || !decisions.contains(where: {
+                        $0.meetingID == origin.meetingID && $0.speakerID == origin.speakerID
+                            && $0.personID == origin.personID
+                    })
+            else { continue }
+            examples[index].personID = nil
+            examples[index].review = .unassigned
+        }
+    }
 }
