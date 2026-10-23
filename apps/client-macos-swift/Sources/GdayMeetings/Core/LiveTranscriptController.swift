@@ -4,11 +4,27 @@ import Foundation
 /// Partial results publish only to the live panel, never through the meeting library.
 @MainActor
 final class LiveTranscriptController: ObservableObject {
+    typealias Preparation =
+        @Sendable (
+            String, @escaping @Sendable (ProviderActivity) async -> Void
+        ) async throws -> Locale
+    private let prepare: Preparation
+    private var finishing = false
+
+    init(
+        prepare: @escaping Preparation = { language, activity in
+            try await AppleLiveTranscription.prepare(language: language, activity: activity)
+        }
+    ) {
+        self.prepare = prepare
+    }
+
     @Published private(set) var draft: LiveTranscriptDraft?
     @Published private(set) var partials: [LiveTranscriptPhrase] = []
     @Published private(set) var status = ""
     @Published private(set) var enabled = false
-    private var generation = UUID()
+    @Published private(set) var activity: ProviderActivity = .idle
+    private(set) var generation = UUID()
     private var acceptedGenerations = Set<UUID>()
     private var directory: URL?
     private var sources: [LiveAudioSource] = []
@@ -94,10 +110,12 @@ final class LiveTranscriptController: ObservableObject {
     func begin(
         meetingID: UUID, language: String, directory: URL, sources: [LiveAudioSource],
         sink: LiveAudioSink, enabled: Bool, people: @escaping () -> [Person] = { [] },
-        favorAccuracy: @escaping () -> Bool = { false }
+        favorAccuracy: @escaping () -> Bool = { false },
+        preparedQueues: [LiveAudioSource: LiveAudioQueue]? = nil
     ) {
         transcriptionIssue = nil
         transcriptionFailures = []
+        finishing = false
         checkpointIssue = nil
         dataEventIssue = nil
         projectionWriter = LiveTranscriptProjectionWriter()
@@ -118,13 +136,25 @@ final class LiveTranscriptController: ObservableObject {
         draft = LiveTranscriptDraft(meetingID: meetingID, locale: language)
         draft?.liveSources = sources
         publishStream()
-        setEnabled(enabled)
+        setEnabled(enabled, preparedQueues: preparedQueues)
     }
 
     func seedPreview(meetingID: UUID, directory: URL, previouslyAssignedPersonID: UUID? = nil) {
         begin(
             meetingID: meetingID, language: "en", directory: directory,
             sources: [.microphone, .system], sink: LiveAudioSink(), enabled: true)
+        if UIPreviewPerformanceFixtures.flag(
+            "--synthetic-transcription-loading", infoKey: "GdayTranscriptionLoadingPreview")
+        {
+            activity = .loading("Downloading the speech model for English…")
+            return
+        }
+        if UIPreviewPerformanceFixtures.flag(
+            "--synthetic-transcription-failure", infoKey: "GdayTranscriptionFailurePreview")
+        {
+            activity = .failed("Couldn’t download the speech model. Check your internet connection, then retry.")
+            return
+        }
         let microphoneSession = UUID()
         let systemSession = UUID()
         knownRecognitionSessions.formUnion([microphoneSession, systemSession])
@@ -162,6 +192,11 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func setEnabled(_ value: Bool) {
+        setEnabled(value, preparedQueues: nil)
+    }
+
+    private func setEnabled(_ value: Bool, preparedQueues: [LiveAudioSource: LiveAudioQueue]?) {
+        guard !finishing else { return }
         transcriptionIssue = nil
         transcriptionFailures = []
         // On restart, only the interval since recognition was detached is uncovered.
@@ -179,47 +214,68 @@ final class LiveTranscriptController: ObservableObject {
         let token = generation
         acceptedGenerations.insert(token)
         startup?.cancel()
-        sink?.replace([:])
+        if preparedQueues == nil { sink?.replace([:]) }
         stopProvider = nil
         cancelProvider = nil
         partials = []
         stream.discardPartials()
         publishStream()
         enabled = value
+        activity = .idle
         guard value, let draft, let sink else {
             status = "Live transcript is off."
             return
         }
         if UIPreview.enabled {
+            activity = .active
             status = "Synthetic live transcript · No recognition is running."
             return
         }
         status = "Preparing live transcript…"
+        activity = .loading(status)
         checkpoint()
         let provider = AppleLiveTranscription()
         let favorAccuracy = self.favorAccuracy()
         let boundaries = self.boundaries
-        cancelProvider = { await provider.cancel() }
-        stopProvider = { await provider.finish() }
+        let queues =
+            preparedQueues
+            ?? Dictionary(
+                uniqueKeysWithValues: sources.map {
+                    ($0, LiveAudioQueue(bufferDuringPreparation: true))
+                })
+        sink.replace(queues)
+        cancelProvider = {
+            for queue in queues.values { queue.discard() }
+            await provider.cancel()
+        }
+        stopProvider = {
+            let finished = await provider.finish()
+            for queue in queues.values { queue.discard() }
+            return finished
+        }
         startup = Task(name: "Start live transcription") { [self] in
             do {
-                let locale = try await AppleLiveTranscription.prepare(language: draft.locale) { [weak self] value in
-                    await self?.setStatus(value, token: token)
+                let locale = try await prepare(draft.locale) { [weak self] value in
+                    await self?.receiveActivity(value, token: token)
                 }
                 guard generation == token, !Task.isCancelled else { return }
                 self.draft?.locale = locale.identifier
                 let result = try await provider.start(
                     locale: locale, sources: sources, sink: sink, boundaries: boundaries,
-                    favorAccuracy: favorAccuracy,
+                    favorAccuracy: favorAccuracy, preparedQueues: queues,
                     receive: { [weak self] phrase, final in await self?.receive(phrase, final: final, token: token) },
                     gap: { [weak self] gap in await self?.recordGap(gap, token: token) },
                     failure: { [weak self] message in await self?.receiveTranscriptionFailure(message, token: token) })
-                guard generation == token else {
+                guard generation == token, !Task.isCancelled, !finishing else {
+                    for queue in queues.values { queue.discard() }
                     await provider.cancel()
                     return
                 }
                 ready = true
-                status = "Listening · This Mac"
+                if activity.isLoading {
+                    activity = .active
+                    status = "Listening · This Mac"
+                }
                 let event = MeetingDataEvent(action: .sent, dataFlow: result.dataFlow)
                 dataEvents[token] = event
                 if let directory {
@@ -233,9 +289,11 @@ final class LiveTranscriptController: ObservableObject {
                 }
             }
             catch {
+                for queue in queues.values { queue.discard() }
                 await provider.cancel()
                 guard generation == token, !Task.isCancelled else { return }
                 status = error.localizedDescription
+                activity = .failed(status)
                 transcriptionIssue = status
                 checkpoint()
             }
@@ -259,6 +317,8 @@ final class LiveTranscriptController: ObservableObject {
     }
 
     func finish() async {
+        finishing = true
+        activity = .idle
         if !enabled || !ready { recordInactiveCoverage() }
         sink?.replace([:])
         startup?.cancel()
@@ -325,13 +385,23 @@ final class LiveTranscriptController: ObservableObject {
 
     func receiveTranscriptionFailure(_ message: String, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }
-        status = message
+        if token == generation, !finishing {
+            status = message
+            activity = .failed(message)
+        }
         if !transcriptionFailures.contains(message) { transcriptionFailures.append(message) }
     }
 
-    private func setStatus(_ value: String, token: UUID) {
-        guard token == generation else { return }
-        status = value
+    func receiveActivity(_ value: ProviderActivity, token: UUID) {
+        // A late preparation callback must not replace listening, failure, or Stop.
+        guard token == generation, activity.isLoading, value.isLoading else { return }
+        activity = value
+        if let message = value.message { status = message }
+    }
+
+    func retryTranscription() {
+        guard enabled, sink != nil, case .failed = activity else { return }
+        setEnabled(true)
     }
     private func recordGap(_ value: LiveTranscriptGap, token: UUID) {
         guard acceptedGenerations.contains(token) else { return }

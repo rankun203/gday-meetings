@@ -438,3 +438,58 @@ extension VoiceMatchReviewSessionTests {
         #expect(session.decisions.isEmpty && session.history.isEmpty)
     }
 }
+
+extension VoiceMatchReviewSessionTests {
+    @Test func existingSamplesBoundMachineTurnsAndRetainEveryDistinctConfirmation() {
+        let person = UUID()
+        let meeting = UUID()
+        let speaker = UUID()
+        var turns = (0..<1200).map { index -> VoiceExample in
+            let start = Double(index) * 4
+            return VoiceExample(
+                meetingID: meeting, speakerID: speaker, source: "system", audioFile: "system.wav",
+                audioRevision: "fixture", start: start, end: start + 3,
+                suggestedPersonID: person, review: .suggested, origin: .discovery,
+                detectedSpeakerID: "cluster-\(index % 4)",
+                attributionTurn: .init(start: start, end: start + 3))
+        }
+        for index in 0..<12 {
+            turns[index].review = .confirmed
+            turns[index].personID = person
+        }
+        let existing = VoiceMatchReviewSession.referenceExamples(turns, personID: person)
+        #expect(existing.count == 16)
+        #expect(existing.filter { $0.review == .confirmed }.count == 12)
+        #expect(existing.filter { $0.review != .confirmed }.count == 4)
+        #expect(VoiceSampleMaintenance.examples(turns, personID: person, ignoredOnly: false).count == 1200)
+        #expect(turns.filter { $0.review == .confirmed }.count == 12)
+    }
+
+    @Test func existingSamplesKeepExactReviewContextBeforeSamplingTurnAliases() {
+        let person = UUID()
+        let meeting = UUID()
+        let speaker = UUID()
+        var confirmed = VoiceExample(
+            meetingID: meeting, speakerID: speaker, source: "system", audioFile: "system.wav",
+            audioRevision: "fixture", start: 0, end: 10,
+            personID: person, review: .confirmed, origin: .discovery,
+            detectedSpeakerID: "cluster", attributionTurn: .init(start: 0, end: 10))
+        var alias = confirmed
+        alias.id = UUID()
+        alias.personID = nil
+        alias.suggestedPersonID = person
+        alias.review = .suggested
+        var another = alias
+        another.id = UUID()
+        another.start = 12
+        another.end = 15
+        another.attributionTurn = .init(start: 12, end: 15)
+        let existing = VoiceMatchReviewSession.referenceExamples([alias, another, confirmed], personID: person)
+        #expect(Set(existing.map(\.id)) == [confirmed.id, another.id])
+        confirmed.review = .rejected
+        confirmed.personID = nil
+        confirmed.rejectedPersonIDs = [person]
+        let rejected = VoiceMatchReviewSession.referenceExamples([alias, another, confirmed], personID: person)
+        #expect(rejected.map(\.id) == [another.id])
+    }
+}

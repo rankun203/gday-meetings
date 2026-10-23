@@ -1,7 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// Acoustic turns determine grouping. Recognition rows provide exact, anchored text only.
+/// Acoustic turns assign identity within the original recognition passages.
+/// Source anchors preserve those reading boundaries across repeated projections.
 enum DiarizedTranscriptProjection {
     private struct UnresolvedKey: Equatable {
         var overlappingTurns: [Int]
@@ -26,7 +27,7 @@ enum DiarizedTranscriptProjection {
             let old = row.speakerID.flatMap { speakers[$0] }
             let protected =
                 old?.protectsManualAssignment(to: row) == true
-                || (old?.personID != nil && old?.manualReviewThrough == nil)
+                || (old?.personID != nil && old?.manualReviewThrough == nil && old?.voiceReviewOrigin == nil)
             let track: String? = {
                 if let track = row.analysisTrackID { return track }
                 if let track = old?.track, track.hasPrefix("track") { return track }
@@ -118,6 +119,7 @@ enum DiarizedTranscriptProjection {
                 if var previous = rows.last,
                     previous.row.session == part.row.session, previous.row.source == part.row.source,
                     previous.row.associationUncertain == part.row.associationUncertain,
+                    contiguousOriginalPassage(previous.row, part.row),
                     (part.turn != nil && previous.turn == part.turn)
                         || canGroupUnresolved(previous, part, turns: turns),
                     previous.row.end <= part.row.start, previous.row.timing != nil, part.row.timing != nil
@@ -227,6 +229,16 @@ enum DiarizedTranscriptProjection {
             }
         }
         return (nil, false)
+    }
+
+    private static func contiguousOriginalPassage(_ left: TranscriptSegment, _ right: TranscriptSegment) -> Bool {
+        guard let leftSpans = left.sourceSpans, let rightSpans = right.sourceSpans,
+            let last = leftSpans.last, let first = rightSpans.first,
+            leftSpans.allSatisfy({ $0.rowID == first.rowID }),
+            rightSpans.allSatisfy({ $0.rowID == first.rowID }),
+            last.range.location + last.range.length == first.range.location
+        else { return false }
+        return true
     }
 
     private static func canGroupUnresolved(_ previous: Piece, _ next: Piece, turns: [AcousticSpeakerTurn]) -> Bool {

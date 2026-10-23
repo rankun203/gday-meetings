@@ -218,9 +218,10 @@ actor VoiceMatchingWorker {
             for metadata in input.examples where metadata.acceptsSuggestions {
                 try Task.checkCancellation()
                 guard let example = hydrated[metadata.id] else { continue }
-                let profiles = profiles.filter { !example.rejectedPersonIDs.contains($0.id) }
                 let associations = example.embeddings.compactMap {
-                    Self.transcriptAssociation(embedding: $0, people: profiles, policy: input.policy.normalized)
+                    Self.transcriptAssociation(
+                        embedding: $0, people: profiles, rejectedPersonIDs: Set(example.rejectedPersonIDs),
+                        policy: input.policy.normalized)
                 }
                 let associatedPeople = Set(associations.map(\.personID))
                 let association =
@@ -252,12 +253,14 @@ actor VoiceMatchingWorker {
     }
 
     private static func transcriptAssociation(
-        embedding: TypedVoiceEmbedding, people: [Person], policy: VoiceMatchingPolicy
+        embedding: TypedVoiceEmbedding, people: [Person], rejectedPersonIDs: Set<UUID>, policy: VoiceMatchingPolicy
     ) -> VoiceTranscriptAssociation? {
         let scores = people.compactMap { person in
             SpeakerRecognition.match(embedding: embedding, people: [person], threshold: -1, minimumMargin: 0)
         }.sorted { $0.score == $1.score ? $0.personID.uuidString < $1.personID.uuidString : $0.score > $1.score }
-        guard let best = scores.first else { return nil }
+        // A pair-specific rejection vetoes its identity without creating more
+        // acoustic separation for the next candidate.
+        guard let best = scores.first, !rejectedPersonIDs.contains(best.personID) else { return nil }
         let margin = best.score - (scores.dropFirst().first?.score ?? -1)
         guard margin >= policy.minimumMargin else { return nil }
         let tier: VoiceTranscriptAssociation.Tier
@@ -267,7 +270,7 @@ actor VoiceMatchingWorker {
         else {
             // Relative evidence needs a real alternative; a lone known person
             // must not win every unfamiliar voice through the -1 sentinel.
-            guard scores.count >= 2, best.score > 0 else { return nil }
+            guard scores.count >= 2, best.score > 0, best.score >= policy.suggestionThreshold else { return nil }
             tier = .tentative
         }
         return .init(personID: best.personID, score: best.score, margin: margin, policy: policy, tier: tier)

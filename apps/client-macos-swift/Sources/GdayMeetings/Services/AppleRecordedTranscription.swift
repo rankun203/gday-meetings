@@ -10,7 +10,9 @@ enum AppleRecordedTranscription {
         progress: (@Sendable (AudioTaskProgress) async -> Void)? = nil,
         status: @escaping @Sendable (String) async -> Void
     ) async throws -> LiveTranscriptDraft {
-        let locale = try await AppleLiveTranscription.prepare(language: language, status: status)
+        let locale = try await AppleLiveTranscription.prepare(language: language) { activity in
+            if let message = activity.message { await status(message) }
+        }
         try await AppleSpeechAssets.shared.retain(locale)
         do {
             let durations = try AudioTaskProgress.durations(files)

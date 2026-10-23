@@ -20,48 +20,151 @@ import Testing
                 ]),
             sourceSpans: [.init(rowID: id, range: .init(location: 0, length: text.utf16.count), text: text)])
     }
-    @Test func continuationGroupsWithoutChangingCanonicalAttribution() {
+    private func fragments(_ values: [(String, MeetingSpeaker?)]) -> [TranscriptSegment] {
+        let original = UUID()
+        var offset = 0
+        return values.enumerated().map { index, value in
+            var segment = row(value.0, at: Double(index), speaker: value.1)
+            segment.sourceSpans = [
+                .init(
+                    rowID: original, range: .init(location: offset, length: value.0.utf16.count), text: value.0)
+            ]
+            offset += value.0.utf16.count
+            return segment
+        }
+    }
+
+    @Test func originalPassageGroupsUnknownWordsPunctuationAndSentences() {
         let speaker = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic")
-        let rows = [
-            row("A sentence", at: 0, speaker: speaker), row(" ends", at: 1), row(".", at: 2), row("Next", at: 3),
-        ]
-        let analysis = LocalDiarizationResult(
-            modelRevision: "synthetic",
-            ranges: [
-                .init(track: "track0", label: "A", start: 0, end: 1),
-                .init(track: "track0", label: "A", start: 2, end: 2.5),
-            ], speakers: [speaker])
-        let grouped = TranscriptPassagePresentation.groups(rows, speakers: [speaker], analysis: analysis)
-        #expect(grouped.map(\.count) == [3, 1])
+        let rows = fragments([("A sentence", speaker), (" ends", nil), (".", nil), (" Next sentence.", speaker)])
+        let grouped = TranscriptPassagePresentation.groups(rows, speakers: [speaker], analysis: nil)
+        #expect(grouped.map(\.count) == [4])
         #expect(grouped.flatMap { $0 } == rows)
         #expect(grouped[0][1].speakerID == nil)
-        #expect(TranscriptPassagePresentation.endsSentence("你好。", before: "下一句"))
-        #expect(!TranscriptPassagePresentation.endsSentence("Version 1.", before: "5 remains"))
+        #expect(grouped[0][2].speakerID == nil)
     }
-    @Test func differentVoiceOverlapSessionAndManualBoundariesStopComposition() {
+
+    @Test func entirelyUnresolvedOriginalPassageStillReadsAsOneParagraph() {
+        let rows = fragments([("你", nil), ("好", nil), ("。", nil), (" 下一句", nil)])
+        #expect(TranscriptPassagePresentation.groups(rows, speakers: [], analysis: nil).map(\.count) == [4])
+    }
+
+    @Test func differentVoiceSessionSourceAndPassageCorrectionBoundariesStopComposition() {
         var speaker = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic")
-        let first = row("Start", at: 0, speaker: speaker)
-        var second = row(" continuation", at: 1)
-        var analysis = LocalDiarizationResult(
-            modelRevision: "synthetic",
-            ranges: [
-                .init(track: "track0", label: "B", start: 1, end: 2)
-            ], speakers: [speaker])
+        let other = MeetingSpeaker(label: "B", track: "track0", providerName: "Synthetic")
+        var rows = fragments([("Start", speaker), (" unknown", nil), (" changed", other)])
         #expect(
-            TranscriptPassagePresentation.groups([first, second], speakers: [speaker], analysis: analysis).count == 2)
-        analysis.ranges = []
-        second.session = UUID()
+            TranscriptPassagePresentation.groups(rows, speakers: [speaker, other], analysis: nil).map(\.count) == [
+                2, 1,
+            ])
+        rows[1].session = UUID()
         #expect(
-            TranscriptPassagePresentation.groups([first, second], speakers: [speaker], analysis: analysis).count == 2)
-        second.session = nil
-        second.source = .microphone
+            TranscriptPassagePresentation.groups(Array(rows.prefix(2)), speakers: [speaker], analysis: nil).count == 2)
+        rows[1].session = nil
+        rows[1].source = .microphone
         #expect(
-            TranscriptPassagePresentation.groups([first, second], speakers: [speaker], analysis: analysis).count == 2)
-        second.source = .system
+            TranscriptPassagePresentation.groups(Array(rows.prefix(2)), speakers: [speaker], analysis: nil).count == 2)
+        rows[1].source = .system
         speaker.manuallyAssigned = true
+        speaker.personID = UUID()
         #expect(
-            TranscriptPassagePresentation.groups([first, second], speakers: [speaker], analysis: analysis).count == 2)
+            TranscriptPassagePresentation.groups(Array(rows.prefix(2)), speakers: [speaker], analysis: nil).count == 1)
+        speaker.passageAssignmentOrigin = .init(speaker: "A")
+        #expect(
+            TranscriptPassagePresentation.groups(Array(rows.prefix(2)), speakers: [speaker], analysis: nil).count == 2)
     }
+
+    @Test func separateOriginalPassagesAndEditedAnchorsKeepTheirBoundaries() {
+        let speaker = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic")
+        let separate = [
+            row("First paragraph", at: 0, speaker: speaker), row("Second paragraph", at: 1, speaker: speaker),
+        ]
+        #expect(TranscriptPassagePresentation.groups(separate, speakers: [speaker], analysis: nil).count == 2)
+        var rows = fragments([("First", speaker), (" next", speaker)])
+        rows[1].text = "Edited"
+        #expect(TranscriptPassagePresentation.groups(rows, speakers: [speaker], analysis: nil).count == 2)
+    }
+
+    @Test func mixedDisplayRetainsClickedUnknownIdentityAndSupportedHeader() throws {
+        let speaker = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic")
+        let segments = fragments([("Unknown ", nil), ("known", speaker), (".", nil)])
+        let person = UUID()
+        let rows = segments.map {
+            TranscriptDisplayRow(
+                id: $0.id, start: $0.start, end: $0.end, speaker: $0.speaker,
+                speakerID: $0.speakerID, text: $0.text,
+                personID: $0.speakerID == nil ? nil : person,
+                isSourcePlaceholder: $0.sourcePlaceholder == true,
+                transcriptAssociationTier: $0.speakerID == nil ? nil : .automatic)
+        }
+        let passage = try #require(TranscriptDisplayRow.passage(rows: rows, segments: segments))
+        #expect(passage.text == "Unknown known.")
+        #expect(passage.speakerID == speaker.id)
+        #expect(passage.sourceRow(atUTF16: 1).speakerID == nil)
+        #expect(passage.sourceRow(atUTF16: 9).speakerID == speaker.id)
+        #expect(passage.sourceRow(atUTF16: 13).speakerID == nil)
+        #expect(passage.accessibilityHelp == "Some words have no speaker label.")
+        #expect(passage.canonicalRows == rows)
+        #expect(passage.id == segments[0].id)
+        #expect(passage.speakerSourceRowID == segments[1].id)
+        let assignmentTarget = try #require(passage.canonicalRows.first { $0.id == passage.speakerSourceRowID })
+        #expect(assignmentTarget.speakerID == passage.speakerID)
+        #expect(assignmentTarget.transcriptAssociationTier == .automatic)
+        let cell = TranscriptNativeCell(frame: NSRect(x: 0, y: 0, width: 600, height: 28))
+        cell.configure(passage, showsSpeakers: true)
+        #expect(cell.badge.unresolved)
+        #expect(cell.badge.toolTip?.contains("Some words have no speaker label.") == true)
+        #expect(cell.body.toolTip == "Some words have no speaker label.")
+    }
+
+    @Test func separateTurnProjectionsWithSameVoiceAndPersonKeepOneReadingPassage() throws {
+        let base = UUID()
+        let person = UUID()
+        var first = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic", personID: person)
+        first.voiceReviewOrigin = .init(speakerID: base, transcriptAssociationTier: .automatic)
+        var next = first
+        next.id = UUID()
+        next.voiceReviewOrigin?.transcriptAssociationTier = .tentative
+        let segments = fragments([("One", first), (" paragraph.", next)])
+        let groups = TranscriptPassagePresentation.groups(segments, speakers: [first, next], analysis: nil)
+        #expect(groups.map(\.count) == [2])
+        let rows = segments.enumerated().map { index, segment in
+            TranscriptDisplayRow(
+                id: segment.id, start: segment.start, end: segment.end, speaker: "Example Person",
+                speakerID: segment.speakerID, text: segment.text, personID: person,
+                transcriptAssociationTier: index == 0 ? .automatic : .tentative)
+        }
+        let display = try #require(TranscriptDisplayRow.passage(rows: rows, segments: segments))
+        #expect(display.transcriptAssociationTier == .tentative)
+        #expect(display.canonicalRows[0].transcriptAssociationTier == .automatic)
+        #expect(display.canonicalRows[1].transcriptAssociationTier == .tentative)
+        var unmatched = first
+        unmatched.id = base
+        unmatched.personID = nil
+        unmatched.voiceReviewOrigin = nil
+        let withGap = fragments([("One", first), (" unmatched", unmatched), (" paragraph.", next)])
+        #expect(
+            TranscriptPassagePresentation.groups(withGap, speakers: [first, unmatched, next], analysis: nil).map(
+                \.count) == [3])
+    }
+
+    @Test func overlappingNativeIntervalsKeepOriginalReadingAndConstituentPlayback() throws {
+        let speaker = MeetingSpeaker(label: "A", track: "track0", providerName: "Synthetic")
+        var segments = fragments([("Native", speaker), (" timing.", nil)])
+        segments[0].end = 3
+        let grouped = TranscriptPassagePresentation.groups(segments, speakers: [speaker], analysis: nil)
+        #expect(grouped.map(\.count) == [2])
+        let rows = segments.map {
+            TranscriptDisplayRow(
+                id: $0.id, start: $0.start, end: $0.end, speaker: $0.speaker,
+                speakerID: $0.speakerID, text: $0.text)
+        }
+        let passage = try #require(TranscriptDisplayRow.passage(rows: rows, segments: segments))
+        #expect(passage.end == 3)
+        #expect(passage.canonicalRows.map(\.end) == [3, 2])
+        #expect(passage.sourceRow(atUTF16: 8).id == segments[1].id)
+    }
+
     @Test func displayCompositionPreservesWhitespacePunctuationAndAnchorContinuity() throws {
         let first = row("Hello", at: 0)
         var second = row(" world", at: 1)
@@ -87,7 +190,34 @@ import Testing
         passage = try #require(
             TranscriptDisplayRow.passage(rows: [display(first), display(second)], segments: [first, second]))
         #expect(passage.text == "Helloworld")
-        #expect(TranscriptPassagePresentation.groups([first, second], speakers: [], analysis: nil).count == 2)
+        #expect(TranscriptPassagePresentation.groups([first, second], speakers: [], analysis: nil).count == 1)
+    }
+
+    @Test func readablePreviewUsesProductionMatchingAndOriginalReadingBoundaries() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        _ = await store.addPerson(name: "Person A")
+        _ = await store.addPerson(name: "Person B")
+        var meeting = Meeting(title: "Synthetic readable transcript", audioFiles: ["microphone.wav"])
+        meeting.duration = 60
+        let folder = store.directory(for: meeting.id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("Synthetic audio revision".utf8).write(to: folder.appendingPathComponent("microphone.wav"))
+        try await store.insertImportedMeeting(meeting)
+        try await UIPreview.seedReadableTranscriptPresentation(store: store, meeting: meeting)
+        await store.refreshVoiceAssignments(meetingIDs: [meeting.id])
+        await store.flushVoiceAssignmentRefresh()
+        let current = try #require(store.meeting(id: meeting.id))
+        let grouped = TranscriptPassagePresentation.groups(
+            current.transcript, speakers: current.speakers, analysis: nil)
+        #expect(grouped.map(\.count) == [4, 1, 1, 3])
+        #expect(grouped[0].map(\.text).joined() == "The schedule is ready, and the notes are saved.")
+        #expect(grouped[0][1].speakerID == nil)
+        #expect(grouped.last?.allSatisfy { $0.speakerID == nil } == true)
+        #expect(grouped.flatMap { $0 } == current.transcript)
     }
 
     @Test func contextMenuEditKeepsTargetFromOpeningEvent() throws {

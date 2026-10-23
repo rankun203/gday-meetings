@@ -1,7 +1,7 @@
 ---
 title: Local transcription provider comparison
 date: 2026-10-23
-status: ready-for-review
+status: evaluated
 scope: offline-transcription-experiment
 ---
 
@@ -25,7 +25,7 @@ Use the runtime intended for integration to measure relevant local behavior. Hol
 
 ## Technical debt
 
-No production integration or storage change. The initial Nemotron adapter returned whole-recording text. Its public SDK token-timing API now supports conservative review-page grouping: the English diagnostic passed, while the short diagnostic exceeded real audio bounds by 314 ms and retained whole-recording text. A later long-microphone diagnostic produced 24 validated groups; the long system track retains its original whole-recording result. Latest transcript text remains byte-identical to the primary matrix. Timestamp quality still needs listening validation. Process-only resource accounting excludes system-service and accelerator allocations, so it cannot support a total-memory or battery ranking. WhisperKit can fall back to a tokenizer download if local assets change after preflight; immutable staged assets and hash manifests limit this experiment risk, while production integration should enforce a stronger offline-loading contract. Human quality rankings and integration decisions remain pending judgment.
+No production integration or storage change. The initial Nemotron adapter returned whole-recording text. Its public SDK token-timing API now supports conservative review-page grouping: the English diagnostic passed, while the short diagnostic exceeded real audio bounds by 314 ms and retained whole-recording text. A later long-microphone diagnostic produced 24 validated groups; the long system track retains its original whole-recording result. Latest transcript text remains byte-identical to the primary matrix. Timestamp quality still needs listening validation. Process-only resource accounting excludes system-service and accelerator allocations, so it cannot support a total-memory or battery ranking. WhisperKit can fall back to a tokenizer download if local assets change after preflight; immutable staged assets and hash manifests limit this experiment risk, while production integration should enforce a stronger offline-loading contract. Written qualitative review is complete; provider integration remains separate work.
 
 ## Notes
 
@@ -37,6 +37,8 @@ Independent read-only review found three material issues, all fixed and re-revie
 
 The primary matrix includes 18 successful optimized native invocations. On system tracks, native totals were 1.74/4.40/18.17 seconds for the short recording, 22.95/55.02/233.39 seconds for the long recording, and 8.82/16.72/56.92 seconds for English (Apple/Nemotron/Whisper). Initial model loading and microphone-track results are reported separately in the experiment results. These measurements establish neither transcription accuracy nor total system memory use.
 
-Validation: six Python regression tests passed; standalone Swift timing checks passed; strict app-config Swift formatting, release compilation and signature verification passed. The final diagnostic binary hash remained identical after formatting, with exact measured source and binary snapshots retained privately. Existing Command Line Tools linker search-path warnings remain. Human quality judgments and rendered browser checks are the remaining evaluation limits. No production provider, app bundle or source library was changed.
+Validation: six Python regression tests passed; standalone Swift timing checks passed; strict app-config Swift formatting, release compilation and signature verification passed. The final diagnostic binary hash remained identical after formatting, with exact measured source and binary snapshots retained privately. Existing Command Line Tools linker search-path warnings remain. Complete numerical ratings, corrected references and developer-rendered browser checks remain unavailable. No production provider, app bundle or source library was changed.
 
-Final integrity checks verified all six source audio files, six original copies, six PCM fixtures and 65 model artifacts unchanged. The private page and aggregate report are ready for user evaluation.
+Final integrity checks verified all six source audio files, six original copies, six PCM fixtures and 65 model artifacts unchanged. The private page and aggregate report remain available; the user finished evaluation through written feedback rather than completing the UI ratings.
+
+User review: Apple remains the preferred default across the reviewed short and English examples. A longer microphone passage favored Whisper for technical wording while Apple was good and Nemotron had errors. Prioritize improved diarization with Apple transcription. Treat this as qualitative feedback, not complete numeric ratings or a general accuracy benchmark; preserve unfinished ratings without altering or extrapolating them.

@@ -16,20 +16,28 @@ struct LiveTranscriptView: View {
         let displayedMeetingID = controller.draft?.meetingID
         VStack(alignment: .leading, spacing: 8) {
             if displayCache.count == 0 {
-                ContentUnavailableView {
-                    Label(
-                        controller.enabled ? "No Live Text Yet" : "Live Transcription Is Off",
-                        systemImage: "text.bubble")
-                } description: {
-                    Text(
-                        controller.enabled
-                            ? "Recording continues. You can transcribe the saved audio after recording."
-                            : "Enable live transcription in Settings to show text in future recordings. You can also transcribe the saved audio after recording."
-                    )
-                }
+                LiveTranscriptionActivityView(
+                    activity: controller.activity, enabled: controller.enabled,
+                    retry: controller.retryTranscription
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             else {
+                if case .loading(let message) = controller.activity {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+                if case .failed(let message) = controller.activity {
+                    HStack {
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Retry", action: controller.retryTranscription)
+                    }
+                    .padding(.horizontal)
+                }
                 NativeTranscriptView(
                     rows: [], layoutService: layoutService, generation: displayCache.revision, showsSpeakers: false,
                     showsSources: true,
@@ -84,6 +92,43 @@ struct LiveTranscriptView: View {
             controller.presentedStream, people: store.people,
             enabled: false, recognitionEnabled: controller.enabled)
         hasUnresolvedTiming = displayCache.hasUnresolvedTiming
+    }
+}
+
+struct LiveTranscriptionActivityView: View {
+    let activity: ProviderActivity
+    let enabled: Bool
+    let retry: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            if enabled, activity.isLoading {
+                ProgressView().controlSize(.large)
+                Text("Preparing Live Transcription")
+            }
+            else {
+                Label(title, systemImage: "text.bubble")
+            }
+        } description: {
+            Text(description)
+        } actions: {
+            if enabled, case .failed = activity {
+                Button("Retry", action: retry)
+            }
+        }
+    }
+
+    private var title: String {
+        guard enabled else { return "Live Transcription Is Off" }
+        if case .failed = activity { return "Live Transcription Unavailable" }
+        return "Listening"
+    }
+
+    private var description: String {
+        guard enabled else {
+            return "Enable live transcription in Settings to show text in future recordings."
+        }
+        return activity.message ?? "Live text appears as you speak."
     }
 }
 

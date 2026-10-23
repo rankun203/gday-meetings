@@ -24,7 +24,8 @@ struct VoiceTranscriptAssociation: Codable, Equatable, Sendable {
         return score.isFinite && (-1...1).contains(score)
             && margin.isFinite && (0...2).contains(margin)
             && margin >= policy.minimumMargin
-            && (tier == .automatic ? score >= policy.automaticThreshold : score > 0)
+            && (tier == .automatic
+                ? score >= policy.automaticThreshold : score > 0 && score >= policy.suggestionThreshold)
     }
 }
 
@@ -131,6 +132,8 @@ struct VoiceExample: Codable, Equatable, Identifiable, Sendable {
     var detectedSpeakerResultID: UUID? = nil
     var detectedSpeakerConfiguration: VoiceDiscoveryConfiguration? = nil
     var detectedSpeakerSpans: [SpeakerEvidenceSpan]? = nil
+    /// Machine attribution is restricted to this turn, including speech beyond the excerpt.
+    var attributionTurn: SpeakerEvidenceSpan? = nil
 
     var sampleQuality: VoiceSampleQuality? = nil
     /// Automatic evidence selection follows a manual recording-speaker identity.

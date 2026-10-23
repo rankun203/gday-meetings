@@ -127,7 +127,10 @@ struct VoiceLibraryTests {
         #expect(reopened.upsert([otherSeed]))
         #expect(reopened.confirm(ids: [otherSeed.id], personID: other.id))
         try await reopened.suggestReviewedPeopleResult(from: [person, other])
-        #expect(reopened.examples.first { $0.id == candidate.id }?.suggestedPersonID == other.id)
+        // Equal acoustic scores stay ambiguous after a pair-specific rejection.
+        // The other person remains available for explicit review below.
+        #expect(reopened.examples.first { $0.id == candidate.id }?.suggestedPersonID == nil)
+        #expect(reopened.examples.first { $0.id == candidate.id }?.transcriptAssociation == nil)
         #expect(reopened.examples.first { $0.id == candidate.id }?.rejectedPersonIDs == [person.id])
         #expect(try await reopened.reviewCandidates(for: other.id).map(\.id) == [candidate.id])
     }

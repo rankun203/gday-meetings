@@ -6,6 +6,7 @@ enum ProviderHealth: Equatable, Sendable {
     case checking, ready
     case notReady(String)
     case unknown(String)
+    /// The capability can start, including automatic preparation performed by its provider.
     var isReady: Bool { self == .ready }
     var title: String {
         switch self {
@@ -67,21 +68,27 @@ extension ServiceProvider {
 }
 
 extension ThisMacProvider {
-    @MainActor static func health(for capability: ProviderCapability, settings: AppSettings) async -> ProviderHealth {
+    @MainActor static func health(
+        for capability: ProviderCapability, settings: AppSettings,
+        speechAvailable: () -> Bool = { SpeechTranscriber.isAvailable },
+        supportedLocales: () async -> [Locale] = { await SpeechTranscriber.supportedLocales },
+        assetStatus: (Locale) async -> AssetInventory.Status = { locale in
+            await AssetInventory.status(forModules: [SpeechTranscriber(locale: locale, preset: .transcription)])
+        }
+    ) async -> ProviderHealth {
         guard ThisMacProvider.capabilities.contains(capability) else { return .notReady("Capability unavailable.") }
         guard settings.thisMacCapabilities.contains(capability) else { return .notReady("Capability is turned off.") }
-        guard SpeechTranscriber.isAvailable else { return .notReady("Transcription is unavailable on this Mac.") }
-        let locales = await SpeechTranscriber.supportedLocales
+        guard speechAvailable() else { return .notReady("Transcription is unavailable on this Mac.") }
+        let locales = await supportedLocales()
         guard let locale = AppleSpeechLanguageMapping.locale(for: settings.effectiveDefaultLanguage, supported: locales)
         else {
             return .notReady("Choose a supported transcription language.")
         }
-        let status = await AssetInventory.status(forModules: [SpeechTranscriber(locale: locale, preset: .transcription)]
-        )
+        let status = await assetStatus(locale)
         switch status {
-        case .installed: return .ready
-        case .downloading: return .notReady("Speech model is downloading.")
-        case .supported: return .notReady("Download the speech model in provider settings.")
+        // AppleLiveTranscription.prepare installs supported assets before analysis.
+        // Readiness describes whether transcription can start, not whether assets are installed.
+        case .installed, .downloading, .supported: return .ready
         default: return .notReady("Speech model is unavailable.")
         }
     }

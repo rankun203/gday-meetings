@@ -9,7 +9,7 @@ scope: offline-transcription-experiment
 
 ## Findings
 
-All three providers completed all six prepared tracks: 18 successful comparisons. Apple had the shortest measured total on every track. Nemotron was faster than Whisper on the system tracks; their order reversed on the longer microphone tracks. This is a pipeline-speed result on one Mac, not a transcription-quality ranking. Initial Core ML loading was much slower than subsequent fresh-process loading. Human quality judgments remain pending in the private listening-and-rating page.
+All three providers completed all six prepared tracks: 18 successful comparisons. Apple had the shortest measured total on every track. Nemotron was faster than Whisper on the system tracks; their order reversed on the longer microphone tracks. This is a pipeline-speed result on one Mac, not a transcription-quality ranking. Initial Core ML loading was much slower than subsequent fresh-process loading. The user completed qualitative listening review through written feedback rather than completing the page ratings. Apple remains the preferred default, with diarization improvements the next priority.
 
 ## References
 
@@ -84,6 +84,16 @@ The first English microphone Nemotron run also loaded the Latin-vocabulary varia
 
 On the long Chinese recording, Nemotron transcription itself took 210.45 seconds for microphone audio versus 54.77 seconds for system audio. Input content affects pipeline cost; long-track diagnostic counters were not captured in this original pass, so the specific cause is not established. Do not extrapolate cost from duration alone.
 
+### User listening review
+
+The user finished judging on October 23 and supplied written feedback as the final qualitative review. The page's incomplete ratings are not a completed numerical evaluation and must not be averaged or filled in retrospectively.
+
+- Short recording: Apple was preferred, including its readable sentence segmentation. Sentence segmentation is not evidence of speaker diarization.
+- Longer microphone excerpt: the user's annotations favored Whisper for a technical passage, judged Apple good and marked Nemotron errors. This is a passage-level observation, not a ranking of the entire recording.
+- English recording: the user again judged Apple good.
+
+The resulting product direction is to retain Apple as the preferred transcription option and focus on better diarization. Whisper showed useful strengths on some mixed-language technical speech. These observations do not establish general accuracy, a complete ordering across all tracks or measured WER/CER. No private meeting content is reproduced here.
+
 ### Review-page timing and quality
 
 The private page includes all three recordings, both source tracks, locally playable audio, three initially unnamed result columns, five quality ratings, notes, optional checked-reference text and JSON export. Revealing providers shows model identifiers, timings, client resource readings and accounting scopes. Ratings are keyed to the exact result hash. No WER/CER is calculated, and no machine transcript is treated as human ground truth.
@@ -97,6 +107,6 @@ The optimized native executable ran all 18 primary cases successfully. Six Pytho
 
 ## Limitations
 
-Three recordings can expose useful differences but cannot establish general transcription accuracy. Human judgments are pending. Resource measurements on a shared workstation must identify model loading, inference and system-service accounting limits. Upstream GPU benchmarks cannot establish Core ML performance on this Mac. Shared 16 kHz normalization makes engine inputs comparable but does not reproduce every original-format production path. Model loading is measured in fresh processes with uncontrolled operating-system compilation caches; repeated invocations are not a continuously resident, warmed provider. Timestamp accuracy and live streaming response latency are not established by these throughput runs.
+Three recordings can expose useful differences but cannot establish general transcription accuracy. Qualitative written judgments are complete; standardized ratings and human-corrected references were not completed. Resource measurements on a shared workstation must identify model loading, inference and system-service accounting limits. Upstream GPU benchmarks cannot establish Core ML performance on this Mac. Shared 16 kHz normalization makes engine inputs comparable but does not reproduce every original-format production path. Model loading is measured in fresh processes with uncontrolled operating-system compilation caches; repeated invocations are not a continuously resident, warmed provider. Timestamp accuracy and live streaming response latency are not established by these throughput runs.
 
 Final integrity verification confirmed that six source audio files, six independent original copies, six PCM fixtures and 65 staged model artifacts remained unchanged. Exact measured native sources, binary hashes, invocation receipts and final experiment-source snapshots are retained in ignored private artifacts.

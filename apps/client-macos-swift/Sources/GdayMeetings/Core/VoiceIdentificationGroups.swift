@@ -82,6 +82,7 @@ enum VoiceIdentificationSelection {
     static func groups(
         _ examples: [VoiceExample], includeExcluded: Bool = false, policy: VoiceMatchingPolicy = .default
     ) -> [VoiceIdentificationGroup] {
+        let examples = VoiceTurnReviewSelection.select(examples)
         let decisions = VoiceExactReviewDecisions(examples)
         let eligible = examples.filter { original in
             let value = decisions.applying(to: original)

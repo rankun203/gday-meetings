@@ -27,11 +27,13 @@ struct AppleLiveTranscriptionTests {
             let provider = AppleLiveTranscription()
             let sink = LiveAudioSink()
             let collection = Results()
-            try await provider.start(
-                locale: locale, sources: [.microphone, .system], sink: sink,
-                favorAccuracy: favorAccuracy,
-                receive: { phrase, final in await collection.receive(phrase, final: final) },
-                gap: { _ in }, failure: { message in await collection.fail(message) })
+            let queues: [LiveAudioSource: LiveAudioQueue] = [
+                .microphone: LiveAudioQueue(bufferDuringPreparation: true),
+                .system: LiveAudioQueue(bufferDuringPreparation: true),
+            ]
+            sink.replace(queues)
+            defer { for queue in queues.values { queue.discard() } }
+            var started = false
             let file = try AVAudioFile(forReading: fileURL)
             let count = AVAudioFrameCount(file.processingFormat.sampleRate / 10)
             var position = 0.0
@@ -43,12 +45,27 @@ struct AppleLiveTranscriptionTests {
                 let duration = Double(buffer.frameLength) / file.processingFormat.sampleRate
                 position += duration
                 try await Task.sleep(for: .seconds(duration))
+                // Simulate model preparation longer than the normal memory budget.
+                // Both earlier speech and subsequent live speech use one session.
+                if !started, position >= 3 {
+                    try await provider.start(
+                        locale: locale, sources: [.microphone, .system], sink: sink,
+                        favorAccuracy: favorAccuracy, preparedQueues: queues,
+                        receive: { phrase, final in await collection.receive(phrase, final: final) },
+                        gap: { value in await collection.recordGap(value) },
+                        failure: { message in await collection.fail(message) })
+                    started = true
+                }
             }
+            #expect(started)
             sink.replace([:])
             let complete = await provider.finish()
             let result = await collection.snapshot()
             #expect(complete)
             #expect(result.1.isEmpty)
+            #expect(result.2.isEmpty)
+            #expect(result.0.contains { $0.start < 1 })
+            #expect(result.0.contains { $0.end > 3 })
             #expect(result.0.contains { $0.source == .microphone && !$0.text.isEmpty })
             #expect(result.0.contains { $0.source == .system && !$0.text.isEmpty })
             #expect(result.0.allSatisfy { $0.start.isFinite && $0.end >= $0.start && $0.locale == locale.identifier })
@@ -98,8 +115,10 @@ struct AppleLiveTranscriptionTests {
     actor Results {
         var phrases: [LiveTranscriptPhrase] = []
         var failures: [String] = []
+        var gaps: [LiveTranscriptGap] = []
+        func recordGap(_ gap: LiveTranscriptGap) { gaps.append(gap) }
         func receive(_ phrase: LiveTranscriptPhrase, final: Bool) { if final { phrases.append(phrase) } }
         func fail(_ message: String) { failures.append(message) }
-        func snapshot() -> ([LiveTranscriptPhrase], [String]) { (phrases, failures) }
+        func snapshot() -> ([LiveTranscriptPhrase], [String], [LiveTranscriptGap]) { (phrases, failures, gaps) }
     }
 }

@@ -107,7 +107,7 @@ struct DiarizedTranscriptProjectionTests {
         #expect(LocalDiarizationAssignment.applying(shared, to: meeting, fileCount: 1).transcript == meeting.transcript)
     }
 
-    @Test func assignedGroupingPreservesSessionAndSourceBoundaries() {
+    @Test func assignedGroupingPreservesOriginalPassageSessionAndSourceBoundaries() {
         let session = UUID()
         var first = row("One", words: [("One", 0, 1)])
         var second = row("two", words: [("two", 1, 2)])
@@ -119,9 +119,9 @@ struct DiarizedTranscriptProjectionTests {
         meeting.transcript = [first, second]
         let analysis = result([("A", 0, 2)])
         let grouped = LocalDiarizationAssignment.applying(analysis, to: meeting, fileCount: 1)
-        #expect(grouped.transcript.count == 1)
-        #expect(grouped.transcript[0].text == "One two")
-        #expect(grouped.transcript[0].session == session)
+        #expect(grouped.transcript.count == 2)
+        #expect(grouped.transcript.map(\.text) == ["One", "two"])
+        #expect(grouped.transcript.map(\.session) == [session, session])
 
         second.session = UUID()
         meeting.transcript = [first, second]
@@ -137,7 +137,7 @@ struct DiarizedTranscriptProjectionTests {
         #expect(differentSources.transcript.map(\.source) == [first.source, second.source])
     }
 
-    @Test func turnsSplitInsideRecognitionAndMergeAcrossRecognitionRows() {
+    @Test func turnsSplitInsideRecognitionAndKeepOriginalReadingBoundaries() {
         var meeting = Meeting()
         meeting.transcript = [
             row("One two", words: [("One", 0, 1), ("two", 1, 2)]),
@@ -145,9 +145,9 @@ struct DiarizedTranscriptProjectionTests {
         ]
         let analysis = result([("A", 0, 1), ("B", 1, 3)])
         let projected = LocalDiarizationAssignment.applying(analysis, to: meeting, fileCount: 1)
-        #expect(projected.transcript.map(\.text) == ["One", " two three"])
-        #expect(projected.transcript.map(\.speaker) == ["A", "B"])
-        #expect(projected.transcript[1].sourceSpans?.count == 2)
+        #expect(projected.transcript.map(\.text) == ["One", " two", "three"])
+        #expect(projected.transcript.map(\.speaker) == ["A", "B", "B"])
+        #expect(projected.transcript[1].sourceSpans?.count == 1)
         let again = LocalDiarizationAssignment.applying(analysis, to: projected, fileCount: 1)
         #expect(again.transcript == projected.transcript)
     }

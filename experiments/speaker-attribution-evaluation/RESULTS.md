@@ -1,6 +1,7 @@
 ---
 title: Speaker attribution and reference evaluation results
 date: 2026-10-23
+updated: 2026-10-24
 status: measured
 scope: offline-speaker-experiment
 ---
@@ -13,7 +14,7 @@ Checking multiple excerpts improved attribution on the four independently annota
 
 The additional work cost about 1.1 seconds per approximately two-minute recording on the measured Mac. Both clusters were inconsistent, so selective checking extracted the same number of additional vectors as full per-turn matching. This fixture establishes no selective-computation savings.
 
-The reference evaluation does not justify increasing the active cap above 12. It does identify an open-set weakness: when all references for the correct identity are removed, the current tentative policy accepts a wrong known name in 16 of 62 trials. Keep tentative acceptance and reference-set size as separate decisions. Production behavior is unchanged.
+The reference evaluation does not justify increasing the active cap above 12. It does identify an open-set weakness: when all references for the correct identity are removed, the current tentative policy accepts a wrong known name in 16 of 62 trials. Keep tentative acceptance and reference-set size as separate decisions. The production follow-up now matches usable turns independently; its validation is recorded below. The acoustic partition remains unchanged.
 
 ## References
 
@@ -66,7 +67,7 @@ A retrospective creation-order replay compares stopping at the cap with reselect
 
 Three explicit rejected-person pairs from three different query meetings have compatible references in other meetings. One pair scores above 0.55 and none above 0.80. This sample is too small to tune or validate a generalized negative-evidence policy. A rejection supplies a pairwise fact, not the identity of another speaker.
 
-Production currently persists a veto for the exact excerpt and compatible aliases. It does not retrain embeddings or generalize the rejection to new meetings. Rejected profiles are excluded before ranking, which can enlarge the remaining candidate's margin; any future calibration should retain the original comparison context rather than mistake removal for additional positive evidence.
+Production persists a veto for the exact excerpt and compatible aliases. It does not retrain embeddings or generalize the rejection to new meetings. The evaluated baseline excluded rejected profiles before ranking, which could enlarge the remaining candidate's margin. The production follow-up retains rejected profiles in the comparison and abstains when the best identity was rejected; removing an identity does not create positive evidence for another.
 
 ### Acoustic attribution and resources
 
@@ -87,6 +88,32 @@ Hardware: Apple M1 Max, MacBookPro18,4. One isolated release test process per me
 RSS is the process-lifetime high-water mark, not an incremental allocation or accelerator-memory measurement. Small differences between methods do not establish memory savings. CPU excludes accelerator/system-service work; no energy claim is made. The workstation is shared, operating-system and Core ML caches are uncontrolled, and first inference is only process-cold. Compilation excludes unrelated test files from the isolated harness target; the original package manifest and file mode are restored afterward.
 
 A separate serial Python/NumPy run evaluates 60 cap/selection/scorer configurations and 20 unknown-person configurations in 35.916 seconds wall and 35.603 seconds process CPU, with 57.5 MiB process peak RSS. Cap-12 maximum scoring takes a median 0.466 ms and p95 0.551 ms per cached query across 1,240 calls. This includes Python array/scoring overhead and excludes audio decoding, embedding extraction, app publication and profile preparation. It is not a Swift app latency measurement. Input loading and profile preparation are separately recorded in the raw receipts. Python 3.13.0 and NumPy 2.5.4 ran with BLAS thread limits of one.
+
+### Production turn attribution validation
+
+The production follow-up retains each detected cluster for transcript organization and manual naming, while extracting and matching each usable acoustic turn independently. A turn needs at least two seconds of speech, uses at most its first ten seconds, and abstains when detected overlap or unusable PCM prevents extraction. Full turn support is retained separately from the bounded excerpt. Human assignments remain authoritative; machine predictions remain outside confirmed reference profiles. This changes identity attribution, rather than the acoustic segmentation algorithm.
+
+Optimized release checks used independent copies of the original diagnostic recording and four completed recordings from the latest-20 trial fixture. The additional recordings include one approximately 35-minute recording. Ten source-track hashes remained unchanged, and all 22 model/data assets matched the frozen model manifest; model loading refreshed only its validation receipt. Each query meeting was excluded from reference enrollment. Raw vectors, receipts and reconstructed reference records remain ignored.
+
+| Recording | App-reported track-seconds | Acoustic turns | Usable vectors | Scan and extraction wall | Process CPU | Process peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Original diagnostic, two repetitions | 257.45 | 21 | 14 | 2.72–2.79 s | 2.88–2.94 s | 327–338 MiB |
+| Short recording A | 53.50 | 4 | 2 | 0.64 s | 0.64 s | 338 MiB |
+| Short recording B | 239.80 | 27 | 17 | 2.99 s | 3.05 s | 374 MiB |
+| Short recording C | 322.89 | 16 | 5 | 2.32 s | 2.84 s | 385 MiB |
+| Approximately 35-minute recording | 4227.74 | 499 | 307 | 47.91 s | 51.25 s | 626 MiB |
+
+Times exclude compilation and model acquisition. App-reported track-seconds sum both source tracks; they are separate from decoded sample-count durations used to bound the actual excerpts. Runs share one test process, so RSS is a cumulative high-water mark rather than independent per-recording memory or accelerator usage. A shared workstation, uncontrolled operating-system/Core ML caches and few repetitions limit comparison with the original five-repetition experiment. The saved acoustic turns and vectors supply reproducible follow-up checks without repeating model inference.
+
+Both diagnostic repetitions correctly attribute all four independently annotated points. The additional recordings have no independent identity annotations, so their coverage and resource results establish no accuracy estimate. All per-turn candidates survived persistence with their full attribution support, and none became confirmed reference evidence. A real fractional-start regression initially discarded every diagnostic candidate despite 14 valid vectors; allowing one sample of boundary snapping repaired ingestion and now has synthetic regression coverage.
+
+The long recording writes 307 canonical example/representation pairs totaling 2.77 MB, excluding immutable analysis and discovery-cache artifacts. Initial synchronous candidate publication took 0.462 seconds. A follow-up release run reused identical saved vectors, retained original reference identifiers, and replaced repeated upsert scans with indexed lookup. Publication then took 0.447 seconds and cold matching took 0.241 seconds; these single measurements establish no meaningful causal speedup. The approximately 0.45-second main-actor publication remains a responsiveness cost, distinct from the background model work.
+
+Review eligibility is bounded independently of attribution vectors. The 307 long-recording vectors provide 11 detected-cluster review representatives and 11 review groups; selecting and grouping them took 3.68 milliseconds in the optimized sampling snapshot. The final exact-audio alias check was added afterward and verified separately with synthetic regression tests. Explicit human decisions remain available, sampled-out turns never become hidden group-confirmation members, and another independent turn can surface after review. Existing exact-audio vetoes prevent a reviewed alias from occupying the next review slot. Review selection does not declare a mixed acoustic cluster to be one identity. The same bound applies to Existing Samples and the associated-sample list/counts on a person's profile, while retaining every distinct authored confirmation. A 1,200-turn synthetic fixture supplies four automatic review inputs without changing any attribution record. Manage Samples remains a complete stored-evidence inventory, including sampled-out turns and ignored or rejected records, so maintenance and restoration stay available independently of the listening queue.
+
+The review cap bounds each proposal snapshot. Optional review can advance to another excerpt. Suppressing further excerpts based on a prior confirmation needs separate evaluation, including minority identities within mixed clusters.
+
+The cached follow-up preserves every assignment outcome and both four-point diagnostic results. It measures ingestion, matching and review selection, not inference latency. Exact source, harness, input, model and configuration receipts distinguish the inference snapshot from the review/indexing snapshot; no current-build timing is inferred from cached outputs.
 
 ### Validation and review
 

@@ -197,6 +197,7 @@ final class VoiceLibraryStore: ObservableObject {
         var detectedSpeakerResultID: UUID?
         var detectedSpeakerConfiguration: VoiceDiscoveryConfiguration?
         var detectedSpeakerSpans: [SpeakerEvidenceSpan]?
+        var attributionTurn: SpeakerEvidenceSpan?
         var personID: UUID?
         var rejectedPersonIDs: Set<UUID>
         var manuallyCleared: Bool
@@ -211,6 +212,7 @@ final class VoiceLibraryStore: ObservableObject {
             detectedSpeakerResultID = value.detectedSpeakerResultID
             detectedSpeakerConfiguration = value.detectedSpeakerConfiguration
             detectedSpeakerSpans = value.detectedSpeakerSpans
+            attributionTurn = value.attributionTurn
             excluded = value.excluded
             personID = value.personID
             rejectedPersonIDs = Set(value.rejectedPersonIDs)
@@ -464,14 +466,16 @@ final class VoiceLibraryStore: ObservableObject {
     func upsert(_ incoming: [VoiceExample], staged: Bool = false) -> Bool {
         defer { if !staged { releaseRepresentations() } }
         if staged, !admitVoiceWrite() { return false }
+        let existingIndices = exampleIndices
         for value in incoming where !value.embeddings.isEmpty {
-            if document.examples.contains(where: { $0.id == value.id }), hydratedExample(id: value.id) == nil {
+            if existingIndices[value.id] != nil, hydratedExample(id: value.id) == nil {
                 return false
             }
         }
         var next = document
+        var indices = existingIndices
         for value in incoming {
-            if let index = next.examples.firstIndex(where: { $0.id == value.id }) {
+            if let index = indices[value.id] {
                 // Preparation may finish after review. Representations and
                 // exact-audio quality can change without replacing decisions.
                 guard next.examples[index].range == value.range else { continue }
@@ -482,6 +486,7 @@ final class VoiceLibraryStore: ObservableObject {
                 }
                 if next.examples[index].audioRevision == value.audioRevision {
                     next.examples[index].detectedSpeakerSpans = value.detectedSpeakerSpans
+                    next.examples[index].attributionTurn = value.attributionTurn
                     next.examples[index].detectedSpeakerID = value.detectedSpeakerID
                     next.examples[index].detectedSpeakerResultID = value.detectedSpeakerResultID
                     next.examples[index].detectedSpeakerConfiguration = value.detectedSpeakerConfiguration
@@ -496,6 +501,7 @@ final class VoiceLibraryStore: ObservableObject {
                 }
             }
             else {
+                indices[value.id] = next.examples.count
                 next.examples.append(value)
             }
         }
@@ -1396,7 +1402,9 @@ final class VoiceLibraryStore: ObservableObject {
             _ = resolveLegacyExample(exampleID: example.id, meeting: meeting, directory: directory, reportError: false)
         }
         var additions: [VoiceExample] = []
-        for speaker in meeting.speakers where speaker.canAssignPerson && speaker.voiceReviewOrigin == nil {
+        for speaker in meeting.speakers
+        where speaker.canAssignPerson && speaker.voiceReviewOrigin == nil && speaker.independentTurnAttribution != true
+        {
             if examples.contains(where: {
                 $0.meetingID == meeting.id && $0.speakerID == speaker.id && audioIsCurrent($0)
             }) {

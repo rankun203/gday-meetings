@@ -27,6 +27,8 @@ struct MeetingSpeaker: Codable, Identifiable, Equatable, Sendable {
     /// A meeting-local palette slot, independent of the assigned person's name.
     var colorSlot: Int?
     var passageAssignmentOrigin: TranscriptPassageOrigin?
+    /// Machine identities use independently measured turns instead of this cluster's excerpt.
+    var independentTurnAttribution: Bool?
 
     func protectsManualAssignment(to row: TranscriptSegment) -> Bool {
         guard manuallyAssigned == true else { return false }
@@ -199,6 +201,19 @@ enum SpeakerRecognition {
 }
 
 extension Meeting {
+    /// The speaker panel reviews detected voices. Turn names remain editable in
+    /// the transcript instead of repeating their shared reference audio here.
+    var reviewableSpeakers: [MeetingSpeaker] {
+        let reviewable = speakers.filter(\.canReviewVoice)
+        let retainedIDs = Set(reviewable.map(\.id))
+        return reviewable.filter { speaker in
+            guard speaker.passageAssignmentOrigin == nil, let origin = speaker.voiceReviewOrigin,
+                origin.speakerID != speaker.id
+            else { return true }
+            return !retainedIDs.contains(origin.speakerID)
+        }
+    }
+
     /// People includes every attributed passage while retaining independent attendees.
     var associatedPersonIDs: [UUID] {
         let byID = Dictionary(speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -282,6 +297,13 @@ extension MeetingStore {
         else { return false }
         var replacement = meeting.speakers
         let speaker = meeting.speakers[index]
+        if replacement[index].voiceReviewOrigin == nil,
+            speaker.independentTurnAttribution == true || selected.voiceReviewOrigin?.speakerID == canonicalID
+        {
+            replacement[index].voiceReviewOrigin = .init(
+                speakerID: speaker.id, personID: speaker.personID, manuallyAssigned: speaker.manuallyAssigned,
+                confidence: speaker.confidence, manualReviewThrough: speaker.manualReviewThrough)
+        }
         replacement[index].voiceReviewOrigin?.transcriptAssociationTier = nil
         replacement[index].personID = personID
         replacement[index].confidence = nil
@@ -293,9 +315,11 @@ extension MeetingStore {
             voiceLibrary.assign(
                 meetingID: meetingID, speakerID: canonicalID, personID: personID, staged: true,
                 previousPersonID: meeting.speakers[index].personID,
-                preservePreviousSpeakerDecision: speaker.voiceReviewOrigin?.speakerID != canonicalID,
+                preservePreviousSpeakerDecision: speaker.voiceReviewOrigin?.speakerID != canonicalID
+                    && selected.voiceReviewOrigin?.speakerID != canonicalID
+                    && speaker.independentTurnAttribution != true,
                 updateReferenceEvidence: false,
-                relatedExampleID: speaker.voiceReviewExampleID)
+                relatedExampleID: selected.voiceReviewExampleID ?? speaker.voiceReviewExampleID)
         else {
             errorMessage = voiceLibrary.errorMessage
             return false
@@ -328,7 +352,8 @@ extension MeetingStore {
         if let personID {
             voicePreparation.selectReference(
                 meetingID: meetingID, speakerID: canonicalID, personID: personID,
-                exampleID: speaker.voiceReviewExampleID, directory: directory(for: meetingID))
+                exampleID: selected.voiceReviewExampleID ?? speaker.voiceReviewExampleID,
+                directory: directory(for: meetingID))
         }
         return true
     }
@@ -351,7 +376,16 @@ enum SpeakerLabelPresentation {
 extension TranscriptSegment {
     func allowsPersonAssociation(from speaker: MeetingSpeaker?) -> Bool {
         guard associationUncertain == true else { return true }
-        guard let speaker, speaker.manuallyAssigned == true else { return false }
+        guard let speaker else { return false }
+        if speaker.manuallyAssigned != true {
+            // Exact reviewed legacy excerpts retain their narrow identity scope.
+            // Machine turn names and whole-label reference matches cannot resolve
+            // acoustic uncertainty without an explicit transcript correction.
+            return speaker.independentTurnAttribution != true && speaker.personID != nil
+                && speaker.voiceReviewExampleID != nil
+                && speaker.voiceReviewOrigin?.transcriptAssociationTier == nil
+                && speaker.voiceReviewOrigin.map { $0.speakerID != speaker.id } == true
+        }
         guard let through = speaker.manualReviewThrough else { return true }
         guard let source, let end = through[source.rawValue] else { return false }
         return self.end <= end

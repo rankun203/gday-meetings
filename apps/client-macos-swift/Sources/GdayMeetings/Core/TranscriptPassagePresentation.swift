@@ -1,53 +1,81 @@
 import Foundation
-import NaturalLanguage
 
-/// Reading groups retain canonical rows; display grouping never assigns an unresolved word to a voice.
+/// Reading groups restore original recognition passages while retaining every canonical attribution.
 enum TranscriptPassagePresentation {
+    private struct SupportedIdentity: Equatable {
+        var speakerID: UUID
+        var personID: UUID?
+    }
+
     static func groups(
-        _ rows: [TranscriptSegment], speakers: [MeetingSpeaker], analysis: LocalDiarizationResult?
+        _ rows: [TranscriptSegment], speakers: [MeetingSpeaker], analysis _: LocalDiarizationResult?
     ) -> [[TranscriptSegment]] {
-        guard let analysis else { return rows.map { [$0] } }
         let metadata = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0) })
         var groups: [[TranscriptSegment]] = []
+        var groupSpeakerID: SupportedIdentity?
         for row in rows {
-            guard var previous = groups.last, let leading = previous.first, let last = previous.last,
-                let speakerID = leading.speakerID, let speaker = metadata[speakerID],
-                leading.sourcePlaceholder != true, !protected(leading, speaker: speaker),
-                leading.timing?.text == leading.text, leading.timing?.isValid == true,
-                row.speakerID == nil || row.speakerID == speakerID,
+            guard let last = groups.last?.last,
                 !protected(row, speaker: row.speakerID.flatMap { metadata[$0] }),
+                !protected(last, speaker: last.speakerID.flatMap { metadata[$0] }),
                 row.source == last.source, row.session == last.session,
                 row.analysisTrackID == last.analysisTrackID,
-                last.end <= row.start, hasExactSourceText(row),
-                (row.timing?.text == row.text && row.timing?.isValid == true)
-                    || (row.timing == nil
-                        && row.text.unicodeScalars.allSatisfy {
-                            CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines).contains($0)
-                        }),
-                !endsSentence(previous.map(\.text).joined(), before: row.text),
-                !analysis.ranges.contains(where: {
-                    $0.track == speaker.track && $0.label != speaker.label
-                        && $0.start < row.end && $0.end > last.end
-                })
+                let left = originalRange(last), let right = originalRange(row),
+                left.rowID == right.rowID,
+                left.range.location + left.range.length == right.range.location,
+                canContinue(groupSpeakerID, with: supportedIdentity(row, metadata: metadata))
             else {
                 groups.append([row])
+                groupSpeakerID = supportedIdentity(row, metadata: metadata)
                 continue
             }
-            // Only neighboring visible rows combine, preserving interleaved track order.
-            previous.append(row)
-            groups[groups.count - 1] = previous
+            // Unresolved words remain constituents, so playback, editing and correction
+            // retain their exact target. Only supported voice changes split the passage.
+            groups[groups.count - 1].append(row)
+            if let next = supportedIdentity(row, metadata: metadata), groupSpeakerID?.personID == nil {
+                groupSpeakerID = next
+            }
         }
         return groups
     }
 
-    private static func hasExactSourceText(_ row: TranscriptSegment) -> Bool {
-        guard let anchors = row.sourceSpans, !anchors.isEmpty else { return false }
-        return anchors.map { ($0.separatorBefore ?? "") + $0.text }.joined() == row.text
+    private static func originalRange(_ row: TranscriptSegment) -> TranscriptSourceSpan? {
+        guard let anchors = row.sourceSpans, let first = anchors.first,
+            anchors.map({ ($0.separatorBefore ?? "") + $0.text }).joined() == row.text
+        else { return nil }
+        var end = first.range.location
+        for anchor in anchors {
+            guard anchor.rowID == first.rowID, (anchor.separatorBefore ?? "").isEmpty,
+                anchor.range.location == end, anchor.range.length == anchor.text.utf16.count,
+                anchor.range.location <= Int.max - anchor.range.length
+            else { return nil }
+            end = anchor.range.location + anchor.range.length
+        }
+        var combined = first
+        combined.range.length = end - first.range.location
+        return combined
+    }
+
+    private static func canContinue(_ group: SupportedIdentity?, with next: SupportedIdentity?) -> Bool {
+        guard let group, let next else { return true }
+        return group.speakerID == next.speakerID
+            && (group.personID == nil || next.personID == nil || group.personID == next.personID)
+    }
+
+    private static func supportedIdentity(_ row: TranscriptSegment, metadata: [UUID: MeetingSpeaker])
+        -> SupportedIdentity?
+    {
+        guard row.associationUncertain != true, row.sourcePlaceholder != true, let id = row.speakerID else {
+            return nil
+        }
+        let speaker = metadata[id]
+        return .init(
+            speakerID: speaker?.voiceReviewOrigin?.speakerID ?? id,
+            personID: speaker?.personID)
     }
 
     private static func protected(_ row: TranscriptSegment, speaker: MeetingSpeaker?) -> Bool {
-        row.personID != nil || speaker?.protectsManualAssignment(to: row) == true
-            || (speaker?.personID != nil && speaker?.manualReviewThrough == nil)
+        row.personID != nil || speaker?.passageAssignmentOrigin != nil
+            || (speaker?.personID != nil && speaker?.voiceReviewOrigin == nil && speaker?.manuallyAssigned != true)
     }
 
     static func separator(_ left: String, _ right: String) -> String {
@@ -56,26 +84,5 @@ enum TranscriptPassagePresentation {
             !CharacterSet.punctuationCharacters.contains(first)
         else { return "" }
         return " "
-    }
-
-    static func endsSentence(_ text: String, before continuation: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let last = trimmed.last, ".!?。！？".contains(last) else { return false }
-        let decimalContinuation =
-            last == "." && trimmed.dropLast().last?.isNumber == true
-            && continuation.first?.isNumber == true
-        let combined = trimmed + (decimalContinuation ? "" : separator(trimmed, continuation)) + continuation
-        let boundary = trimmed.count
-        let tokenizer = NLTokenizer(unit: .sentence)
-        tokenizer.string = combined
-        var ended = false
-        tokenizer.enumerateTokens(in: combined.startIndex..<combined.endIndex) { range, _ in
-            let sentence = String(combined[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if combined.distance(from: combined.startIndex, to: range.lowerBound) + sentence.count == boundary {
-                ended = true
-            }
-            return !ended
-        }
-        return ended
     }
 }

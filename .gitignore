@@ -57,3 +57,6 @@ node_modules/
 # Standalone Swift experiment compiler caches
 /experiments/**/module-cache/
 /experiments/**/astra-module-cache/
+
+# Private listening-review exports, including browser duplicate downloads
+transcription-judgments*.json

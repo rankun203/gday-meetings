@@ -15,7 +15,7 @@ struct VoiceDiscoveryConfiguration: Codable, Equatable, Sendable {
         // FluidAudio; algorithm changes invalidate this tier even with unchanged models.
         return .init(
             model: descriptor.repository, revision: descriptor.revision,
-            pipeline: "FluidAudio-21493f8dac5a97e65742e6ff26f42f164c2fda0f|speech-range-v1|"
+            pipeline: "FluidAudio-21493f8dac5a97e65742e6ff26f42f164c2fda0f|independent-turn-v2|"
                 + fingerprint(CommunityDiarizationWorker.discoveryConfiguration))
     }()
     /// Include every effective inference option. A dependency update changes the
@@ -67,7 +67,7 @@ struct VoiceDiscoveryConfiguration: Codable, Equatable, Sendable {
 actor VoiceDiscoveryCache {
     static let directoryName = "voice-analysis"
     private struct Entry: Codable {
-        var version = 3
+        var version = 4
         var input: VoiceDiscoveryInput
         var configuration: VoiceDiscoveryConfiguration
         var modelRevision: String
@@ -75,16 +75,22 @@ actor VoiceDiscoveryCache {
         var ranges: [LocalSpeakerRange]?
         var unresolvedRanges: [UnresolvedSpeakerRange]?
         var sampleQualities: [String: VoiceSampleQuality]?
+        var turnSamples: [LocalSpeakerTurn]?
     }
 
     private struct Sample: Codable {
         var label: String
         var track: String
-        var range: VoiceSampleRange
+        var range: VoiceSampleRange?
+        var independentTurnAttribution: Bool?
         var revision: String?
 
         init?(_ speaker: MeetingSpeaker) {
-            guard let range = speaker.voiceSampleRange, range.isValid else { return nil }
+            let range = speaker.voiceSampleRange
+            guard range?.isValid == true || (range == nil && speaker.independentTurnAttribution == true) else {
+                return nil
+            }
+            independentTurnAttribution = speaker.independentTurnAttribution
             label = speaker.label
             track = speaker.track
             self.range = range
@@ -94,6 +100,7 @@ actor VoiceDiscoveryCache {
             var value = MeetingSpeaker(label: label, track: track, providerName: "Community-1")
             value.voiceSampleRange = range
             value.voiceSampleRevision = revision
+            value.independentTurnAttribution = independentTurnAttribution
             return value
         }
     }
@@ -128,13 +135,13 @@ actor VoiceDiscoveryCache {
         try Task.checkCancellation()
         let path = try url(input: input, configuration: configuration, directory: directory)
         guard let data = try? Data(contentsOf: path), let entry = try? JSONDecoder().decode(Entry.self, from: data),
-            entry.version == 3, entry.input == input, entry.configuration == configuration
+            entry.version == 4, entry.input == input, entry.configuration == configuration
         else { return nil }
         try Task.checkCancellation()
         return .init(
             modelRevision: entry.modelRevision, ranges: entry.ranges ?? [],
             speakers: entry.speakers.map(\.speaker), unresolvedRanges: entry.unresolvedRanges,
-            sampleQualities: entry.sampleQualities)
+            sampleQualities: entry.sampleQualities, turnSamples: entry.turnSamples)
     }
 
     func save(
@@ -149,7 +156,7 @@ actor VoiceDiscoveryCache {
                 input: input, configuration: configuration,
                 modelRevision: result.modelRevision, speakers: result.speakers.compactMap(Sample.init),
                 ranges: result.ranges, unresolvedRanges: result.unresolvedRanges,
-                sampleQualities: result.sampleQualities))
+                sampleQualities: result.sampleQualities, turnSamples: result.turnSamples))
         try Task.checkCancellation()
         try data.write(to: path, options: .atomic)
     }

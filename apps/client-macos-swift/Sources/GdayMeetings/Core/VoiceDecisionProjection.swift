@@ -39,16 +39,33 @@ enum VoiceDecisionProjection {
             }
         }
         updated.speakers = restoredSpeakers
-        for decision in decisions where decision.meetingID == meeting.id {
+        let meetingDecisions = decisions.filter { $0.meetingID == meeting.id }.map { value in
+            var decision = value
+            decision.speakerID =
+                projections.first(where: { $0.id == value.speakerID })?.voiceReviewOrigin?.speakerID
+                ?? value.speakerID
+            return decision
+        }
+        for decision in meetingDecisions {
             guard let index = updated.speakers.firstIndex(where: { $0.id == decision.speakerID }) else { continue }
             // Keep the pre-attribution baseline while a speaker-wide decision
             // is active. Undo can then restore derived identity rather than
             // leaving the last manually saved name behind.
             if let origin = projections.first(where: {
-                $0.id == decision.speakerID && $0.voiceReviewOrigin?.speakerID == $0.id
+                $0.voiceReviewOrigin?.speakerID == decision.speakerID
+                    && $0.voiceReviewOrigin?.evidenceOnly != true && $0.passageAssignmentOrigin == nil
             })?.voiceReviewOrigin {
                 updated.speakers[index].voiceReviewOrigin = origin
                 updated.speakers[index].voiceReviewOrigin?.transcriptAssociationTier = nil
+            }
+            if updated.speakers[index].voiceReviewOrigin == nil,
+                updated.speakers[index].independentTurnAttribution == true
+            {
+                let baseline = updated.speakers[index]
+                updated.speakers[index].voiceReviewOrigin = .init(
+                    speakerID: baseline.id, personID: baseline.personID,
+                    manuallyAssigned: baseline.manuallyAssigned, confidence: baseline.confidence,
+                    manualReviewThrough: baseline.manualReviewThrough)
             }
             updated.speakers[index].personID = decision.personID
             updated.speakers[index].manuallyAssigned = true
@@ -62,7 +79,9 @@ enum VoiceDecisionProjection {
         // A reviewed excerpt identifies its detected speaker. Keep the full
         // speaker attribution derived and reversible; exact passage decisions
         // below can still override it without enrolling machine evidence.
-        applySpeakerAssociations(to: &updated, evidence: evidence, deletedPeople: deletedPeople, policy: policy)
+        let turnSpeakers = turnSpeakerScopes(evidence, meeting: updated)
+        applySpeakerAssociations(
+            to: &updated, evidence: evidence, deletedPeople: deletedPeople, policy: policy, turnSpeakers: turnSpeakers)
         let originalUsed = Set(updated.transcript.compactMap(\.speakerID))
         for index in updated.transcript.indices {
             let row = updated.transcript[index]
@@ -74,18 +93,44 @@ enum VoiceDecisionProjection {
             // passage corrections use their own speaker identity and remain intact.
             if speaker.passageAssignmentOrigin != nil { continue }
             let baseID = speaker.voiceReviewOrigin?.speakerID ?? speaker.id
-            if decisions.contains(where: { $0.meetingID == meeting.id && $0.speakerID == baseID }) { continue }
+            if meetingDecisions.contains(where: { $0.speakerID == baseID }) { continue }
             let file = audioFile(for: row, speaker: speaker, meeting: updated)
             let relevant = evidence.filter {
-                guard let range = $0.range else { return false }
+                guard !$0.excluded, let range = $0.range, range.audioFile == file else { return false }
+                if let turn = $0.attributionTurn {
+                    guard turn.isValid, turnSpeakers[$0.id] == baseID, row.associationUncertain != true,
+                        turn.start <= row.start, row.end <= turn.end
+                    else { return false }
+                    if $0.review == .confirmed || $0.manuallyCleared { return true }
+                    guard speaker.manuallyAssigned != true, let association = $0.transcriptAssociation else {
+                        return false
+                    }
+                    return association.isValid && association.policy.normalized == policy.normalized
+                        && !deletedPeople.contains(association.personID)
+                        && !$0.rejectedPersonIDs.contains(association.personID)
+                }
                 let applies =
                     $0.review == .confirmed || $0.manuallyCleared
                     || speaker.personID.map($0.rejectedPersonIDs.contains) == true
-                return applies && range.audioFile == file && range.contains(start: row.start, end: row.end)
+                return applies && range.contains(start: row.start, end: row.end)
             }
-            guard let first = relevant.first(where: { $0.review == .confirmed }) ?? relevant.first else { continue }
+            let ranked = relevant.sorted {
+                let leftConfirmed = $0.review == .confirmed
+                let rightConfirmed = $1.review == .confirmed
+                if leftConfirmed != rightConfirmed { return leftConfirmed }
+                let leftTentative = $0.transcriptAssociation?.tier == .tentative
+                let rightTentative = $1.transcriptAssociation?.tier == .tentative
+                if leftTentative != rightTentative { return leftTentative }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            guard let first = ranked.first else { continue }
             let confirmedPeople = Set(relevant.filter { $0.review == .confirmed }.map(\.personID))
-            var people: Set<UUID?> = confirmedPeople.isEmpty ? [nil] : confirmedPeople
+            let machinePeople = Set(
+                relevant.compactMap { $0.attributionTurn == nil ? nil : $0.transcriptAssociation?.personID })
+            var people: Set<UUID?> = confirmedPeople.isEmpty ? Set(machinePeople.map(Optional.some)) : confirmedPeople
+            if people.isEmpty || (confirmedPeople.isEmpty && relevant.contains(where: \.manuallyCleared)) {
+                people.insert(nil)
+            }
             // A negative answer about one person cannot contradict positive
             // evidence for somebody else covering the same passage.
             if relevant.contains(where: { example in
@@ -98,14 +143,21 @@ enum VoiceDecisionProjection {
             // Reviewing examples during a whole-label assignment confirms that
             // same decision; it does not create a distinct voice for each passage.
             // Conflicting or different exact-time reviews still need a projection.
-            if speaker.manuallyAssigned == true || speaker.voiceReviewOrigin != nil, people.count == 1,
+            let exactLegacyCorrection =
+                row.associationUncertain == true && first.review == .confirmed
+                && first.attributionTurn == nil && speaker.voiceReviewOrigin?.personID != nil
+                && speaker.voiceReviewOrigin?.personID != speaker.personID
+            if speaker.manuallyAssigned == true || speaker.voiceReviewOrigin != nil,
+                !exactLegacyCorrection, people.count == 1,
                 people.first! == speaker.personID,
                 speaker.voiceReviewOrigin?.transcriptAssociationTier != .tentative
             {
                 continue
             }
             var assigned = speaker
-            assigned.id = VoiceProjectionOrigin.identity(exampleID: first.id, segmentID: row.id)
+            let sharesTurnIdentity = first.attributionTurn != nil && people.count == 1 && people.first! != nil
+            assigned.id = VoiceProjectionOrigin.identity(
+                exampleID: first.id, segmentID: sharesTurnIdentity ? meeting.id : row.id)
             // Saving allocates colors for distinct projected voices. Preserve
             // that passage's saved slot when rebuilding its projection, rather
             // than copying the first restored origin's slot onto every voice.
@@ -115,13 +167,15 @@ enum VoiceDecisionProjection {
             }
             // Flatten an existing whole-speaker projection so removing its
             // evidence also removes that identity from passage overrides.
-            assigned.voiceReviewOrigin = .init(
-                speakerID: speaker.voiceReviewOrigin?.speakerID ?? speaker.id,
-                personID: speaker.voiceReviewOrigin.map { $0.personID } ?? speaker.personID,
-                manuallyAssigned: speaker.voiceReviewOrigin.map { $0.manuallyAssigned } ?? speaker.manuallyAssigned,
-                confidence: speaker.voiceReviewOrigin.map { $0.confidence } ?? speaker.confidence,
-                manualReviewThrough: speaker.voiceReviewOrigin.map { $0.manualReviewThrough }
-                    ?? speaker.manualReviewThrough)
+            let baseline =
+                speaker.voiceReviewOrigin
+                ?? VoiceProjectionOrigin(
+                    speakerID: speaker.id, personID: speaker.personID,
+                    manuallyAssigned: speaker.manuallyAssigned, confidence: speaker.confidence,
+                    manualReviewThrough: speaker.manualReviewThrough)
+            assigned.voiceReviewOrigin = baseline
+            assigned.voiceReviewOrigin?.transcriptAssociationTier =
+                confirmedPeople.isEmpty ? first.transcriptAssociation?.tier : nil
             assigned.voiceReviewExampleID = first.id
             assigned.personID = people.count == 1 ? people.first! : nil
             assigned.manuallyAssigned = false
@@ -131,7 +185,10 @@ enum VoiceDecisionProjection {
             updated.transcript[index].speakerID = assigned.id
         }
         let used = Set(updated.transcript.compactMap(\.speakerID))
-        updated.speakers.removeAll { originalUsed.contains($0.id) && !used.contains($0.id) }
+        let turnBaseIDs = Set(turnSpeakers.values)
+        updated.speakers.removeAll {
+            originalUsed.contains($0.id) && !used.contains($0.id) && !turnBaseIDs.contains($0.id)
+        }
         // Discovery evidence is independent of transcript-local speaker IDs.
         // Keep confirmed attendance even when transcription has no speaker labels,
         // or the excerpt covers only part of a transcript row. Never fabricate a
@@ -172,11 +229,12 @@ enum VoiceDecisionProjection {
     }
 
     private static func applySpeakerAssociations(
-        to meeting: inout Meeting, evidence: [VoiceExample], deletedPeople: Set<UUID>, policy: VoiceMatchingPolicy
+        to meeting: inout Meeting, evidence: [VoiceExample], deletedPeople: Set<UUID>, policy: VoiceMatchingPolicy,
+        turnSpeakers: [UUID: UUID]
     ) {
         var scoped: [UUID: [VoiceExample]] = [:]
         for example in evidence {
-            guard !example.excluded, let range = example.range else { continue }
+            guard !example.excluded, example.attributionTurn == nil, let range = example.range else { continue }
             let speakerID: UUID?
             if example.origin == .discovery, example.detectedSpeakerConfiguration != .community { continue }
             if meeting.speakers.contains(where: { $0.id == example.speakerID && $0.canAssignPerson }) {
@@ -219,9 +277,21 @@ enum VoiceDecisionProjection {
             guard speaker.canAssignPerson, speaker.manuallyAssigned != true, let values = scoped[speaker.id] else {
                 continue
             }
-            let confirmed = values.filter { !$0.manuallyCleared && $0.review == .confirmed && $0.personID != nil }
+            let hasIndependentTurns =
+                speaker.independentTurnAttribution == true
+                || evidence.contains {
+                    turnSpeakers[$0.id] == speaker.id
+                }
+            let confirmed =
+                hasIndependentTurns
+                ? []
+                : values.filter {
+                    !$0.manuallyCleared && $0.review == .confirmed && $0.personID != nil
+                }
             let machine = values.filter {
-                guard !$0.manuallyCleared, let association = $0.transcriptAssociation else { return false }
+                guard !hasIndependentTurns, !$0.manuallyCleared,
+                    let association = $0.transcriptAssociation
+                else { return false }
                 return association.isValid && association.policy.normalized == policy.normalized
                     && !$0.rejectedPersonIDs.contains(association.personID)
             }
@@ -247,6 +317,34 @@ enum VoiceDecisionProjection {
             meeting.speakers[index].manuallyAssigned = false
             meeting.speakers[index].confidence = confirmed.isEmpty ? anchor.transcriptAssociation?.score : nil
         }
+    }
+
+    private static func turnSpeakerScopes(_ evidence: [VoiceExample], meeting: Meeting) -> [UUID: UUID] {
+        var scopes: [UUID: UUID] = [:]
+        let speakers = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0) })
+        for example in evidence {
+            guard !example.excluded, let turn = example.attributionTurn, turn.isValid,
+                let range = example.range
+            else { continue }
+            if speakers[example.speakerID]?.canAssignPerson == true {
+                scopes[example.id] = example.speakerID
+                continue
+            }
+            guard example.origin == .discovery, example.detectedSpeakerConfiguration == .community else { continue }
+            // Discovery IDs are local to their scan. Place the independently
+            // measured turn only when current, supported rows identify one voice.
+            let candidates = Set(
+                meeting.transcript.compactMap { row -> UUID? in
+                    guard row.associationUncertain != true, row.sourcePlaceholder != true,
+                        turn.start < row.end, row.start < turn.end,
+                        let id = row.speakerID, let speaker = speakers[id], speaker.canAssignPerson,
+                        audioFile(for: row, speaker: speaker, meeting: meeting) == range.audioFile
+                    else { return nil }
+                    return id
+                })
+            if candidates.count == 1 { scopes[example.id] = candidates.first }
+        }
+        return scopes
     }
 
     private static func audioFile(for row: TranscriptSegment, speaker: MeetingSpeaker, meeting: Meeting) -> String? {

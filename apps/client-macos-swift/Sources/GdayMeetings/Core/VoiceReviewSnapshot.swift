@@ -98,7 +98,7 @@ struct VoiceReviewSnapshot: Sendable {
             grouping: examples.filter {
                 $0.selectedReference != nil && $0.review == .confirmed && !$0.excluded && !$0.manuallyCleared
             }, by: \.meetingID)
-        return examples.filter { example in
+        return VoiceTurnReviewSelection.select(examples).filter { example in
             if example.selectedReference != nil && example.review != .confirmed { return false }
             guard example.acceptsSuggestions else { return true }
             return !(selected[example.meetingID] ?? []).contains { reference in

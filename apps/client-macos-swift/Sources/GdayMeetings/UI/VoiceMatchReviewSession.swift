@@ -117,12 +117,14 @@ struct VoiceMatchReviewSession {
     /// evidence values for stale-write checks and preserve conflicting identities.
     static func referenceExamples(_ examples: [VoiceExample], personID: UUID) -> [VoiceExample] {
         let decisions = VoiceExactReviewDecisions(examples)
-        let eligible = examples.filter { original in
+        // A vetoed alias must not occupy this person's review slot.
+        let candidates = examples.filter { original in
             let effective = decisions.applying(to: original)
             return !effective.excluded && !effective.manuallyCleared
                 && !effective.rejectedPersonIDs.contains(personID)
                 && (original.personID ?? original.namedPersonID ?? original.suggestedPersonID) == personID
-        }.sorted { left, right in
+        }
+        let eligible = VoiceTurnReviewSelection.select(candidates).sorted { left, right in
             if (left.review == .confirmed) != (right.review == .confirmed) { return left.review == .confirmed }
             if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
             return left.id.uuidString < right.id.uuidString

@@ -26,14 +26,24 @@ extension TranscriptDisplayRow {
             ranges.append(NSRange(location: text.utf16.count, length: content.utf16.count))
             text += content
         }
+        let supported = zip(rows, segments).filter {
+            $0.0.speakerID != nil && !$0.0.isSourcePlaceholder && $0.1.associationUncertain != true
+        }.map(\.0)
+        let label =
+            supported.first(where: { $0.transcriptAssociationTier == .tentative })
+            ?? supported.first(where: { $0.personID != nil }) ?? supported.first ?? first
         var composed = Self(
-            id: first.id, start: first.start, end: last.end, speaker: first.speaker,
-            speakerID: first.speakerID, text: text, personID: first.personID,
-            speakerColorIndex: first.speakerColorIndex, speakerColorKey: first.speakerColorKey,
+            id: first.id, start: first.start, end: rows.map(\.end).max() ?? last.end, speaker: label.speaker,
+            speakerID: label.speakerID, text: text, personID: label.personID,
+            speakerColorIndex: label.speakerColorIndex, speakerColorKey: label.speakerColorKey,
             accessibilityHelp: rows.contains(where: { $0.speakerID == nil })
-                ? "Some words have no speaker label." : nil,
-            isSourcePlaceholder: first.isSourcePlaceholder, source: first.source,
-            transcriptAssociationTier: first.transcriptAssociationTier)
+                ? "Some words have no speaker label."
+                : (label.personID != nil && rows.contains(where: { $0.personID == nil })
+                    ? "Some words have no person match." : nil),
+            isSourcePlaceholder: label.isSourcePlaceholder, source: first.source,
+            transcriptAssociationTier: label.transcriptAssociationTier)
+        composed.speakerSourceRowID = label.id
+        composed.hasUnattributedWords = composed.accessibilityHelp != nil
         composed.constituents = rows
         composed.constituentTextRanges = ranges
         return composed

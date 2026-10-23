@@ -67,6 +67,8 @@ struct TranscriptDisplayRow: Identifiable, Equatable {
     var transcriptAssociationTier: VoiceTranscriptAssociation.Tier? = nil
     var constituents: [TranscriptDisplayRow] = []
     var constituentTextRanges: [NSRange] = []
+    var speakerSourceRowID: UUID?
+    var hasUnattributedWords = false
     var canonicalRows: [TranscriptDisplayRow] { constituents.isEmpty ? [self] : constituents }
     func containsSourceRow(_ id: UUID?) -> Bool {
         guard let id else { return false }
@@ -983,9 +985,10 @@ struct NativeTranscriptView: NSViewRepresentable {
         func showSpeaker(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell) {
             guard parent.editable else { return }
             if !row.constituents.isEmpty {
+                let speakerRowID = row.speakerSourceRowID ?? row.id
                 expand(row)
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, let index = self.rows.firstIndex(where: { $0.id == row.id }),
+                    guard let self, let index = self.rows.firstIndex(where: { $0.id == speakerRowID }),
                         let cell = self.table?.view(atColumn: 0, row: index, makeIfNecessary: true)
                             as? TranscriptNativeCell
                     else { return }
@@ -1564,10 +1567,11 @@ enum TranscriptSpeakerPalette {
         updatePlaybackAccessibility()
         speaker.stringValue = row.speaker
         speaker.lineBreakMode = .byTruncatingTail
-        speaker.toolTip = row.speakerAssignmentHelp.map { "\(row.speaker). \($0)" }
+        let speakerHelp = [row.speakerAssignmentHelp, row.accessibilityHelp].compactMap { $0 }.joined(separator: " ")
+        speaker.toolTip = speakerHelp.isEmpty ? nil : "\(row.speaker). \(speakerHelp)"
         speaker.setAccessibilityLabel(row.speaker)
         speaker.setAccessibilityValue(row.hasTentativePerson ? "Tentative match" : nil)
-        speaker.setAccessibilityHelp(row.speakerAssignmentHelp)
+        speaker.setAccessibilityHelp(speakerHelp.isEmpty ? nil : speakerHelp)
         badge.toolTip = speaker.toolTip
         speakerHeight = 20
         speakerWidth = min(
@@ -1578,7 +1582,8 @@ enum TranscriptSpeakerPalette {
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey)
         badge.role = row.canAssignPerson || row.personID != nil ? .person : .source
         badge.outlined = row.canAssignPerson && row.personID != nil
-        badge.unresolved = row.canAssignPerson && (row.hasTentativePerson || row.personID == nil)
+        badge.unresolved =
+            row.canAssignPerson && (row.hasTentativePerson || row.personID == nil || row.hasUnattributedWords)
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint, role: badge.role)
         if !body.isEditable {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]
@@ -1608,6 +1613,7 @@ enum TranscriptSpeakerPalette {
             }
             body.attributedStringValue = text
             body.setAccessibilityHelp(row.accessibilityHelp ?? (row.isProvisional ? "Transcription may change." : nil))
+            body.toolTip = row.accessibilityHelp
         }
         badge.isHidden = !showsSpeakers || row.speaker.isEmpty
         badge.needsDisplay = true

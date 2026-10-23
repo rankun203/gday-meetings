@@ -6,6 +6,12 @@ extension UIPreview {
         async throws
     {
         if UIPreviewPerformanceFixtures.flag(
+            "--synthetic-readable-transcript", infoKey: "GdaySyntheticReadableTranscript")
+        {
+            try await seedReadableTranscriptPresentation(store: store, meeting: meeting)
+            return
+        }
+        if UIPreviewPerformanceFixtures.flag(
             "--synthetic-transcript-associations", infoKey: "GdaySyntheticTranscriptAssociations")
         {
             try await seedTranscriptAssociationPresentation(store: store, meeting: meeting)
@@ -157,7 +163,7 @@ extension UIPreview {
             VoiceExample(
                 meetingID: value.id, speakerID: tentative.id, source: "microphone", audioFile: audioFile,
                 audioRevision: revision, start: 10, end: 13,
-                embeddings: [embedding([0.4, 0, sqrt(1 - 0.4 * 0.4)])], groupID: tentative.id),
+                embeddings: [embedding([0.6, 0, sqrt(1 - 0.6 * 0.6)])], groupID: tentative.id),
         ]
         guard store.voiceLibrary.upsert(references + candidates) else {
             throw ServiceError("Couldn’t save the transcript match preview.")
@@ -183,5 +189,51 @@ extension UIPreview {
         checkpoint.savedSegments = store.meeting(id: value.id)?.transcript ?? value.transcript
         checkpoint.complete = true
         try checkpoint.save(at: folder)
+    }
+}
+
+extension UIPreview {
+    @MainActor static func seedReadableTranscriptPresentation(store: MeetingStore, meeting: Meeting) async throws {
+        try await seedTranscriptAssociationPresentation(store: store, meeting: meeting)
+        guard var value = store.meeting(id: meeting.id),
+            let automatic = value.speakers.first(where: { $0.label == "mic_02" }),
+            let tentative = value.speakers.first(where: { $0.label == "mic_03" })
+        else { throw ServiceError("Couldn’t prepare the readable transcript preview.") }
+        var rows: [TranscriptSegment] = []
+        var time = 1.0
+        func append(_ parts: [(String, MeetingSpeaker?)]) {
+            let original = UUID()
+            var offset = 0
+            for (text, speaker) in parts {
+                rows.append(
+                    .init(
+                        start: time, end: time + 0.5, speaker: speaker?.label ?? "mic", text: text,
+                        speakerID: speaker?.id, source: .microphone, sourcePlaceholder: speaker == nil,
+                        timing: .init(
+                            text: text,
+                            spans: [
+                                .init(
+                                    range: .init(location: 0, length: text.utf16.count), start: time, end: time + 0.5,
+                                    granularity: .run)
+                            ]),
+                        sourceSpans: [
+                            .init(rowID: original, range: .init(location: offset, length: text.utf16.count), text: text)
+                        ]))
+                offset += text.utf16.count
+                time += 0.5
+            }
+            time += 1
+        }
+        append([("The schedule is ready", automatic), (", ", nil), ("and the notes are saved", automatic), (".", nil)])
+        append([("The next speaker", automatic), (" has an update.", tentative)])
+        append([("An ", nil), ("unlabeled ", nil), ("paragraph.", nil)])
+        value.transcript = rows
+        guard await store.updateMeeting(value) else {
+            throw ServiceError("Couldn’t save the readable transcript preview.")
+        }
+        var checkpoint = LiveTranscriptDraft(meetingID: value.id, locale: "en-AU")
+        checkpoint.savedSegments = rows
+        checkpoint.complete = true
+        try checkpoint.save(at: store.directory(for: value.id))
     }
 }

@@ -86,7 +86,23 @@ struct VoiceTranscriptAssociationTests {
         #expect(result.suggestions.first?.transcriptAssociation == nil)
     }
 
-    @Test func separatedLowSimilarityBecomesTentativeWithoutAddingAReviewSuggestion() async throws {
+    @Test func plausibleSimilarityBecomesTentativeWithoutAddingAReviewSuggestion() async throws {
+        let first = Person(name: "Example Person A")
+        let second = Person(name: "Example Person B")
+        let result = try await run(
+            examples: [
+                sample(score: 0.60, personID: first.id), sample(score: 0.01, personID: second.id), sample(score: 1),
+            ],
+            people: [first, second])
+        let suggestion = try #require(result.suggestions.first)
+        let association = try #require(suggestion.transcriptAssociation)
+        #expect(association.personID == first.id && association.tier == .tentative && association.isValid)
+        #expect(abs(association.score - 0.60) < 1e-12 && abs(association.margin - 0.59) < 1e-12)
+        #expect(suggestion.personID == nil)
+        #expect(result.profiles.allSatisfy { $0.voiceSamples.count == 1 })
+    }
+
+    @Test func relativeLeadBelowPlausibleSimilarityStaysUnresolved() async throws {
         let first = Person(name: "Example Person A")
         let second = Person(name: "Example Person B")
         let result = try await run(
@@ -94,12 +110,59 @@ struct VoiceTranscriptAssociationTests {
                 sample(score: 0.40, personID: first.id), sample(score: 0.01, personID: second.id), sample(score: 1),
             ],
             people: [first, second])
-        let suggestion = try #require(result.suggestions.first)
-        let association = try #require(suggestion.transcriptAssociation)
-        #expect(association.personID == first.id && association.tier == .tentative && association.isValid)
-        #expect(abs(association.score - 0.40) < 1e-12 && abs(association.margin - 0.39) < 1e-12)
-        #expect(suggestion.personID == nil)
-        #expect(result.profiles.allSatisfy { $0.voiceSamples.count == 1 })
+        #expect(result.suggestions.first?.transcriptAssociation == nil)
+    }
+
+    @Test func configuredSuggestionFloorAlsoAppliesToTentativeAttribution() async throws {
+        let first = Person(name: "Example Person A")
+        let second = Person(name: "Example Person B")
+        let result = try await run(
+            examples: [
+                sample(score: 0.60, personID: first.id), sample(score: 0.01, personID: second.id), sample(score: 1),
+            ],
+            people: [first, second], policy: .init(suggestionThreshold: 0.65))
+        #expect(result.suggestions.first?.transcriptAssociation == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func rejectedCompetitorCannotEnlargeTheAcousticMargin(automatic: Bool) async throws {
+        let first = Person(name: "Example Person A")
+        let second = Person(name: "Example Person B")
+        let third = Person(name: "Example Person C")
+        var candidate = sample(score: 1)
+        candidate.rejectedPersonIDs = [second.id]
+        candidate.review = .rejected
+        let best = automatic ? 0.90 : 0.65
+        let result = try await run(
+            examples: [
+                sample(score: best, personID: first.id), sample(score: best - 0.02, personID: second.id),
+                sample(score: 0.01, personID: third.id), candidate,
+            ], people: [first, second, third])
+        #expect(result.suggestions.first?.transcriptAssociation == nil)
+    }
+
+    @Test func rejectingTheNearestPersonDoesNotEstablishTheNextIdentity() async throws {
+        let first = Person(name: "Example Person A")
+        let second = Person(name: "Example Person B")
+        var candidate = sample(score: 1)
+        candidate.rejectedPersonIDs = [first.id]
+        candidate.review = .rejected
+        let result = try await run(
+            examples: [sample(score: 0.95, personID: first.id), sample(score: 0.81, personID: second.id), candidate],
+            people: [first, second])
+        #expect(result.suggestions.first?.transcriptAssociation == nil)
+    }
+
+    @Test func savedTentativeAttributionMustMeetItsPlausibilityFloor() throws {
+        var association = VoiceTranscriptAssociation(
+            personID: UUID(), score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+        let decoded = try JSONDecoder().decode(
+            VoiceTranscriptAssociation.self, from: JSONEncoder().encode(association))
+        #expect(!decoded.isValid)
+        association.score = 0.55
+        #expect(association.isValid)
+        association.policy.suggestionThreshold = 0.6
+        #expect(!association.isValid)
     }
 
     @Test func lowSimilarityWithOnlyOneComparablePersonStaysUnresolved() async throws {

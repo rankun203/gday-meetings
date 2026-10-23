@@ -1,10 +1,92 @@
 import CryptoKit
 import Foundation
+import Speech
 import Testing
 
 @testable import GdayMeetings
 
 @MainActor struct ProviderHealthTests {
+    @Test func appleProviderPanelReceivesBothCapabilityResultsWithoutGeneralSelection() async {
+        let health = ProviderHealthStore { _, _, _ in .ready }
+        var settings = AppSettings()
+        settings.transcriptionProviderID = nil
+        settings.liveTranscriptionProviderID = nil
+        _ = await health.checkProvider(providerID: ThisMacProvider.id, settings: settings)
+        for capability in [ProviderCapability.transcription, .liveTranscription] {
+            #expect(health.validationState(providerID: ThisMacProvider.id, capability: capability) == .ready)
+        }
+    }
+
+    @Test func appleSpeechAssetsPermitAutomaticPreparationWithoutWarnings() async {
+        for capability in [ProviderCapability.transcription, .liveTranscription] {
+            for status in [AssetInventory.Status.installed, .supported, .downloading] {
+                let result = await ThisMacProvider.health(
+                    for: capability, settings: AppSettings(),
+                    speechAvailable: { true },
+                    supportedLocales: { [Locale(identifier: "en-US")] },
+                    assetStatus: { locale in
+                        #expect(locale.identifier == "en-US")
+                        return status
+                    })
+                #expect(result.isReady)
+                #expect(result.reason == nil)
+            }
+        }
+    }
+
+    @Test func unsupportedAppleSpeechAssetsRemainUnavailable() async {
+        for capability in [ProviderCapability.transcription, .liveTranscription] {
+            let result = await ThisMacProvider.health(
+                for: capability, settings: AppSettings(),
+                speechAvailable: { true },
+                supportedLocales: { [Locale(identifier: "en-US")] },
+                assetStatus: { _ in .unsupported })
+            #expect(result == .notReady("Speech model is unavailable."))
+        }
+    }
+
+    @Test func appleSpeechRejectsUnsupportedLanguageBeforeInspectingAssets() async {
+        let result = await ThisMacProvider.health(
+            for: .transcription, settings: AppSettings(),
+            speechAvailable: { true }, supportedLocales: { [Locale(identifier: "fr-FR")] },
+            assetStatus: { _ in
+                Issue.record("An unsupported language must not inspect assets")
+                return .installed
+            })
+        #expect(result == .notReady("Choose a supported transcription language."))
+    }
+
+    @Test func unavailableAppleSpeechHardwareSkipsLocaleAndAssetChecks() async {
+        let result = await ThisMacProvider.health(
+            for: .transcription, settings: AppSettings(), speechAvailable: { false },
+            supportedLocales: {
+                Issue.record("Unavailable hardware must not inspect locales")
+                return []
+            },
+            assetStatus: { _ in
+                Issue.record("Unavailable hardware must not inspect assets")
+                return .installed
+            })
+        #expect(result == .notReady("Transcription is unavailable on this Mac."))
+    }
+
+    @Test func disabledOrUnsupportedAppleCapabilitySkipsSpeechChecks() async {
+        for capability in [ProviderCapability.transcription, .liveTranscription, .summarization] {
+            var settings = AppSettings()
+            settings.thisMacCapabilities = []
+            let result = await ThisMacProvider.health(
+                for: capability, settings: settings,
+                speechAvailable: {
+                    Issue.record("An unavailable capability must not inspect speech support")
+                    return true
+                })
+            #expect(
+                result
+                    == .notReady(
+                        capability == .summarization ? "Capability unavailable." : "Capability is turned off."))
+        }
+    }
+
     @Test func disabledCapabilityDoesNotContactProvider() async {
         var provider = ServiceProvider(kind: .runpod)
         provider.enabledCapabilities = []

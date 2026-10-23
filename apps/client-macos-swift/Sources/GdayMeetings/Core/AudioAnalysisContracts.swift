@@ -133,6 +133,7 @@ struct AcousticSpeakerMetadata: Codable, Equatable, Sendable {
     var voiceEmbedding: TypedVoiceEmbedding?
     var sampleRange: VoiceSampleRange?
     var sampleAudioRevision: String?
+    var independentTurnAttribution: Bool?
 }
 
 struct RecordedDiarizationAnalysis: Codable, Sendable {
@@ -141,6 +142,7 @@ struct RecordedDiarizationAnalysis: Codable, Sendable {
     var generatedAt: Date
     var unresolvedRanges: [AcousticUnresolvedRange]? = nil
     var detail: String? = nil
+    var turnSamples: [LocalSpeakerTurn]? = nil
 
     /// App identity is created only after the provider-neutral result crosses this boundary.
     func localResult() -> LocalDiarizationResult {
@@ -157,12 +159,13 @@ struct RecordedDiarizationAnalysis: Codable, Sendable {
                     track: $0.trackID,
                     providerName: acoustic.provenance.providerName,
                     voiceEmbedding: $0.voiceEmbedding, voiceSampleRange: $0.sampleRange,
-                    voiceSampleRevision: $0.sampleAudioRevision)
+                    voiceSampleRevision: $0.sampleAudioRevision,
+                    independentTurnAttribution: $0.independentTurnAttribution)
             },
             trackSources: Dictionary(uniqueKeysWithValues: acoustic.provenance.audio.map { ($0.trackID, $0.source) }),
             detail: detail, providerName: acoustic.provenance.providerName,
             unresolvedRanges: unresolvedRanges?.map { .init(track: $0.trackID, start: $0.start, end: $0.end) },
-            audioReferences: acoustic.provenance.audio)
+            audioReferences: acoustic.provenance.audio, turnSamples: turnSamples)
     }
 
     private func speakerIdentity(track: String, speaker: String) -> UUID {
@@ -296,11 +299,17 @@ struct CommunityRecordedAnalysisProvider: RecordedDiarizationAnalysisProvider {
             speakers: result.speakers.map {
                 .init(
                     trackID: tracks[$0.track] ?? $0.track, speakerID: $0.label, voiceEmbedding: $0.voiceEmbedding,
-                    sampleRange: $0.voiceSampleRange, sampleAudioRevision: $0.voiceSampleRevision)
+                    sampleRange: $0.voiceSampleRange, sampleAudioRevision: $0.voiceSampleRevision,
+                    independentTurnAttribution: $0.independentTurnAttribution)
             }, generatedAt: result.generatedAt,
             unresolvedRanges: result.unresolvedRanges?.map {
                 .init(trackID: tracks[$0.track] ?? $0.track, start: $0.start, end: $0.end)
-            }, detail: result.detail)
+            }, detail: result.detail,
+            turnSamples: result.turnSamples?.map { sample in
+                var sample = sample
+                sample.track = tracks[sample.track] ?? sample.track
+                return sample
+            })
     }
 }
 

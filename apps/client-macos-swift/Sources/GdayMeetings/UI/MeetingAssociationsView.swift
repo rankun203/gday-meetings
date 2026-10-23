@@ -92,9 +92,7 @@ struct MeetingSpeakersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let meeting {
-                let speakers = meeting.speakers.filter {
-                    $0.canReviewVoice
-                }
+                let speakers = meeting.reviewableSpeakers
                 ForEach(speakers) { speaker in
                     speakerRow(speaker)
                 }

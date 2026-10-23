@@ -29,7 +29,9 @@ actor AppleLiveTranscription {
         AppleSpeechLanguageMapping.locale(for: language, supported: await SpeechTranscriber.supportedLocales)
     }
 
-    static func prepare(language: String, status: @Sendable (String) async -> Void) async throws -> Locale {
+    static func prepare(language: String, activity: @Sendable (ProviderActivity) async -> Void) async throws -> Locale {
+        try Task.checkCancellation()
+        await activity(.loading("Checking the speech model…"))
         guard SpeechTranscriber.isAvailable else {
             throw MeetingError.message("Transcription isn’t available on this Mac.")
         }
@@ -41,19 +43,20 @@ actor AppleLiveTranscription {
         guard readiness != .unsupported else {
             throw MeetingError.message("Transcription isn’t available for this language on this Mac.")
         }
+        try Task.checkCancellation()
         try await AppleSpeechAssets.shared.reserve(locale)
         if readiness != .installed {
-            await status(
-                "Preparing the \(locale.localizedString(forLanguageCode: locale.language.languageCode?.identifier ?? "") ?? language) speech model…"
-            )
+            await activity(.loading("Downloading the speech model for \(AppLanguages.name(for: language))…"))
             log.notice("Speech model installation requested: locale \(locale.identifier, privacy: .public)")
             do {
-                try await AppleSpeechAssets.shared.reserve(locale)
+                try Task.checkCancellation()
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+                    try Task.checkCancellation()
                     try await request.downloadAndInstall()
                 }
                 log.notice("Speech model installation completed: locale \(locale.identifier, privacy: .public)")
             }
+            catch is CancellationError { throw CancellationError() }
             catch {
                 log.error("Speech model installation failed: locale \(locale.identifier, privacy: .public)")
                 throw MeetingError.message(
@@ -62,6 +65,7 @@ actor AppleLiveTranscription {
             }
         }
         try Task.checkCancellation()
+        await activity(.loading("Loading the speech model…"))
         return locale
     }
 
@@ -69,6 +73,7 @@ actor AppleLiveTranscription {
         locale: Locale, sources: [LiveAudioSource], sink: LiveAudioSink,
         boundaries: [LiveAudioSource: Double] = [:],
         favorAccuracy: Bool = false,
+        preparedQueues: [LiveAudioSource: LiveAudioQueue]? = nil,
         receive: @escaping @Sendable (LiveTranscriptPhrase, Bool) async -> Void,
         gap: @escaping @Sendable (LiveTranscriptGap) async -> Void,
         failure: @escaping @Sendable (String) async -> Void
@@ -92,7 +97,7 @@ actor AppleLiveTranscription {
                 await analyzer.cancelAndFinishNow()
                 throw CancellationError()
             }
-            let queue = LiveAudioQueue()
+            let queue = preparedQueues?[source] ?? LiveAudioQueue()
             let reporter = LiveTranscriptGapReporter(deliver: gap)
             let input = AppleLiveAudioInput(
                 queue: queue, format: format, boundary: boundaries[source] ?? 0, source: source,
@@ -101,8 +106,8 @@ actor AppleLiveTranscription {
                     await self.markFailed()
                     await failure(message)
                 })
-            // The analyzer pulls converted packets. The duration-bounded capture
-            // queue is the sole backlog; tiny system packets have the same budget as microphone packets.
+            // One analyzer consumes preparation audio and subsequent live packets
+            // in recording order. The queue owns bounded memory and any disk backlog.
             try await analyzer.start(inputSequence: AsyncStream(unfolding: { await input.next() }))
             let sessionID = UUID()
             let results = Task(name: "Live transcription results: \(source.rawValue)") {
@@ -152,7 +157,10 @@ actor AppleLiveTranscription {
         }
         try Task.checkCancellation()
         guard !cancelled else { throw CancellationError() }
-        sink.replace(queues)
+        // The controller installs preparation queues before capture begins. Do not
+        // reattach them here: a canceled startup may finish after a language change.
+        for queue in queues.values { queue.finishPreparation() }
+        if preparedQueues == nil { sink.replace(queues) }
         return ProviderResult(
             value: (),
             dataFlow: DataFlow(
@@ -295,6 +303,7 @@ actor AppleLiveAudioInput {
             var current = iterator
             guard let packet = await current.next() else {
                 ended = true
+                if let message = queue.failureDescription { await failure(message) }
                 return nil
             }
             iterator = current

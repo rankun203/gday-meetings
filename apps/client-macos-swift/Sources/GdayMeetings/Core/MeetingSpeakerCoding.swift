@@ -6,7 +6,7 @@ extension MeetingSpeaker {
     private enum CodingKeys: String, CodingKey {
         case id, label, track, providerName, voiceScope, embedding, voiceEmbedding, personID, confidence, confirmed,
             sourcePlaceholder, voiceSampleRange, voiceSampleRevision, manuallyAssigned, manualReviewThrough,
-            voiceReviewOrigin, voiceReviewExampleID, colorSlot, passageAssignmentOrigin
+            voiceReviewOrigin, voiceReviewExampleID, colorSlot, passageAssignmentOrigin, independentTurnAttribution
         case fragmentVoiceEmbedding, fragmentLegacyEmbedding
     }
 
@@ -31,6 +31,7 @@ extension MeetingSpeaker {
         colorSlot = try values.decodeIfPresent(Int.self, forKey: .colorSlot)
         passageAssignmentOrigin = try values.decodeIfPresent(
             TranscriptPassageOrigin.self, forKey: .passageAssignmentOrigin)
+        independentTurnAttribution = try values.decodeIfPresent(Bool.self, forKey: .independentTurnAttribution)
         let fragmented = try values.decodeIfPresent(TypedVoiceEmbedding.self, forKey: .fragmentVoiceEmbedding)
         let rawFragmented = try values.decodeIfPresent([Double].self, forKey: .fragmentLegacyEmbedding)
         let ordinary = try values.decodeIfPresent(TypedVoiceEmbedding.self, forKey: .voiceEmbedding)
@@ -63,6 +64,7 @@ extension MeetingSpeaker {
         try values.encodeIfPresent(voiceReviewExampleID, forKey: .voiceReviewExampleID)
         try values.encodeIfPresent(colorSlot, forKey: .colorSlot)
         try values.encodeIfPresent(passageAssignmentOrigin, forKey: .passageAssignmentOrigin)
+        try values.encodeIfPresent(independentTurnAttribution, forKey: .independentTurnAttribution)
         let provenance = voiceEmbedding?.provenance ?? voiceScope ?? ""
         let fragmented =
             voiceSampleRange?.spans != nil

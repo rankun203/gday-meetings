@@ -1285,6 +1285,21 @@ final class MeetingStore: ObservableObject {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let capture = AudioCapture()
             let liveSink = LiveAudioSink()
+            let liveSources: [LiveAudioSource] = [microphone ? .microphone : nil, systemAudio ? .system : nil]
+                .compactMap { $0 }
+            let liveEnabled = settings.liveTranscriptionEnabled
+            let liveQueues =
+                liveEnabled
+                ? Dictionary(
+                    uniqueKeysWithValues: liveSources.map { ($0, LiveAudioQueue(bufferDuringPreparation: true)) })
+                : [:]
+            liveSink.replace(liveQueues)
+            var transferredLiveQueues = false
+            defer {
+                if !transferredLiveQueues {
+                    for queue in liveQueues.values { queue.discard() }
+                }
+            }
             capture.liveAudioSink = liveSink
             capture.onLevels = { [weak self] levels, delivered in
                 Task { @MainActor in
@@ -1333,10 +1348,12 @@ final class MeetingStore: ObservableObject {
             rememberRecordingLanguage(meeting.language)
             liveTranscript.begin(
                 meetingID: meeting.id, language: meeting.language, directory: directory(for: meeting.id),
-                sources: [microphone ? .microphone : nil, systemAudio ? .system : nil].compactMap { $0 },
-                sink: liveSink, enabled: settings.liveTranscriptionEnabled,
+                sources: liveSources,
+                sink: liveSink, enabled: liveEnabled,
                 people: { [weak self] in self?.people ?? [] },
-                favorAccuracy: { [weak self] in self?.settings.thisMacFavorAccuracy ?? false })
+                favorAccuracy: { [weak self] in self?.settings.thisMacFavorAccuracy ?? false },
+                preparedQueues: liveQueues.isEmpty ? nil : liveQueues)
+            transferredLiveQueues = true
             captureHealth = [
                 microphone
                     ? (capture.profile.microphoneVoiceProcessing

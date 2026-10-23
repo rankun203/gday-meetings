@@ -63,8 +63,8 @@ struct ThisMacProviderView: View {
             Section("Readiness") {
                 ProviderHealthSummary(
                     title: "Transcription",
-                    health: health.state(providerID: ThisMacProvider.id, capability: .transcription))
-                let result = health.state(providerID: ThisMacProvider.id, capability: .liveTranscription)
+                    health: health.validationState(providerID: ThisMacProvider.id, capability: .transcription))
+                let result = health.validationState(providerID: ThisMacProvider.id, capability: .liveTranscription)
                 ProviderHealthSummary(title: "Live Transcription", health: result)
             }
             Section("Speech Models") {

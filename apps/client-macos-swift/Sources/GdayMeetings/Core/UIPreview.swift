@@ -180,6 +180,10 @@ enum UIPreview {
                 try await seedPeopleReviewSession(store: store, meeting: conversation, personID: person)
                 try seedLargePeopleReview(store: store, meeting: conversation)
                 if ProcessInfo.processInfo.arguments.contains("--synthetic-live-recording")
+                    || UIPreviewPerformanceFixtures.flag(
+                        "--synthetic-transcription-loading", infoKey: "GdayTranscriptionLoadingPreview")
+                    || UIPreviewPerformanceFixtures.flag(
+                        "--synthetic-transcription-failure", infoKey: "GdayTranscriptionFailurePreview")
                     || ProcessInfo.processInfo.arguments.contains("--synthetic-live-speakers")
                     || Bundle.main.object(forInfoDictionaryKey: "GdaySyntheticLiveRecording") as? Bool == true
                 {

@@ -316,7 +316,9 @@ final class VoiceLibraryPreparation: ObservableObject {
             // unresolved turns. Exclusive output still cannot prove perceptual clarity.
             let excluded = attempted
             let selection = await Task.detached(priority: .utility) {
-                VoiceAlternativeSamples.select(original: original, analysis: analysis, existing: excluded)
+                VoiceAlternativeSamples.select(
+                    original: original, analysis: analysis, existing: excluded,
+                    preferredTurn: original.id == exampleID ? original.attributionTurn : nil)
             }.value
             guard let selection, let rawRange = selection.range else {
                 originalIndex += 1
@@ -979,7 +981,10 @@ final class VoiceLibraryPreparation: ObservableObject {
                     result = try await discoverer.discover(files: files)
                 }
                 try Task.checkCancellation()
-                guard cached != nil || result.speakers.compactMap(\.voiceEmbedding).allSatisfy({ $0.type == job.type })
+                let returnedEmbeddings =
+                    result.speakers.compactMap(\.voiceEmbedding)
+                    + (result.turnSamples ?? []).compactMap(\.voiceEmbedding)
+                guard cached != nil || returnedEmbeddings.allSatisfy({ $0.type == job.type })
                 else {
                     throw ServiceError("The provider returned an incompatible voice representation.")
                 }
@@ -988,25 +993,33 @@ final class VoiceLibraryPreparation: ObservableObject {
                         input.audioRevisions[$0.0] == VoiceLibraryStore.revision(url: $0.1)
                     })
                 else { throw ServiceError("The source audio changed during analysis. Start a new scan.") }
-                let candidates: [VoiceExample] = result.speakers.compactMap { speaker in
-                    guard let range = speaker.voiceSampleRange, range.isValid,
-                        input.audioFiles.contains(range.audioFile),
-                        let revision = input.audioRevisions[range.audioFile]
-                    else { return nil }
-                    let identity = Self.discoveryIdentity(
-                        meetingID: input.meetingID, range: range, revision: revision, model: result.modelRevision)
-                    var candidate = VoiceExample(
-                        id: identity, meetingID: input.meetingID, speakerID: identity, source: range.source,
-                        audioFile: range.audioFile, audioRevision: revision, start: range.start, end: range.end,
-                        embeddings: speaker.voiceEmbedding.map { $0.isValid ? [$0] : [] } ?? [],
-                        groupID: identity, origin: .discovery, spans: range.spans,
-                        sampleQuality: result.sampleQualities?[
-                            VoiceSampleQuality.speakerKey(track: speaker.track, label: speaker.label)])
-                    candidate.detectedSpeakerID = VoiceDetectedSpeakerScope.identity(speaker: speaker, analysis: result)
-                    candidate.detectedSpeakerResultID = result.id
-                    candidate.detectedSpeakerConfiguration = configuration
-                    candidate.detectedSpeakerSpans = VoiceDetectedSpeakerScope.spans(speaker: speaker, analysis: result)
-                    return candidate
+                let candidates: [VoiceExample] =
+                    result.turnSamples != nil
+                    ? Self.turnExamples(result: result, meetingID: input.meetingID, configuration: configuration)
+                    : result.speakers.compactMap { speaker in
+                        guard let range = speaker.voiceSampleRange, range.isValid,
+                            input.audioFiles.contains(range.audioFile),
+                            let revision = input.audioRevisions[range.audioFile]
+                        else { return nil }
+                        let identity = Self.discoveryIdentity(
+                            meetingID: input.meetingID, range: range, revision: revision, model: result.modelRevision)
+                        var candidate = VoiceExample(
+                            id: identity, meetingID: input.meetingID, speakerID: identity, source: range.source,
+                            audioFile: range.audioFile, audioRevision: revision, start: range.start, end: range.end,
+                            embeddings: speaker.voiceEmbedding.map { $0.isValid ? [$0] : [] } ?? [],
+                            groupID: identity, origin: .discovery, spans: range.spans,
+                            sampleQuality: result.sampleQualities?[
+                                VoiceSampleQuality.speakerKey(track: speaker.track, label: speaker.label)])
+                        candidate.detectedSpeakerID = VoiceDetectedSpeakerScope.identity(
+                            speaker: speaker, analysis: result)
+                        candidate.detectedSpeakerResultID = result.id
+                        candidate.detectedSpeakerConfiguration = configuration
+                        candidate.detectedSpeakerSpans = VoiceDetectedSpeakerScope.spans(
+                            speaker: speaker, analysis: result)
+                        return candidate
+                    }
+                guard candidates.allSatisfy({ input.audioRevisions[$0.audioFile ?? ""] == $0.audioRevision }) else {
+                    throw ServiceError("The source audio changed during turn extraction. Start a new scan.")
                 }
                 // Persist refreshed PCM assessments without rerunning diarization.
                 try await discoveryCache.save(result, input: input, configuration: configuration, directory: root)
@@ -1059,8 +1072,44 @@ final class VoiceLibraryPreparation: ObservableObject {
         }
     }
 
+    /// Exact turn identities are stable across retries and separate from cluster-wide manual decisions.
+    nonisolated static func turnExamples(
+        result: LocalDiarizationResult, meetingID: UUID,
+        configuration: VoiceDiscoveryConfiguration = .community
+    ) -> [VoiceExample] {
+        (result.turnSamples ?? []).compactMap { turn in
+            guard let range = turn.sampleRange, range.isValid,
+                let revision = turn.audioRevision, !revision.isEmpty,
+                turn.start.isFinite, turn.end.isFinite, turn.start >= 0, turn.end > turn.start,
+                range.start + 1.0 / 16000 >= turn.start, range.end <= turn.end + 1.0 / 16000,
+                range.speechDuration >= 2, range.speechDuration <= 10 + 1.0 / 16000,
+                turn.sampleQuality?.issue == nil,
+                result.ranges.contains(where: {
+                    $0.track == turn.track && $0.label == turn.label && $0.start == turn.start
+                        && $0.end == turn.end && $0.associationUncertain != true
+                }),
+                !result.ranges.contains(where: {
+                    $0.track == turn.track && $0.label != turn.label && $0.start < turn.end && turn.start < $0.end
+                }),
+                let speaker = result.speakers.first(where: { $0.track == turn.track && $0.label == turn.label })
+            else { return nil }
+            let identity = discoveryIdentity(
+                meetingID: meetingID, range: range, revision: revision,
+                model: result.modelRevision + "|independent-turn-v2|\(turn.start):\(turn.end)")
+            let support = SpeakerEvidenceSpan(start: turn.start, end: turn.end)
+            return VoiceExample(
+                id: identity, meetingID: meetingID, speakerID: speaker.id, source: range.source,
+                audioFile: range.audioFile, audioRevision: revision, start: range.start, end: range.end,
+                embeddings: turn.voiceEmbedding.map { $0.isValid ? [$0] : [] } ?? [],
+                groupID: identity, origin: .discovery, spans: range.spans,
+                detectedSpeakerID: VoiceDetectedSpeakerScope.identity(speaker: speaker, analysis: result),
+                detectedSpeakerResultID: result.id, detectedSpeakerConfiguration: configuration,
+                detectedSpeakerSpans: [support], attributionTurn: support, sampleQuality: turn.sampleQuality)
+        }
+    }
+
     /// Replaying a completed model result after a crash cannot duplicate evidence.
-    static func discoveryIdentity(meetingID: UUID, range: VoiceSampleRange, revision: String, model: String)
+    nonisolated static func discoveryIdentity(meetingID: UUID, range: VoiceSampleRange, revision: String, model: String)
         -> UUID
     {
         let support = range.spans.map { "|" + $0.map { "\($0.start):\($0.end)" }.joined(separator: ",") } ?? ""

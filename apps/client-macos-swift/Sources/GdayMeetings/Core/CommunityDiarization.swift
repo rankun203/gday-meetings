@@ -16,6 +16,26 @@ struct UnresolvedSpeakerRange: Codable, Equatable, Sendable {
     var end: Double
 }
 
+/// Matching support belongs to one acoustic turn; the excerpt is bounded to ten seconds.
+struct LocalSpeakerTurn: Codable, Equatable, Sendable {
+    var track: String
+    var label: String
+    var start: Double
+    var end: Double
+    var sampleRange: VoiceSampleRange?
+    var audioRevision: String?
+    var voiceEmbedding: TypedVoiceEmbedding?
+    var sampleQuality: VoiceSampleQuality?
+
+    static func reviewRepresentative(_ turns: [Self]) -> Self? {
+        turns.filter { $0.sampleQuality.map { $0.issue == nil } == true }.max {
+            let left = $0.sampleRange?.speechDuration ?? 0
+            let right = $1.sampleRange?.speechDuration ?? 0
+            return left == right ? $0.start > $1.start : left < right
+        }
+    }
+}
+
 struct LocalDiarizationResult: Codable, Sendable {
     var version = 1
     var id = UUID()
@@ -29,6 +49,7 @@ struct LocalDiarizationResult: Codable, Sendable {
     var unresolvedRanges: [UnresolvedSpeakerRange]?
     var audioReferences: [AnalysisAudioReference]?
     var sampleQualities: [String: VoiceSampleQuality]?
+    var turnSamples: [LocalSpeakerTurn]?
 }
 
 enum LocalDiarizationInputPolicy {
@@ -179,67 +200,93 @@ actor CommunityDiarizationWorker {
             if output.audioReferences == nil { output.audioReferences = [] }
             output.audioReferences?.append(.init(trackID: track, source: sourceName, revision: sourceRevision))
             let prefix = sourceName == "microphone" ? "mic_" : (sourceName == "system" ? "sys_" : "speaker_")
+            let voicePreparationStart = SuspendingClock.now
             let labels = Array(Set(result.segments.map(\.speakerId))).sorted()
+            var turns: [LocalSpeakerTurn] = []
+            var processedTurns = 0
+            var lastTurnProgress = SuspendingClock.now
             for (slot, modelLabel) in labels.enumerated() {
                 let label = prefix + String(format: "%02d", slot + 1)
-                let segments = result.segments.filter { $0.speakerId == modelLabel }
                 var speaker = MeetingSpeaker(label: label, track: track, providerName: "Community-1")
-                for segment in segments {
+                speaker.independentTurnAttribution = true
+                for segment in result.segments.filter({ $0.speakerId == modelLabel }) {
+                    try Task.checkCancellation()
+                    processedTurns += 1
+                    if AudioTaskProgress.elapsed(since: lastTurnProgress) >= 1 {
+                        await taskProgress?(
+                            .init(
+                                .init(
+                                    phase: "Analyzing Voices", completed: Double(processedTurns),
+                                    total: Double(result.segments.count), unit: "turns")))
+                        lastTurnProgress = SuspendingClock.now
+                    }
                     let start = Double(segment.startTimeSeconds)
                     let end = min(Double(segment.endTimeSeconds), Double(source.sampleCount) / 16000)
                     guard start.isFinite, end.isFinite, start >= 0, end > start else { continue }
-                    output.ranges.append(.init(track: track, label: label, start: start, end: end))
-                }
-                // This selection policy owns the speech-range-v1 cache identity.
-                // Bump that version in VoiceDiscoveryConfiguration when changing
-                // duration, overlap rejection, ordering, or sample boundaries here.
-                // Do not label FluidAudio's clustered/PLDA vectors as our live
-                // extractor's type. Extract the same raw WeSpeaker representation.
-                if let span = segments.filter({
-                    LocalDiarizationInputPolicy.speechSamples(
-                        start: Double($0.startTimeSeconds), end: Double($0.endTimeSeconds),
-                        sampleCount: source.sampleCount) != nil
-                }).sorted(by: { $0.durationSeconds > $1.durationSeconds }).first(where: {
-                    candidate in
-                    candidate.durationSeconds >= 2
-                        && !result.segments.contains { other in
-                            other.speakerId != modelLabel && other.startTimeSeconds < candidate.endTimeSeconds
-                                && other.endTimeSeconds > candidate.startTimeSeconds
-                        }
-                }),
-                    let range = LocalDiarizationInputPolicy.speechSamples(
-                        start: Double(span.startTimeSeconds), end: Double(span.endTimeSeconds),
-                        sampleCount: source.sampleCount)
-                {
-                    let offset = range.lowerBound
-                    let count = range.count
-                    speaker.voiceSampleRange = .init(
+                    let overlaps = result.segments.contains { other in
+                        other.speakerId != modelLabel && Double(other.startTimeSeconds) < end
+                            && Double(other.endTimeSeconds) > start
+                    }
+                    let range =
+                        overlaps
+                        ? nil
+                        : LocalDiarizationInputPolicy.speechSamples(
+                            start: start, end: end, sampleCount: source.sampleCount)
+                    output.ranges.append(
+                        .init(
+                            track: track, label: label, start: start, end: end,
+                            associationUncertain: range == nil ? true : nil))
+                    guard let range else { continue }
+                    let selected = VoiceSampleRange(
                         audioFile: file.lastPathComponent, source: sourceName,
-                        start: Double(offset) / 16000, end: Double(offset + count) / 16000)
-                    speaker.voiceSampleRevision = sourceRevision
-                    var samples = [Float](repeating: 0, count: count)
+                        start: Double(range.lowerBound) / 16000, end: Double(range.upperBound) / 16000)
+                    var samples = [Float](repeating: 0, count: range.count)
                     try samples.withUnsafeMutableBufferPointer { buffer in
-                        try source.copySamples(into: buffer.baseAddress!, offset: offset, count: count)
+                        try source.copySamples(into: buffer.baseAddress!, offset: range.lowerBound, count: range.count)
                     }
-                    if let selected = speaker.voiceSampleRange,
-                        let quality = VoiceSampleQuality.assess(
-                            range: selected, audioRevision: sourceRevision,
-                            scanConfiguration: VoiceDiscoveryConfiguration.community.pipeline, samples: samples)
-                    {
-                        if output.sampleQualities == nil { output.sampleQualities = [:] }
-                        output.sampleQualities?[VoiceSampleQuality.speakerKey(track: track, label: label)] = quality
+                    let quality = VoiceSampleQuality.assess(
+                        range: selected, audioRevision: sourceRevision,
+                        scanConfiguration: VoiceDiscoveryConfiguration.community.pipeline, samples: samples)
+                    guard let quality else {
+                        output.ranges[output.ranges.count - 1].associationUncertain = true
+                        continue
                     }
-                    if let extractor {
-                        if let vector = try? await extractor.extract(samples: samples) {
-                            speaker.voiceEmbedding = TypedVoiceEmbedding.normalizing(
+                    var turn = LocalSpeakerTurn(
+                        track: track, label: label, start: start, end: end, sampleRange: selected,
+                        audioRevision: sourceRevision, sampleQuality: quality)
+                    // Keep inference sequential under the shared Community permit.
+                    // Cancellation is checked again before retaining any model output.
+                    if let extractor, quality.issue == nil {
+                        do {
+                            let vector = try await extractor.extract(samples: samples)
+                            try Task.checkCancellation()
+                            turn.voiceEmbedding = TypedVoiceEmbedding.normalizing(
                                 type: CommunityVoiceEmbeddingExtractor.embeddingType, values: vector,
-                                provenance: "Community-1 selected speech")
+                                provenance: "Community-1 independent turn")
+                        }
+                        catch is CancellationError { throw CancellationError() }
+                        catch {
+                            // A failed extraction leaves this turn unidentified.
                         }
                     }
                     try Task.checkCancellation()
+                    turns.append(turn)
+                }
+                // Retain one playable excerpt for manual naming/reference selection,
+                // without using it as the identity of every turn in the cluster.
+                if let selected = LocalSpeakerTurn.reviewRepresentative(turns.filter { $0.label == label }) {
+                    speaker.voiceSampleRange = selected.sampleRange
+                    speaker.voiceSampleRevision = selected.audioRevision
+                    if let quality = selected.sampleQuality {
+                        if output.sampleQualities == nil { output.sampleQualities = [:] }
+                        output.sampleQualities?[VoiceSampleQuality.speakerKey(track: track, label: label)] = quality
+                    }
                 }
                 output.speakers.append(speaker)
             }
+            if output.turnSamples == nil { output.turnSamples = [] }
+            output.turnSamples?.append(contentsOf: turns)
+            inferenceSeconds += AudioTaskProgress.elapsed(since: voicePreparationStart)
             guard VoiceLibraryStore.revision(url: file) == sourceRevision else {
                 throw ServiceError("The source audio changed during analysis. Run speaker diarization again.")
             }
@@ -285,7 +332,8 @@ enum LocalDiarizationAssignment {
         // A real acoustic cluster can have a clean review example even when no
         // whole transcript row has enough exclusive support to take its label.
         let reviewable = result.speakers.filter {
-            $0.resolvedVoiceEmbedding?.isValid == true && $0.voiceSampleRange?.isValid == true
+            ($0.resolvedVoiceEmbedding?.isValid == true || $0.independentTurnAttribution == true)
+                && $0.voiceSampleRange?.isValid == true
         }
         for speaker in reviewable where !speakers.contains(where: { $0.id == speaker.id }) {
             speakers.append(speaker)
@@ -336,7 +384,11 @@ enum LocalDiarizationAssignment {
         assigned.speaker = speaker.label
         assigned.sourcePlaceholder = false
         assigned.personID = nil
-        assigned.associationUncertain = nil
+        assigned.associationUncertain =
+            result.ranges.contains {
+                $0.track == track && $0.label == best.key && $0.associationUncertain == true
+                    && $0.start < row.end && row.start < $0.end
+            } ? true : nil
         return assigned
     }
 
@@ -478,6 +530,12 @@ extension MeetingStore {
                 guard voiceLibrary.ingest(meeting: updated, directory: folder) else {
                     throw ServiceError(
                         voiceLibrary.errorMessage ?? "Couldn’t save the speaker examples for People review.")
+                }
+                guard
+                    voiceLibrary.upsert(
+                        VoiceLibraryPreparation.turnExamples(result: result, meetingID: id))
+                else {
+                    throw ServiceError(voiceLibrary.errorMessage ?? "Couldn’t save speaker turn examples.")
                 }
                 updated = voiceLibrary.applyingDecisions(to: updated)
                 markManagedTaskCompletion(on: &updated, kind: .diarization)

@@ -18,8 +18,10 @@ enum VoiceAlternativeSamples {
         var detectedSpeakerSpans: [SpeakerEvidenceSpan]?
     }
 
-    static func select(original: VoiceExample, analysis: LocalDiarizationResult, existing: [VoiceExample]) -> Selection?
-    {
+    static func select(
+        original: VoiceExample, analysis: LocalDiarizationResult, existing: [VoiceExample],
+        preferredTurn: SpeakerEvidenceSpan? = nil
+    ) -> Selection? {
         guard let originalRange = original.range else { return nil }
         let matches = analysis.speakers.filter { speaker in
             guard let selected = speaker.voiceSampleRange, selected.audioFile == originalRange.audioFile else {
@@ -84,6 +86,11 @@ enum VoiceAlternativeSamples {
         }
         return .init(
             range: candidates.sorted {
+                if let preferredTurn {
+                    let leftPreferred = preferredTurn.start <= $0.start && $0.end <= preferredTurn.end
+                    let rightPreferred = preferredTurn.start <= $1.start && $1.end <= preferredTurn.end
+                    if leftPreferred != rightPreferred { return leftPreferred }
+                }
                 if $0.speechDuration != $1.speechDuration { return $0.speechDuration > $1.speechDuration }
                 return $0.start < $1.start
             }.first,

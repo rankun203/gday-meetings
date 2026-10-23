@@ -64,6 +64,7 @@ enum VoiceReviewSelection {
     static func rank(
         _ examples: [VoiceExample], for personIDs: Set<UUID>, limit: Int = 48, policy: VoiceMatchingPolicy = .default
     ) -> [UUID: [VoiceExample]] {
+        let examples = VoiceTurnReviewSelection.select(examples)
         let policy = policy.normalized
         guard !personIDs.isEmpty else { return [:] }
         let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: examples)

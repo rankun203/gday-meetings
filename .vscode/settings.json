@@ -1,4 +1,18 @@
 {
+    "python.analysis.include": ["apps"],
+    "python.analysis.exclude": [
+        "tmp",
+        "**/node_modules",
+        "**/__pycache__",
+        "**/.git",
+        "**/.venv",
+        "**/venv",
+        "**/.build",
+        "**/.swiftpm",
+        "**/target",
+        "**/*.app"
+    ],
+    "python.analysis.diagnosticMode": "openFilesOnly",
     "cSpell.words": [
         "backref",
         "brackethighlighter",

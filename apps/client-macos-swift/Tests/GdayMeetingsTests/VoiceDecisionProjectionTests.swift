@@ -66,7 +66,7 @@ struct VoiceDecisionProjectionTests {
             tentative.personID = nil
             tentative.review = .suggested
             tentative.transcriptAssociation = .init(
-                personID: person, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+                personID: person, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
             meeting = VoiceDecisionProjection.apply(
                 to: meeting, evidence: [tentative], decisions: [], deletedPeople: [])
         }
@@ -76,7 +76,7 @@ struct VoiceDecisionProjectionTests {
         example.personID = nil
         example.review = .suggested
         example.transcriptAssociation = .init(
-            personID: person, score: tier == .automatic ? 0.9 : 0.4, margin: 0.3, policy: .default, tier: tier)
+            personID: person, score: tier == .automatic ? 0.9 : 0.6, margin: 0.3, policy: .default, tier: tier)
         if target == "confirmed" {
             example.personID = person
             example.review = .confirmed
@@ -288,7 +288,7 @@ struct VoiceDecisionProjectionTests {
         example.personID = nil
         example.review = .suggested
         example.transcriptAssociation = .init(
-            personID: person, score: tier == .automatic ? 0.9 : 0.4, margin: 0.3, policy: .default, tier: tier)
+            personID: person, score: tier == .automatic ? 0.9 : 0.6, margin: 0.3, policy: .default, tier: tier)
         let originalSpeaker = meeting.speakers[0].id
         meeting.transcript[0].associationUncertain = true
         meeting.transcript.append(.init(start: 10, end: 12, text: "Another passage", speakerID: originalSpeaker))
@@ -516,12 +516,12 @@ struct VoiceDecisionProjectionTests {
         var weak = strong
         weak.id = UUID()
         weak.transcriptAssociation = .init(
-            personID: person, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+            personID: person, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
         for evidence in [[strong, weak], [weak, strong]] {
             let projected = VoiceDecisionProjection.apply(
                 to: meeting, evidence: evidence, decisions: [], deletedPeople: [])
             #expect(projected.speakers[0].voiceReviewOrigin?.transcriptAssociationTier == .tentative)
-            #expect(projected.speakers[0].confidence == 0.4)
+            #expect(projected.speakers[0].confidence == 0.6)
             #expect(!projected.speakers[0].confirmed)
             #expect(projected.personIDs.isEmpty)
         }
@@ -578,7 +578,7 @@ struct VoiceDecisionProjectionTests {
             confirmedReference
             ? nil
             : .init(
-                personID: first, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+                personID: first, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
         #expect(library.upsert([example]))
         await store.refreshVoiceAssignments(meetingIDs: [meeting.id], recomputeSuggestions: false)
         #expect(
@@ -674,7 +674,7 @@ struct VoiceDecisionProjectionTests {
         tentative.personID = nil
         tentative.review = .suggested
         tentative.transcriptAssociation = .init(
-            personID: person, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+            personID: person, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
         var confirmed = original
         confirmed.id = UUID()
         confirmed.speakerID = UUID()
@@ -741,7 +741,7 @@ struct VoiceDecisionProjectionTests {
         example.personID = nil
         example.review = .suggested
         example.transcriptAssociation = .init(
-            personID: person, score: tier == .automatic ? 0.9 : 0.4, margin: 0.3, policy: .default, tier: tier)
+            personID: person, score: tier == .automatic ? 0.9 : 0.6, margin: 0.3, policy: .default, tier: tier)
         #expect(library.upsert([example]))
         let first = library.applyingDecisions(to: meeting)
         let replacement = MeetingSpeaker(label: "new_voice", track: "track0", providerName: "Synthetic")
@@ -771,7 +771,7 @@ struct VoiceDecisionProjectionTests {
         example.personID = nil
         example.review = .suggested
         example.transcriptAssociation = .init(
-            personID: person, score: 0.4, margin: 0.3, policy: .default, tier: .tentative)
+            personID: person, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
         let projected = VoiceDecisionProjection.apply(
             to: meeting, evidence: [example], decisions: [], deletedPeople: [])
         #expect(projected.personIDs == [person])
@@ -780,6 +780,210 @@ struct VoiceDecisionProjectionTests {
             to: projected, evidence: [], decisions: [], deletedPeople: [])
         #expect(corrected.personIDs == [person])
         #expect(corrected.associatedPersonIDs == [person])
+    }
+
+    @Test(arguments: [false, true])
+    func independentTurnsAttributeFullSupportWithoutNamingClusterOrUnknownSpeech(discovery: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var (meeting, sample) = try fixture(directory: directory)
+        meeting.speakers[0].independentTurnAttribution = discovery ? nil : true
+        let clusterID = meeting.speakers[0].id
+        meeting.transcript = (0..<6).map {
+            TranscriptSegment(start: Double($0), end: Double($0 + 1), text: "Part \($0)", speakerID: clusterID)
+        }
+        meeting.transcript[4].associationUncertain = true
+        let firstPerson = UUID()
+        let secondPerson = UUID()
+        sample.personID = nil
+        sample.review = .suggested
+        sample.end = 0.5
+        sample.attributionTurn = .init(start: 0, end: 2)
+        sample.transcriptAssociation = .init(personID: firstPerson, score: 0.9, margin: 0.3, policy: .default)
+        var other = sample
+        other.id = UUID()
+        other.start = 3
+        other.end = 3.5
+        other.attributionTurn = .init(start: 3, end: 5)
+        other.transcriptAssociation = .init(
+            personID: secondPerson, score: 0.6, margin: 0.3, policy: .default, tier: .tentative)
+        // A retained cluster excerpt cannot extend its identity across independent turns.
+        var old = sample
+        old.id = UUID()
+        old.attributionTurn = nil
+        old.end = 6
+        if discovery {
+            sample.speakerID = UUID()
+            sample.origin = .discovery
+            sample.detectedSpeakerConfiguration = .community
+            other.speakerID = UUID()
+            other.origin = .discovery
+            other.detectedSpeakerConfiguration = .community
+        }
+        var legacyConfirmed = old
+        legacyConfirmed.id = UUID()
+        legacyConfirmed.end = 0.5
+        legacyConfirmed.personID = UUID()
+        legacyConfirmed.review = .confirmed
+        legacyConfirmed.transcriptAssociation = nil
+        let evidence = [sample, other, old, legacyConfirmed]
+        let projected = VoiceDecisionProjection.apply(to: meeting, evidence: evidence, decisions: [], deletedPeople: [])
+        func person(_ index: Int) -> UUID? {
+            projected.speakers.first { $0.id == projected.transcript[index].speakerID }?.personID
+        }
+        #expect((0..<6).map(person) == [firstPerson, firstPerson, nil, secondPerson, nil, nil])
+        #expect(projected.transcript[0].speakerID == projected.transcript[1].speakerID)
+        let tentative = projected.speakers.first { $0.id == projected.transcript[3].speakerID }
+        #expect(tentative?.voiceReviewOrigin?.transcriptAssociationTier == .tentative)
+        #expect(!projected.personIDs.contains(secondPerson))
+        #expect(
+            VoiceDecisionProjection.apply(to: projected, evidence: evidence, decisions: [], deletedPeople: [])
+                == projected)
+        let withdrawn = VoiceDecisionProjection.apply(to: projected, evidence: [], decisions: [], deletedPeople: [])
+        #expect(withdrawn.transcript.map(\.speakerID) == Array(repeating: Optional(clusterID), count: 6))
+        #expect(withdrawn.speakers.allSatisfy { $0.personID == nil })
+        let override = VoiceSpeakerDecision(
+            meetingID: meeting.id, speakerID: projected.transcript[0].speakerID!, personID: secondPerson)
+        let corrected = VoiceDecisionProjection.apply(
+            to: projected, evidence: evidence, decisions: [override], deletedPeople: [])
+        #expect(corrected.speakers.filter { $0.id == clusterID }.first?.personID == secondPerson)
+        #expect(corrected.transcript.allSatisfy { $0.speakerID == clusterID })
+        let undone = VoiceDecisionProjection.apply(to: corrected, evidence: evidence, decisions: [], deletedPeople: [])
+        #expect(undone.transcript.map(\.speakerID) == projected.transcript.map(\.speakerID))
+    }
+
+    @Test func wholeSpeakerCorrectionFromTurnNameAndUndoRetainIndependentMatches() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: directory)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        let firstPerson = await store.addPerson(name: "Example Person A")
+        let secondPerson = await store.addPerson(name: "Example Person B")
+        var (meeting, first) = try fixture(directory: directory)
+        let cluster = meeting.speakers[0].id
+        meeting.speakers[0].independentTurnAttribution = true
+        meeting.transcript = [
+            .init(start: 0, end: 1, text: "First turn", speakerID: cluster),
+            .init(start: 1, end: 2, text: "Second turn", speakerID: cluster),
+        ]
+        try await store.insertImportedMeeting(meeting)
+        await store.flushVoiceAssignmentRefresh()
+        store.voiceLibrary.didChange = nil
+        store.voiceLibrary.didChangeProjection = nil
+        first.personID = nil
+        first.review = .suggested
+        first.end = 0.5
+        first.attributionTurn = .init(start: 0, end: 1)
+        first.transcriptAssociation = .init(personID: firstPerson, score: 0.9, margin: 0.3, policy: .default)
+        var second = first
+        second.id = UUID()
+        second.start = 1
+        second.end = 1.5
+        second.attributionTurn = .init(start: 1, end: 2)
+        second.transcriptAssociation?.personID = secondPerson
+        #expect(store.voiceLibrary.upsert([first, second]))
+        await store.refreshVoiceAssignments(meetingIDs: [meeting.id], recomputeSuggestions: false)
+        let projected = try #require(store.meeting(id: meeting.id))
+        let target = try #require(projected.transcript[0].speakerID)
+        #expect(target != cluster)
+        #expect(Set(projected.associatedPersonIDs) == [firstPerson, secondPerson])
+        #expect(projected.speakers.contains { $0.id == cluster })
+        #expect(await store.assignSpeaker(meetingID: meeting.id, speakerID: target, personID: secondPerson))
+        await store.refreshVoiceAssignments(meetingIDs: [meeting.id], recomputeSuggestions: false)
+        let corrected = try #require(store.meeting(id: meeting.id))
+        #expect(corrected.transcript.allSatisfy { $0.speakerID == cluster })
+        #expect(corrected.speakers.first { $0.id == cluster }?.personID == secondPerson)
+        #expect(corrected.associatedPersonIDs == [secondPerson])
+        #expect(store.voiceLibrary.examples.allSatisfy { $0.review != .confirmed && $0.personID == nil })
+        #expect(store.people.allSatisfy { $0.voiceSamples.isEmpty })
+        #expect(store.voiceLibrary.undo())
+        await store.refreshVoiceAssignments(meetingIDs: [meeting.id], recomputeSuggestions: false)
+        let restored = try #require(store.meeting(id: meeting.id))
+        #expect(restored.transcript.map(\.speakerID) == projected.transcript.map(\.speakerID))
+        #expect(restored.speakers.first { $0.id == restored.transcript[0].speakerID }?.personID == firstPerson)
+        #expect(restored.speakers.first { $0.id == restored.transcript[1].speakerID }?.personID == secondPerson)
+        #expect(Set(restored.associatedPersonIDs) == [firstPerson, secondPerson])
+        let reopened = try MeetingFolderStorage.read(id: meeting.id, directory: directory)
+        #expect(reopened.transcript == restored.transcript)
+        #expect(Set(reopened.associatedPersonIDs) == [firstPerson, secondPerson])
+    }
+
+    @Test(arguments: [false, true])
+    func overlappingTurnContextCannotReuseEarlierNamedProjection(samePerson: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var (meeting, first) = try fixture(directory: directory)
+        let clusterID = meeting.speakers[0].id
+        meeting.speakers[0].independentTurnAttribution = true
+        meeting.transcript = [
+            .init(start: 0, end: 2, text: "First", speakerID: clusterID),
+            .init(start: 2, end: 4, text: "Second", speakerID: clusterID),
+        ]
+        let person = UUID()
+        first.personID = nil
+        first.review = .suggested
+        first.attributionTurn = .init(start: 0, end: 4)
+        first.transcriptAssociation = .init(personID: person, score: 0.9, margin: 0.3, policy: .default)
+        var other = first
+        other.id = UUID()
+        other.attributionTurn = .init(start: 2, end: 4)
+        other.transcriptAssociation?.personID = samePerson ? person : UUID()
+        other.transcriptAssociation?.tier = .tentative
+        other.transcriptAssociation?.score = 0.6
+        let projected = VoiceDecisionProjection.apply(
+            to: meeting, evidence: [first, other], decisions: [], deletedPeople: [])
+        #expect(projected.speakers.first { $0.id == projected.transcript[0].speakerID }?.personID == person)
+        let overlap = projected.speakers.first { $0.id == projected.transcript[1].speakerID }
+        #expect(overlap?.personID == (samePerson ? person : nil))
+        if samePerson {
+            #expect(overlap?.voiceReviewOrigin?.transcriptAssociationTier == .tentative)
+            #expect(overlap?.attendancePersonID == nil)
+        }
+        #expect(projected.transcript[0].speakerID != projected.transcript[1].speakerID)
+        #expect(
+            VoiceDecisionProjection.apply(to: projected, evidence: [first, other], decisions: [], deletedPeople: [])
+                == projected)
+    }
+
+    @Test func confirmedTurnReferenceCannotResolveIndependentAcousticUncertainty() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var (meeting, example) = try fixture(directory: directory)
+        meeting.speakers[0].independentTurnAttribution = true
+        meeting.transcript[0].associationUncertain = true
+        example.attributionTurn = .init(start: 0, end: 2)
+        let projected = VoiceDecisionProjection.apply(
+            to: meeting, evidence: [example], decisions: [], deletedPeople: [])
+        let speaker = projected.speakers.first { $0.id == projected.transcript[0].speakerID }
+        #expect(speaker?.personID == nil)
+        #expect(!projected.transcript[0].allowsPersonAssociation(from: speaker))
+        #expect(projected.transcript[0].associationUncertain == true)
+    }
+
+    @Test func staleRejectedAndPartialTurnEvidenceLeavesRowsUnidentified() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var (meeting, sample) = try fixture(directory: directory)
+        meeting.speakers[0].independentTurnAttribution = true
+        let person = UUID()
+        sample.personID = nil
+        sample.review = .suggested
+        sample.attributionTurn = .init(start: 0, end: 2)
+        sample.transcriptAssociation = .init(personID: person, score: 0.9, margin: 0.3, policy: .default)
+        for kind in ["partial", "rejected", "policy", "deleted", "source"] {
+            var invalid = sample
+            var policy = VoiceMatchingPolicy.default
+            if kind == "partial" { invalid.attributionTurn?.end = 1 }
+            if kind == "rejected" { invalid.rejectedPersonIDs = [person] }
+            if kind == "policy" { policy.automaticThreshold = 0.95 }
+            if kind == "source" { invalid.audioFile = "microphone.wav" }
+            let projected = VoiceDecisionProjection.apply(
+                to: meeting, evidence: [invalid], decisions: [], deletedPeople: kind == "deleted" ? [person] : [],
+                policy: policy)
+            #expect(projected.transcript == meeting.transcript)
+            #expect(projected.speakers.allSatisfy { $0.personID == nil })
+        }
     }
 
     private func fixture(directory: URL) throws -> (Meeting, VoiceExample) {

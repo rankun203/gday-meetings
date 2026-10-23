@@ -182,11 +182,7 @@ struct MeetingTranscriptView: View {
                             return AnyView(Text("Speaker is unavailable."))
                         }
                     ).id(meetingID)
-                    if !usesCheckpoint
-                        && meeting.speakers.contains(where: {
-                            $0.canReviewVoice
-                        })
-                    {
+                    if !usesCheckpoint && !meeting.reviewableSpeakers.isEmpty {
                         DisclosureGroup("Speakers") {
                             ScrollView { MeetingSpeakersView(meetingID: meetingID) }.frame(maxHeight: 240)
                         }

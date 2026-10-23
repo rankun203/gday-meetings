@@ -9,7 +9,7 @@ struct LiveAudioLoss: Equatable, Sendable {
 }
 
 /// Called only from the regular microphone tap / system consumer, never from the real-time IOProc.
-/// Queue ownership ends on dequeue. At most two seconds of PCM await conversion, regardless of callback size.
+/// Queue ownership ends on dequeue. Memory queues retain two seconds; preparation queues spill older work to disk.
 final class LiveAudioQueue: @unchecked Sendable {
     struct Packet: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
@@ -17,18 +17,32 @@ final class LiveAudioQueue: @unchecked Sendable {
         var duration: Double { Double(buffer.frameLength) / buffer.format.sampleRate }
     }
     let stream: AsyncStream<Packet>
-    private let continuation: AsyncStream<Packet>.Continuation
+    private let continuation: AsyncStream<Packet>.Continuation?
     private let lock = NSLock()
     private var queuedSeconds = 0.0
     private var ended = false
     private var dropped: [LiveAudioLoss] = []
+    private let backlog: LiveAudioBacklog?
     static let maximumSeconds = 2.0
     static let maximumDroppedRanges = 64
 
-    init() {
-        let pair = AsyncStream<Packet>.makeStream()
-        stream = pair.stream
-        continuation = pair.continuation
+    var failureDescription: String? { backlog?.failureDescription }
+
+    func finishPreparation() { backlog?.finishPreparation() }
+
+    init(bufferDuringPreparation: Bool = false) {
+        if bufferDuringPreparation {
+            let backlog = LiveAudioBacklog()
+            self.backlog = backlog
+            stream = AsyncStream(unfolding: { await backlog.next() })
+            continuation = nil
+        }
+        else {
+            backlog = nil
+            let pair = AsyncStream<Packet>.makeStream()
+            stream = pair.stream
+            continuation = pair.continuation
+        }
     }
 
     func append(_ buffer: AVAudioPCMBuffer, start: Double) {
@@ -37,6 +51,10 @@ final class LiveAudioQueue: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !ended else { return }
+        if let backlog {
+            backlog.append(buffer, start: start)
+            return
+        }
         guard queuedSeconds + seconds <= Self.maximumSeconds,
             let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength)
         else {
@@ -62,10 +80,11 @@ final class LiveAudioQueue: @unchecked Sendable {
             if let src = from.mData, let dst = to.mData { memcpy(dst, src, Int(from.mDataByteSize)) }
         }
         queuedSeconds += seconds
-        continuation.yield(Packet(buffer: copy, start: start))
+        continuation?.yield(Packet(buffer: copy, start: start))
     }
 
     func consumed(_ packet: Packet) {
+        guard backlog == nil else { return }
         lock.lock()
         queuedSeconds = max(0, queuedSeconds - packet.duration)
         lock.unlock()
@@ -74,7 +93,7 @@ final class LiveAudioQueue: @unchecked Sendable {
     func takeDroppedRanges() -> [LiveAudioLoss] {
         lock.lock()
         defer { lock.unlock() }
-        let result = dropped
+        let result = dropped + (backlog?.takeDroppedRanges() ?? [])
         dropped = []
         return result
     }
@@ -82,7 +101,17 @@ final class LiveAudioQueue: @unchecked Sendable {
     func finish() {
         lock.lock()
         ended = true
-        continuation.finish()
+        continuation?.finish()
+        backlog?.finish()
+        lock.unlock()
+    }
+
+    /// Cancellation releases pending replay audio; graceful finish keeps it available to drain.
+    func discard() {
+        lock.lock()
+        ended = true
+        continuation?.finish()
+        backlog?.discard()
         lock.unlock()
     }
 }
