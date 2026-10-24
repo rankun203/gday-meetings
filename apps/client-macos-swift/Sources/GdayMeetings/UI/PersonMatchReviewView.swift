@@ -137,6 +137,8 @@ private struct PersonMatchReviewContent: View, Equatable {
                     if !loading && !loadFailed && !session.examples.isEmpty {
                         Text(
                             "\(session.decidedCount) of \(session.examples.count) reviewed · \(session.skippedCount) skipped"
+                                + (session.noLongerNeededIDs.isEmpty
+                                    ? "" : " · \(session.noLongerNeededIDs.count) no longer needed")
                         )
                         .font(.caption).foregroundStyle(.secondary)
                     }
@@ -185,15 +187,21 @@ private struct PersonMatchReviewContent: View, Equatable {
                     }
                     else if session.examples.isEmpty {
                         ContentUnavailableView {
-                            Label("No Matches to Review", systemImage: "waveform")
+                            Label(
+                                session.additionalCandidates.isEmpty
+                                    ? "No Matches to Review" : "Samples Ready to Review",
+                                systemImage: "waveform")
                         } description: {
                             Text(
-                                references.isEmpty
-                                    ? "No playable candidates are available for this person."
-                                    : "No playable candidates are available. Existing samples remain available in the list."
-                            )
+                                session.additionalCandidates.isEmpty
+                                    ? "No useful voice examples need review right now."
+                                    : "New useful examples are available when you want to review more.")
                         } actions: {
-                            Button("Refresh Matches") { Task { await loadCandidates(useProvided: false) } }
+                            Button(
+                                session.additionalCandidates.isEmpty ? "Check for More Samples" : "Review More Samples"
+                            ) {
+                                Task { await loadCandidates(useProvided: false, admitNewCandidates: true) }
+                            }
                         }
                     }
                     else {
@@ -206,7 +214,15 @@ private struct PersonMatchReviewContent: View, Equatable {
                                 )
                             }
                         } actions: {
-                            Button("Refresh Matches") { Task { await loadCandidates(useProvided: false) } }
+                            if !session.additionalCandidates.isEmpty {
+                                Button("Review More Samples") {
+                                    Task { await loadCandidates(useProvided: true, admitNewCandidates: true) }
+                                }
+                            }
+                            else {
+                                Text("You’ve reviewed the useful examples in this batch.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }.frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
@@ -264,7 +280,7 @@ private struct PersonMatchReviewContent: View, Equatable {
             VoiceSampleNameEditor(
                 title: "Name This Person",
                 explanation:
-                    "Name this voice, then review its suggested matches.",
+                    "Name this voice to improve recognition in future recordings.",
                 createAndAssign: { name in await nameGroup(context, newPersonName: name) }
             ) { id in await nameGroup(context, personID: id) }
         }
@@ -285,34 +301,38 @@ private struct PersonMatchReviewContent: View, Equatable {
     private var sampleList: some View {
         ScrollViewReader { proxy in
             List(selection: selection) {
-                Section("Candidates · \(session.remainingCount) Remaining") {
+                Section {
                     ForEach(session.examples) { example in
                         sampleRow(
                             example,
                             status: session.unavailableIDs.contains(example.id)
-                                ? "Unavailable" : session.decisions[example.id].map(decisionTitle) ?? "Needs Review",
+                                ? "Unavailable"
+                                : (session.noLongerNeededIDs.contains(example.id)
+                                    ? "No Longer Needed"
+                                    : session.decisions[example.id].map(decisionTitle) ?? "Needs Review"),
                             kind: session.unavailableIDs.contains(example.id)
-                                ? .ignored : session.decisions[example.id].map(decisionKind) ?? .needsReview,
+                                ? .ignored
+                                : (session.noLongerNeededIDs.contains(example.id)
+                                    ? .ignored : session.decisions[example.id].map(decisionKind) ?? .needsReview),
                             selected: session.referenceID == nil && session.candidateID == example.id
                         ).tag(Selection.candidate(example.id)).id(Selection.candidate(example.id))
                     }
-                }
-                if reviewPersonID != nil && !references.isEmpty {
-                    Section("Existing Samples") {
-                        ForEach(references) { example in
-                            sampleRow(
-                                example, status: referenceStatus(example),
-                                kind: example.review == .confirmed ? .confirmed : .needsReview,
-                                selected: session.referenceID == example.id
-                            ).tag(Selection.reference(example.id)).id(Selection.reference(example.id))
+                } header: {
+                    HStack {
+                        Text("Candidates · \(session.remainingCount) Remaining")
+                        Spacer()
+                        if session.remainingCount == 0 && !session.additionalCandidates.isEmpty {
+                            Button("Review More") {
+                                Task { await loadCandidates(useProvided: true, admitNewCandidates: true) }
+                            }.controlSize(.small)
+                                .accessibilityLabel("Review More Samples")
                         }
-
                     }
                 }
-                if !session.examples.isEmpty || !references.isEmpty {
+                if !session.examples.isEmpty {
                     ListCountFooter(
                         text: ListCountFooter.text(
-                            count: session.examples.count + references.count, singular: "Sample", plural: "Samples")
+                            count: session.examples.count, singular: "Sample", plural: "Samples")
                     )
                     .selectionDisabled()
                 }
@@ -376,9 +396,9 @@ private struct PersonMatchReviewContent: View, Equatable {
                     Divider()
                     Text(
                         isReference
-                            ? (example.review == .confirmed
-                                ? "Confirmed Sample" : "Does this voice belong to \(personName)?")
-                            : decision.map(decisionTitle)
+                            ? "Confirmed Sample"
+                            : (session.noLongerNeededIDs.contains(example.id)
+                                ? "No Review Needed" : decision.map(decisionTitle))
                                 ?? (reviewPersonID == nil
                                     ? "Who is speaking?" : "Does this voice belong to \(personName)?")
                     )
@@ -391,9 +411,7 @@ private struct PersonMatchReviewContent: View, Equatable {
                         VStack(alignment: .leading, spacing: 4) {
                             if isReference {
                                 sampleNameLabel(example)
-                                VoiceSampleStatusLabel(
-                                    title: referenceStatus(example),
-                                    kind: example.review == .confirmed ? .confirmed : .needsReview)
+                                VoiceSampleStatusLabel(title: "Confirmed", kind: .confirmed)
                             }
                             else if let decision {
                                 if confirmed || decision == .skipped || decision == .ignored || decision == .rejected {
@@ -416,23 +434,25 @@ private struct PersonMatchReviewContent: View, Equatable {
                             }
                         }
                     }
+                    if !isReference, let reference = references.first(where: { audioAvailable($0) }) {
+                        Button("Compare with Reference") { session.selectReference(reference.id) }
+                            .disabled(saving || editingName)
+                    }
                     if isReference {
-                        Text(
-                            example.review == .confirmed
-                                ? "You confirmed this sample. You can correct its name or remove it from this person."
-                                : (example.namedPersonID == reviewPersonID
-                                    ? "This sample is associated with this person. Confirm it after listening."
-                                    : "This voice may belong to this person. Confirm it after listening.")
-                        )
-                        .font(.callout).foregroundStyle(.secondary)
+                        Text("You confirmed this sample. You can correct its name or remove it from this person.")
+                            .font(.callout).foregroundStyle(.secondary)
                         if session.candidateID != nil {
                             Button("Return to Candidate") { session.returnToCandidate() }
                         }
                     }
+                    else if session.noLongerNeededIDs.contains(example.id) {
+                        Text("This sample no longer needs review. You can still correct its identity.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     else if decision == nil {
                         Text(
                             reviewPersonID == nil
-                                ? "Name this person once, then review each proposed sample."
+                                ? "Name this voice to improve recognition in future recordings."
                                 : "Confirm the voice matches this person."
                         )
                         .font(.callout).foregroundStyle(.secondary)
@@ -467,7 +487,7 @@ private struct PersonMatchReviewContent: View, Equatable {
                     } label: {
                         actionLabel("Try Another Sample", action: .alternate)
                     }.disabled(
-                        saving || editingName || unavailable || !observation.snapshot.libraryWritable
+                        saving || editingName || unavailable || decision != nil || !observation.snapshot.libraryWritable
                             || observation.snapshot.recordingBusy || observation.snapshot.playbackBlocked)
                     if saving && savingAction == .alternate {
                         Button("Cancel", action: cancelAlternative)
@@ -576,10 +596,6 @@ private struct PersonMatchReviewContent: View, Equatable {
         case .skipped: return "Skipped"
         }
     }
-    private func referenceStatus(_ example: VoiceExample) -> String {
-        if example.review == .confirmed { return "Confirmed" }
-        return example.namedPersonID == reviewPersonID ? "Associated · Needs Review" : "Automatic Match · Needs Review"
-    }
 
     private struct MatchRevision: Equatable {
         let evidence: Int
@@ -595,7 +611,9 @@ private struct PersonMatchReviewContent: View, Equatable {
             saving: saving, editing: editingName)
     }
 
-    private func loadCandidates(useProvided: Bool, retryOnDrift: Bool = true, background: Bool = false) async {
+    private func loadCandidates(
+        useProvided: Bool, retryOnDrift: Bool = true, background: Bool = false, admitNewCandidates: Bool = false
+    ) async {
         let interval = ReviewPerformance.signposter.beginInterval(
             "Load review candidates", id: ReviewPerformance.signposter.makeSignpostID())
         defer { ReviewPerformance.signposter.endInterval("Load review candidates", interval) }
@@ -618,18 +636,23 @@ private struct PersonMatchReviewContent: View, Equatable {
             let directoryRevision = store.directoryRevision
             let root = store.dataDirectory
             var proposedSession = initialized ? session : VoiceMatchReviewSession(personID: personID)
-            proposedSession.refreshQueue(candidates, currentEvidence: currentEvidence)
+            proposedSession.refreshQueue(
+                candidates, currentEvidence: currentEvidence, admitNewCandidates: admitNewCandidates,
+                coveredExampleIDs: reviewPersonID.flatMap { snapshot.coveredExampleIDs[$0] } ?? [])
             let evidence = reviewPersonID.map { library.referenceEvidence(for: $0) } ?? []
-            let evidenceIDs = Set((proposedSession.examples + input.groupEvidence + evidence).map(\.id))
+            let potential = proposedSession.examples + proposedSession.additionalCandidates
+            let evidenceIDs = Set((potential + input.groupEvidence + evidence).map(\.id))
             let dependencies = VoiceReviewPresentationEvidence(examples: library.reviewEvidence(for: evidenceIDs))
-            let labels = await loadTitles(for: proposedSession.examples + evidence)
+            let labels = await loadTitles(for: potential + evidence)
             var prepared = await presentationCache.prepare(
                 .init(
-                    candidates: proposedSession.examples, referenceEvidence: evidence, personID: reviewPersonID,
+                    candidates: potential, referenceEvidence: evidence, personID: reviewPersonID,
                     meetings: labels, libraryDirectory: store.dataDirectory), forceRefresh: !useProvided)
             let eligible = candidates.filter { prepared.playableCandidateIDs.contains($0.id) }
             var nextSession = initialized ? session : VoiceMatchReviewSession(personID: personID)
-            nextSession.refreshQueue(eligible, currentEvidence: currentEvidence)
+            nextSession.refreshQueue(
+                eligible, currentEvidence: currentEvidence, admitNewCandidates: admitNewCandidates,
+                coveredExampleIDs: reviewPersonID.flatMap { snapshot.coveredExampleIDs[$0] } ?? [])
             // Retained decisions stay in the candidate section. If a source
             // disappeared, deduplicate references against the final queue only.
             if nextSession.examples != proposedSession.examples {
@@ -647,7 +670,9 @@ private struct PersonMatchReviewContent: View, Equatable {
                 dependencies.matches(library.reviewEvidence(for: evidenceIDs))
             else {
                 if retryOnDrift {
-                    await loadCandidates(useProvided: true, retryOnDrift: false, background: background)
+                    await loadCandidates(
+                        useProvided: true, retryOnDrift: false, background: background,
+                        admitNewCandidates: admitNewCandidates)
                 }
                 else {
                     loading = false
@@ -835,7 +860,7 @@ private struct PersonMatchReviewContent: View, Equatable {
             return
         }
         let ignored = session.examples.filter { session.decisions[$0.id] == .ignored }
-        let evidence = groupEvidence.filter { candidate in
+        let evidence = session.namingEvidence(groupEvidence).filter { candidate in
             !candidate.excluded && !candidate.manuallyCleared
                 && !ignored.contains { VoiceReviewSelection.sameAudio($0, candidate) }
         }
@@ -890,6 +915,10 @@ private struct PersonMatchReviewContent: View, Equatable {
             }
             if succeeded {
                 session.restoreLast(updatedExamples: library.examples)
+                if last.namingSnapshot != nil {
+                    groupEvidence = session.restoredNamingEvidence(
+                        initialEvidence: initialGroup?.evidenceExamples ?? [], currentEvidence: library.examples)
+                }
                 refreshOwnEvidence()
             }
             else {
@@ -928,7 +957,7 @@ private struct PersonMatchReviewContent: View, Equatable {
                 switch result {
                 case .prepared(let replacement):
                     session.showAlternative(replacement, currentEvidence: library.examples)
-                    groupEvidence.append(replacement)
+                    groupEvidence = session.namingEvidence(groupEvidence + [replacement])
                     await refreshPresentation()
                     // Selection changed while preparation disabled autoplay.
                     if active, !Task.isCancelled, alternateRequest == request,
@@ -1145,8 +1174,7 @@ private struct VoiceSampleNameEditor: View {
     @ViewState private var error: String?
     @FocusState private var focused: Bool
     @ViewState private var selectedPerson: UUID?
-    @ViewState private var selectionWasExplicit = false
-    private var shouldCreate: Bool { !name.isEmpty && exact == nil && !selectionWasExplicit }
+    private var canCreate: Bool { !name.isEmpty && exact == nil }
     private var name: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var matches: [Person] { TranscriptSpeakerSearch.matches(store.people, query: query) }
     private var exact: Person? { store.people.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame } }
@@ -1166,23 +1194,20 @@ private struct VoiceSampleNameEditor: View {
                 }
                 .onChange(of: query) { _, _ in
                     selectedPerson = matches.first?.id
-                    selectionWasExplicit = false
                 }
-            List(
-                selection: Binding(
-                    get: { selectedPerson },
-                    set: {
-                        selectedPerson = $0
-                        selectionWasExplicit = $0 != nil
-                    })
-            ) {
+            List(selection: $selectedPerson) {
                 ForEach(matches) { person in
-                    Text(person.name).padding(.vertical, 4).tag(person.id)
-                        .onTapGesture(count: 2) { save(person.id) }
+                    Text(person.name).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .tag(person.id)
+                        .simultaneousGesture(TapGesture().onEnded { selectedPerson = person.id })
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { save(person.id) })
                 }
             }.frame(height: 190)
+                .scrollContentBackground(.hidden)
                 .onKeyPress(.return) {
-                    if let selectedPerson { save(selectedPerson) }
+                    submit()
                     return .handled
                 }
             if let error { AppInlineMessage(text: error, systemImage: "exclamationmark.triangle", tint: .red) }
@@ -1190,9 +1215,16 @@ private struct VoiceSampleNameEditor: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if saving { ProgressView().controlSize(.small) }
-                if shouldCreate {
-                    if let selectedPerson { Button("Use Name") { save(selectedPerson) } }
-                    Button("Create “\(name)”", action: create).lineLimit(1).keyboardShortcut(.defaultAction)
+                if selectedPerson != nil {
+                    if canCreate {
+                        Button("Create “\(name)”", action: create).lineLimit(1)
+                            .buttonRepeatBehavior(.disabled)
+                    }
+                    Button("Use Name", action: submit).keyboardShortcut(.defaultAction)
+                        .buttonRepeatBehavior(.disabled)
+                }
+                else if canCreate {
+                    Button("Create “\(name)”", action: submit).lineLimit(1).keyboardShortcut(.defaultAction)
                         .buttonRepeatBehavior(.disabled)
                 }
                 else {
@@ -1208,11 +1240,11 @@ private struct VoiceSampleNameEditor: View {
     }
     private func submit() {
         guard !saving else { return }
-        if shouldCreate {
-            create()
-        }
-        else if let selectedPerson {
+        if let selectedPerson {
             save(selectedPerson)
+        }
+        else if canCreate {
+            create()
         }
     }
     private func moveSelection(_ offset: Int) {
@@ -1220,7 +1252,6 @@ private struct VoiceSampleNameEditor: View {
             selectedPerson = nil
             return
         }
-        selectionWasExplicit = true
         let current = matches.firstIndex { $0.id == selectedPerson } ?? (offset > 0 ? -1 : matches.count)
         selectedPerson = matches[min(max(current + offset, 0), matches.count - 1)].id
     }

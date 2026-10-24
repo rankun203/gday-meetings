@@ -53,14 +53,12 @@ final class MeetingPlayback: ObservableObject {
     private let readWaveform: WaveformLoader
     private var transport: StreamingPlayback?
     private var transportNeedsReload = false
-    private var playTask: Task<Void, Never>?
     private var sourceMeeting: Meeting?
     private var sourceFiles: [URL] = []
     private var temporaryURLs: [URL] = []
     private var preparationTask: Task<Void, Never>?
     private var waveformTask: Task<Void, Never>?
     private var cacheTask: Task<Void, Never>?
-    private var seekTask: Task<Void, Never>?
     private var generation = UUID()
     private var seekGeneration = UUID()
     private var wantsPlayback = false
@@ -79,8 +77,6 @@ final class MeetingPlayback: ObservableObject {
 
     deinit {
         preparationTask?.cancel()
-        seekTask?.cancel()
-        playTask?.cancel()
         waveformTask?.cancel()
         cacheTask?.cancel()
         transport?.close(removing: temporaryURLs)
@@ -155,14 +151,14 @@ final class MeetingPlayback: ObservableObject {
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {
         playbackIntent = UUID()
         guard !isPlaybackBlocked else { return }
-        excerptRange = nil
-        excerptRanges = []
+        if excerptRange != nil { excerptRange = nil }
+        if !excerptRanges.isEmpty { excerptRanges = [] }
         excerptIndex = 0
         if meetingID == meeting.id, sourceFiles == files, errorMessage == nil, !transportNeedsReload {
-            title = meeting.title
             sourceMeeting = meeting
             wantsPlayback = true
             seek(to: position)
+            if title != meeting.title { title = meeting.title }
             return
         }
         load(meeting: meeting, files: files, track: -1, position: position, autoplay: true)
@@ -239,7 +235,6 @@ final class MeetingPlayback: ObservableObject {
     func pause() {
         playbackIntent = UUID()
         wantsPlayback = false
-        playTask?.cancel()
         transport?.pause()
         isPlaying = false
     }
@@ -263,40 +258,41 @@ final class MeetingPlayback: ObservableObject {
         }
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
         pendingPosition = target
-        progress.seek(to: target)
-        hasEnded = duration > 0 && target >= duration
-        if isLoading { return }
-        guard let transport else { return }
-        seekTask?.cancel()
-        playTask?.cancel()
+        let ended = duration > 0 && target >= duration
+        guard !isLoading, let transport else {
+            progress.seek(to: target)
+            hasEnded = ended
+            return
+        }
         let operation = UUID()
         seekGeneration = operation
         let currentGeneration = generation
-        let end = excerptRange?.upperBound
+        let intent = playbackIntent
+        let resume = wantsPlayback && !isPlaybackBlocked && !ended
         isSeeking = true
-        isPlaying = false
-        seekTask = Task { [weak self] in
-            do {
-                try await transport.seek(to: target, revision: operation, end: end)
-                guard let self, !Task.isCancelled, self.generation == currentGeneration,
-                    self.seekGeneration == operation
-                else { return }
-                self.isSeeking = false
-                if self.wantsPlayback, !self.isPlaybackBlocked, !self.hasEnded {
-                    self.startPlayback()
-                }
-                else if self.hasEnded {
-                    self.pause()
-                }
-            }
-            catch is CancellationError {}
-            catch {
+        transport.requestSeek(
+            to: target, revision: operation, end: excerptRange?.upperBound,
+            resumeRate: resume ? playbackRate : nil
+        ) { [weak self] result in
+            Task { @MainActor in
                 guard let self, self.generation == currentGeneration, self.seekGeneration == operation else { return }
                 self.isSeeking = false
-                self.pause()
-                self.errorMessage = error.localizedDescription
+                switch result {
+                case .success:
+                    let playing = self.wantsPlayback && !self.isPlaybackBlocked && !ended
+                    if self.isPlaying != playing { self.isPlaying = playing }
+                    if ended { self.pause() }
+                case .failure(let error):
+                    guard self.playbackIntent == intent, !(error is CancellationError) else { return }
+                    self.pause()
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
+        // Audio has already been queued. These publications may trigger a large
+        // view update, while the transport independently seeks and starts.
+        progress.seek(to: target)
+        if hasEnded != ended { hasEnded = ended }
     }
 
     private func startPlayback() {
@@ -304,17 +300,16 @@ final class MeetingPlayback: ObservableObject {
             play()
             return
         }
-        guard let transport, !isSeeking else { return }
+        guard let transport, wantsPlayback, !isPlaybackBlocked else { return }
         let operation = generation
-        playTask?.cancel()
-        playTask = Task { [weak self] in
-            guard let self, self.wantsPlayback, !self.isPlaybackBlocked else { return }
-            do { try await transport.play(rate: self.playbackRate) }
-            catch is CancellationError {}
-            catch {
-                guard self.generation == operation else { return }
-                self.pause()
-                self.errorMessage = error.localizedDescription
+        let intent = playbackIntent
+        transport.requestPlay(rate: playbackRate) { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.generation == operation, self.playbackIntent == intent else { return }
+                if case .failure(let error) = result, !(error is CancellationError) {
+                    self.pause()
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -392,8 +387,6 @@ final class MeetingPlayback: ObservableObject {
         waveformTask = nil
         cacheTask?.cancel()
         cacheTask = nil
-        seekTask?.cancel()
-        seekTask = nil
         releaseCurrentItem()
         sourceMeeting = nil
         sourceFiles = []
@@ -434,7 +427,6 @@ final class MeetingPlayback: ObservableObject {
         generation = UUID()
         let operation = generation
         preparationTask?.cancel()
-        seekTask?.cancel()
         waveformTask?.cancel()
         cacheTask?.cancel()
         releaseCurrentItem()

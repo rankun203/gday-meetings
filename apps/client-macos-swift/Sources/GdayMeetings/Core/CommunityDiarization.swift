@@ -192,7 +192,7 @@ actor CommunityDiarizationWorker {
                 await channel.finish()
                 throw error
             }
-            await taskProgress?(.init(.init(phase: "Preparing voice examples")))
+            await taskProgress?(.init(.init(phase: "Analysing voice excerpts")))
             try Task.checkCancellation()
             let track = "track\(index)"
             let sourceName = LocalDiarizationInputPolicy.sourceName(for: file)

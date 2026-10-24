@@ -35,6 +35,32 @@ private actor PlaybackAttemptCounter {
 
 @MainActor
 struct MeetingPlaybackTests {
+    @Test func playDuringPausedSeekAndLaterPausePreserveLatestIntent() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeSilence(url, seconds: 3)
+        let playback = MeetingPlayback()
+        defer { playback.clear() }
+        playback.select(meeting: Meeting(title: "Seek intent fixture"), files: [url])
+        await playback.waitForPreparation()
+        playback.seek(to: 1)
+        // Completion cannot run on this actor until both calls return.
+        playback.play()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while playback.currentTime <= 1.05, playback.errorMessage == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(playback.errorMessage == nil)
+        #expect(playback.isPlaying)
+        #expect(playback.currentTime > 1.05)
+        playback.seek(to: 2)
+        playback.pause()
+        // A queued seek completion must never restart this paused transport.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!playback.isPlaying)
+        #expect(abs(playback.currentTime - 2) < 0.01)
+    }
+
     @Test func excerptSelectsSourceAndRecordingBlocksReplacement() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -84,6 +84,14 @@ enum VoiceReviewConflicts {
     }
 }
 
+/// A row depends on its person's effective profile, not unrelated library work.
+struct VoiceReferenceFeedbackDependency: Equatable {
+    var profileRevision: UUID?
+    var sample: VoiceExample?
+    var representationRevision: String?
+    var profileEligible: Bool
+}
+
 @MainActor
 final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var examples: [VoiceExample] = []
@@ -95,7 +103,23 @@ final class VoiceLibraryStore: ObservableObject {
     @Published private(set) var jobs: [VoicePreparationJob] = []
     private var jobTimeEstimates: [UUID: Double] = [:]
     @Published private(set) var isLoaded = false
-    private(set) var decisions: [VoiceSpeakerDecision] = []
+    @Published private(set) var decisions: [VoiceSpeakerDecision] = []
+    @Published private(set) var referenceFeedbackRevision = 0
+    private struct SpeakerDecisionKey: Hashable {
+        var meetingID: UUID
+        var speakerID: UUID
+    }
+    private var speakerDecisionIndices: [SpeakerDecisionKey: Int] = [:]
+    private struct ReferenceFeedbackProfile {
+        var examples: [VoiceExample]
+        var fileRevisions: [String: String]
+        var exampleIDs: Set<UUID>
+        var revision: UUID
+    }
+    private var referenceFeedbackProfiles: [UUID: ReferenceFeedbackProfile] = [:]
+    private var referenceFeedbackConfirmedMetadata: [VoiceExample] = []
+    private var referenceFeedbackDeletedPeople: Set<UUID> = []
+    private var referenceFeedbackFileRevisions: [String: String] = [:]
     private var document = VoiceLibraryDocument()
     private let url: URL
     private let canWrite: () -> Bool
@@ -368,6 +392,10 @@ final class VoiceLibraryStore: ObservableObject {
         let affected = updateProjectionEvidence(metadata: metadata)
         let representationsChanged = publishedRepresentationsRevision != representationsRevision
         publishedRepresentationsRevision = representationsRevision
+        let referenceMetadataChanged = examples != metadata || deletedPeople != document.deletedPersonIDs
+        if referenceMetadataChanged || representationsChanged {
+            updateReferenceFeedbackProfiles(metadata: metadata, metadataChanged: referenceMetadataChanged)
+        }
         if examples != metadata || deletedPeople != document.deletedPersonIDs {
             invalidateReviewAudio()
         }
@@ -376,6 +404,7 @@ final class VoiceLibraryStore: ObservableObject {
         }
         deletedPeople = document.deletedPersonIDs
         if examples != metadata {
+            referenceFeedbackRevision += 1
             examples = metadata
             exampleIndices = Dictionary(uniqueKeysWithValues: metadata.enumerated().map { ($0.element.id, $0.offset) })
             personExampleIDs = [:]
@@ -391,7 +420,16 @@ final class VoiceLibraryStore: ObservableObject {
             }
             hydratedIDs.formIntersection(exampleIndices.keys)
         }
-        if decisions != document.decisions { decisions = document.decisions }
+        if decisions != document.decisions {
+            decisions = document.decisions
+            speakerDecisionIndices = Dictionary(
+                decisions.enumerated().map {
+                    (SpeakerDecisionKey(meetingID: $0.element.meetingID, speakerID: $0.element.speakerID), $0.offset)
+                },
+                uniquingKeysWith: { _, latest in latest })
+            referenceFeedbackRevision += 1
+        }
+        if representationsChanged { referenceFeedbackRevision += 1 }
         canUndo = !document.undo.isEmpty
         reviewUndoID = document.undo.last?.id
         publishJobs()
@@ -819,6 +857,20 @@ final class VoiceLibraryStore: ObservableObject {
             }
         }
         next.decisions = previous.decisions
+        // Undo owns human decisions. A later recognition outcome for the same
+        // assignment generation survives an unrelated review action's snapshot.
+        for index in next.decisions.indices {
+            let restored = next.decisions[index]
+            guard let personID = restored.personID,
+                let current = referenceDecision(
+                    meetingID: restored.meetingID, speakerID: restored.speakerID,
+                    personID: personID),
+                current.referenceSelectionID == restored.referenceSelectionID,
+                restored.referenceSelectionID != nil || current.referenceSelectionResult != nil
+            else { continue }
+            next.decisions[index].referenceSelectionPending = current.referenceSelectionPending
+            next.decisions[index].referenceSelectionResult = current.referenceSelectionResult
+        }
         if let created = previous.createdPerson {
             if !next.deletedPersonIDs.contains(created.id) { next.deletedPersonIDs.append(created.id) }
             for index in next.examples.indices {
@@ -830,7 +882,7 @@ final class VoiceLibraryStore: ObservableObject {
                 }
             }
         }
-        let changedDecisions = Set(document.decisions).symmetricDifference(Set(previous.decisions))
+        let changedDecisions = Set(document.decisions).symmetricDifference(Set(next.decisions))
         let restoredIDs = Set(previous.examples.map(\.id))
         let changedMeetings = Set(next.examples.filter { restoredIDs.contains($0.id) }.map(\.meetingID))
             .union(changedDecisions.map(\.meetingID))
@@ -1504,7 +1556,8 @@ final class VoiceLibraryStore: ObservableObject {
             next.decisions.append(
                 .init(
                     meetingID: meetingID, speakerID: speakerID, personID: personID,
-                    referenceSelectionPending: !updateReferenceEvidence && personID != nil ? true : nil))
+                    referenceSelectionPending: !updateReferenceEvidence && personID != nil ? true : nil,
+                    referenceSelectionID: !updateReferenceEvidence && personID != nil ? UUID() : nil))
         }
         for index in next.examples.indices
         where next.examples[index].id == exampleID || relatedIDs.contains(next.examples[index].id)
@@ -1550,15 +1603,152 @@ final class VoiceLibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func finishReferenceSelection(meetingID: UUID, speakerID: UUID, personID: UUID) -> Bool {
+    func finishReferenceSelection(
+        meetingID: UUID, speakerID: UUID, personID: UUID,
+        result: VoiceReferenceSelectionResult? = nil, expectedSelectionID: UUID? = nil
+    ) -> Bool {
         guard canSaveSelectedReference,
             let index = document.decisions.firstIndex(where: {
                 $0.meetingID == meetingID && $0.speakerID == speakerID && $0.personID == personID
             })
         else { return false }
-        guard document.decisions[index].referenceSelectionPending == true else { return true }
+        if let expectedSelectionID,
+            document.decisions[index].referenceSelectionID != expectedSelectionID
+        {
+            return false
+        }
+        let pending = result?.outcome == .scanNeeded
+        guard
+            document.decisions[index].referenceSelectionPending != pending
+                || (result != nil && document.decisions[index].referenceSelectionResult != result)
+        else { return true }
         var next = document
-        next.decisions[index].referenceSelectionPending = false
+        next.decisions[index].referenceSelectionPending = pending
+        if let result { next.decisions[index].referenceSelectionResult = result }
+        return commit(next)
+    }
+
+    func referenceDecision(meetingID: UUID, speakerID: UUID, personID: UUID) -> VoiceSpeakerDecision? {
+        guard let index = speakerDecisionIndices[.init(meetingID: meetingID, speakerID: speakerID)],
+            decisions[index].personID == personID
+        else { return nil }
+        return decisions[index]
+    }
+
+    func referenceExample(id: UUID) -> VoiceExample? {
+        exampleIndices[id].map { examples[$0] }
+    }
+
+    /// Publication already has metadata and persisted file revisions in memory.
+    /// Resolve cross-person conflicts once here; a view lookup never reads files
+    /// or scans all examples to discover whether its profile changed.
+    private func updateReferenceFeedbackProfiles(metadata: [VoiceExample], metadataChanged: Bool) {
+        let deleted = Set(document.deletedPersonIDs)
+        let confirmed =
+            metadataChanged
+            ? metadata.filter { $0.review == .confirmed && !$0.excluded }
+            : referenceFeedbackConfirmedMetadata
+        let groups: [UUID: [VoiceExample]]
+        if confirmed != referenceFeedbackConfirmedMetadata || deleted != referenceFeedbackDeletedPeople {
+            let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: confirmed)
+            let eligible = confirmed.filter {
+                !conflicts.contains($0.id) && $0.personID.map { !deleted.contains($0) } == true
+            }
+            groups = Dictionary(grouping: eligible, by: { $0.personID! }).mapValues {
+                $0.sorted { $0.id.uuidString < $1.id.uuidString }
+            }
+            referenceFeedbackConfirmedMetadata = confirmed
+            referenceFeedbackDeletedPeople = deleted
+        }
+        else {
+            // Progress and representation updates do not repeat global conflict
+            // sorting or rebuild unchanged effective metadata groups.
+            groups = referenceFeedbackProfiles.mapValues(\.examples)
+        }
+        let files = persistence?.snapshot().fileRevisions ?? [:]
+        referenceFeedbackFileRevisions = files
+        var updated: [UUID: ReferenceFeedbackProfile] = [:]
+        for (personID, examples) in groups {
+            var revisions: [String: String] = [:]
+            for example in examples {
+                for path in ["examples/\(example.id.uuidString).json", "representations/\(example.id.uuidString).json"]
+                {
+                    revisions[path] = files[path]
+                }
+            }
+            if let prior = referenceFeedbackProfiles[personID], prior.examples == examples,
+                prior.fileRevisions == revisions
+            {
+                updated[personID] = prior
+            }
+            else {
+                updated[personID] = .init(
+                    examples: examples, fileRevisions: revisions,
+                    exampleIDs: Set(examples.map(\.id)), revision: UUID())
+            }
+        }
+        referenceFeedbackProfiles = updated
+    }
+
+    func referenceFeedbackDependency(
+        personID: UUID, result: VoiceReferenceSelectionResult?
+    ) -> VoiceReferenceFeedbackDependency {
+        let profile = referenceFeedbackProfiles[personID]
+        let sample = result?.sampleID.flatMap { referenceExample(id: $0) }
+        let representation = result?.sampleID.flatMap {
+            referenceFeedbackFileRevisions["representations/\($0.uuidString).json"]
+        }
+        return .init(
+            profileRevision: profile?.revision, sample: sample, representationRevision: representation,
+            profileEligible: result?.sampleID.map { profile?.exampleIDs.contains($0) == true } ?? false)
+    }
+
+    /// Ask the same cached profile builder used by recognition. Saved embeddings
+    /// can remain usable when their original audio is unavailable for playback.
+    func referenceSampleUsage(
+        result: VoiceReferenceSelectionResult, personID: UUID, people: [Person]
+    ) async throws -> VoiceReferenceSampleUsage {
+        guard let sampleID = result.sampleID, let example = referenceExample(id: sampleID),
+            example.personID == personID, example.review == .confirmed,
+            !example.excluded, !example.manuallyCleared, example.audioRevision == result.audioRevision
+        else { return .unavailable }
+        let dependency = referenceFeedbackDependency(personID: personID, result: result)
+        // A different person's commit may cancel the shared matching snapshot.
+        // Retry only while this row's own evidence is unchanged, and stop after
+        // a bounded number of attempts instead of keeping a spinner alive.
+        for attempt in 0..<3 {
+            do {
+                let profiles = try await matchingPeople(from: people)
+                try Task.checkCancellation()
+                guard referenceFeedbackDependency(personID: personID, result: result) == dependency else {
+                    throw CancellationError()
+                }
+                return profiles.first { $0.id == personID }?.voiceSamples.contains { $0.speakerID == sampleID } == true
+                    ? .available : .stored
+            }
+            catch is CancellationError {
+                try Task.checkCancellation()
+                guard referenceFeedbackDependency(personID: personID, result: result) == dependency else {
+                    throw CancellationError()
+                }
+                if attempt == 2 { throw ServiceError("Voice recognition is changing. Check this sample again.") }
+                await Task.yield()
+            }
+        }
+        throw CancellationError()
+    }
+
+    @discardableResult
+    func restartReferenceSelection(meetingID: UUID, speakerID: UUID, personID: UUID) -> Bool {
+        guard canSaveSelectedReference,
+            let index = document.decisions.firstIndex(where: {
+                $0.meetingID == meetingID && $0.speakerID == speakerID && $0.personID == personID
+            })
+        else { return false }
+        var next = document
+        next.decisions[index].referenceSelectionPending = true
+        next.decisions[index].referenceSelectionID = UUID()
+        next.decisions[index].referenceSelectionResult = nil
         return commit(next)
     }
 
@@ -1590,6 +1780,8 @@ final class VoiceLibraryStore: ObservableObject {
             $0.meetingID == example.meetingID && $0.speakerID == speakerID && $0.personID == personID
         }) {
             next.decisions[decision].referenceSelectionPending = false
+            next.decisions[decision].referenceSelectionResult = .init(
+                outcome: .sampleAdded, sampleID: selected.id, audioRevision: selected.audioRevision)
         }
         return commit(next)
     }

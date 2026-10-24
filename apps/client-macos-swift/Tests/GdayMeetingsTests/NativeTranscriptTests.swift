@@ -4,7 +4,107 @@ import Testing
 
 @testable import GdayMeetings
 
+@MainActor private final class TranscriptClickTestTable: NSTableView {
+    var testClickedRow = 0
+    override var clickedRow: Int { testClickedRow }
+}
+
 @MainActor struct NativeTranscriptTests {
+    @Test func singleClickStartsPlaybackBeforeReturning() {
+        let row = TranscriptDisplayRow(id: UUID(), start: 12, end: 13, speaker: "", speakerID: nil, text: "Example")
+        var requested: [Double] = []
+        let view = NativeTranscriptView(
+            rows: [row], generation: 1, showsSpeakers: false, editable: true, canPlay: true,
+            play: { requested.append($0) }, save: { _, _ in },
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        coordinator.rows = [row]
+        coordinator.clicked(TranscriptClickTestTable())
+        #expect(requested == [12])
+        coordinator.tearDown()
+    }
+
+    @Test(arguments: [2, 5])
+    func immediatePlaybackKeepsDoubleClickOnCapturedRow(clickedRow: Int) async throws {
+        let playback = MeetingPlayback()
+        let meeting = Meeting(title: "Pointer stability fixture")
+        playback.select(meeting: meeting, files: [])
+        let rows = (0..<30).map {
+            TranscriptDisplayRow(
+                id: UUID(), start: Double($0 * 10), end: Double($0 * 10 + 9),
+                speaker: "", speakerID: nil, text: "Synthetic row \($0)")
+        }
+        let view = NativeTranscriptView(
+            rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
+            playback: playback, meetingID: meeting.id, play: { playback.progress.seek(to: $0) }, save: { _, _ in },
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        defer { coordinator.tearDown() }
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        let table = TranscriptNativeTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        let pointer = TranscriptClickTestTable()
+        pointer.testClickedRow = clickedRow
+        let top = scroll.contentView.bounds.minY
+        coordinator.clicked(pointer)
+        #expect(playback.currentTime == rows[clickedRow].start)
+        #expect(!coordinator.isFollowing)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(scroll.contentView.bounds.minY == top)
+        // A viewport/model update may alter AppKit's hit row before the second
+        // action. The edit still belongs to the first click's source identity.
+        pointer.testClickedRow = clickedRow + 1
+        coordinator.doubleClicked(pointer)
+        try await Task.sleep(for: .milliseconds(40))
+        let intended = try #require(
+            table.view(atColumn: 0, row: clickedRow, makeIfNecessary: true) as? TranscriptNativeCell)
+        let adjacent = try #require(
+            table.view(atColumn: 0, row: clickedRow + 1, makeIfNecessary: true) as? TranscriptNativeCell)
+        #expect(intended.body.isEditable)
+        #expect(!adjacent.body.isEditable)
+        #expect(!coordinator.isFollowing)
+    }
+
+    @Test(arguments: [false, true])
+    func pointerFollowResumesAfterIntervalUnlessUserScrolls(userScrolls: Bool) async throws {
+        let playback = MeetingPlayback()
+        let meeting = Meeting(title: "Deferred follow fixture")
+        playback.select(meeting: meeting, files: [])
+        let rows = (0..<30).map {
+            TranscriptDisplayRow(
+                id: UUID(), start: Double($0), end: Double($0 + 1),
+                speaker: "", speakerID: nil, text: "Synthetic row \($0)")
+        }
+        let view = NativeTranscriptView(
+            rows: rows, generation: 1, showsSpeakers: false, editable: true, canPlay: true,
+            playback: playback, meetingID: meeting.id, play: { playback.progress.seek(to: $0) }, save: { _, _ in },
+            speakerPicker: { _, _, _ in AnyView(EmptyView()) })
+        let coordinator = NativeTranscriptView.Coordinator(view)
+        defer { coordinator.tearDown() }
+        let scroll = TranscriptNativeScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        let table = TranscriptNativeTable(frame: scroll.bounds)
+        table.addTableColumn(NSTableColumn(identifier: .init("transcript")))
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.table = table
+        coordinator.update(view)
+        coordinator.settleLayout()
+        let pointer = TranscriptClickTestTable()
+        pointer.testClickedRow = 5
+        let top = scroll.contentView.bounds.minY
+        coordinator.clicked(pointer)
+        if userScrolls { coordinator.userScrolled() }
+        try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.4))
+        #expect((abs(scroll.contentView.bounds.minY - top) > 1) == !userScrolls)
+    }
+
     @Test func timestampRevisionPreservesUntouchedOverlappingPlaybackCell() throws {
         let playback = MeetingPlayback()
         let meeting = Meeting(title: "Synthetic playback revision")

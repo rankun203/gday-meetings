@@ -26,12 +26,12 @@ private actor TurnReferenceExtractor: VoiceExampleEmbeddingExtracting {
         second.personID = UUID()
         var meeting = Meeting()
         meeting.speakers = [base, first, second]
-        #expect(meeting.reviewableSpeakers.map(\.id) == [base.id])
+        #expect(meeting.assignableSpeakers.map(\.id) == [base.id])
         meeting.speakers.removeFirst()
-        #expect(meeting.reviewableSpeakers.map(\.id) == [first.id, second.id])
+        #expect(meeting.assignableSpeakers.map(\.id) == [first.id, second.id])
         first.passageAssignmentOrigin = .init(speaker: "A")
         meeting.speakers = [base, first, second]
-        #expect(meeting.reviewableSpeakers.map(\.id) == [base.id, first.id])
+        #expect(meeting.assignableSpeakers.map(\.id) == [base.id, first.id])
     }
 
     @Test func directUnrecognizedClusterAssignmentAndUndoRestoreEmptyIdentity() async throws {

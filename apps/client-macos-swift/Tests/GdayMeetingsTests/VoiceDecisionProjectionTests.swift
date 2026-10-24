@@ -191,6 +191,7 @@ struct VoiceDecisionProjectionTests {
                 exampleIDs: [anchor.id], confirmedExampleID: anchor.id,
                 personID: firstPerson, newPersonName: nil, expectedExamples: [anchor]))
         #expect(receipt.personID == firstPerson)
+        await store.flushVoiceAssignmentRefresh()
         #expect(try store.libraryIndex?.count(personID: firstPerson) == 1)
         // The second meeting is outside the currently loaded detail page.
         store.meetings.removeAll { $0.id == examples[1].meetingID }

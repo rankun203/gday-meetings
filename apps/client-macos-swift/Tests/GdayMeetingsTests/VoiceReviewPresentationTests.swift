@@ -193,7 +193,7 @@ struct VoiceReviewPresentationTests {
             .init(
                 candidates: [], referenceEvidence: [example], personID: person, meetings: [:],
                 libraryDirectory: directory))
-        #expect(first.rows[example.id]?.referenceStatus == "Associated · Needs Review")
+        #expect(first.references.isEmpty && first.rows[example.id] == nil)
         example.personID = person
         example.review = .confirmed
         let updated = await cache.prepare(

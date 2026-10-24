@@ -87,3 +87,23 @@ struct VoiceTurnReviewSelectionTests {
         #expect(LocalSpeakerTurn.reviewRepresentative([turns[0]]) == nil)
     }
 }
+
+extension VoiceTurnReviewSelectionTests {
+    @Test func metadataWithoutVectorsPreservesIndependentTurnsUntilHydration() {
+        let turns = (0..<3).map { index in
+            var value = example(index: index)
+            value.embeddings = []
+            return value
+        }
+        #expect(VoiceTurnReviewSelection.select(turns).count == 3)
+        #expect(VoiceReviewSnapshot.selectiveEvidence(turns).count == 3)
+    }
+
+    @Test func conflictingVoicesInsideDetectedClusterHaveSeparateRepresentatives() {
+        var first = example(index: 0)
+        var second = example(index: 1)
+        first.embeddings[0].values = [1] + [Double](repeating: 0, count: 255)
+        second.embeddings[0].values = [0, 1] + [Double](repeating: 0, count: 254)
+        #expect(Set(VoiceTurnReviewSelection.select([first, second]).map(\.id)) == [first.id, second.id])
+    }
+}

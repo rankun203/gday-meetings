@@ -161,62 +161,98 @@ final class StreamingPlayback: @unchecked Sendable {
     }
 
     func seek(to seconds: Double, revision: UUID, end: Double? = nil) async throws {
-        try await perform { [self] in
-            guard !closed, let ring, let engine else { throw CancellationError() }
-            guard seconds.isFinite, end == nil || end!.isFinite else {
-                throw ServiceError("The audio range is invalid.")
+        try await perform { [self] in try seekOnQueue(to: seconds, revision: revision, end: end) }
+    }
+
+    /// Enqueue before publishing UI changes. Seeking and resuming stay together
+    /// on the transport queue, so a busy main actor cannot postpone either step.
+    func requestSeek(
+        to seconds: Double, revision: UUID, end: Double? = nil, resumeRate: Double?,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        queue.async { [self] in
+            do {
+                try seekOnQueue(to: seconds, revision: revision, end: end)
+                if let resumeRate { try playOnQueue(rate: resumeRate) }
+                completion(.success(()))
             }
-            playing = false
-            timer?.cancel()
-            timer = nil
-            engine.stop()
-            engine.reset()
-            let duration = Double(totalFrames) / 48000
-            endFrame = Int64((min(duration, max(0, end ?? duration)) * 48000).rounded())
-            origin = min(endFrame, Int64((min(duration, max(0, seconds)) * 48000).rounded()))
-            produced = origin
-            self.revision = revision
-            drainStarted = nil
-            gday_playback_reset(ring.pointer)
-            for index in readers.indices {
-                guard let reader = readers[index] else { continue }
-                do { try reader.seek(frame: min(origin, reader.totalFrames)) }
-                catch { failTrack(index, error: error) }
-            }
-            try requirePlayableTrack()
-            try fill()
-            publish()
+            catch { completion(.failure(error)) }
         }
     }
 
-    func play(rate: Double) async throws {
-        try await perform { [self] in
-            guard !closed, let engine, let pitch else { throw CancellationError() }
-            pitch.rate = Float(rate)
-            try fill()
-            try engine.start()
-            playing = true
-            drainStarted = nil
-            if !manualRendering {
-                // Buffer maintenance is independent of display refresh. Even at 2×,
-                // the ring holds 170 ms; a 50 ms refill leaves ample headroom.
-                let timer = DispatchSource.makeTimerSource(queue: queue)
-                timer.schedule(deadline: .now(), repeating: 0.05, leeway: .milliseconds(5))
-                timer.setEventHandler { [weak self] in
-                    guard let self, !self.closed, self.playing else { return }
-                    do {
-                        try self.fill()
-                        self.updateEnd()
-                        self.publish()
-                    }
-                    catch { self.fail(error.localizedDescription) }
-                }
-                self.timer?.cancel()
-                self.timer = timer
-                timer.resume()
-            }
-            publish()
+    private func seekOnQueue(to seconds: Double, revision: UUID, end: Double?) throws {
+        guard !closed, let ring, let engine else { throw CancellationError() }
+        guard seconds.isFinite, end == nil || end!.isFinite else {
+            throw ServiceError("The audio range is invalid.")
         }
+        playing = false
+        timer?.cancel()
+        timer = nil
+        // Pause quiesces the consumer before resetting the SPSC ring and keeps
+        // the graph's prepared resources. Clear the time-pitch history so a seek
+        // cannot replay audio retained from the previous position.
+        engine.pause()
+        pitch?.auAudioUnit.reset()
+        let duration = Double(totalFrames) / 48000
+        endFrame = Int64((min(duration, max(0, end ?? duration)) * 48000).rounded())
+        origin = min(endFrame, Int64((min(duration, max(0, seconds)) * 48000).rounded()))
+        produced = origin
+        self.revision = revision
+        drainStarted = nil
+        gday_playback_reset(ring.pointer)
+        for index in readers.indices {
+            guard let reader = readers[index] else { continue }
+            do { try reader.seek(frame: min(origin, reader.totalFrames)) }
+            catch { failTrack(index, error: error) }
+        }
+        try requirePlayableTrack()
+        try fill()
+        publish()
+    }
+
+    func play(rate: Double) async throws {
+        try await perform { [self] in try playOnQueue(rate: rate) }
+    }
+
+    func requestPlay(rate: Double, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        queue.async { [self] in
+            do {
+                try playOnQueue(rate: rate)
+                completion(.success(()))
+            }
+            catch { completion(.failure(error)) }
+        }
+    }
+
+    private func playOnQueue(rate: Double) throws {
+        guard !closed, let engine, let pitch else { throw CancellationError() }
+        guard !requiresReload else {
+            throw ServiceError("Audio output changed. Press Play to resume with the current device.")
+        }
+        pitch.rate = Float(rate)
+        try fill()
+        if !engine.isRunning { try engine.start() }
+        playing = true
+        drainStarted = nil
+        if !manualRendering {
+            // Buffer maintenance is independent of display refresh. Even at 2×,
+            // the ring holds 170 ms; a 50 ms refill leaves ample headroom.
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now(), repeating: 0.05, leeway: .milliseconds(5))
+            timer.setEventHandler { [weak self] in
+                guard let self, !self.closed, self.playing else { return }
+                do {
+                    try self.fill()
+                    self.updateEnd()
+                    self.publish()
+                }
+                catch { self.fail(error.localizedDescription) }
+            }
+            self.timer?.cancel()
+            self.timer = timer
+            timer.resume()
+        }
+        publish()
     }
     func pause() {
         queue.async { [self] in

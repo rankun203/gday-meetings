@@ -35,11 +35,29 @@ extension UIPreview {
         _ = await store.addPerson(name: "Taylor Lee")
         let file = "system.wav"
         let revision = VoiceLibraryStore.revision(url: store.directory(for: meeting.id).appendingPathComponent(file))
+        let referenceVector = TypedVoiceEmbedding(
+            type: .community1, values: [1, 0] + [Double](repeating: 0, count: 254),
+            provenance: "Synthetic review reference")
         let reference = VoiceExample(
             meetingID: meeting.id, speakerID: meeting.speakers[0].id, source: "system",
             audioFile: file, audioRevision: revision, start: 34, end: 38,
-            personID: personID, review: .confirmed)
-        guard store.voiceLibrary.upsert([reference]) else {
+            personID: personID, review: .confirmed, embeddings: [referenceVector])
+        // Keep one useful tentative voice proposal after selective review drops
+        // clear automatic matches. These vectors exercise layout, not accuracy.
+        let candidates = store.voiceLibrary.examples.filter {
+            $0.suggestedPersonID == personID && $0.range != nil && !$0.excluded
+        }.enumerated().map { index, original in
+            var example = original
+            let similarity = index.isMultiple(of: 2) ? 0.79 : 0.72
+            example.embeddings = [
+                TypedVoiceEmbedding(
+                    type: .community1,
+                    values: [similarity, sqrt(1 - similarity * similarity)] + [Double](repeating: 0, count: 254),
+                    provenance: "Synthetic tentative review proposal")
+            ]
+            return example
+        }
+        guard store.voiceLibrary.upsert([reference] + candidates) else {
             throw ServiceError("Couldn’t save the reference sample preview.")
         }
         guard let other = store.meetings.first(where: { $0.id != meeting.id }) else { return }

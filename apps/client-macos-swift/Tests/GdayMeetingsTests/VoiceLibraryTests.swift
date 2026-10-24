@@ -110,7 +110,8 @@ struct VoiceLibraryTests {
         let person = Person(name: "Alex")
         let other = Person(name: "Sam")
         let seed = try example(root: directory)
-        let candidate = try example(root: directory)
+        var candidate = try example(root: directory)
+        candidate.embeddings[0].values = [0.79, sqrt(1 - 0.79 * 0.79)]
         let unavailable = try example(root: directory)
         #expect(library.upsert([seed, candidate, unavailable]))
         #expect(library.confirm(ids: [seed.id], personID: person.id))

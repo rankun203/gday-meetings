@@ -21,6 +21,36 @@ extension FocusedValues {
     }
 }
 
+/// Status takes space above the transport, keeping playback anchored when work appears.
+struct LibraryBottomDock<Status: View, Transport: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let showsStatus: Bool
+    let status: Status
+    let transport: Transport
+
+    init(
+        showsStatus: Bool, @ViewBuilder status: () -> Status,
+        @ViewBuilder transport: () -> Transport
+    ) {
+        self.showsStatus = showsStatus
+        self.status = status()
+        self.transport = transport()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                if showsStatus {
+                    status.transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .clipped()
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsStatus)
+            transport
+        }
+    }
+}
+
 struct LibraryView: View {
     /// Splits after the first sentence; a single-sentence message has no body.
     static func alertParts(_ text: String?) -> (title: String, message: String) {
@@ -502,7 +532,17 @@ struct LibraryView: View {
             // A single persistent transport replaces scattered status and action rows.
             // https://developer.apple.com/design/human-interface-guidelines/feedback
             // Allocate actual layout height so detail overlays cannot extend beneath playback.
-            VStack(spacing: 0) {
+            LibraryBottomDock(showsStatus: store.showsTaskQueueStatus) {
+                TaskQueueStatusButton {
+                    workspace.tasks.scope = store.taskAttentionCount > 0 ? .attention : .active
+                    workspace.tasks.selection = nil
+                    workspace.tasks.selectedRow = nil
+                    focusedTaskID = nil
+                    showsSearchResults = false
+                    openedSearchResult = nil
+                    destination = .tasks
+                }
+            } transport: {
                 if recordingActive
                     && (store.isStartingRecording || showsSearchResults || destination != .meetings
                         || selectedMeeting != store.recordingID)
@@ -512,21 +552,6 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                VStack(spacing: 0) {
-                    if store.showsTaskQueueStatus {
-                        TaskQueueStatusButton {
-                            workspace.tasks.scope = store.taskAttentionCount > 0 ? .attention : .active
-                            workspace.tasks.selection = nil
-                            workspace.tasks.selectedRow = nil
-                            focusedTaskID = nil
-                            showsSearchResults = false
-                            openedSearchResult = nil
-                            destination = .tasks
-                        }
-                        .transition(.opacity)
-                    }
-                }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: store.showsTaskQueueStatus)
             }
         }
         .environment(\.transcriptLayoutService, transcriptLayout)

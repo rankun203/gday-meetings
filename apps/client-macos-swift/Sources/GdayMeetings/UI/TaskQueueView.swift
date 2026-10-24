@@ -890,55 +890,47 @@ struct TaskQueueStatusButton: View {
     let action: () -> Void
 
     var body: some View {
-        if store.taskAttentionCount > 0 {
-            HStack(spacing: 12) {
-                Label(
-                    store.taskAttentionCount == 1
-                        ? "1 Task Needs Attention" : "\(store.taskAttentionCount) Tasks Need Attention",
-                    systemImage: "exclamationmark.circle.fill"
-                )
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                Spacer(minLength: 0)
-                Button(
-                    store.taskAttentionCount == 1 ? "Review Task" : "Review \(store.taskAttentionCount) Tasks",
-                    action: action
-                )
-                .buttonStyle(.borderedProminent)
-                .help("Show tasks that need attention")
-            }
-            .padding(.horizontal, 16).padding(.vertical, 8)
-            .background(.bar)
-        }
-        else {
-            activityButton
-        }
-    }
-
-    private var activityButton: some View {
+        let attention = store.taskAttentionCount
+        let reviewTitle = attention == 1 ? "Review Task" : "Review \(attention) Tasks"
+        let attentionTitle = attention == 1 ? "1 Task Needs Attention" : "\(attention) Tasks Need Attention"
         Button(action: action) {
             HStack(spacing: 8) {
-                if store.visibleSearchMaintenanceBatchActive
-                    || store.visibleManagedTasks.contains(where: { $0.state == .running })
-                    || !store.taskQueueOtherJobs.isEmpty
-                    || store.voiceLibrary.jobs.contains(where: { $0.state == .running })
-                {
-                    ProgressView().controlSize(.small)
+                if attention > 0 {
+                    Label(attentionTitle, systemImage: "exclamationmark.circle.fill")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
                 }
                 else {
-                    Image(systemName: "list.bullet.rectangle")
+                    if store.visibleSearchMaintenanceBatchActive
+                        || store.visibleManagedTasks.contains(where: { $0.state == .running })
+                        || !store.taskQueueOtherJobs.isEmpty
+                        || store.voiceLibrary.jobs.contains(where: { $0.state == .running })
+                    {
+                        ProgressView().controlSize(.small)
+                    }
+                    else {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                    Text(store.taskQueueSummary).font(.caption).lineLimit(1)
                 }
-                Text(store.taskQueueSummary).font(.caption)
-                Spacer()
-                Text("Tasks").font(.caption)
+                Spacer(minLength: 8)
+                Text(attention > 0 ? reviewTitle : "Tasks")
+                    .font(.caption.weight(attention > 0 ? .semibold : .regular))
+                    .foregroundStyle(attention > 0 ? Color.accentColor : Color.primary)
+                    .lineLimit(1).fixedSize()
                 Image(systemName: "chevron.right").font(.caption)
             }
+            .frame(minHeight: 20)
             .padding(.horizontal, 16).padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).background(.bar)
-        .help("Show tasks").accessibilityLabel("Show Tasks: \(store.taskQueueSummary)")
+        .help(attention > 0 ? "\(attentionTitle). \(reviewTitle)." : "Show tasks: \(store.taskQueueSummary)")
+        .accessibilityLabel(
+            attention > 0 ? "\(reviewTitle): \(attentionTitle)" : "Show Tasks: \(store.taskQueueSummary)")
     }
+
 }
 
 extension MeetingStore {

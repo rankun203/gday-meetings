@@ -82,7 +82,7 @@ enum VoiceIdentificationSelection {
     static func groups(
         _ examples: [VoiceExample], includeExcluded: Bool = false, policy: VoiceMatchingPolicy = .default
     ) -> [VoiceIdentificationGroup] {
-        let examples = VoiceTurnReviewSelection.select(examples)
+        let examples = VoiceTurnReviewSelection.select(examples, policy: policy)
         let decisions = VoiceExactReviewDecisions(examples)
         let eligible = examples.filter { original in
             let value = decisions.applying(to: original)
@@ -90,6 +90,8 @@ enum VoiceIdentificationSelection {
                 && value.range.map { $0.speechDuration >= 1 } == true && value.audioRevision != nil
                 && value.sourceResolutionIssue == nil
                 && (value.embeddings.isEmpty || value.embeddings.contains(where: \.isValid))
+                && (value.attributionTurn == nil || value.manuallyGrouped
+                    || value.embeddings.contains(where: \.isValid))
         }
         // Legacy records did not distinguish authored linkage from automatic
         // proposals. Preserve linked evidence, including hidden recovery members,

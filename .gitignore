@@ -11,6 +11,10 @@ target/
 *.a
 *.dylib
 *.dSYM/
+# Instruments captures and exported profiling results can contain private data
+*.trace/
+*.trace.zip
+*.xcresult/
 
 # IDE
 .idea/

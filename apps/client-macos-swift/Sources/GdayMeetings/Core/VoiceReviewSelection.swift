@@ -5,6 +5,8 @@ import Foundation
 enum VoiceReviewSelection {
     // Initial review heuristic, pending evaluation with reviewed recordings.
     static let minimumSimilarity = VoiceMatchingPolicy.default.suggestionThreshold
+    private static let nearDuplicateSimilarity = 0.985
+    private typealias Candidate = (example: VoiceExample, effective: VoiceExample, score: Double)
 
     static func sameAudio(_ left: VoiceExample, _ right: VoiceExample) -> Bool {
         guard let key = VoiceExactReviewDecisions.Key(left) else { return false }
@@ -59,14 +61,24 @@ enum VoiceReviewSelection {
         rank(examples, for: [personID], limit: limit, policy: policy)[personID] ?? []
     }
 
-    /// Hydration, representative selection and candidate-to-person distances are
-    /// shared by the chooser and individual queues; counts describe these arrays.
+    struct Evaluation {
+        var candidates: [UUID: [VoiceExample]]
+        var coveredExampleIDs: [UUID: Set<UUID>]
+    }
+
     static func rank(
         _ examples: [VoiceExample], for personIDs: Set<UUID>, limit: Int = 48, policy: VoiceMatchingPolicy = .default
     ) -> [UUID: [VoiceExample]] {
-        let examples = VoiceTurnReviewSelection.select(examples)
+        evaluate(examples, for: personIDs, limit: limit, policy: policy).candidates
+    }
+
+    /// Selection and coverage share one scoring pass. A session may retire an
+    /// admitted question only when confirmed evidence already covers it.
+    static func evaluate(
+        _ examples: [VoiceExample], for personIDs: Set<UUID>, limit: Int = 48, policy: VoiceMatchingPolicy = .default
+    ) -> Evaluation {
         let policy = policy.normalized
-        guard !personIDs.isEmpty else { return [:] }
+        guard !personIDs.isEmpty else { return Evaluation(candidates: [:], coveredExampleIDs: [:]) }
         let conflicts = VoiceReviewConflicts.confirmedExampleIDs(in: examples)
         let confirmed = examples.filter {
             $0.review == .confirmed && $0.personID != nil && !$0.excluded && !conflicts.contains($0.id)
@@ -92,15 +104,21 @@ enum VoiceReviewSelection {
             }
         }
         let exactDecisions = VoiceExactReviewDecisions(examples)
-        var scored: [UUID: [(example: VoiceExample, score: Double)]] = [:]
+        var scored: [UUID: [Candidate]] = [:]
+        var coveredExampleIDs: [UUID: Set<UUID>] = [:]
+        // Decide usefulness before sampling: a clear turn in a detected cluster
+        // must not hide a weaker, independently attributed turn worth reviewing.
         for original in examples {
             let example = exactDecisions.applying(to: original)
-            guard isEligible(example) else { continue }
+            guard isEligible(example), example.currentSampleQuality?.issue == nil,
+                example.embeddings.contains(where: \.isValid)
+            else { continue }
             let strengths = representatives.compactMapValues { values in
                 values.compactMap { similarity(example, $0) }.max()
             }
-            let best = strengths.sorted { $0.value > $1.value }.prefix(2)
-            var plausible = Set(strengths.filter { $0.value >= policy.suggestionThreshold }.keys).intersection(
+            let eligibleStrengths = strengths.filter { !example.rejectedPersonIDs.contains($0.key) }
+            let best = eligibleStrengths.sorted { $0.value > $1.value }.prefix(2)
+            var plausible = Set(eligibleStrengths.filter { $0.value >= policy.suggestionThreshold }.keys).intersection(
                 personIDs)
             if let suggested = example.namedPersonID ?? example.suggestedPersonID, personIDs.contains(suggested) {
                 plausible.insert(suggested)
@@ -108,68 +126,71 @@ enum VoiceReviewSelection {
             for personID in plausible where !example.rejectedPersonIDs.contains(personID) {
                 let strength = strengths[personID] ?? policy.suggestionThreshold
                 let competitor = best.first { $0.key != personID }?.value ?? -1
+                // A question should improve the voice profile or resolve a real
+                // ambiguity. Clear associations already organize the recording.
+                if strength >= policy.automaticThreshold && strength - competitor >= policy.minimumMargin {
+                    coveredExampleIDs[personID, default: []].insert(original.id)
+                    continue
+                }
+                let covered = (representatives[personID] ?? []).contains {
+                    $0.source == example.source && (similarity(example, $0) ?? -1) >= nearDuplicateSimilarity
+                }
+                if covered {
+                    coveredExampleIDs[personID, default: []].insert(original.id)
+                    continue
+                }
                 let boundary = max(0, 1 - abs(strength - policy.automaticThreshold) / 0.30)
                 let ambiguity = max(0, 1 - abs(strength - competitor) / 0.15)
-                scored[personID, default: []].append((original, 0.55 * boundary + 0.30 * ambiguity + 0.15 * strength))
+                scored[personID, default: []].append(
+                    (original, example, 0.55 * boundary + 0.30 * ambiguity + 0.15 * strength))
             }
         }
-        return Dictionary(uniqueKeysWithValues: personIDs.map { ($0, select(scored[$0] ?? [], for: $0, limit: limit)) })
+        return Evaluation(
+            candidates: Dictionary(
+                uniqueKeysWithValues: personIDs.map { ($0, select(scored[$0] ?? [], limit: limit, policy: policy)) }),
+            coveredExampleIDs: coveredExampleIDs)
     }
 
     private static func select(
-        _ candidates: [(example: VoiceExample, score: Double)], for personID: UUID, limit: Int
+        _ candidates: [Candidate], limit: Int, policy: VoiceMatchingPolicy
     ) -> [VoiceExample] {
-        let decisions = VoiceExactReviewDecisions(candidates.map(\.example))
-        // Naming promises individual review of every associated excerpt. Keep
-        // those exact-distinct questions ahead of sampled automatic suggestions.
-        let associated: [VoiceExample] = candidates.compactMap {
-            $0.example.namedPersonID == personID ? $0.example : nil
+        guard limit > 0 else { return [] }
+        struct Condition: Hashable {
+            var source: String
+            var namedPersonID: UUID?
+            var rejectedPersonIDs: Set<UUID>
+            var models: Set<EmbeddingType>
         }
-        let explicit = associated.sorted { left, right in
-            if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
-            return left.id.uuidString < right.id.uuidString
+        let byID = Dictionary(candidates.map { ($0.example.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let conditions = Dictionary(grouping: candidates.map(\.effective)) { example in
+            return Condition(
+                source: example.source, namedPersonID: example.namedPersonID,
+                rejectedPersonIDs: Set(example.rejectedPersonIDs),
+                models: Set(example.embeddings.filter(\.isValid).map(\.type)))
         }
-        var selected: [VoiceExample] = []
-        var selectedKeys = Set<VoiceExactReviewDecisions.Key>()
-        for example in explicit {
-            if let key = VoiceExactReviewDecisions.Key(example), !selectedKeys.insert(key).inserted { continue }
-            selected.append(example)
-        }
-        var scored = candidates.filter { candidate in
-            guard candidate.example.namedPersonID != personID else { return false }
-            return VoiceExactReviewDecisions.Key(candidate.example).map { !selectedKeys.contains($0) } ?? true
-        }
-        var meetings = Set(selected.map(\.meetingID))
-        let priorities = Dictionary(
-            scored.map { ($0.example.id, VoiceSampleQuality.priority(example: $0.example)) },
-            uniquingKeysWith: max)
-        let automaticLimit = selected.count + max(0, limit)
-        while !scored.isEmpty && selected.count < automaticLimit {
-            scored.sort { left, right in
-                let leftQuality = priorities[left.example.id] ?? 1
-                let rightQuality = priorities[right.example.id] ?? 1
-                if leftQuality != rightQuality { return leftQuality > rightQuality }
-                let lhs = left.score + (meetings.contains(left.example.meetingID) ? 0 : 0.20)
-                let rhs = right.score + (meetings.contains(right.example.meetingID) ? 0 : 0.20)
-                return lhs == rhs ? left.example.id.uuidString < right.example.id.uuidString : lhs > rhs
+        // Complete-link groups require every pair to agree, so a chain of
+        // similar turns cannot hide a conflicting voice. This only chooses
+        // questions; confirmation never expands to undisplayed members.
+        var representatives: [Candidate] = []
+        for values in conditions.values {
+            for group in VoiceAutomaticGrouping.groups(values, policy: policy) {
+                let best = group.compactMap { byID[$0.id] }.sorted(by: preferred).first
+                if let best { representatives.append(best) }
             }
-            let next = scored.removeFirst().example
-            selected.append(next)
-            meetings.insert(next.meetingID)
-            scored.removeAll { redundant(decisions.applying(to: $0.example), with: decisions.applying(to: next)) }
         }
-        return selected
+        return representatives.sorted(by: preferred).prefix(limit).map(\.example)
     }
 
-    private static func redundant(_ left: VoiceExample, with right: VoiceExample) -> Bool {
-        guard left.meetingID == right.meetingID, left.audioRevision == right.audioRevision,
-            left.source == right.source, VoiceIdentificationSelection.sameDecision(left, right),
-            let a = left.range, let b = right.range, a.audioFile == b.audioFile
-        else { return false }
-        let overlap = a.supportSpans.reduce(0.0) { total, span in
-            total + b.supportSpans.reduce(0.0) { $0 + max(0, min(span.end, $1.end) - max(span.start, $1.start)) }
-        }
-        if overlap / min(a.speechDuration, b.speechDuration) >= 0.8 { return true }
-        return left.groupID == right.groupID && (similarity(left, right) ?? -1) >= 0.985
+    private static func preferred(
+        _ left: Candidate, _ right: Candidate
+    ) -> Bool {
+        let leftQuality = VoiceSampleQuality.priority(example: left.example)
+        let rightQuality = VoiceSampleQuality.priority(example: right.example)
+        if leftQuality != rightQuality { return leftQuality > rightQuality }
+        if left.score != right.score { return left.score > right.score }
+        let leftDuration = left.example.range?.speechDuration ?? 0
+        let rightDuration = right.example.range?.speechDuration ?? 0
+        if leftDuration != rightDuration { return leftDuration > rightDuration }
+        return left.example.id.uuidString < right.example.id.uuidString
     }
 }

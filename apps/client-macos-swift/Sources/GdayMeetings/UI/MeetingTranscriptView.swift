@@ -150,17 +150,15 @@ struct MeetingTranscriptView: View {
                         save: { id, text in
                             updateSegment(id, meetingID: meeting.id, text: text, checkpoint: editableCheckpoint)
                         },
-                        speakerPicker: { rowID, id, completed in
-                            let segment = segments.first { $0.id == rowID }
+                        speakerPicker: { context, id, completed in
+                            let rowID = context.rowID
                             if let speaker = (editableCheckpoint?.speakers ?? meeting.speakers).first(where: {
                                 $0.id == id
                             }) {
                                 return AnyView(
                                     TranscriptSpeakerPicker(
                                         meetingID: meeting.id, speaker: speaker, completed: completed,
-                                        associationUncertain: segment?.associationUncertain == true,
-                                        identityAssociationTier: segment?.allowsPersonAssociation(from: speaker) == true
-                                            ? speaker.voiceReviewOrigin?.transcriptAssociationTier : nil,
+                                        explanation: context.explanation,
                                         restorePassage: speaker.passageAssignmentOrigin == nil
                                             ? nil
                                             : {
@@ -182,7 +180,7 @@ struct MeetingTranscriptView: View {
                             return AnyView(Text("Speaker is unavailable."))
                         }
                     ).id(meetingID)
-                    if !usesCheckpoint && !meeting.reviewableSpeakers.isEmpty {
+                    if !usesCheckpoint && !meeting.assignableSpeakers.isEmpty {
                         DisclosureGroup("Speakers") {
                             ScrollView { MeetingSpeakersView(meetingID: meetingID) }.frame(maxHeight: 240)
                         }

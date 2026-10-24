@@ -108,7 +108,7 @@ actor VoiceMatchingWorker {
             }
         }
         let selected = try Dictionary(grouping: evidence, by: \.model).values.flatMap {
-            try VoiceProfileSelection.selectCancellable($0, limit: 12, cancellationCheck: Task.checkCancellation)
+            try VoiceProfileSelection.selectCancellable($0, cancellationCheck: Task.checkCancellation)
         }.sorted { $0.id < $1.id }
         let byID = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.id.uuidString, $0) })
         var person = key.person

@@ -107,7 +107,6 @@ extension MeetingStore {
         }
         if result && !undoMeetings.isEmpty {
             scheduleVoiceAssignmentRefresh(meetingIDs: undoMeetings)
-            await flushVoiceAssignmentRefresh()
         }
         return result ? receipt : nil
     }
@@ -174,8 +173,10 @@ extension MeetingStore {
             return committed
         }
         if saved {
+            // The canonical transaction above is the acknowledgement boundary.
+            // Store-owned projection and matching continue after the dialog closes;
+            // subsequent corrections and Undo retain canonical queue ordering.
             scheduleVoiceAssignmentRefresh(meetingIDs: Set(expectedExamples.map(\.meetingID)))
-            await flushVoiceAssignmentRefresh()
         }
         return saved ? receipt : nil
     }
@@ -219,7 +220,16 @@ extension MeetingStore {
                 try relatedIDs.map { try loaded[$0] ?? reader($0, root) }
             }.value
             let latestRelated = try libraryIndex?.page(limit: allowedMeetings.count + 1, personID: created.id) ?? []
-            guard meetings == meetingSnapshot, Set(latestRelated.map(\.id)) == Set(related.map(\.id)),
+            // Background projection may load unrelated recordings while this
+            // check yields. Only changes affecting this person's use invalidate Undo.
+            let checked = Dictionary(uniqueKeysWithValues: relatedMeetings.map { ($0.id, $0) })
+            let currentRelevant = meetings.filter {
+                relatedIDs.contains($0.id) || $0.personIDs.contains(created.id)
+                    || $0.speakers.contains { $0.personID == created.id }
+                    || $0.transcript.contains { $0.personID == created.id }
+            }
+            guard currentRelevant.allSatisfy({ checked[$0.id] == $0 }),
+                Set(latestRelated.map(\.id)) == Set(related.map(\.id)),
                 relatedMeetings.allSatisfy({ meeting in
                     let assigned = meeting.speakers.filter { $0.personID == created.id }
                     return !assigned.isEmpty

@@ -104,7 +104,7 @@ import Testing
         reference.personID = person
         reference.review = .confirmed
         var candidate = try sample(root)
-        candidate.embeddings = [.init(type: type, values: [0.8, 0.6])]
+        candidate.embeddings = [.init(type: type, values: [0.79, sqrt(1 - 0.79 * 0.79)])]
         #expect(library.upsert([reference, candidate]))
         let ordinary = try await library.reviewSnapshot(for: [person])
         #expect(ordinary.candidates[person]?.map(\.id) == [candidate.id])
@@ -152,6 +152,102 @@ import Testing
         #expect(calls.withLock { $0 } == 1)
     }
 
+    @Test func preparingAutomaticTurnsBecomeQuestionsOnlyAfterRepresentationIsAvailable() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var prepared = try sample(root)
+        prepared.origin = .discovery
+        prepared.attributionTurn = .init(start: 0, end: 4)
+        var pending = prepared
+        pending.embeddings = []
+        let waiting = VoiceReviewSnapshot.make(
+            hydrated: [pending], metadata: [pending], playableIDs: [pending.id], personIDs: [], revision: 1)
+        #expect(waiting.unnamedGroups.isEmpty)
+        #expect(VoiceReviewSnapshot.selectiveEvidence([pending]).map(\.id) == [pending.id])
+        let ready = VoiceReviewSnapshot.make(
+            hydrated: [prepared], metadata: [pending], playableIDs: [pending.id], personIDs: [], revision: 2)
+        #expect(ready.unnamedGroups.flatMap(\.examples).map(\.id) == [prepared.id])
+        pending.manuallyGrouped = true
+        let authored = VoiceReviewSnapshot.make(
+            hydrated: [pending], metadata: [pending], playableIDs: [pending.id], personIDs: [], revision: 3)
+        #expect(authored.unnamedGroups.flatMap(\.examples).map(\.id) == [pending.id])
+    }
+
+    @Test func acousticSubgroupsNeverAcquireUnseenConflictingTurnsThroughProviderGroupIDs() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let groupID = UUID()
+        var left = try sample(root, groupID: groupID)
+        left.origin = .discovery
+        left.end = 10
+        left.attributionTurn = .init(start: 0, end: 10)
+        left.detectedSpeakerID = "cluster-1"
+        var hidden = left
+        hidden.id = UUID()
+        hidden.start = 12
+        hidden.end = 16
+        hidden.attributionTurn = .init(start: 12, end: 16)
+        var right = hidden
+        right.id = UUID()
+        right.start = 20
+        right.end = 24
+        right.attributionTurn = .init(start: 20, end: 24)
+        right.embeddings = [.init(type: type, values: [0, 1])]
+        let examples = [left, hidden, right]
+        let metadata = examples.map { original in
+            var value = original
+            value.embeddings = []
+            return value
+        }
+        let snapshot = VoiceReviewSnapshot.make(
+            hydrated: examples, metadata: metadata, playableIDs: Set(examples.map(\.id)),
+            personIDs: [], revision: 1)
+        #expect(snapshot.unnamedGroups.count == 2)
+        let leftGroup = try #require(snapshot.unnamedGroups.first { $0.examples.contains { $0.id == left.id } })
+        #expect(leftGroup.evidenceExamples.map(\.id) == [left.id])
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
+        #expect(library.upsert(examples))
+        let person = UUID()
+        #expect(
+            library.nameGroup(
+                ids: Set(leftGroup.evidenceExamples.map(\.id)), confirmedExampleID: left.id, personID: person))
+        #expect(library.examples.first { $0.id == left.id }?.personID == person)
+        #expect(library.examples.first { $0.id == hidden.id }?.namedPersonID == nil)
+        #expect(library.examples.first { $0.id == right.id }?.namedPersonID == nil)
+        #expect(library.examples.first { $0.id == right.id }?.personID == nil)
+    }
+
+    @Test func damagedAuthoredRecordCannotJoinAnAutomaticVoiceWithTheSameProviderGroupID() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let providerGroup = UUID()
+        let rejectedPerson = UUID()
+        var damaged = try sample(root, groupID: providerGroup)
+        damaged.origin = .discovery
+        damaged.manuallyGrouped = true
+        damaged.review = .rejected
+        damaged.rejectedPersonIDs = [rejectedPerson]
+        damaged.sourceResolutionIssue = "Synthetic source unavailable"
+        var automatic = try sample(root, groupID: providerGroup)
+        automatic.origin = .discovery
+        automatic.embeddings = [.init(type: type, values: [0, 1])]
+        let snapshot = VoiceReviewSnapshot.make(
+            hydrated: [damaged, automatic], metadata: [damaged, automatic], playableIDs: [automatic.id],
+            personIDs: [], revision: 1)
+        let group = try #require(snapshot.unnamedGroups.first)
+        #expect(group.evidenceExamples.map(\.id) == [automatic.id])
+        let library = VoiceLibraryStore(loading: .immediate, directory: root)
+        #expect(library.upsert([damaged, automatic]))
+        let person = UUID()
+        #expect(
+            library.nameGroup(
+                ids: Set(group.evidenceExamples.map(\.id)), confirmedExampleID: automatic.id, personID: person))
+        let preserved = try #require(library.examples.first { $0.id == damaged.id })
+        #expect(preserved.personID == nil && preserved.namedPersonID == nil)
+        #expect(preserved.review == .rejected && preserved.rejectedPersonIDs == [rejectedPerson])
+        #expect(library.examples.first { $0.id == automatic.id }?.personID == person)
+    }
+
     @Test func reviewRowsKeepEligibleAudioDisjointAndRetainHiddenNamingEvidence() throws {
         let person = UUID()
         let group = UUID()
@@ -160,7 +256,8 @@ import Testing
         var seed = try sample(root)
         seed.personID = person
         seed.review = .confirmed
-        let plausible = try sample(root, groupID: group)
+        var plausible = try sample(root, groupID: group)
+        plausible.embeddings = [.init(type: type, values: [0.79, sqrt(1 - 0.79 * 0.79)])]
         var alias = plausible
         alias.id = UUID()
         let unrelated = try sample(root, groupID: group, start: 10)
@@ -170,7 +267,11 @@ import Testing
         short.end = 20.25
         var invalid = try sample(root, groupID: group, start: 30)
         invalid.embeddings = [.init(type: type, values: [0, 0])]
-        let examples = [seed, plausible, alias, unrelatedHydrated, short, invalid]
+        let examples = [seed, plausible, alias, unrelatedHydrated, short, invalid].map { original in
+            var value = original
+            value.manuallyGrouped = value.groupID == group
+            return value
+        }
         let snapshot = VoiceReviewSnapshot.make(
             hydrated: examples, metadata: examples, playableIDs: Set(examples.map(\.id)),
             personIDs: [person], revision: 4)
@@ -219,7 +320,9 @@ import Testing
         let read = Task { try await library.reviewSnapshot(for: [person]) }
         for await _ in entered.stream { break }
         #expect(library.addRepresentation(exampleID: candidate.id, embedding: .init(type: type, values: [1, 0])))
-        #expect(library.addRepresentation(exampleID: candidate.id, embedding: .init(type: type, values: [0.8, 0.6])))
+        #expect(
+            library.addRepresentation(
+                exampleID: candidate.id, embedding: .init(type: type, values: [0.79, sqrt(1 - 0.79 * 0.79)])))
         try await Task.sleep(for: .milliseconds(400))
         #expect(library.reviewEvidenceRevision == revision)
         #expect(library.reviewMetadataRevision == metadataRevision)

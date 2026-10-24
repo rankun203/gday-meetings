@@ -48,6 +48,6 @@ void gday_playback_set_audible(GdayPlaybackRing *ring, uint32_t mask);
 uint32_t gday_playback_render(GdayPlaybackRing *ring, float *left, float *right, uint32_t frames);
 uint64_t gday_playback_consumed(GdayPlaybackRing *ring);
 uint64_t gday_playback_underruns(GdayPlaybackRing *ring);
-// Reset only with both engine and producer stopped.
+// Reset only while rendering and the producer are quiescent.
 void gday_playback_reset(GdayPlaybackRing *ring);
 #endif

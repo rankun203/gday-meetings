@@ -47,7 +47,7 @@ import Testing
         #expect(reopened.examples.count == 3)
         #expect(Set(reopened.examples.filter { $0.review == .confirmed }.map(\.id)) == [first.id, alias.id])
         #expect(reopened.examples.first { $0.id == next.id }?.namedPersonID == person)
-        #expect(try await reopened.reviewCandidates(for: person).map(\.id) == [next.id])
+        #expect(try await reopened.reviewCandidates(for: person).isEmpty)
         let refreshed = try await reopened.identificationGroups().flatMap(\.examples)
         #expect(refreshed.filter { VoiceReviewSelection.sameAudio($0, first) }.count == 1)
         #expect(Set(refreshed.map(\.id)).isSubset(of: [first.id, alias.id, next.id]))
@@ -55,7 +55,7 @@ import Testing
         #expect(try await reopened.identificationGroups().flatMap(\.examples).count == 2)
         #expect(reopened.confirm(ids: [anchor.id], personID: person))
         let confirmed = VoiceLibraryStore(loading: .immediate, directory: root)
-        #expect(try await confirmed.reviewCandidates(for: person).map(\.id) == [next.id])
+        #expect(try await confirmed.reviewCandidates(for: person).isEmpty)
         #expect(
             try await confirmed.identificationGroups().flatMap(\.examples).filter {
                 VoiceReviewSelection.sameAudio($0, first)
@@ -106,7 +106,7 @@ import Testing
         #expect(try await reopened.matchingPeople(from: [person])[0].voiceSamples.map(\.speakerID) == [first.id])
         try await reopened.suggestReviewedPeopleResult(from: [])
         #expect(reopened.examples.first { $0.id == second.id }?.suggestedPersonID == person.id)
-        #expect(try await reopened.reviewCandidates(for: person.id).map(\.id) == [second.id])
+        #expect(try await reopened.reviewCandidates(for: person.id).isEmpty)
         #expect(reopened.reject(ids: [second.id], personID: person.id))
         try await reopened.suggestReviewedPeopleResult(from: [person])
         #expect(try await reopened.reviewCandidates(for: person.id).isEmpty)
@@ -184,7 +184,7 @@ import Testing
         let emptyPerson = UUID()
         #expect(library.nameGroup(ids: [first.id, second.id], confirmedExampleID: first.id, personID: person))
         let queues = try await library.reviewCandidates(for: Set([person, emptyPerson]))
-        #expect(Set(queues[person, default: []].map(\.id)) == [second.id, otherRecording.id])
+        #expect(queues[person]?.isEmpty == true)
         #expect(queues[emptyPerson]?.isEmpty == true)
         #expect(try await library.reviewCandidates(for: person).map(\.id) == queues[person]?.map(\.id))
     }
@@ -275,7 +275,8 @@ import Testing
         #expect(reopened.voiceLibrary.examples.first?.personID == createdID)
     }
 
-    @Test func creationUndoRevalidatesNewMeetingUseAfterDetachedRead() async throws {
+    @Test(arguments: [false, true])
+    func creationUndoRevalidatesPersonUseWhileAllowingUnrelatedCacheLoads(newUse: Bool) async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
@@ -294,35 +295,58 @@ import Testing
             await store.nameVoiceGroup(
                 exampleIDs: [sample.id], confirmedExampleID: sample.id, personID: nil,
                 newPersonName: "Alex", expectedExamples: [sample]))
+        await store.flushVoiceAssignmentRefresh()
         let token = try #require(store.voiceLibrary.reviewUndoID)
         let unrelatedID = await store.createMeeting(title: "Another recording")
         store.clearLoadedMeetingCache()
-        #expect(await store.ensureMeetingLoaded(id: unrelatedID))
+        if newUse { #expect(await store.ensureMeetingLoaded(id: unrelatedID)) }
         let gate = VoiceNamingWriteGate(fail: false)
+        let loadingGate = VoiceNamingWriteGate(fail: false)
         defer { gate.release() }
+        defer { loadingGate.release() }
         let reader = store.meetingLoadReader
         store.meetingLoadReader = { id, directory in
             if id == meetingID { try gate.enter() }
+            if !newUse && id == unrelatedID { try loadingGate.enter() }
             return try reader(id, directory)
+        }
+        var loading: Task<Bool, Never>?
+        if !newUse {
+            // Begin before Undo holds the canonical queue, then publish the
+            // cold read while Undo's independent validation read is suspended.
+            loading = Task { await store.ensureMeetingLoaded(id: unrelatedID) }
+            try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { loadingGate.started })
         }
         let undo = Task { await store.reviewVoiceExamples(.undo, expectedUndoID: token) }
         try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
-        var unrelated = try #require(store.meeting(id: unrelatedID))
-        unrelated.personIDs = [created]
-        let update = Task { await store.updateMeeting(unrelated) }
-        try #require(
-            try await waitForMainActorTestCondition(timeout: .seconds(3)) {
-                store.meeting(id: unrelatedID)?.personIDs.contains(created) == true
-            })
+        var update: Task<Bool, Never>?
+        if newUse {
+            var unrelated = try #require(store.meeting(id: unrelatedID))
+            unrelated.personIDs = [created]
+            update = Task { await store.updateMeeting(unrelated) }
+            try #require(
+                try await waitForMainActorTestCondition(timeout: .seconds(3)) {
+                    store.meeting(id: unrelatedID)?.personIDs.contains(created) == true
+                })
+        }
+        else {
+            loadingGate.release()
+            try #require(
+                try await waitForMainActorTestCondition(timeout: .seconds(3)) {
+                    store.meeting(id: unrelatedID) != nil
+                })
+        }
         gate.release()
-        #expect(await !undo.value)
-        #expect(await update.value)
-        #expect(store.people.contains { $0.id == created })
-        #expect(store.voiceLibrary.examples.first?.personID == created)
-        #expect(store.voiceLibrary.reviewUndoID == token)
+        #expect(await undo.value == !newUse)
+        if let update { #expect(await update.value) }
+        if let loading { #expect(await loading.value) }
+        await store.flushVoiceAssignmentRefresh()
+        #expect(store.people.contains { $0.id == created } == newUse)
+        #expect(store.voiceLibrary.examples.first?.personID == (newUse ? created : nil))
+        #expect(store.voiceLibrary.reviewUndoID == (newUse ? token : nil))
     }
 
-    @Test func namingReceiptKeepsItsOwnUndoTokenWhileProjectionRefreshYields() async throws {
+    @Test func namingReceiptReturnsAfterDurableSaveWhileProjectionIsSuspended() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
@@ -342,21 +366,78 @@ import Testing
             if id == meeting { try gate.enter() }
             return try reader(id, directory)
         }
+        var acknowledged = false
         let naming = Task {
-            await store.nameVoiceGroupResult(
+            let receipt = await store.nameVoiceGroupResult(
                 exampleIDs: [first.id], confirmedExampleID: first.id, personID: person,
                 newPersonName: nil, expectedExamples: [first])
+            acknowledged = true
+            return receipt
         }
         try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
+        // Projection is still suspended. Acknowledgement must depend only on
+        // the durable identity save, so the naming dialog can close now.
+        try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { acknowledged })
+        let receipt = try #require(await naming.value)
         let namedToken = try #require(store.voiceLibrary.reviewUndoID)
+        #expect(receipt.undoID == namedToken)
+        #expect(receipt.personID == person)
+        #expect(
+            VoiceLibraryStore(loading: .immediate, directory: root).examples.first { $0.id == first.id }?.personID
+                == person)
         #expect(store.voiceLibrary.exclude(ids: [second.id]))
         let laterToken = try #require(store.voiceLibrary.reviewUndoID)
         #expect(namedToken != laterToken)
         gate.release()
-        let receipt = try #require(await naming.value)
-        #expect(receipt.undoID == namedToken)
-        #expect(receipt.personID == person)
+        await store.flushVoiceAssignmentRefresh()
         #expect(store.voiceLibrary.reviewUndoID == laterToken)
+    }
+
+    @Test(arguments: [false, true])
+    func pendingNamingProjectionUsesTheLatestCorrectionOrUndo(undo: Bool) async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
+        store.voiceLibrary.didChange = nil
+        let person = await store.addPerson(name: "Alex")
+        let replacement = await store.addPerson(name: "Sam")
+        let meetingID = await store.createMeeting(title: "Deferred naming fixture")
+        let sample = try sample(root: root, meeting: meetingID)
+        var meeting = try #require(store.meeting(id: meetingID))
+        meeting.audioFiles = ["system.wav"]
+        meeting.speakers = [.init(id: sample.speakerID, label: "Speaker 1", track: "system", providerName: "Synthetic")]
+        meeting.transcript = [.init(start: 0, end: 4, text: "Synthetic passage", speakerID: sample.speakerID)]
+        #expect(await store.updateMeeting(meeting))
+        #expect(store.voiceLibrary.upsert([sample]))
+        await store.flushVoiceAssignmentRefresh()
+        store.clearLoadedMeetingCache()
+        let gate = VoiceNamingWriteGate(fail: false)
+        defer { gate.release() }
+        let reader = store.meetingLoadReader
+        store.meetingLoadReader = { id, directory in
+            if id == meetingID { try gate.enter() }
+            return try reader(id, directory)
+        }
+        let receipt = try #require(
+            await store.nameVoiceGroupResult(
+                exampleIDs: [sample.id], confirmedExampleID: sample.id, personID: person,
+                newPersonName: nil, expectedExamples: [sample]))
+        try #require(try await waitForMainActorTestCondition(timeout: .seconds(3)) { gate.started })
+        if undo {
+            #expect(await store.reviewVoiceExamples(.undo, expectedUndoID: receipt.undoID))
+        }
+        else {
+            #expect(await store.reviewVoiceExamples(.confirm(ids: [sample.id], personID: replacement)))
+        }
+        store.scheduleVoiceAssignmentRefresh(meetingIDs: [meetingID])
+        gate.release()
+        await store.flushVoiceAssignmentRefresh()
+        let saved = try MeetingFolderStorage.read(id: meetingID, directory: root)
+        #expect(!saved.personIDs.contains(person))
+        #expect(saved.personIDs.contains(replacement) == !undo)
+        #expect(store.voiceLibrary.examples.first { $0.id == sample.id }?.personID == (undo ? nil : replacement))
     }
 
     @Test func oldOptionalGroupProvenanceAndUndoTokensDecodeWithoutInventingHumanDecisions() throws {

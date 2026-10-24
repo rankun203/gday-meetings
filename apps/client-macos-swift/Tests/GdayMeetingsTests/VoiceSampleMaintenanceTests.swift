@@ -150,6 +150,7 @@ struct VoiceSampleMaintenanceTests {
                     exampleIDs: [anchor.id],
                     confirmedExampleID: anchor.id, personID: nil, newPersonName: "New Person",
                     expectedExamples: [anchor]))
+            await before.flushVoiceAssignmentRefresh()
             let person = try #require(receipt.personID)
             let reopened = await openStore()
             #expect(
@@ -159,6 +160,7 @@ struct VoiceSampleMaintenanceTests {
             #expect(reopened.people.contains { $0.id == person })
             let undo = try #require(reopened.voiceLibrary.reviewUndoID)
             #expect(await reopened.reviewVoiceExamples(.undo, expectedUndoID: undo))
+            await reopened.flushVoiceAssignmentRefresh()
             let undone = await openStore()
             #expect(!undone.people.contains { $0.id == person })
             #expect(
@@ -176,6 +178,7 @@ struct VoiceSampleMaintenanceTests {
                 await undone.nameVoiceGroupResult(
                     exampleIDs: Set(groupEvidence.map(\.id)), confirmedExampleID: fresh.id,
                     personID: nil, newPersonName: "Another Person", expectedExamples: groupEvidence))
+            await undone.flushVoiceAssignmentRefresh()
             let groupPerson = try #require(groupName.personID)
             let groupReopened = await openStore()
             #expect(groupReopened.voiceLibrary.examples.first { $0.id == fresh.id }?.personID == groupPerson)

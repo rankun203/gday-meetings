@@ -56,7 +56,8 @@ struct OperationProgressTests {
         job.state = .running
         job.completedExampleIDs = [job.exampleIDs[0]]
         job.estimatedRemainingSeconds = 30
-        #expect(job.progressDetails.phase == "Preparing voice examples")
+        #expect(job.progressDetails.phase == "Analysing voice excerpts")
+        #expect(job.progress.contains("1 of 2 voice excerpts analysed"))
         #expect(job.progressDetails.fractionCompleted == 0.5)
         #expect(job.progressDetails.startedAt == job.progressStartedAt)
         #expect(job.progressDetails.estimatedRemainingSeconds == 30)

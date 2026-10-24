@@ -106,7 +106,9 @@ enum SpeakerRecognition {
                     source: "reviewed", localSpeakerID: sample.speakerID.uuidString,
                     start: 0, end: 0, embedding: value)
             }
-            let samples = candidates.count > 12 ? VoiceProfileSelection.select(candidates, limit: 12) : candidates
+            let samples =
+                candidates.count > VoiceProfileSelection.maximumReferencesPerModel
+                ? VoiceProfileSelection.select(candidates) : candidates
             guard let score = samples.compactMap({ similarity(embedding.values, $0.vector) }).max() else { return nil }
             return (person.id, score)
         }.sorted { $0.1 == $1.1 ? $0.0.uuidString < $1.0.uuidString : $0.1 > $1.1 }
@@ -200,18 +202,45 @@ enum SpeakerRecognition {
     }
 }
 
+struct SpeakerLabelAssignmentSummary: Equatable {
+    var people: Set<UUID?> = []
+    var hasTentativePerson = false
+    var variesByPassage: Bool { people.count > 1 }
+    var hasAssignments: Bool { people.contains { $0 != nil } }
+    var uniformPersonID: UUID? { people.count == 1 ? people.first! : nil }
+}
+
 extension Meeting {
-    /// The speaker panel reviews detected voices. Turn names remain editable in
-    /// the transcript instead of repeating their shared reference audio here.
-    var reviewableSpeakers: [MeetingSpeaker] {
-        let reviewable = speakers.filter(\.canReviewVoice)
-        let retainedIDs = Set(reviewable.map(\.id))
-        return reviewable.filter { speaker in
+    /// Assignment is available without a recognition vector. Keep canonical
+    /// detected labels once; derived turn names remain editable in the transcript.
+    var assignableSpeakers: [MeetingSpeaker] {
+        let assignable = speakers.filter { $0.canAssignPerson && $0.voiceReviewOrigin?.evidenceOnly != true }
+        let retainedIDs = Set(assignable.map(\.id))
+        return assignable.filter { speaker in
             guard speaker.passageAssignmentOrigin == nil, let origin = speaker.voiceReviewOrigin,
                 origin.speakerID != speaker.id
             else { return true }
             return !retainedIDs.contains(origin.speakerID)
         }
+    }
+
+    /// Whole-label controls must distinguish differing turn identities from an
+    /// entirely unassigned label. Explicit passage corrections retain their own row.
+    var speakerLabelAssignments: [UUID: SpeakerLabelAssignmentSummary] {
+        let byID = Dictionary(speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var peopleByLabel: [UUID: SpeakerLabelAssignmentSummary] = [:]
+        for row in transcript {
+            guard let id = row.speakerID, let speaker = byID[id], speaker.passageAssignmentOrigin == nil else {
+                continue
+            }
+            let labelID = speaker.voiceReviewOrigin?.speakerID ?? speaker.id
+            let personID = row.allowsPersonAssociation(from: speaker) ? speaker.personID : nil
+            peopleByLabel[labelID, default: .init()].people.insert(personID)
+            if personID != nil, speaker.voiceReviewOrigin?.transcriptAssociationTier == .tentative {
+                peopleByLabel[labelID, default: .init()].hasTentativePerson = true
+            }
+        }
+        return peopleByLabel
     }
 
     /// People includes every attributed passage while retaining independent attendees.
@@ -272,6 +301,29 @@ extension Meeting {
 }
 
 extension MeetingStore {
+    @discardableResult
+    func retrySpeakerReference(
+        meetingID: UUID, speakerID: UUID, personID: UUID, expectedDecision: VoiceSpeakerDecision
+    ) async -> Bool {
+        guard recordingID == nil, !isStartingRecording, !isFinalizingRecording, libraryWritable,
+            voicePreparation.referenceTokens[speakerID] == nil,
+            voiceLibrary.referenceDecision(meetingID: meetingID, speakerID: speakerID, personID: personID)
+                == expectedDecision,
+            await flushCanonicalWrites(),
+            recordingID == nil, !isStartingRecording, !isFinalizingRecording, libraryWritable,
+            voicePreparation.referenceTokens[speakerID] == nil,
+            voiceLibrary.referenceDecision(meetingID: meetingID, speakerID: speakerID, personID: personID)
+                == expectedDecision,
+            let meeting = meeting(id: meetingID),
+            meeting.speakers.contains(where: { $0.id == speakerID && $0.personID == personID }),
+            voiceLibrary.restartReferenceSelection(meetingID: meetingID, speakerID: speakerID, personID: personID)
+        else { return false }
+        voicePreparation.selectReference(
+            meetingID: meetingID, speakerID: speakerID, personID: personID,
+            exampleID: nil, directory: directory(for: meetingID))
+        return true
+    }
+
     /// Save transcript identity through the library's atomic save/rollback path.
     /// Correcting a derived name preserves independent reference reviews.
     @discardableResult func assignSpeaker(meetingID: UUID, speakerID: UUID, personID: UUID?) async -> Bool {

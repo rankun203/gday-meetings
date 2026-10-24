@@ -144,7 +144,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     var pauseLiveFollowing: (() -> Void)? = nil
     var play: (Double) -> Void
     var save: (UUID, String) -> Void
-    var speakerPicker: (UUID, UUID, @escaping () -> Void) -> AnyView
+    var speakerPicker: (TranscriptSpeakerPickerContext, UUID, @escaping () -> Void) -> AnyView
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
@@ -217,7 +217,6 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var measurementWork: DispatchWorkItem?
         private var measurementOrigin: CGFloat?
         private var measurementForward = true
-        var pendingClick: DispatchWorkItem?
         var popover: NSPopover?
         private var playbackSubscription: AnyCancellable?
         private var lastSeekRevision: UInt64?
@@ -233,6 +232,15 @@ struct NativeTranscriptView: NSViewRepresentable {
         private var followStart: CGFloat = 0
         private var followTarget: CGFloat = 0
         private var userScrollUntil: TimeInterval = 0
+        private var pointerFollowUntil: TimeInterval = 0
+        private var pointerFollowWork: DispatchWorkItem?
+        private struct PointerClickTarget {
+            let displayedID: UUID
+            let sourceID: UUID
+            let assigning: Bool
+            let expires: TimeInterval
+        }
+        private var pointerClickTarget: PointerClickTarget?
         private weak var observedPlayback: MeetingPlayback?
         private var playbackOrder: [(start: Double, end: Double, row: Int)] = []
         private var playbackMaxEnds: [Double] = []
@@ -301,8 +309,10 @@ struct NativeTranscriptView: NSViewRepresentable {
             let readingID = rows.indices.contains(readingRow) ? rows[readingRow].id : nil
             let readingOffset =
                 readingRow >= 0 ? (scroll?.contentView.bounds.minY ?? 0) - table.rect(ofRow: readingRow).minY : 0
-            cancelFollow()
+            cancelFollow(cancelDeferred: sourceChanged)
             if sourceChanged {
+                pointerClickTarget = nil
+                pointerFollowUntil = 0
                 measurementOrigin = nil
                 measurementForward = true
                 deferredLiveUpdate = nil
@@ -313,7 +323,6 @@ struct NativeTranscriptView: NSViewRepresentable {
                 userScrollUntil = 0
                 popover?.close()
             }
-            pendingClick?.cancel()
             let selectedIndex = table.selectedRow
             let selection = rows.indices.contains(selectedIndex) ? rows[selectedIndex].id : nil
             finishEdit()
@@ -505,9 +514,9 @@ struct NativeTranscriptView: NSViewRepresentable {
             if follows { followActiveRow(force: false) }
         }
         func tearDown() {
+            pointerClickTarget = nil
             deferredLiveUpdate = nil
             finishEdit()
-            pendingClick?.cancel()
             popover?.close()
             cancelFollow()
             layoutWork?.cancel()
@@ -520,6 +529,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             heights.deactivate(pageID)
         }
         func userScrolled() {
+            pointerClickTarget = nil
             navigationAnchorID = nil
             pauseLiveFollow()
             userScrollUntil = ProcessInfo.processInfo.systemUptime + 4
@@ -531,22 +541,46 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
         func userSelected() {
             navigationAnchorID = nil
+            // Keep the row under the pointer stable while AppKit determines
+            // whether this interaction is a double click. Audio starts at once.
+            pointerFollowUntil = ProcessInfo.processInfo.systemUptime + NSEvent.doubleClickInterval
+            cancelFollow()
             guard parent.followsLive != nil else { return }
             pauseLiveFollow()
-            cancelFollow()
         }
         private func pauseLiveFollow() {
             guard parent.followsLive != nil else { return }
             liveFollowPaused = true
             parent.pauseLiveFollowing?()
         }
-        func cancelFollow() {
+        func cancelFollow(cancelDeferred: Bool = true) {
             followTimer?.invalidate()
             followTimer = nil
+            if cancelDeferred {
+                pointerFollowWork?.cancel()
+                pointerFollowWork = nil
+            }
+        }
+        private func deferPointerFollow(force: Bool) {
+            guard pointerFollowWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pointerFollowWork = nil
+                self.followActiveRow(force: force)
+            }
+            pointerFollowWork = work
+            let delay = max(0.01, pointerFollowUntil - ProcessInfo.processInfo.systemUptime)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
         private func followActiveRow(force: Bool, animated: Bool = true) {
             guard parent.followsLive == nil else { return }
             guard !needsInitialPosition else { return }
+            guard ProcessInfo.processInfo.systemUptime >= pointerFollowUntil,
+                table?.handlingPointerSelection != true
+            else {
+                deferPointerFollow(force: force)
+                return
+            }
             guard editedID == nil, popover?.isShown != true,
                 force || ProcessInfo.processInfo.systemUptime >= userScrollUntil,
                 let row = activeRow, let table, row < table.numberOfRows,
@@ -691,7 +725,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             else { return }
             layoutWork?.cancel()
             layoutWork = nil
-            cancelFollow()
+            cancelFollow(cancelDeferred: false)
             let visibleRow = table.row(at: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
             let offset = visibleRow >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: visibleRow).minY : 0
             withoutLayoutAnimation {
@@ -896,7 +930,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             let anchorIndex = navigationRow ?? first
             let anchor = rows.indices.contains(anchorIndex) ? rows[anchorIndex].id : nil
             let offset = anchorIndex >= 0 ? scroll.contentView.bounds.minY - table.rect(ofRow: anchorIndex).minY : 0
-            cancelFollow()
+            cancelFollow(cancelDeferred: false)
             withoutLayoutAnimation {
                 table.noteHeightOfRows(withIndexesChanged: changed)
                 for index in changed {
@@ -951,25 +985,43 @@ struct NativeTranscriptView: NSViewRepresentable {
         }
 
         @objc func clicked(_ sender: NSTableView) {
-            pendingClick?.cancel()
-            guard rows.indices.contains(sender.clickedRow), parent.canPlay else { return }
+            guard rows.indices.contains(sender.clickedRow) else { return }
+            userSelected()
             let value = rows[sender.clickedRow]
             let target = clickedSourceRow(value, table: sender, row: sender.clickedRow)
-            let start = target.start
-            let work = DispatchWorkItem { [weak self] in self?.parent.play(start) }
-            pendingClick = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+            let cell = sender.view(atColumn: 0, row: sender.clickedRow, makeIfNecessary: false) as? TranscriptNativeCell
+            let assigning =
+                cell.map { cell in
+                    let point = NSApp.currentEvent.map { cell.convert($0.locationInWindow, from: nil) } ?? .zero
+                    return parent.showsSpeakers && cell.badge.frame.contains(point)
+                } ?? false
+            pointerClickTarget = PointerClickTarget(
+                displayedID: value.id, sourceID: target.id, assigning: assigning, expires: pointerFollowUntil)
+            if parent.canPlay { parent.play(target.start) }
         }
         @objc func doubleClicked(_ sender: NSTableView) {
-            pendingClick?.cancel()
-            let row = sender.clickedRow
+            let captured = pointerClickTarget.flatMap {
+                (NSApp.currentEvent?.clickCount ?? 0) >= 2 || ProcessInfo.processInfo.systemUptime <= $0.expires
+                    ? $0 : nil
+            }
+            pointerClickTarget = nil
+            let row: Int
+            if let captured {
+                guard let capturedRow = rows.firstIndex(where: { $0.id == captured.displayedID }),
+                    rows[capturedRow].containsSourceRow(captured.sourceID)
+                else { return }
+                row = capturedRow
+            }
+            else {
+                row = sender.clickedRow
+            }
             guard rows.indices.contains(row),
-                let cell = sender.view(atColumn: 0, row: row, makeIfNecessary: true) as? TranscriptNativeCell
+                let cell = (table ?? sender).view(atColumn: 0, row: row, makeIfNecessary: true) as? TranscriptNativeCell
             else { return }
             let point = NSApp.currentEvent.map { cell.convert($0.locationInWindow, from: nil) } ?? .zero
             let value = rows[row]
-            let assigning = parent.showsSpeakers && cell.badge.frame.contains(point)
-            let target = clickedSourceRow(value, table: sender, row: row)
+            let assigning = captured?.assigning ?? (parent.showsSpeakers && cell.badge.frame.contains(point))
+            let sourceID = captured?.sourceID ?? clickedSourceRow(value, table: sender, row: row).id
             // NSTableView finishes its mouse tracking after this action returns.
             // Activate the editor after that phase so the table cannot reclaim it.
             DispatchQueue.main.async { [weak self, weak cell] in
@@ -978,12 +1030,15 @@ struct NativeTranscriptView: NSViewRepresentable {
                     self.showSpeaker(value, cell: cell)
                 }
                 else {
-                    self.edit(id: target.id)
+                    self.edit(id: sourceID)
                 }
             }
         }
-        func showSpeaker(_ row: TranscriptDisplayRow, cell: TranscriptNativeCell) {
+        func showSpeaker(
+            _ row: TranscriptDisplayRow, cell: TranscriptNativeCell, context: TranscriptSpeakerPickerContext? = nil
+        ) {
             guard parent.editable else { return }
+            let context = context ?? TranscriptSpeakerPickerContext(displayedRow: row)
             if !row.constituents.isEmpty {
                 let speakerRowID = row.speakerSourceRowID ?? row.id
                 expand(row)
@@ -992,7 +1047,7 @@ struct NativeTranscriptView: NSViewRepresentable {
                         let cell = self.table?.view(atColumn: 0, row: index, makeIfNecessary: true)
                             as? TranscriptNativeCell
                     else { return }
-                    self.showSpeaker(self.rows[index], cell: cell)
+                    self.showSpeaker(self.rows[index], cell: cell, context: context)
                 }
                 return
             }
@@ -1005,7 +1060,7 @@ struct NativeTranscriptView: NSViewRepresentable {
             popover.behavior = .transient
             popover.delegate = self
             popover.contentViewController = NSHostingController(
-                rootView: parent.speakerPicker(row.id, speakerID) { [weak popover] in popover?.close() })
+                rootView: parent.speakerPicker(context, speakerID) { [weak popover] in popover?.close() })
             self.popover = popover
             popover.show(relativeTo: cell.badge.bounds, of: cell.badge, preferredEdge: .maxY)
         }
@@ -1027,7 +1082,6 @@ struct NativeTranscriptView: NSViewRepresentable {
             edit(row: index)
         }
         func edit(row: Int) {
-            pendingClick?.cancel()
             guard parent.editable, rows.indices.contains(row), let table else { return }
             if !rows[row].constituents.isEmpty {
                 edit(id: rows[row].id)
@@ -1170,7 +1224,7 @@ struct NativeTranscriptView: NSViewRepresentable {
     private var hoverWork: DispatchWorkItem?
     private var hoverDeadline: TimeInterval = 0
     private(set) var keyboardSelection = false
-    private var handlingPointerSelection = false
+    private(set) var handlingPointerSelection = false
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -1582,8 +1636,7 @@ enum TranscriptSpeakerPalette {
         badge.tint = TranscriptSpeakerPalette.color(for: colorKey)
         badge.role = row.canAssignPerson || row.personID != nil ? .person : .source
         badge.outlined = row.canAssignPerson && row.personID != nil
-        badge.unresolved =
-            row.canAssignPerson && (row.hasTentativePerson || row.personID == nil || row.hasUnattributedWords)
+        badge.unresolved = TranscriptSpeakerAssignmentExplanation.hasDottedOutline(for: row)
         speaker.textColor = TranscriptSpeakerPalette.foreground(for: badge.tint, role: badge.role)
         if !body.isEditable {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13)]

@@ -155,7 +155,8 @@ extension VoiceMatchReviewSessionTests {
         session.selectCandidate(second.id)
         session.refreshQueue([third, second, first])
         #expect(session.displayedID == second.id)
-        #expect(session.examples.map(\.id) == [first.id, second.id, third.id])
+        #expect(session.examples.map(\.id) == [first.id, second.id])
+        #expect(session.additionalCandidates.map(\.id) == [third.id])
         let reference = sample()
         session.selectReference(reference.id)
         session.refreshQueue([first, second])
@@ -200,7 +201,7 @@ extension VoiceMatchReviewSessionTests {
         #expect(
             VoiceMatchReviewSession.referenceExamples(
                 [confirmed, associated, otherRevision, otherSource], personID: person
-            ).count == 3)
+            ).count == 1)
         var rejected = confirmed
         rejected.personID = nil
         rejected.review = .rejected
@@ -277,7 +278,7 @@ extension VoiceMatchReviewSessionTests {
         #expect(session.decidedCount == 0 && session.skippedCount == 1 && session.displayedID == first.id)
     }
 
-    @Test func refreshingCompletedQueueSelectsNewAudioWithoutAppendingAnAlias() {
+    @Test func completedQueueWaitsForExplicitAdmissionWithoutAppendingAnAlias() {
         var first = sample()
         first.audioRevision = "synthetic"
         var alias = first
@@ -286,8 +287,12 @@ extension VoiceMatchReviewSessionTests {
         var session = VoiceMatchReviewSession(examples: [first])
         session.record(.ignored, for: first.id, undoID: UUID())
         session.refreshQueue([alias, newAudio], currentEvidence: [first, alias, newAudio])
+        #expect(session.examples.map(\.id) == [first.id])
+        #expect(session.displayedID == nil && session.remainingCount == 0)
+        #expect(session.additionalCandidates.map(\.id) == [newAudio.id])
+        session.refreshQueue([alias, newAudio], currentEvidence: [first, alias, newAudio], admitNewCandidates: true)
         #expect(session.examples.map(\.id) == [first.id, newAudio.id])
-        #expect(session.displayedID == newAudio.id && session.remainingCount == 1)
+        #expect(session.displayedID == newAudio.id && session.additionalCandidates.isEmpty)
     }
 
     @Test func queueRefreshUsesCurrentEvidenceAndDisablesDeletedRows() {
@@ -303,9 +308,10 @@ extension VoiceMatchReviewSessionTests {
         #expect(session.examples.first?.namedPersonID == updated.namedPersonID)
         #expect(session.unavailableIDs == [deleted.id])
         #expect(session.displayedID == deleted.id)
-        #expect(session.remainingCount == 2)
+        #expect(session.remainingCount == 1)
+        #expect(session.additionalCandidates.map(\.id) == [newAudio.id])
         session.refreshQueue([deleted], currentEvidence: [updated, deleted, newAudio])
-        #expect(session.unavailableIDs.isEmpty && session.examples.count == 3)
+        #expect(session.unavailableIDs.isEmpty && session.examples.count == 2)
     }
 }
 
@@ -387,7 +393,7 @@ extension VoiceMatchReviewSessionTests {
                 currentEvidence: [first, alternate])
             retained = input.groupEvidence
             session.refreshQueue(input.examples, currentEvidence: [first, alternate])
-            #expect(retained.map(\.id) == [first.id, alternate.id])
+            #expect(retained.map(\.id) == [alternate.id])
             #expect(session.displayedID == alternate.id)
         }
         let person = UUID()
@@ -432,7 +438,7 @@ extension VoiceMatchReviewSessionTests {
         let removed = session.refreshInput(
             from: snapshot, initialGroup: group, fallbackPersonID: nil,
             retainedGroupEvidence: refreshed.groupEvidence, currentEvidence: [first])
-        #expect(removed.groupEvidence.map(\.id) == [first.id])
+        #expect(removed.groupEvidence.isEmpty)
         session.refreshQueue(removed.examples, currentEvidence: [first])
         #expect(session.displayedID == alternate.id && session.unavailableIDs.contains(alternate.id))
         #expect(session.decisions.isEmpty && session.history.isEmpty)
@@ -440,7 +446,7 @@ extension VoiceMatchReviewSessionTests {
 }
 
 extension VoiceMatchReviewSessionTests {
-    @Test func existingSamplesBoundMachineTurnsAndRetainEveryDistinctConfirmation() {
+    @Test func comparisonReferencesIncludeOnlyConfirmedEvidence() {
         let person = UUID()
         let meeting = UUID()
         let speaker = UUID()
@@ -458,14 +464,14 @@ extension VoiceMatchReviewSessionTests {
             turns[index].personID = person
         }
         let existing = VoiceMatchReviewSession.referenceExamples(turns, personID: person)
-        #expect(existing.count == 16)
+        #expect(existing.count == 12)
         #expect(existing.filter { $0.review == .confirmed }.count == 12)
-        #expect(existing.filter { $0.review != .confirmed }.count == 4)
+        #expect(existing.allSatisfy { $0.review == .confirmed })
         #expect(VoiceSampleMaintenance.examples(turns, personID: person, ignoredOnly: false).count == 1200)
         #expect(turns.filter { $0.review == .confirmed }.count == 12)
     }
 
-    @Test func existingSamplesKeepExactReviewContextBeforeSamplingTurnAliases() {
+    @Test func comparisonReferencesRespectExactDecisionsAndExcludeMachineSuggestions() {
         let person = UUID()
         let meeting = UUID()
         let speaker = UUID()
@@ -485,11 +491,202 @@ extension VoiceMatchReviewSessionTests {
         another.end = 15
         another.attributionTurn = .init(start: 12, end: 15)
         let existing = VoiceMatchReviewSession.referenceExamples([alias, another, confirmed], personID: person)
-        #expect(Set(existing.map(\.id)) == [confirmed.id, another.id])
+        #expect(existing.map(\.id) == [confirmed.id])
         confirmed.review = .rejected
         confirmed.personID = nil
         confirmed.rejectedPersonIDs = [person]
         let rejected = VoiceMatchReviewSession.referenceExamples([alias, another, confirmed], personID: person)
-        #expect(rejected.map(\.id) == [another.id])
+        #expect(rejected.isEmpty)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func firstEmptyBatchStaysEmptyUntilReviewMoreIsRequested() {
+        let example = sample()
+        var session = VoiceMatchReviewSession()
+        session.refreshQueue([])
+        session.refreshQueue([example])
+        #expect(session.examples.isEmpty && session.displayedID == nil)
+        #expect(session.additionalCandidates.map(\.id) == [example.id])
+        session.refreshQueue([example], admitNewCandidates: true)
+        #expect(session.examples.map(\.id) == [example.id] && session.displayedID == example.id)
+    }
+
+    @Test func alternateReplacesOneOpportunityAndDoesNotReappearAsNewWork() {
+        let first = sample()
+        let second = sample()
+        let alternate = sample()
+        var session = VoiceMatchReviewSession(examples: [first, second])
+        session.showAlternative(alternate, currentEvidence: [first, second, alternate])
+        #expect(session.examples.map(\.id) == [alternate.id, second.id])
+        #expect(session.remainingCount == 2 && session.displayedID == alternate.id)
+        session.refreshQueue([first, second, alternate], currentEvidence: [first, second, alternate])
+        #expect(session.additionalCandidates.isEmpty)
+        session.record(.ignored, for: alternate.id, undoID: UUID())
+        session.selectCandidate(alternate.id)
+        session.showAlternative(first, currentEvidence: [first, second, alternate])
+        #expect(session.examples.map(\.id) == [alternate.id, second.id])
+        #expect(session.decisions[alternate.id] == .ignored)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func explicitCoverageRetiresPendingWorkWithoutInterruptingCurrentPlayback() {
+        let first = sample()
+        let covered = sample()
+        let last = sample()
+        let person = UUID()
+        var session = VoiceMatchReviewSession(examples: [first, covered, last], personID: person)
+        session.refreshQueue(
+            [last], currentEvidence: [first, covered, last], coveredExampleIDs: [first.id, covered.id])
+        #expect(session.examples.count == 3 && session.decidedCount == 0)
+        #expect(session.noLongerNeededIDs == [first.id, covered.id] && session.remainingCount == 1)
+        #expect(session.displayedID == first.id)
+        // A current sample remains correctable, and the next selection skips covered work.
+        session.record(.confirmed(person), for: first.id, undoID: UUID())
+        #expect(session.displayedID == last.id && session.decidedCount == 1)
+        session.restoreLast(updatedExamples: [first, covered, last])
+        session.refreshQueue([first, covered, last], currentEvidence: [first, covered, last])
+        #expect(session.noLongerNeededIDs.isEmpty && session.remainingCount == 3)
+        #expect(session.displayedID == first.id)
+    }
+
+    @Test func omittedCandidatesAreNotRetiredAndExplicitAlternativeStaysReviewable() {
+        let first = sample()
+        let omitted = sample()
+        let alternate = sample()
+        var session = VoiceMatchReviewSession(examples: [first, omitted])
+        session.refreshQueue([first], currentEvidence: [first, omitted])
+        #expect(session.noLongerNeededIDs.isEmpty && session.remainingCount == 2)
+        session.refreshQueue([omitted], currentEvidence: [first, omitted, alternate], coveredExampleIDs: [first.id])
+        #expect(session.noLongerNeededIDs == [first.id])
+        session.showAlternative(alternate, currentEvidence: [first, omitted, alternate])
+        #expect(session.noLongerNeededIDs.isEmpty)
+        session.refreshQueue(
+            [], currentEvidence: [first, omitted, alternate], coveredExampleIDs: [alternate.id, omitted.id])
+        #expect(session.noLongerNeededIDs == [omitted.id])
+        #expect(session.displayedID == alternate.id && session.remainingCount == 1)
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func replacingCandidateKeepsReferenceUndoReturnTargetValid() {
+        let candidate = sample()
+        let replacement = sample()
+        let reference = sample()
+        var session = VoiceMatchReviewSession(examples: [candidate])
+        session.selectReference(reference.id)
+        session.recordReference(for: reference.id, undoID: UUID())
+        session.returnToCandidate()
+        session.showAlternative(replacement, currentEvidence: [candidate, replacement, reference])
+        session.restoreLast(updatedExamples: [candidate, replacement, reference])
+        #expect(session.displayedID == reference.id && session.candidateID == replacement.id)
+        session.returnToCandidate()
+        #expect(session.displayedID == replacement.id && session.remainingCount == 1)
+        #expect(session.examples.map(\.id) == [replacement.id])
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func explicitMoreSelectsNewQuestionWhileCoveredSampleIsStillDisplayed() {
+        let covered = sample()
+        let next = sample()
+        var session = VoiceMatchReviewSession(examples: [covered])
+        session.refreshQueue([next], currentEvidence: [covered, next], coveredExampleIDs: [covered.id])
+        #expect(session.displayedID == covered.id && session.remainingCount == 0)
+        #expect(session.additionalCandidates.map(\.id) == [next.id])
+        session.refreshQueue(
+            [next], currentEvidence: [covered, next], admitNewCandidates: true, coveredExampleIDs: [covered.id])
+        #expect(session.displayedID == next.id && session.remainingCount == 1)
+        #expect(session.noLongerNeededIDs == [covered.id])
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func discardedAlternativeSourceIsAbsentFromNamingBeforeAndAfterRefresh() {
+        var source = sample()
+        source.audioRevision = "synthetic"
+        var alias = source
+        alias.id = UUID()
+        let replacement = sample()
+        var session = VoiceMatchReviewSession(examples: [source])
+        session.showAlternative(replacement, currentEvidence: [source, alias, replacement])
+        #expect(session.namingEvidence([source, alias, replacement]).map(\.id) == [replacement.id])
+        let group = VoiceIdentificationGroup(
+            id: source.groupID, examples: [source, alias], representativeID: source.id)
+        let snapshot = VoiceReviewSnapshot(revision: 1, candidates: [:], unnamedGroups: [group])
+        let input = session.refreshInput(
+            from: snapshot, initialGroup: group, fallbackPersonID: nil,
+            retainedGroupEvidence: [source, replacement], currentEvidence: [source, alias, replacement])
+        #expect(input.groupEvidence.map(\.id) == [replacement.id])
+    }
+
+    @Test func withdrawnCoverageRestoresExistingPendingFocusWithoutAdmittingNewQuestions() {
+        let first = sample()
+        let covered = sample()
+        let unseen = sample()
+        var session = VoiceMatchReviewSession(examples: [first, covered])
+        session.refreshQueue([first], currentEvidence: [first, covered], coveredExampleIDs: [covered.id])
+        session.record(.confirmed(UUID()), for: first.id, undoID: UUID())
+        #expect(session.displayedID == nil && session.remainingCount == 0)
+        session.refreshQueue([covered, unseen], currentEvidence: [first, covered, unseen])
+        #expect(session.displayedID == covered.id && session.remainingCount == 1)
+        #expect(session.examples.map(\.id) == [first.id, covered.id])
+        #expect(session.additionalCandidates.map(\.id) == [unseen.id])
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func undoNamingRestoresAlternativeMembershipBeforeLaterReplacement() {
+        let anchor = sample()
+        let source = sample()
+        let replacement = sample()
+        var session = VoiceMatchReviewSession(examples: [anchor, source])
+        session.recordNaming(
+            personID: UUID(), confirmedExampleID: anchor.id, updatedExamples: [anchor, source], undoID: UUID())
+        session.showAlternative(replacement, currentEvidence: [anchor, source, replacement])
+        #expect(session.examples.map(\.id) == [anchor.id, replacement.id])
+        session.restoreLast(updatedExamples: [anchor, source, replacement])
+        #expect(session.personID == nil && session.examples.map(\.id) == [anchor.id, source.id])
+        #expect(session.alternateExampleIDs.isEmpty)
+        #expect(session.namingEvidence([anchor, source]).map(\.id) == [anchor.id, source.id])
+        let group = VoiceIdentificationGroup(
+            id: anchor.groupID, examples: [anchor, source], representativeID: anchor.id)
+        let snapshot = VoiceReviewSnapshot(revision: 1, candidates: [:], unnamedGroups: [group])
+        let input = session.refreshInput(
+            from: snapshot, initialGroup: group, fallbackPersonID: nil,
+            retainedGroupEvidence: [anchor, source, replacement], currentEvidence: [anchor, source, replacement])
+        #expect(input.groupEvidence.map(\.id) == [anchor.id, source.id])
+    }
+}
+
+extension VoiceMatchReviewSessionTests {
+    @Test func newlyArrivedQuestionsAndTheirAliasesStayOutsideNamingScope() {
+        let admitted = sample()
+        var unseen = sample()
+        unseen.audioRevision = "synthetic"
+        var alias = unseen
+        alias.id = UUID()
+        var session = VoiceMatchReviewSession(examples: [admitted])
+        session.refreshQueue([admitted, unseen], currentEvidence: [admitted, unseen, alias])
+        #expect(session.additionalCandidates.map(\.id) == [unseen.id])
+        #expect(session.namingEvidence([admitted, unseen, alias]).map(\.id) == [admitted.id])
+    }
+
+    @Test func immediateNamingUndoRebuildsScopeBeforeAnySnapshotRefresh() {
+        let anchor = sample()
+        let source = sample()
+        let replacement = sample()
+        var session = VoiceMatchReviewSession(examples: [anchor, source])
+        session.recordNaming(
+            personID: UUID(), confirmedExampleID: anchor.id, updatedExamples: [anchor, source], undoID: UUID())
+        session.showAlternative(replacement, currentEvidence: [anchor, source, replacement])
+        let postNamingEvidence = session.namingEvidence([anchor, source, replacement])
+        #expect(postNamingEvidence.map(\.id) == [anchor.id, replacement.id])
+        session.restoreLast(updatedExamples: [anchor, source, replacement])
+        let immediate = session.restoredNamingEvidence(
+            initialEvidence: [anchor, source], currentEvidence: [anchor, source, replacement])
+        #expect(immediate.map(\.id) == [anchor.id, source.id])
+        #expect(!immediate.contains { $0.id == replacement.id })
     }
 }

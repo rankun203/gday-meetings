@@ -3,18 +3,21 @@ import Foundation
 /// Selects a bounded, diverse set from confirmed evidence. Call once per compatible
 /// model and person; this never changes the durable sample-to-person decisions.
 enum VoiceProfileSelection {
+    static let maximumReferencesPerModel = 12
     private static func quality(_ sample: SpeakerEvidenceSample) -> Double {
         let duration = sample.speechDuration
         let durationScore = duration.isFinite ? min(1, max(0, duration / 3)) : 0
         return min(1, max(0, sample.quality)) * durationScore
     }
 
-    static func select(_ samples: [SpeakerEvidenceSample], limit: Int = 12) -> [SpeakerEvidenceSample] {
+    static func select(
+        _ samples: [SpeakerEvidenceSample], limit: Int = maximumReferencesPerModel
+    ) -> [SpeakerEvidenceSample] {
         selectCancellable(samples, limit: limit, cancellationCheck: {})
     }
 
     static func selectCancellable(
-        _ samples: [SpeakerEvidenceSample], limit: Int = 12, cancellationCheck: () throws -> Void
+        _ samples: [SpeakerEvidenceSample], limit: Int = maximumReferencesPerModel, cancellationCheck: () throws -> Void
     ) rethrows -> [SpeakerEvidenceSample] {
         try cancellationCheck()
         guard limit > 0 else { return [] }

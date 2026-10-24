@@ -69,6 +69,12 @@ import Testing
         await store.assignSpeaker(meetingID: meeting.id, speakerID: speaker.id, personID: second)
         #expect(store.people.first { $0.id == first }?.voiceSamples.isEmpty == true)
         #expect(store.people.first { $0.id == second }?.voiceSamples.isEmpty == true)
+        // Reopening represents a new owner, after the first owner's derived
+        // reference work is durable and its filesystem monitor has stopped.
+        await store.voicePreparation.awaitReferenceSelections()
+        await store.flushVoiceAssignmentRefresh()
+        await store.libraryMonitor?.stop()
+        store.libraryMonitor = nil
         let reopened = MeetingStore(voiceLibraryLoading: .immediate, dataDirectory: root)
         #expect(await reopened.ensureMeetingLoaded(id: meeting.id))
         _ = try #require(reopened.meeting(id: meeting.id))

@@ -156,6 +156,7 @@ import Testing
             await store.nameVoiceGroupResult(
                 exampleIDs: [anchor.id], confirmedExampleID: anchor.id, personID: nil,
                 newPersonName: "Example Person", expectedExamples: [anchor]))
+        await store.flushVoiceAssignmentRefresh()
         let person = try #require(receipt.personID)
         candidate.transcriptAssociation?.personID = person
         #expect(library.upsert([candidate]))

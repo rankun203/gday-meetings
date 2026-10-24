@@ -161,6 +161,7 @@ struct VoiceSelectedReferenceTests {
         var otherSpeaker = original
         otherSpeaker.id = UUID()
         otherSpeaker.speakerID = UUID()
+        otherSpeaker.embeddings[0].values = [0.79, sqrt(1 - 0.79 * 0.79)]
         let snapshot = VoiceReviewSnapshot.make(
             hydrated: [reference, original, otherSpeaker], metadata: [reference, original, otherSpeaker],
             playableIDs: [reference.id, original.id, otherSpeaker.id], personIDs: [person], revision: 1)

@@ -175,6 +175,24 @@ struct VoiceSpeakerDecision: Codable, Hashable, Sendable {
     var speakerID: UUID
     var personID: UUID?
     var referenceSelectionPending: Bool? = nil
+    /// A new identity choice starts a new attempt, including choosing the same person again.
+    var referenceSelectionID: UUID? = nil
+    var referenceSelectionResult: VoiceReferenceSelectionResult? = nil
+}
+
+/// Records what happened to recognition evidence separately from transcript identity.
+struct VoiceReferenceSelectionResult: Codable, Hashable, Sendable {
+    enum Outcome: String, Codable, Hashable, Sendable {
+        case sampleAdded, sampleAvailable, scanNeeded, audioUnavailable, noSuitableSample
+        case alreadyRepresented, conflictingEvidence, failed, passageOnly
+    }
+    var outcome: Outcome
+    var sampleID: UUID? = nil
+    var audioRevision: String? = nil
+}
+
+enum VoiceReferenceSampleUsage: Equatable {
+    case available, stored, unavailable
 }
 
 struct VoiceProjectionOrigin: Codable, Equatable, Sendable {

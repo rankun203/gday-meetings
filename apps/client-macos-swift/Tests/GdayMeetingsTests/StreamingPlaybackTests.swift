@@ -23,7 +23,72 @@ private final class FailingTrackReader: StreamingAudioReading {
     }
 }
 
+private final class SeekBoundaryReader: StreamingAudioReading {
+    let totalFrames: Int64 = 192000
+    private var position: Int64 = 0
+    func seek(frame: Int64) throws { position = frame }
+    func read(into buffer: AVAudioPCMBuffer, frames: AVAudioFrameCount) throws {
+        buffer.frameLength = frames
+        for channel in 0..<2 {
+            for frame in 0..<Int(frames) {
+                buffer.floatChannelData![channel][frame] = position + Int64(frame) < 96000 ? 0.25 : 0
+            }
+        }
+        position += Int64(frames)
+    }
+}
+
 struct StreamingPlaybackTests {
+    @Test func preparedSeekClearsPreviousAudioAndHonorsLaterPause() async throws {
+        let player = StreamingPlayback(manualRendering: true, openReader: { _ in SeekBoundaryReader() })
+        defer { player.close() }
+        _ = try await player.prepare(files: [URL(fileURLWithPath: "/synthetic")])
+        try await player.play(rate: 1)
+        for _ in 0..<8 { _ = try await player.renderOffline(frames: 4096) }
+        let completions = AsyncStream<Result<Void, Error>>.makeStream()
+        let revision = UUID()
+        player.requestSeek(to: 2.5, revision: revision, resumeRate: 1) { completions.continuation.yield($0) }
+        var iterator = completions.stream.makeAsyncIterator()
+        try #require(await iterator.next()).get()
+        // The first block after a seek must contain no time-pitch history from
+        // the audible source interval, even though the graph stays prepared.
+        for _ in 0..<4 {
+            let audio = try await player.renderOffline(frames: 4096)
+            #expect((0..<Int(audio.frameLength)).allSatisfy { abs(audio.floatChannelData![0][$0]) < 0.00001 })
+        }
+        let updates = AsyncStream<StreamingPlayback.Snapshot>.makeStream()
+        player.onUpdate = { updates.continuation.yield($0) }
+        player.requestSeek(to: 0.5, revision: UUID(), resumeRate: 1) { completions.continuation.yield($0) }
+        player.pause()
+        try #require(await iterator.next()).get()
+        // An explicit pause queued after seek/resume is the final transport
+        // action; completion never schedules a second Play through the UI.
+        await player.shutdown()
+        updates.continuation.finish()
+        var last: StreamingPlayback.Snapshot?
+        for await update in updates.stream { last = update }
+        #expect(last?.playing == false)
+        completions.continuation.finish()
+    }
+
+    @MainActor @Test func queuedSeekCompletesWhileMainActorIsBusy() async throws {
+        let player = StreamingPlayback(manualRendering: true, openReader: { _ in SeekBoundaryReader() })
+        defer { player.close() }
+        _ = try await player.prepare(files: [URL(fileURLWithPath: "/synthetic")])
+        let completed = DispatchSemaphore(value: 0)
+        let results = AsyncStream<Result<Void, Error>>.makeStream()
+        // Deliberately keep this actor occupied: the transport must enqueue
+        // synchronously and finish seeking/resuming without a UI round trip.
+        player.requestSeek(to: 1, revision: UUID(), resumeRate: 1) {
+            results.continuation.yield($0)
+            completed.signal()
+        }
+        #expect(completed.wait(timeout: .now() + 2) == .success)
+        results.continuation.finish()
+        var iterator = results.stream.makeAsyncIterator()
+        try #require(await iterator.next()).get()
+    }
+
     @Test(arguments: ["open", "seek", "read"])
     func trackFailureDoesNotStopOrAttenuateRemainingAudio(failure: String) async throws {
         let player = StreamingPlayback(

@@ -64,20 +64,20 @@ struct VoicePreparationJob: Identifiable, Codable, Equatable {
             && completedRecordingIDs.count < discoveryInputs.count
         {
             return TaskProgress(
-                phase: "Analyzing recordings", completed: Double(completedRecordingIDs.count),
+                phase: "Analysing recordings", completed: Double(completedRecordingIDs.count),
                 total: Double(discoveryInputs.count), unit: "recordings",
                 startedAt: progressStartedAt ?? timeline?.last?.date ?? createdAt)
         }
         return TaskProgress(
-            phase: "Preparing voice examples", completed: Double(completedExampleIDs.count),
-            total: Double(exampleIDs.count), unit: "voice examples",
+            phase: "Analysing voice excerpts", completed: Double(completedExampleIDs.count),
+            total: Double(exampleIDs.count), unit: "voice excerpts",
             startedAt: progressStartedAt ?? timeline?.last?.date ?? createdAt,
             estimatedRemainingSeconds: state == .running ? estimatedRemainingSeconds : nil)
     }
     var progress: String {
-        let examples = "\(completedExampleIDs.count) of \(exampleIDs.count) voice examples prepared"
+        let examples = "\(completedExampleIDs.count) of \(exampleIDs.count) voice excerpts analysed"
         guard !discoveryInputs.isEmpty else { return examples }
-        return "\(completedRecordingIDs.count) of \(discoveryInputs.count) recordings analyzed · \(examples)"
+        return "\(completedRecordingIDs.count) of \(discoveryInputs.count) recordings analysed · \(examples)"
     }
 }
 
@@ -122,7 +122,7 @@ final class VoiceLibraryPreparation: ObservableObject {
             + (alternativeTask == nil ? 0 : 1)
     }
     private var retiringReferences: [UUID: Task<Void, Never>] = [:]
-    private var referenceTokens: [UUID: UUID] = [:]
+    @Published private(set) var referenceTokens: [UUID: UUID] = [:]
     private var referenceTasks: [UUID: Task<Void, Never>] = [:]
     private var recordingPausedJobs: [UUID] = []
     private var runTokens: [UUID: UUID] = [:]
@@ -204,26 +204,48 @@ final class VoiceLibraryPreparation: ObservableObject {
     /// only publish while the same explicit speaker identity is still current.
     func selectReference(meetingID: UUID, speakerID: UUID, personID: UUID, exampleID: UUID?, directory: URL) {
         cancelReference(speakerID: speakerID)
-        guard !recordingSuspended, alternativePreparationAllowed?() != false else { return }
+        guard !recordingSuspended, alternativePreparationAllowed?() != false,
+            let decision = library.referenceDecision(meetingID: meetingID, speakerID: speakerID, personID: personID)
+        else { return }
+        let selectionID = decision.referenceSelectionID
         let token = UUID()
         let predecessors = Array(referenceTasks.values) + Array(retiringReferences.values)
         referenceTokens[speakerID] = token
         referenceTasks[speakerID] = Task { [weak self] in
             guard let self else { return }
+            @MainActor func current() -> Bool {
+                self.referenceTokens[speakerID] == token
+                    && self.library.referenceDecision(meetingID: meetingID, speakerID: speakerID, personID: personID)?
+                        .referenceSelectionID == selectionID
+                    && self.library.hasManualIdentity(meetingID: meetingID, speakerID: speakerID, personID: personID)
+            }
             do {
                 for predecessor in predecessors { await predecessor.value }
                 try Task.checkCancellation()
-                let completed = try await self.prepareReference(
+                let result = try await self.prepareReference(
                     meetingID: meetingID, speakerID: speakerID, personID: personID,
-                    exampleID: exampleID, directory: directory)
-                if completed, await self.referenceWriteReady?() != false {
+                    selectionID: selectionID, exampleID: exampleID, directory: directory)
+                if let result, await self.referenceWriteReady?() != false {
                     try Task.checkCancellation()
-                    _ = self.library.finishReferenceSelection(
-                        meetingID: meetingID, speakerID: speakerID, personID: personID)
+                    if current() {
+                        _ = self.library.finishReferenceSelection(
+                            meetingID: meetingID, speakerID: speakerID, personID: personID,
+                            result: result, expectedSelectionID: selectionID)
+                    }
                 }
             }
+            catch is CancellationError {
+                // Suspension and a newer assignment preserve pending work for the current identity.
+            }
             catch {
-                // A transcript identity remains useful when local evidence is unavailable.
+                if !Task.isCancelled, await self.referenceWriteReady?() != false,
+                    !Task.isCancelled, current(), !self.recordingSuspended,
+                    self.alternativePreparationAllowed?() != false
+                {
+                    _ = self.library.finishReferenceSelection(
+                        meetingID: meetingID, speakerID: speakerID, personID: personID,
+                        result: .init(outcome: .failed), expectedSelectionID: selectionID)
+                }
             }
             self.retiringReferences[token] = nil
             if self.referenceTokens[speakerID] == token {
@@ -234,7 +256,9 @@ final class VoiceLibraryPreparation: ObservableObject {
     }
 
     func cancelReference(speakerID: UUID) {
-        if let task = referenceTasks[speakerID], let token = referenceTokens[speakerID] {
+        if let task = referenceTasks.removeValue(forKey: speakerID),
+            let token = referenceTokens.removeValue(forKey: speakerID)
+        {
             task.cancel()
             retiringReferences[token] = task
         }
@@ -245,46 +269,53 @@ final class VoiceLibraryPreparation: ObservableObject {
     }
 
     private func prepareReference(
-        meetingID: UUID, speakerID: UUID, personID: UUID, exampleID: UUID?, directory: URL
-    ) async throws -> Bool {
+        meetingID: UUID, speakerID: UUID, personID: UUID, selectionID: UUID?, exampleID: UUID?, directory: URL
+    ) async throws -> VoiceReferenceSelectionResult? {
         func check() throws {
             try Task.checkCancellation()
             guard !recordingSuspended, alternativePreparationAllowed?() != false,
-                library.hasManualIdentity(meetingID: meetingID, speakerID: speakerID, personID: personID)
+                library.hasManualIdentity(meetingID: meetingID, speakerID: speakerID, personID: personID),
+                library.referenceDecision(meetingID: meetingID, speakerID: speakerID, personID: personID)?
+                    .referenceSelectionID == selectionID
             else { throw CancellationError() }
         }
         try check()
+        let retained = library.examples.filter { example in
+            guard let origin = example.selectedReference else { return false }
+            return origin.meetingID == meetingID && origin.speakerID == speakerID && origin.personID == personID
+                && example.personID == personID && example.review == .confirmed
+                && !example.excluded && !example.manuallyCleared
+        }
+        if !retained.isEmpty {
+            let profiles = try await library.matchingPeople(from: people())
+            try check()
+            let active = Set(profiles.first { $0.id == personID }?.voiceSamples.map(\.speakerID) ?? [])
+            if let existing = retained.first(where: { active.contains($0.id) }) {
+                return .init(outcome: .sampleAvailable, sampleID: existing.id, audioRevision: existing.audioRevision)
+            }
+        }
         let snapshot: VoiceDiscoverySourceReader.Snapshot
         do { snapshot = try await inventoryReader.read(meetingID: meetingID, folder: directory) }
         catch {
             let exists = await Task.detached(priority: .utility) {
                 FileManager.default.fileExists(atPath: directory.path)
             }.value
-            if !exists { return true }
+            if !exists { return .init(outcome: .audioUnavailable) }
             throw error
         }
         try check()
         // Legacy passage corrections retain their separate Undo scope and do not
         // enroll recording-wide reference evidence.
         if snapshot.meeting.speakers.first(where: { $0.id == speakerID })?.passageAssignmentOrigin != nil {
-            return true
+            return .init(outcome: .passageOnly)
         }
-        if library.examples.contains(where: { example in
-            guard let origin = example.selectedReference, let file = example.audioFile,
-                let revision = snapshot.revisions[file]
-            else { return false }
-            return origin.meetingID == meetingID && origin.speakerID == speakerID && origin.personID == personID
-                && example.personID == personID && example.review == .confirmed
-                && !example.excluded && !example.manuallyCleared && example.audioRevision == revision
-                && example.currentSampleQuality != nil && example.currentSampleQuality?.issue == nil
-        }) {
-            return true
-        }
+        guard !snapshot.meeting.audioFiles.isEmpty, !snapshot.revisions.isEmpty
+        else { return .init(outcome: .audioUnavailable) }
         let input = VoiceDiscoveryInput(
             meetingID: meetingID, audioFiles: snapshot.meeting.audioFiles, audioRevisions: snapshot.revisions)
         guard
             let analysis = try await discoveryCache.read(input: input, configuration: .community, directory: directory)
-        else { return false }
+        else { return .init(outcome: .scanNeeded) }
         try check()
         let current = library.examples.filter { example in
             guard example.meetingID == meetingID, let file = example.audioFile,
@@ -302,14 +333,15 @@ final class VoiceLibraryPreparation: ObservableObject {
         }
         // Current analysis resolves a completed attempt even if an older,
         // pre-conversion excerpt has no current usable equivalent.
-        guard !originals.isEmpty else { return true }
+        guard !originals.isEmpty else { return .init(outcome: .noSuitableSample) }
         var originalIndex = 0
         var attempted = library.examples.filter { $0.isReviewed && $0.selectedReference == nil }
         var audioAttempts = 0
+        var rejection: VoiceReferenceSelection.Rejection?
         for _ in 0..<64 {
             try check()
             if audioAttempts >= 3 { break }
-            guard originalIndex < originals.count else { return true }
+            guard originalIndex < originals.count else { break }
             let original = originals[originalIndex]
             // Select from all retained turns rather than approving whichever excerpt
             // happened to be displayed. The selector excludes detected overlap and
@@ -383,27 +415,38 @@ final class VoiceLibraryPreparation: ObservableObject {
             await worker.finish()
             try check()
             guard embedding.isValid, embedding.type == CommunityVoiceEmbeddingExtractor.embeddingType else {
-                return false
+                return .init(outcome: .failed)
             }
             let profiles = try await library.matchingPeople(from: people())
             try check()
-            guard VoiceReferenceSelection.permits(embedding: embedding, personID: personID, profiles: profiles) else {
+            let referenceIDs = Set(profiles.first { $0.id == personID }?.voiceSamples.map(\.speakerID) ?? [])
+            if let reason = VoiceReferenceSelection.rejection(
+                embedding: embedding, personID: personID, profiles: profiles, candidate: candidate,
+                referenceExamples: library.reviewEvidence(for: referenceIDs))
+            {
+                if rejection != .alreadyRepresented { rejection = reason }
                 continue
             }
-            guard await referenceWriteReady?() != false else { return false }
+            guard await referenceWriteReady?() != false else { return nil }
             try check()
             let latest = try await inventoryReader.read(meetingID: meetingID, folder: directory)
             try check()
             guard latest.revisions == snapshot.revisions,
                 VoiceReferenceSelection.isSupported(range: range, meeting: latest.meeting, speakerID: speakerID)
-            else { return false }
+            else { return nil }
             // Re-read suspension/save state after inventory I/O, then publish without an await.
-            guard await referenceWriteReady?() != false else { return false }
+            guard await referenceWriteReady?() != false else { return nil }
             try check()
             candidate.embeddings = [embedding]
-            return library.acceptSelectedReference(candidate, personID: personID, speakerID: speakerID)
+            guard library.acceptSelectedReference(candidate, personID: personID, speakerID: speakerID) else {
+                return .init(outcome: .failed)
+            }
+            return .init(outcome: .sampleAdded, sampleID: candidate.id, audioRevision: candidate.audioRevision)
         }
-        return true
+        return .init(
+            outcome: rejection == .alreadyRepresented
+                ? .alreadyRepresented
+                : (rejection == .conflictingEvidence ? .conflictingEvidence : .noSuitableSample))
     }
 
     /// Prepares independent evidence without replacing the original excerpt or its decision.
@@ -803,7 +846,101 @@ final class VoiceLibraryPreparation: ObservableObject {
                     $0.progressStartedAt = Date()
                 })
         else { return }
-        let pending = Set(job.exampleIDs).subtracting(job.completedExampleIDs)
+        defer { library.releaseRepresentations() }
+        var completed = Set(job.completedExampleIDs)
+        var pendingCompletions: [UUID] = []
+        var pendingFailures: [String: String] = [:]
+        var completionSources: [UUID: VoiceExample] = [:]
+        var checkpointStarted = SuspendingClock.now
+        var metadataRevision = library.reviewMetadataRevision
+        var representationRevision = library.representationsRevision
+        var metadata = Dictionary(uniqueKeysWithValues: library.examples.map { ($0.id, $0) })
+        var aliases = Dictionary(grouping: library.examples, by: VoiceExactReviewDecisions.Key.init)
+        var representationOwners: [VoiceExactReviewDecisions.Key: UUID] = [:]
+        var reusedVectors: [VoiceExactReviewDecisions.Key: TypedVoiceEmbedding] = [:]
+
+        func markCompleted(_ id: UUID) {
+            if completed.insert(id).inserted {
+                pendingCompletions.append(id)
+                completionSources[id] = metadata[id]
+            }
+            pendingFailures.removeValue(forKey: id.uuidString)
+        }
+        func checkpoint() -> Bool {
+            guard !pendingCompletions.isEmpty || !pendingFailures.isEmpty else { return true }
+            guard !Task.isCancelled, library.jobs.first(where: { $0.id == jobID })?.state == .running else {
+                return false
+            }
+            refreshMetadata()
+            var checkedAudio: [String: Bool] = [:]
+            let currentCompletions = pendingCompletions.filter { id in
+                guard let original = completionSources[id], let current = metadata[id], !current.excluded else {
+                    return true
+                }
+                let sameSource = original.range == current.range && original.audioRevision == current.audioRevision
+                let audioKey = "\(current.meetingID)|\(current.audioFile ?? "")|\(current.audioRevision ?? "")"
+                let audioCurrent: Bool
+                if current.audioRevision == nil {
+                    audioCurrent = true
+                }
+                else if let checked = checkedAudio[audioKey] {
+                    audioCurrent = checked
+                }
+                else {
+                    audioCurrent = library.audioIsCurrent(current)
+                    checkedAudio[audioKey] = audioCurrent
+                }
+                guard sameSource, audioCurrent else {
+                    completed.remove(id)
+                    pendingFailures[id.uuidString] =
+                        "The source audio changed during preparation. Review a new example."
+                    return false
+                }
+                return true
+            }
+            guard complete(currentCompletions, failures: pendingFailures, jobID: jobID) else { return false }
+            pendingCompletions.removeAll(keepingCapacity: true)
+            pendingFailures.removeAll(keepingCapacity: true)
+            completionSources.removeAll(keepingCapacity: true)
+            reusedVectors.removeAll(keepingCapacity: true)
+            library.releaseRepresentations()
+            checkpointStarted = SuspendingClock.now
+            return true
+        }
+        func refreshMetadata() {
+            guard
+                metadataRevision != library.reviewMetadataRevision
+                    || representationRevision != library.representationsRevision
+            else { return }
+            metadata = Dictionary(uniqueKeysWithValues: library.examples.map { ($0.id, $0) })
+            aliases = Dictionary(grouping: library.examples, by: VoiceExactReviewDecisions.Key.init)
+            metadataRevision = library.reviewMetadataRevision
+            representationRevision = library.representationsRevision
+            representationOwners.removeAll(keepingCapacity: true)
+            reusedVectors.removeAll(keepingCapacity: true)
+        }
+        func remember(_ value: TypedVoiceEmbedding, example: VoiceExample) {
+            guard let key = VoiceExactReviewDecisions.Key(example) else { return }
+            representationOwners[key] = example.id
+            reusedVectors[key] = value
+        }
+        func compatibleAlias(for example: VoiceExample) -> TypedVoiceEmbedding? {
+            guard let key = VoiceExactReviewDecisions.Key(example) else { return nil }
+            if let value = reusedVectors[key] { return value }
+            let known = representationOwners[key]
+            let ids = (known.map { [$0] } ?? []) + (aliases[key] ?? []).map(\.id).filter { $0 != known }
+            for id in ids where id != example.id {
+                guard let current = metadata[id], VoiceExactReviewDecisions.Key(current) == key,
+                    let alias = library.hydratedExample(id: id),
+                    let value = alias.voiceEmbeddings.first(where: { $0.type == job.type && $0.isValid })
+                else { continue }
+                remember(value, example: alias)
+                return value
+            }
+            return nil
+        }
+
+        let pending = Set(job.exampleIDs).subtracting(completed)
         let remainingDurations = Dictionary(
             uniqueKeysWithValues: library.examples.compactMap { example -> (UUID, Double)? in
                 guard pending.contains(example.id), !example.excluded, let duration = example.range?.speechDuration
@@ -813,39 +950,57 @@ final class VoiceLibraryPreparation: ObservableObject {
         var remainingAudio = remainingDurations.values.reduce(0, +)
         var measuredAudio = 0.0
         var measuredSeconds = 0.0
-        for exampleID in job.exampleIDs {
-            defer {
-                remainingAudio = max(0, remainingAudio - (remainingDurations[exampleID] ?? 0))
-                updateExampleEstimate(jobID: jobID, key: performanceKey, remainingAudio: remainingAudio)
+        for (position, exampleID) in job.exampleIDs.enumerated() {
+            if position > 0 && (position.isMultiple(of: 64) || AudioTaskProgress.elapsed(since: checkpointStarted) >= 1)
+            {
+                guard checkpoint() else { return }
+                await Task.yield()
             }
             guard !Task.isCancelled,
                 library.jobs.first(where: { $0.id == jobID })?.state == .running
             else { return }
-            if library.jobs.first(where: { $0.id == jobID })?.completedExampleIDs.contains(exampleID) == true {
+            if completed.contains(exampleID) { continue }
+            defer { remainingAudio = max(0, remainingAudio - (remainingDurations[exampleID] ?? 0)) }
+            refreshMetadata()
+            guard let currentMetadata = metadata[exampleID], !currentMetadata.excluded else {
+                markCompleted(exampleID)
                 continue
             }
-            guard let metadata = library.examples.first(where: { $0.id == exampleID }), !metadata.excluded else {
-                if !complete(exampleID, jobID: jobID) { return }
+            // A current scan's failed PCM assessment is already an analysis result.
+            // Retrying the same unusable excerpt cannot produce useful evidence.
+            if job.discover, let configuration = job.discoveryConfiguration,
+                currentMetadata.detectedSpeakerConfiguration == configuration,
+                let quality = currentMetadata.currentSampleQuality,
+                quality.scanConfiguration == configuration.pipeline, quality.issue != nil
+            {
+                if library.audioIsCurrent(currentMetadata) {
+                    markCompleted(exampleID)
+                }
+                else {
+                    pendingFailures[exampleID.uuidString] = "Audio is unavailable for this model’s preparation."
+                }
                 continue
             }
             guard let example = library.hydratedExample(id: exampleID) else {
-                guard
-                    update(jobID, { $0.failures[exampleID.uuidString] = "Couldn’t read saved voice representations." })
-                else { return }
+                pendingFailures[exampleID.uuidString] = "Couldn’t read saved voice representations."
                 continue
             }
-            if example.voiceEmbeddings.contains(where: { $0.type == job.type && $0.isValid }),
-                example.audioRevision == nil || library.audioIsCurrent(metadata)
+            if let value = example.voiceEmbeddings.first(where: { $0.type == job.type && $0.isValid }),
+                example.audioRevision == nil || library.audioIsCurrent(currentMetadata)
             {
-                if !complete(exampleID, jobID: jobID) { return }
+                remember(value, example: example)
+                markCompleted(exampleID)
                 continue
             }
-            guard library.audioIsCurrent(metadata) else {
-                guard
-                    update(
-                        jobID,
-                        { $0.failures[exampleID.uuidString] = "Audio is unavailable for this model’s preparation." })
-                else { return }
+            guard library.audioIsCurrent(currentMetadata) else {
+                pendingFailures[exampleID.uuidString] = "Audio is unavailable for this model’s preparation."
+                continue
+            }
+            if let value = compatibleAlias(for: example) {
+                guard library.addRepresentation(exampleID: exampleID, embedding: value) else { return }
+                representationRevision = library.representationsRevision
+                remember(value, example: example)
+                markCompleted(exampleID)
                 continue
             }
             do {
@@ -853,12 +1008,14 @@ final class VoiceLibraryPreparation: ObservableObject {
                 let representation = try await extractor.extract(
                     example: example, directory: directory(example.meetingID), type: job.type)
                 try Task.checkCancellation()
+                guard library.jobs.first(where: { $0.id == jobID })?.state == .running else { return }
+                refreshMetadata()
                 guard representation.type == job.type, representation.isValid else {
                     throw ServiceError("The provider returned an incompatible voice representation.")
                 }
-                // Review, exclusion, and audio changes during extraction invalidate its snapshot.
+                // Exclusion and audio changes during extraction invalidate its snapshot.
                 guard let current = library.examples.first(where: { $0.id == exampleID }), !current.excluded else {
-                    if !complete(exampleID, jobID: jobID) { return }
+                    markCompleted(exampleID)
                     continue
                 }
                 guard current.audioFile == example.audioFile, current.start == example.start,
@@ -866,9 +1023,10 @@ final class VoiceLibraryPreparation: ObservableObject {
                     current.end == example.end, current.audioRevision == example.audioRevision,
                     library.audioIsCurrent(current)
                 else { throw ServiceError("The source audio changed during preparation. Review a new example.") }
-                guard library.addRepresentation(exampleID: exampleID, embedding: representation),
-                    complete(exampleID, jobID: jobID)
-                else { return }
+                guard library.addRepresentation(exampleID: exampleID, embedding: representation) else { return }
+                representationRevision = library.representationsRevision
+                remember(representation, example: current)
+                markCompleted(exampleID)
                 if let seconds = await extractor.processingDuration(), let duration = example.range?.speechDuration {
                     try Task.checkCancellation()
                     guard library.jobs.first(where: { $0.id == jobID })?.state == .running else { return }
@@ -885,10 +1043,9 @@ final class VoiceLibraryPreparation: ObservableObject {
                 }
             }
             catch is CancellationError { return }
-            catch {
-                guard update(jobID, { $0.failures[exampleID.uuidString] = error.localizedDescription }) else { return }
-            }
+            catch { pendingFailures[exampleID.uuidString] = error.localizedDescription }
         }
+        guard checkpoint() else { return }
         guard !Task.isCancelled else { return }
         guard
             update(
@@ -1068,7 +1225,8 @@ final class VoiceLibraryPreparation: ObservableObject {
                 $0.fullyAnalyzedRecordingIDs = Array(Set(($0.fullyAnalyzedRecordingIDs ?? []) + [input.meetingID]))
             }
             $0.failures.removeValue(forKey: failureKey)
-            for example in examples where !$0.exampleIDs.contains(example.id) { $0.exampleIDs.append(example.id) }
+            var known = Set($0.exampleIDs)
+            for example in examples where known.insert(example.id).inserted { $0.exampleIDs.append(example.id) }
         }
     }
 
@@ -1125,10 +1283,14 @@ final class VoiceLibraryPreparation: ObservableObject {
     }
 
     @discardableResult
-    private func complete(_ exampleID: UUID, jobID: UUID) -> Bool {
+    private func complete(_ exampleIDs: [UUID], failures: [String: String], jobID: UUID) -> Bool {
         update(jobID) {
-            if !$0.completedExampleIDs.contains(exampleID) { $0.completedExampleIDs.append(exampleID) }
-            $0.failures.removeValue(forKey: exampleID.uuidString)
+            var known = Set($0.completedExampleIDs)
+            for id in exampleIDs {
+                if known.insert(id).inserted { $0.completedExampleIDs.append(id) }
+                $0.failures.removeValue(forKey: id.uuidString)
+            }
+            $0.failures.merge(failures) { _, latest in latest }
         }
     }
 
@@ -1286,8 +1448,17 @@ enum VoiceReferenceSelection {
         return true
     }
 
+    enum Rejection { case alreadyRepresented, conflictingEvidence, insufficientEvidence }
+
     static func permits(embedding: TypedVoiceEmbedding, personID: UUID, profiles: [Person]) -> Bool {
-        guard embedding.isValid else { return false }
+        rejection(embedding: embedding, personID: personID, profiles: profiles) == nil
+    }
+
+    static func rejection(
+        embedding: TypedVoiceEmbedding, personID: UUID, profiles: [Person], candidate: VoiceExample? = nil,
+        referenceExamples: [VoiceExample] = []
+    ) -> Rejection? {
+        guard embedding.isValid else { return .conflictingEvidence }
         func scores(_ person: Person) -> [Double] {
             person.voiceSamples.compactMap { sample in
                 let reference = sample.resolvedVoiceEmbedding
@@ -1297,18 +1468,43 @@ enum VoiceReferenceSelection {
         }
         let own = profiles.first(where: { $0.id == personID }).map(scores) ?? []
         if let best = own.max() {
-            guard best >= VoiceMatchingPolicy.default.suggestionThreshold else { return false }
+            guard best >= VoiceMatchingPolicy.default.suggestionThreshold else { return .conflictingEvidence }
             // Profile selection already bounds representations. A practically
             // identical voice vector adds no useful diversity to that profile.
-            if best >= 0.97 { return false }
-            if own.count >= 12 { return false }
+            if best >= 0.97 { return .alreadyRepresented }
         }
         let rival = profiles.filter { $0.id != personID }.flatMap(scores).max()
         if let rival, rival >= VoiceMatchingPolicy.default.automaticThreshold,
             rival > (own.max() ?? -1)
         {
-            return false
+            return .conflictingEvidence
         }
-        return true
+        guard own.count >= VoiceProfileSelection.maximumReferencesPerModel else { return nil }
+        let metadata = Dictionary(referenceExamples.map { ($0.id, $0) }, uniquingKeysWith: { _, value in value })
+        func evidence(_ example: VoiceExample, embedding: TypedVoiceEmbedding) -> SpeakerEvidenceSample? {
+            guard let range = example.range else { return nil }
+            return .init(
+                id: example.id.uuidString, source: example.source, localSpeakerID: example.groupID.uuidString,
+                start: range.start, end: range.end, embedding: embedding, spans: example.spans)
+        }
+        let existing =
+            profiles.first { $0.id == personID }?.voiceSamples.compactMap { sample -> SpeakerEvidenceSample? in
+                let value = sample.resolvedVoiceEmbedding
+                guard value.type == embedding.type, value.isValid, let example = metadata[sample.speakerID] else {
+                    return nil
+                }
+                return evidence(example, embedding: value)
+            } ?? []
+        guard existing.count == own.count, let candidate, let proposal = evidence(candidate, embedding: embedding)
+        else {
+            return .insufficientEvidence
+        }
+        // A full active profile can improve. Compare diversity within its existing
+        // budget instead of rejecting every later reference because it is full.
+        // PCM suitability was checked before this admission decision.
+        guard VoiceProfileSelection.select(existing + [proposal]).contains(where: { $0.id == proposal.id }) else {
+            return .alreadyRepresented
+        }
+        return nil
     }
 }

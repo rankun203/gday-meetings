@@ -48,6 +48,7 @@ struct VoiceReviewSnapshot: Sendable {
     var revision: Int
     var candidates: [UUID: [VoiceExample]]
     var unnamedGroups: [VoiceIdentificationGroup]
+    var coveredExampleIDs: [UUID: Set<UUID>] = [:]
 
     static func make(
         hydrated allHydrated: [VoiceExample], metadata allMetadata: [VoiceExample], playableIDs: Set<UUID>,
@@ -60,9 +61,13 @@ struct VoiceReviewSnapshot: Sendable {
         let byID = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
         // Unavailable confirmed records remain reference evidence, but cannot
         // become review questions even if their metadata still has a range.
-        let ranked = VoiceReviewSelection.rank(hydrated, for: personIDs, policy: policy).mapValues { values in
+        let evaluation = VoiceReviewSelection.evaluate(hydrated, for: personIDs, policy: policy)
+        let ranked = evaluation.candidates.mapValues { values in
             values.filter { playableIDs.contains($0.id) }.compactMap { byID[$0.id] }
         }
+        let coveredIDs = Set(evaluation.coveredExampleIDs.values.flatMap { $0 })
+        let coveredAudio = Set(
+            hydrated.filter { coveredIDs.contains($0.id) }.compactMap(VoiceExactReviewDecisions.Key.init))
         let namedAudio = Set(ranked.values.flatMap { $0 }.compactMap(VoiceExactReviewDecisions.Key.init))
         let namedIDs = Set(ranked.values.flatMap { $0 }.map(\.id))
         let unnamedGroups =
@@ -70,7 +75,9 @@ struct VoiceReviewSnapshot: Sendable {
             .compactMap {
                 source -> VoiceIdentificationGroup? in
                 func unnamed(_ example: VoiceExample) -> Bool {
-                    availableIDs.contains(example.id) && example.personID == nil && example.namedPersonID == nil
+                    availableIDs.contains(example.id) && !coveredIDs.contains(example.id)
+                        && VoiceExactReviewDecisions.Key(example).map { !coveredAudio.contains($0) } == true
+                        && example.personID == nil && example.namedPersonID == nil
                         && example.suggestedPersonID == nil
                         && !example.excluded && !example.manuallyCleared
                 }
@@ -87,31 +94,17 @@ struct VoiceReviewSnapshot: Sendable {
                 if !visibleIDs.contains(group.representativeID) { group.representativeID = first.id }
                 return group
             }
-        return Self(revision: revision, candidates: ranked, unnamedGroups: unnamedGroups)
+        return Self(
+            revision: revision, candidates: ranked, unnamedGroups: unnamedGroups,
+            coveredExampleIDs: evaluation.coveredExampleIDs.mapValues { $0.intersection(playableIDs) })
     }
 
-    /// A manually identified speaker with selected recognition evidence does
-    /// not need repeated approval of its arbitrary initial excerpt. Keep stored
-    /// decisions intact so corrections and later reopening remain reversible.
+    /// Pending reference-selection records are background work. Keep every
+    /// independent turn available until typed vectors can establish consistency.
     static func selectiveEvidence(_ examples: [VoiceExample]) -> [VoiceExample] {
-        let selected = Dictionary(
-            grouping: examples.filter {
-                $0.selectedReference != nil && $0.review == .confirmed && !$0.excluded && !$0.manuallyCleared
-            }, by: \.meetingID)
-        return VoiceTurnReviewSelection.select(examples).filter { example in
-            if example.selectedReference != nil && example.review != .confirmed { return false }
-            guard example.acceptsSuggestions else { return true }
-            return !(selected[example.meetingID] ?? []).contains { reference in
-                guard let origin = reference.selectedReference,
-                    example.meetingID == origin.meetingID,
-                    example.audioRevision == reference.audioRevision,
-                    example.namedPersonID == nil || example.namedPersonID == origin.personID
-                else { return false }
-                // A scan cluster may span multiple transcript identities. Only
-                // suppress questions belonging to this exact detected speaker.
-                return example.speakerID == origin.speakerID
-            }
-        }
+        // Metadata has no vectors, so it cannot establish voice consistency.
+        // Typed, hydrated evidence supplies the acoustic sampling stage later.
+        examples.filter { $0.selectedReference == nil || $0.review == .confirmed }
     }
 
     static func groups(
@@ -135,13 +128,14 @@ struct VoiceReviewSnapshot: Sendable {
         }
         let included = Set(groups.flatMap(\.evidenceExamples).map(\.id))
         let decisions = VoiceExactReviewDecisions(metadata)
-        // Recovery evidence joins its original proposed group as hidden data.
-        // A short, invalid, or missing source never creates a reviewable row.
-        for example in metadata where !included.contains(example.id) {
+        // Only authored grouping grants hidden evidence membership. Automatic
+        // turn representatives are questions, so omitted turns keep independent
+        // attribution and never inherit a name through an old provider group ID.
+        for example in metadata where !included.contains(example.id) && example.manuallyGrouped {
             let effective = decisions.applying(to: example)
             guard !effective.manuallyCleared, !effective.excluded else { continue }
             if let index = groups.firstIndex(where: { group in
-                group.id == example.groupID || group.evidenceExamples.contains { $0.groupID == example.groupID }
+                group.evidenceExamples.contains { $0.manuallyGrouped && $0.groupID == example.groupID }
             }) {
                 groups[index].duplicateExamples.append(example)
             }

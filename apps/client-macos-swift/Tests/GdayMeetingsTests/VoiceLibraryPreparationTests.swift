@@ -64,6 +64,43 @@ private actor VoiceRetirementGate {
     }
 }
 
+private final class VoicePreparationJobWriteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func wrote(_ url: URL) {
+        guard url.deletingLastPathComponent().lastPathComponent == "jobs" else { return }
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+    func reset() {
+        lock.lock()
+        value = 0
+        lock.unlock()
+    }
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+private actor VoiceSecondExtractionGate {
+    var calls = 0
+    var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func visit() async {
+        calls += 1
+        guard calls == 2 else { return }
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 @MainActor
 struct VoiceLibraryPreparationTests {
     private func directory() throws -> URL {
@@ -114,6 +151,170 @@ struct VoiceLibraryPreparationTests {
         #expect(await extractor.finishes == 1)
         #expect(library.jobs.first?.state == .failed)
         #expect(library.jobs.first?.completedExampleIDs.count == 2)
+    }
+
+    @Test func cachedAnalysisCompletesWithBatchCheckpointsWithoutInference() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let counter = VoicePreparationJobWriteCounter()
+        let library = VoiceLibraryStore(
+            loading: .immediate, directory: directory,
+            write: { data, url in
+                try data.write(to: url, options: .atomic)
+                counter.wrote(url)
+            })
+        let original = try example(in: directory, embeddings: [embedding()])
+        let samples = (0..<512).map { index -> VoiceExample in
+            var sample = original
+            sample.id = UUID()
+            sample.start = Double(index) * 4
+            sample.end = Double(index) * 4 + 3
+            return sample
+        }
+        #expect(library.upsert(samples))
+        let extractor = FakeVoiceExampleExtractor(result: embedding())
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job(samples)
+        #expect(library.setJobs([task]))
+        counter.reset()
+        await preparation.run(jobID: task.id, directory: { _ in directory })
+        #expect(await extractor.calls == 0)
+        #expect(library.jobs.first?.completedExampleIDs.count == 512)
+        #expect(library.jobs.first?.state == .completed)
+        print("SYNTHETIC_ANALYSIS_CHECKPOINTS examples=512 jobWrites=\(counter.count)")
+        #expect(counter.count < 32)
+        #expect(library.examples.allSatisfy { $0.embeddings.isEmpty })
+        let reopened = VoiceLibraryStore(loading: .immediate, directory: directory)
+        #expect(reopened.jobs.first?.completedExampleIDs.count == 512)
+    }
+
+    @Test func exactAudioAliasReusesCompatibleRepresentationWithoutCopyingReview() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        var reference = try example(in: directory, embeddings: [embedding()])
+        reference.personID = UUID()
+        var alias = reference
+        alias.id = UUID()
+        alias.personID = nil
+        alias.review = .unassigned
+        alias.embeddings = []
+        #expect(library.upsert([reference, alias]))
+        let extractor = FakeVoiceExampleExtractor(result: embedding())
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job([alias])
+        #expect(library.setJobs([task]))
+        await preparation.run(jobID: task.id, directory: { _ in directory })
+        #expect(await extractor.calls == 0)
+        #expect(library.hydratedExample(id: alias.id)?.embeddings == [embedding()])
+        #expect(library.examples.first(where: { $0.id == alias.id })?.review == .unassigned)
+        #expect(library.examples.first(where: { $0.id == alias.id })?.personID == nil)
+        #expect(library.examples.first(where: { $0.id == reference.id })?.personID == reference.personID)
+    }
+
+    @Test func twoMissingExactAliasesNeedOneExtractionAndDifferentTypesRemainIndependent() async throws {
+        for compatible in [true, false] {
+            let directory = try directory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+            var first = try example(in: directory)
+            if !compatible {
+                var different = EmbeddingType.community1
+                different.revision = "different-contract"
+                first.embeddings = [embedding(type: different)]
+            }
+            var alias = first
+            alias.id = UUID()
+            alias.embeddings = []
+            #expect(library.upsert([first, alias]))
+            let extractor = FakeVoiceExampleExtractor(result: embedding())
+            let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+            let task = job([first, alias])
+            #expect(library.setJobs([task]))
+            await preparation.run(jobID: task.id, directory: { _ in directory })
+            #expect(await extractor.calls == 1)
+            #expect(library.jobs.first?.completedExampleIDs.count == 2)
+            #expect(library.hydratedExample(id: alias.id)?.embeddings == [embedding()])
+            if !compatible {
+                #expect(library.hydratedExample(id: first.id)?.embeddings.count == 2)
+            }
+        }
+    }
+
+    @Test func currentUnusableScanAssessmentCompletesWithoutRepeatingExtraction() async throws {
+        for currentQuality in [true, false] {
+            let directory = try directory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+            var sample = try example(in: directory)
+            sample.detectedSpeakerConfiguration = .community
+            sample.sampleQuality = .init(
+                policy: VoiceSampleQuality.policyVersion, range: try #require(sample.range),
+                audioRevision: currentQuality ? try #require(sample.audioRevision) : "obsolete-revision",
+                scanConfiguration: VoiceDiscoveryConfiguration.community.pipeline,
+                sampleCount: 48_000, nearSilentFraction: 1, fullScaleFraction: 0)
+            #expect(library.upsert([sample]))
+            let extractor = FakeVoiceExampleExtractor(result: embedding())
+            let discovery = FakeVoiceRecordingDiscoverer(
+                result: .init(modelRevision: "fixture", ranges: [], speakers: []))
+            let preparation = VoiceLibraryPreparation(library: library, extractor: extractor, discoverer: discovery)
+            var task = job([sample], discover: true)
+            task.discoveryConfiguration = .community
+            #expect(library.setJobs([task]))
+            await preparation.run(jobID: task.id, directory: { _ in directory })
+            #expect(await extractor.calls == (currentQuality ? 0 : 1))
+            #expect(library.jobs.first?.state == .completed)
+            #expect(library.jobs.first?.completedExampleIDs == [sample.id])
+        }
+    }
+
+    @Test func batchCheckpointRevalidatesAudioAfterAnotherExtractionSuspends() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let cached = try example(in: directory, embeddings: [embedding()])
+        let missing = try example(in: directory)
+        let folder = try MeetingFolderLocation.resolve(id: cached.meetingID, directory: directory)
+        let audio = folder.appendingPathComponent("system.wav")
+        #expect(library.upsert([cached, missing]))
+        let extractor = FakeVoiceExampleExtractor(
+            result: embedding(),
+            onExtract: {
+                try? Data("Replacement source during the next extraction.".utf8).write(to: audio, options: .atomic)
+            })
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job([cached, missing])
+        #expect(library.setJobs([task]))
+        await preparation.run(jobID: task.id, directory: { _ in directory })
+        #expect(await extractor.calls == 1)
+        #expect(library.jobs.first?.completedExampleIDs == [missing.id])
+        #expect(library.jobs.first?.failures[cached.id.uuidString] != nil)
+        #expect(library.jobs.first?.state == .failed)
+    }
+
+    @Test func pausedBatchReusesPersistedVectorBeforeItsJobCheckpoint() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = VoiceLibraryStore(loading: .immediate, directory: directory)
+        let first = try example(in: directory)
+        let second = try example(in: directory)
+        #expect(library.upsert([first, second]))
+        let gate = VoiceSecondExtractionGate()
+        let extractor = FakeVoiceExampleExtractor(result: embedding(), onExtract: { await gate.visit() })
+        let preparation = VoiceLibraryPreparation(library: library, extractor: extractor)
+        let task = job([first, second])
+        #expect(library.setJobs([task]))
+        preparation.resume(jobID: task.id, directory: { _ in directory })
+        while !(await gate.entered) { await Task.yield() }
+        preparation.pause(jobID: task.id)
+        await gate.open()
+        while preparation.pendingRunCount > 0 { await Task.yield() }
+        #expect(library.hydratedExample(id: first.id)?.embeddings == [embedding()])
+        preparation.resume(jobID: task.id, directory: { _ in directory })
+        while preparation.pendingRunCount > 0 { await Task.yield() }
+        #expect(await extractor.calls == 3)
+        #expect(library.jobs.first?.state == .completed)
+        #expect(Set(library.jobs.first?.completedExampleIDs ?? []) == [first.id, second.id])
     }
 
     @Test func providersShareRepresentationWithoutTrustingEndpointOrDimensions() {

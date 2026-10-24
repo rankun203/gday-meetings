@@ -12,6 +12,10 @@ struct VoiceMatchReviewSession {
         let personID: UUID?
         let examples: [VoiceExample]
         let decisions: [UUID: Decision]
+        let alternateExampleIDs: Set<UUID>
+        let replacedExamples: [VoiceExample]
+        let additionalCandidates: [VoiceExample]
+        let noLongerNeededIDs: Set<UUID>
     }
     struct Step {
         let exampleID: UUID
@@ -30,10 +34,25 @@ struct VoiceMatchReviewSession {
     private(set) var history: [Step] = []
     private(set) var unavailableIDs: Set<UUID> = []
     private(set) var alternateExampleIDs: Set<UUID> = []
+    private(set) var additionalCandidates: [VoiceExample] = []
+    private(set) var noLongerNeededIDs: Set<UUID> = []
+    private var hasInitialBatch = false
+    private var replacedExamples: [VoiceExample] = []
 
     mutating func showAlternative(_ example: VoiceExample, currentEvidence: [VoiceExample]) {
+        guard let candidateID, decisions[candidateID] == nil,
+            let index = examples.firstIndex(where: { $0.id == candidateID })
+        else { return }
+        replacedExamples.append(examples[index])
         alternateExampleIDs.insert(example.id)
-        refreshQueue([example], currentEvidence: currentEvidence)
+        examples[index] = example
+        for step in history.indices where history[step].candidateID == candidateID {
+            history[step].candidateID = example.id
+        }
+        unavailableIDs.remove(candidateID)
+        noLongerNeededIDs.remove(candidateID)
+        refreshExamples(currentEvidence, authoritative: true)
+        additionalCandidates.removeAll { Self.sameOpportunity($0, as: example) }
         selectCandidate(example.id)
     }
 
@@ -49,7 +68,7 @@ struct VoiceMatchReviewSession {
         let current = Dictionary(currentEvidence.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         // Other surfaces can change or remove retained samples. Naming must use
         // their current evidence, while the visible queue preserves unavailable rows.
-        let retained = retainedGroupEvidence.compactMap { current[$0.id] }
+        let retained = namingEvidence(retainedGroupEvidence.compactMap { current[$0.id] })
         if let person = personID ?? fallbackPersonID {
             return RefreshInput(examples: snapshot.candidates[person] ?? [], groupEvidence: retained)
         }
@@ -59,7 +78,7 @@ struct VoiceMatchReviewSession {
             $0.id == initialGroup.id || $0.examples.contains { ids.contains($0.id) }
         }
         // Preserve naming evidence across completion/refresh so Undo can reopen naming.
-        var evidence = group?.evidenceExamples.compactMap { current[$0.id] } ?? retained
+        var evidence = group.map { namingEvidence($0.evidenceExamples.compactMap { current[$0.id] }) } ?? retained
         var evidenceIDs = Set(evidence.map(\.id))
         // Prepared alternatives are separate persisted samples. Keep them in
         // this session's naming evidence even if clustering puts them elsewhere.
@@ -67,6 +86,25 @@ struct VoiceMatchReviewSession {
             alternateExampleIDs.contains($0.id) && evidenceIDs.insert($0.id).inserted
         }
         return RefreshInput(examples: group?.examples ?? [], groupEvidence: evidence)
+    }
+
+    /// Replacing an unsuitable excerpt withdraws it from this naming action.
+    /// Its saved record remains available for an explicit later correction.
+    func namingEvidence(_ values: [VoiceExample]) -> [VoiceExample] {
+        values.filter { value in
+            !replacedExamples.contains { Self.sameOpportunity($0, as: value) }
+                && !additionalCandidates.contains { Self.sameOpportunity($0, as: value) }
+        }
+    }
+
+    /// Undo restores the original admitted scope synchronously, before a later
+    /// snapshot can update the chooser. Dropped alternatives cannot rejoin it.
+    func restoredNamingEvidence(initialEvidence: [VoiceExample], currentEvidence: [VoiceExample]) -> [VoiceExample] {
+        let current = Dictionary(currentEvidence.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        var seen = Set<UUID>()
+        return namingEvidence((initialEvidence + examples).compactMap { current[$0.id] }).filter {
+            seen.insert($0.id).inserted
+        }
     }
 
     struct Actions {
@@ -103,6 +141,7 @@ struct VoiceMatchReviewSession {
     init(examples: [VoiceExample] = [], personID: UUID? = nil) {
         self.examples = examples
         self.personID = personID
+        hasInitialBatch = !examples.isEmpty
         candidateID = examples.first?.id
     }
 
@@ -122,7 +161,7 @@ struct VoiceMatchReviewSession {
             let effective = decisions.applying(to: original)
             return !effective.excluded && !effective.manuallyCleared
                 && !effective.rejectedPersonIDs.contains(personID)
-                && (original.personID ?? original.namedPersonID ?? original.suggestedPersonID) == personID
+                && original.review == .confirmed && original.personID == personID
         }
         let eligible = VoiceTurnReviewSelection.select(candidates).sorted { left, right in
             if (left.review == .confirmed) != (right.review == .confirmed) { return left.review == .confirmed }
@@ -136,26 +175,53 @@ struct VoiceMatchReviewSession {
         }
     }
 
-    /// Reconcile a refreshed queue without changing its visible order or focus.
-    mutating func refreshQueue(_ updated: [VoiceExample], currentEvidence: [VoiceExample]? = nil) {
+    /// A refresh updates the admitted batch. New opportunities wait for an
+    /// explicit request, so confirming an excerpt has a predictable finish.
+    mutating func refreshQueue(
+        _ updated: [VoiceExample], currentEvidence: [VoiceExample]? = nil, admitNewCandidates: Bool = false,
+        coveredExampleIDs: Set<UUID> = []
+    ) {
         if let currentEvidence {
             refreshExamples(currentEvidence, authoritative: true)
         }
         else {
             refreshExamples(updated)
         }
-        var ids = Set(examples.map(\.id))
-        var audio = Set(examples.compactMap(VoiceExactReviewDecisions.Key.init))
+        noLongerNeededIDs = Set(
+            examples.filter {
+                decisions[$0.id] == nil && !alternateExampleIDs.contains($0.id) && coveredExampleIDs.contains($0.id)
+            }.map(\.id))
+        let retained = examples + replacedExamples
+        var available: [VoiceExample] = []
         for example in updated {
-            guard !ids.contains(example.id) else { continue }
-            if let key = VoiceExactReviewDecisions.Key(example), !audio.insert(key).inserted { continue }
-            examples.append(example)
-            ids.insert(example.id)
-            unavailableIDs.remove(example.id)
+            guard !retained.contains(where: { Self.sameOpportunity($0, as: example) }),
+                !available.contains(where: { Self.sameOpportunity($0, as: example) })
+            else { continue }
+            available.append(example)
+        }
+        let admit = !hasInitialBatch || admitNewCandidates
+        hasInitialBatch = true
+        if admit {
+            examples.append(contentsOf: available)
+            additionalCandidates = []
+            if admitNewCandidates, let next = available.first {
+                selectCandidate(next.id)
+            }
+
+        }
+        else {
+            additionalCandidates = available
         }
         if displayedID == nil {
-            candidateID = examples.first { decisions[$0.id] == nil && !unavailableIDs.contains($0.id) }?.id
+            candidateID =
+                examples.first {
+                    decisions[$0.id] == nil && !unavailableIDs.contains($0.id) && !noLongerNeededIDs.contains($0.id)
+                }?.id
         }
+    }
+
+    private static func sameOpportunity(_ left: VoiceExample, as right: VoiceExample) -> Bool {
+        left.id == right.id || VoiceReviewSelection.sameAudio(left, right)
     }
 
     /// References share durable decisions and Undo, while candidate progress
@@ -185,7 +251,11 @@ struct VoiceMatchReviewSession {
         return group
     }
 
-    var remainingCount: Int { examples.filter { decisions[$0.id] == nil && !unavailableIDs.contains($0.id) }.count }
+    var remainingCount: Int {
+        examples.filter {
+            decisions[$0.id] == nil && !unavailableIDs.contains($0.id) && !noLongerNeededIDs.contains($0.id)
+        }.count
+    }
     var skippedCount: Int { decisions.values.filter { $0 == .skipped }.count }
     var decidedCount: Int { decisions.count - skippedCount }
     var displayedID: UUID? { referenceID ?? candidateID }
@@ -201,6 +271,7 @@ struct VoiceMatchReviewSession {
     mutating func record(_ decision: Decision, for exampleID: UUID, undoID: UUID?) {
         guard decisions[exampleID] == nil, examples.contains(where: { $0.id == exampleID }) else { return }
         decisions[exampleID] = decision
+        noLongerNeededIDs.remove(exampleID)
         history.append(Step(exampleID: exampleID, undoID: undoID))
         advance(after: exampleID)
     }
@@ -220,7 +291,10 @@ struct VoiceMatchReviewSession {
         guard self.personID == nil,
             examples.contains(where: { $0.id == confirmedExampleID })
         else { return }
-        let snapshot = NamingSnapshot(personID: self.personID, examples: examples, decisions: decisions)
+        let snapshot = NamingSnapshot(
+            personID: self.personID, examples: examples, decisions: decisions,
+            alternateExampleIDs: alternateExampleIDs, replacedExamples: replacedExamples,
+            additionalCandidates: additionalCandidates, noLongerNeededIDs: noLongerNeededIDs)
         self.personID = personID
         refreshExamples(updatedExamples)
         decisions[confirmedExampleID] = .confirmed(personID)
@@ -239,8 +313,12 @@ struct VoiceMatchReviewSession {
         guard let position = examples.firstIndex(where: { $0.id == exampleID }) else { return }
         referenceID = nil
         candidateID =
-            examples.dropFirst(position + 1).first { decisions[$0.id] == nil && !unavailableIDs.contains($0.id) }?.id
-            ?? examples.first { decisions[$0.id] == nil && !unavailableIDs.contains($0.id) }?.id
+            examples.dropFirst(position + 1).first {
+                decisions[$0.id] == nil && !unavailableIDs.contains($0.id) && !noLongerNeededIDs.contains($0.id)
+            }?.id
+            ?? examples.first {
+                decisions[$0.id] == nil && !unavailableIDs.contains($0.id) && !noLongerNeededIDs.contains($0.id)
+            }?.id
     }
 
     /// Call only after the corresponding durable undo succeeds, or for a local skip.
@@ -254,8 +332,13 @@ struct VoiceMatchReviewSession {
             personID = snapshot.personID
             examples = snapshot.examples
             decisions = snapshot.decisions
+            alternateExampleIDs = snapshot.alternateExampleIDs
+            replacedExamples = snapshot.replacedExamples
+            additionalCandidates = snapshot.additionalCandidates
+            noLongerNeededIDs = snapshot.noLongerNeededIDs
         }
-        else {
+        noLongerNeededIDs.remove(last.exampleID)
+        if last.namingSnapshot == nil {
             if let previous = last.previousDecision {
                 decisions[last.exampleID] = previous
             }

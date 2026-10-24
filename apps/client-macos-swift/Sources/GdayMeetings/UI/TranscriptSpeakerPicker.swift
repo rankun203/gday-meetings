@@ -21,35 +21,52 @@ struct TranscriptSpeakerPicker: View {
     let meetingID: UUID
     let speaker: MeetingSpeaker
     var completed: (() -> Void)? = nil
-    var associationUncertain = false
-    var identityAssociationTier: VoiceTranscriptAssociation.Tier? = nil
+    let explanation: TranscriptSpeakerAssignmentExplanation
     var restorePassage: (() async -> Bool)? = nil
     var assignment: ((UUID?) async -> Bool)? = nil
     @ViewState private var query = ""
     @ViewState private var saving = false
     @ViewState private var saveError: String?
+    @ViewState private var selectedPersonID: UUID?
 
     private var matches: [Person] { TranscriptSpeakerSearch.matches(store.people, query: query) }
     private var newName: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var selectedPerson: Person? { matches.first { $0.id == selectedPersonID } ?? matches.first }
     private var hasExactMatch: Bool {
         store.people.contains { $0.name.localizedCaseInsensitiveCompare(newName) == .orderedSame }
     }
 
     var body: some View {
+        let highlightedID = selectedPerson?.id
         VStack(alignment: .leading, spacing: 10) {
-            Text("Assign Person").font(.headline)
+            Text(TranscriptSpeakerAssignmentExplanation.title(for: speaker)).font(.headline)
             TextField("Search people", text: $query)
-                .onSubmit { if let person = matches.first { assign(person.id) } }
+                .onSubmit { if let person = selectedPerson { assign(person.id) } }
+                .onKeyPress(.downArrow) {
+                    moveSelection(1)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    moveSelection(-1)
+                    return .handled
+                }
+                .onChange(of: query) { _, _ in selectedPersonID = matches.first?.id }
             Text(
                 restorePassage == nil ? "Applies to this speaker throughout the recording." : "Applies to this passage."
             )
             .font(.caption).foregroundStyle(.secondary)
-            if associationUncertain {
-                Text("Uncertain speaker match.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if explanation.hasDottedOutline {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Dotted outline").fontWeight(.medium)
+                    ForEach(explanation.dottedReasons, id: \.self) { reason in
+                        Text(reason.text)
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)
             }
-            else if let identityAssociationTier {
-                Text(identityAssociationTier == .tentative ? "Tentative match." : "Automatically matched.")
+            if explanation.automaticallyMatched {
+                Text("Automatically matched person.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let restorePassage {
@@ -69,21 +86,32 @@ struct TranscriptSpeakerPicker: View {
                 }
             }
             if let saveError { Text(saveError).font(.caption).foregroundStyle(.red) }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(matches) { person in
-                        Button {
-                            assign(person.id)
-                        } label: {
-                            HStack {
-                                Text(person.name)
-                                Spacer()
-                                if speaker.personID == person.id { Image(systemName: "checkmark") }
-                            }.padding(.vertical, 5).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(matches) { person in
+                            Button {
+                                assign(person.id)
+                            } label: {
+                                HStack {
+                                    Text(person.name)
+                                    Spacer()
+                                    if speaker.personID == person.id { Image(systemName: "checkmark") }
+                                }.padding(.vertical, 5).padding(.horizontal, 6)
+                                    .contentShape(Rectangle())
+                                    .background(
+                                        highlightedID == person.id ? Color.accentColor.opacity(0.15) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 5))
+                            }.buttonStyle(.plain)
+                                .accessibilityAddTraits(highlightedID == person.id ? .isSelected : [])
+                                .id(person.id)
+                        }
                     }
-                }
-            }.frame(maxHeight: 220)
+                }.frame(maxHeight: 220)
+                    .onChange(of: highlightedID) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
+            }
             if !newName.isEmpty && !hasExactMatch {
                 Button("Create and Assign \(newName)") {
                     guard !saving else { return }
@@ -107,6 +135,13 @@ struct TranscriptSpeakerPicker: View {
         }
         .padding(16).frame(width: 320)
         .disabled(saving)
+    }
+
+    private func moveSelection(_ offset: Int) {
+        let candidates = matches
+        guard !saving, !candidates.isEmpty else { return }
+        let current = candidates.firstIndex { $0.id == selectedPersonID } ?? 0
+        selectedPersonID = candidates[min(max(current + offset, 0), candidates.count - 1)].id
     }
 
     private func assign(_ personID: UUID?) {
