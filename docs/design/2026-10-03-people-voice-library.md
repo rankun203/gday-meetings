@@ -8,7 +8,7 @@ scope: swift-people-speaker-association
 
 # People voice library
 
-The library is implemented; the selective-review refinements below are agreed design intent with unresolved implementation and evaluation work. They do not describe the behavior of every delivered build. The [five-system research comparison](2026-10-24-recognition-library-research.md) provides external evidence and discussion questions.
+The library is implemented; the selective-review refinements below are agreed design intent with unresolved implementation and evaluation work. They do not describe the behavior of every delivered build. The [five-system research comparison](2026-10-24-voice-recognition-library.md) provides external evidence and discussion questions.
 
 ## Problem
 

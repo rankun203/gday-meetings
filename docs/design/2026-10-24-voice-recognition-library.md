@@ -1,12 +1,12 @@
 ---
-title: Recognition library management — five cases
+title: Voice recognition library — research and proposed design
 date: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 status: research
 scope: people-library-review-and-reference-selection
 ---
 
-# Recognition library management — five cases
+# Voice recognition library — research and proposed design
 
 The goal is a useful recognition library with as little human review as possible. Five systems offer complementary lessons: simple person management, incremental grouping, explicit confirmation, controlled reference admission, and selective sample review.
 
@@ -79,6 +79,77 @@ Its similarity API can find near duplicates, choose a requested number of divers
 **Important limit.** These tools do not prove a sample has the correct identity or provide a calibrated voice-confidence score. Extreme novelty can be noise. A desired subset size is a processing budget, not proof that every selected member is useful. Gday should prefer a stopping rule based on remaining value, with capacity as a secondary bound.
 
 **Question for discussion:** can each proposed review have an understandable reason, such as a clearer replacement, another recording condition, or conflicting identity evidence?
+
+## Proposed indexed, constraint-aware voice library
+
+An indexed library of speech embeddings can retain broad evidence while keeping recognition references and human review small. The index finds similar evidence; acoustic groups describe similar voices under particular recording conditions; person identities preserve who the user identified. These have separate responsibilities.
+
+This is a proposed architecture to evaluate. Density clustering would help discover voice conditions and unknown people. Durable user decisions would anchor identity, allowing regrouping to improve derived results without rewriting confirmations.
+
+### Evidence and identity
+
+Every usable speech excerpt could carry the following information:
+
+| Field | Purpose |
+| --- | --- |
+| Stable segment ID and audio range | Locate the original evidence |
+| Embedding and model version | Search compatible voice representations |
+| Acoustic cluster ID | Identify its current computed group |
+| Optional person ID | Associate evidence with a known person |
+| Decision provenance | Distinguish user confirmation from automatic inference |
+| Rejections and exclusions | Preserve corrections and unsuitable-evidence decisions |
+
+Many segments can share a person ID; others remain unknown. One logical library can contain separate indexes for incompatible embedding models. The index stores vectors and references to audio. Original audio remains in its source storage.
+
+One person can have several acoustic groups. Headset speech and distant room-microphone speech may form separate groups while belonging to the same person. Confirming both identities should not force acoustically intermediate or unrelated evidence into that identity. Computed cluster membership can change independently of the stable segment and person IDs.
+
+### Processing new evidence
+
+A new batch must be compared with existing evidence. New points can turn an isolated neighborhood into a dense group, connect groups, or expose an identity conflict. Ordinary DBSCAN is a batch, transductive clustering method: its result labels the supplied observations. Incremental updates require additional logic. Immich documents a modified process that preserves existing groups between batches. [DBSCAN documentation](https://scikit-learn.org/stable/modules/clustering.html#dbscan), [Immich facial recognition](https://docs.immich.app/features/facial-recognition/).
+
+The proposed update sequence is:
+
+1. Insert new usable embeddings into their compatible index.
+2. Search for nearby existing evidence.
+3. Re-evaluate affected neighborhoods, expanding the search when connections reach other groups.
+4. Apply saved identity decisions and rejection constraints before publishing results.
+5. Publish supported automatic associations with their provenance.
+6. Offer useful unresolved conflicts or new identities for review.
+
+An index accelerates neighbor search. Trust, identity propagation, and the scope of recomputation remain application responsibilities. A neighborhood update can affect connected groups beyond the initial search area; the incremental policy must account for that possibility.
+
+### User decisions as constraints
+
+Explicit associations and rejections should constrain derived identity results. Constrained clustering research includes density-based methods that accept must-link and cannot-link relationships. For Gday, the constraint must retain the meaning and scope of the user's action. [Incremental constrained clustering research](https://www.comsis.org/archive.php?show=ppr672-1806).
+
+| User action | Meaning |
+| --- | --- |
+| Confirm “this is Alex” | Anchor this specific evidence to Alex |
+| Confirm two excerpts as Alex | Both have the same identity, even when recording conditions differ |
+| “Not Alex” | Prevent this evidence from being assigned to Alex; its actual identity remains unresolved |
+| Ignore Sample | Exclude this unsuitable evidence from recognition and review; retain the reversible decision |
+| Assign a recording label | Save a scoped identity decision and assess which excerpts can safely inherit it |
+| Undo | Withdraw the decision and recompute affected derived results |
+
+Identity constraints and acoustic clustering constraints need separate treatment. Two confirmed excerpts of Alex establish shared identity without requiring a single dense acoustic group. Rejecting Alex establishes a negative identity constraint without identifying another person. A recording label may contain mixed voices, so its assignment alone cannot establish that every excerpt is suitable reference evidence.
+
+### Guardrails for grouping and learning
+
+- **Artificial density:** overlapping or adjacent excerpts from one utterance provide correlated evidence. Deduplicate or limit their density contribution so repeated cuts do not count as independent support.
+- **Identity bridges:** new observations must not silently merge explicitly different people. Connections between conflicting identity anchors should produce a conflict to resolve.
+- **Automatic feedback loops:** inferred associations retain their machine-derived provenance. Propagation through more neighbors must not elevate them to human confirmations.
+
+The resulting library has three independently selected sets:
+
+| Set | Selection objective |
+| --- | --- |
+| Indexed observations | Retain usable, source-linked evidence for discovery and maintenance |
+| Active recognition references | Select clear evidence that provides useful coverage within a bounded profile |
+| Review opportunities | Ask the smallest set of questions likely to improve recognition or resolve conflicts |
+
+Storing more observations need not increase the user's review workload. Confirmation should retire repetitive questions; Ignore and Try Another should seek suitable alternatives. Further confirmation is useful when evidence introduces a meaningful recording condition, improves a reference, or resolves an identity conflict.
+
+Before implementation, evaluate density contribution rules, constraint conflicts, batch-order effects, and incremental recomputation against the current grouping approach. Include removal, reassignment, Undo, and model replacement so derived groups remain repairable from durable evidence and decisions.
 
 ## Proposed combined workflow
 
