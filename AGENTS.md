@@ -46,6 +46,7 @@ scope: repository-workflow
 ## Writing (all apps and documents)
 
 - Before making any repository edit, read [docs/writing.md](docs/writing.md).
+- Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
 - Every document must include front matter.
 - All UI text and documentation across every app must follow Apple's clarity guidance as summarized in that document. This includes labels, messages, accessibility text, examples, design documents, and worklogs.
 - Review all added or changed wording against the guide before finishing. When editing an existing document or UI flow, check its surrounding wording for consistency. Use concrete descriptions and actions; remove vague reassurance and promotional filler.
@@ -80,6 +81,7 @@ scope: repository-workflow
 - Do not create feature branches or pull requests unless the user explicitly asks for one.
 - Use Conventional Commits format for commit messages (for example, `feat: add export support` or `fix(audio): handle device loss`).
 - Before committing, inspect the complete diff and run the relevant checks.
+- Fix a bug at its cause, reasoning from first principles and established best practice. Do not patch over the symptom.
 - Preserve unrelated work. Before staging, inspect ignore rules and ensure private inputs, credentials, caches, and generated artifacts are excluded. After an authorized commit and push, check relevant CI and report the repository state.
 - Use isolated test environments and reproducible baselines. Preserve user data and active work; back up the affected test data before an authorized reset and verify the target library or directory.
 - Store temporary artifacts and recovery bundles under the repository's ignored `tmp/` directory when appropriate, and verify that Git ignores them. Before a planned interruption, save the necessary source state, artifacts, decisions, validation results, and resume instructions in a durable location.
